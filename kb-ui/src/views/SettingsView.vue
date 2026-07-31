@@ -13,6 +13,9 @@
         <el-tab-pane label="系统配置" name="system">
           <SystemConfigTab />
         </el-tab-pane>
+        <el-tab-pane label="品牌外观" name="brand">
+          <BrandAppearanceTab />
+        </el-tab-pane>
         <el-tab-pane label="域管理" name="domain">
           <DomainManageTab />
         </el-tab-pane>
@@ -37,6 +40,7 @@
 import { ref } from 'vue'
 import { useControlPlaneStore } from '@/stores/controlPlane'
 import SystemConfigTab from '@/components/settings/SystemConfigTab.vue'
+import BrandAppearanceTab from '@/components/settings/BrandAppearanceTab.vue'
 import DomainManageTab from '@/components/settings/DomainManageTab.vue'
 import DomainDetailTab from '@/components/settings/DomainDetailTab.vue'
 import ReloadConfigTab from '@/components/settings/ReloadConfigTab.vue'

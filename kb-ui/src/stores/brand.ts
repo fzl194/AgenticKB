@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useControlPlaneApi } from '@/api/controlPlane'
+import { normalizeSite } from '@/utils/brandYaml'
 import type { BrandConfig } from '@/types/brand'
 
 /** 当前硬编码值的兜底；main_control 不可达或缺 site 块时使用。 */
@@ -27,21 +28,6 @@ export function resolveIcon(icon: string | undefined | null): string {
   return v
 }
 
-/** 从 GET /api/v1/system/ui 的返回里提取 site 块（容错：缺字段不覆盖默认）。 */
-function readSite(raw: unknown): Partial<BrandConfig> {
-  const root = raw as Record<string, unknown> | null | undefined
-  const site = root?.site
-  if (!site || typeof site !== 'object') return {}
-  const s = site as Record<string, unknown>
-  const out: Partial<BrandConfig> = {}
-  if (typeof s.title === 'string') out.title = s.title
-  if (typeof s.name === 'string') out.name = s.name
-  if (typeof s.badge === 'string') out.badge = s.badge
-  if (typeof s.logo_text === 'string') out.logoText = s.logo_text
-  if (typeof s.icon === 'string') out.icon = s.icon
-  return out
-}
-
 export const useBrandStore = defineStore('brand', () => {
   const title = ref(DEFAULT_BRAND.title)
   const name = ref(DEFAULT_BRAND.name)
@@ -63,7 +49,7 @@ export const useBrandStore = defineStore('brand', () => {
     try {
       const api = useControlPlaneApi()
       const raw = await api.getSystemConfig('ui')
-      applyValues(readSite(raw))
+      applyValues(normalizeSite((raw as { site?: unknown } | null | undefined)?.site))
     } catch {
       // main_control 不可达或缺 site 块：保持默认值
     } finally {

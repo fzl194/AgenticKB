@@ -120,6 +120,7 @@ def assemble_build(
     run_id: str,
     batch_id: str | None,
     snapshot_decisions: list[dict[str, Any]],
+    kb_id: str | None = None,
 ) -> str:
     """Assemble a new build from snapshot decisions with merge semantics.
 
@@ -175,6 +176,7 @@ def assemble_build(
                 "removed_count": len([d for d in snapshot_decisions if d.get("selection_status") == "removed"]),
                 "action_counts": action_counts,
             },
+            kb_id=kb_id,
         )
 
         # Incremental merge: carry forward parent selections not in the run

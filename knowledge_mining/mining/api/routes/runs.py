@@ -475,9 +475,40 @@ async def get_run(run_id: str, request: Request, domain: str = Query(..., min_le
         return result
 
 
+# 算子化工作流(execution_engine=workflow)逐模块事件映射到 PipelineFlow 的 12 阶段名。
+# 工作流节点事件写 mining_workflow_node_events，传统 StreamingPipeline 写 mining_run_stage_events；
+# get_run_stages 合并两表，让流水线可视化对两种执行引擎都生效。
+_WORKFLOW_NODE_TO_STAGES: dict[str, list[str]] = {
+    "parse_segment": ["parse", "segment"],
+    "enrich": ["enrich"],
+    "contextual_retrieval_enrich": ["discourse"],
+    "discourse_line": ["discourse"],
+    "retrieval_unit_build": ["retrieval_units"],
+    "embedding": ["embedding"],
+    "asset_persist": ["db_write"],
+    "entity_extract": ["entity_extract"],
+    "entity_resolve": ["resolve"],
+    "entity_relation_extract": ["entity_relations"],
+    "graph_write": ["graph_write"],
+    # input_ingest / mining_finalize / ontology_induction / *_review_gate 无对应 12 阶段槽位，跳过。
+}
+_WORKFLOW_NODE_STATUS_MAP: dict[str, str] = {
+    "completed": "completed",
+    "started": "started",
+    "running": "started",
+    "failed": "failed",
+    # not_applicable / skipped 不发，对应阶段保持 pending（灰），避免被误判为 running。
+}
+
+
 @router.get("/{run_id}/stages")
 async def get_run_stages(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
-    """Get stage timeline for a run."""
+    """Get stage timeline for a run.
+
+    合并 mining_run_stage_events（传统引擎：assemble_build/validate_build 等全局阶段）与
+    mining_workflow_node_events（算子化引擎：parse_segment/enrich/embedding 等逐模块），
+    后者按算子类型映射到 PipelineFlow 认得的阶段名。
+    """
     pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
     await _require_run_domain(pool, run_id, domain)
 
@@ -489,9 +520,35 @@ async def get_run_stages(run_id: str, request: Request, domain: str = Query(...,
             "ORDER BY created_at",
             [run_id],
         )
-        rows = await cur.fetchall()
+        rows = [dict(r) for r in await cur.fetchall()]
+        cur = await conn.execute(
+            "SELECT node_id, operator_type, status, started_at, duration_ms, "
+            "error_message, run_document_id "
+            "FROM mining_workflow_node_events WHERE run_id = %s "
+            "ORDER BY started_at",
+            [run_id],
+        )
+        node_rows = await cur.fetchall()
 
-    return {"run_id": run_id, "stages": [dict(r) for r in rows]}
+    for nr in node_rows:
+        op = nr["operator_type"] or nr["node_id"]
+        status = _WORKFLOW_NODE_STATUS_MAP.get(nr["status"])
+        if status is None:
+            continue
+        for stage_name in _WORKFLOW_NODE_TO_STAGES.get(op, []):
+            rows.append({
+                "id": f"wf-{nr['node_id']}-{stage_name}-{nr['run_document_id'] or 'global'}",
+                "run_id": run_id,
+                "stage": stage_name,
+                "status": status,
+                "created_at": nr["started_at"],
+                "duration_ms": nr["duration_ms"],
+                "output_summary": None,
+                "error_message": nr["error_message"],
+                "run_document_id": nr["run_document_id"],
+            })
+
+    return {"run_id": run_id, "stages": rows}
 
 
 @router.get("/{run_id}/documents")

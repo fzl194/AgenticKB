@@ -1,8 +1,14 @@
+# 挖掘服务配置（mining 自身配置，domain 不在此——domain 统一来自 domain_registry.yaml）。
+# 由 main_control_service 经 GET /api/v1/system/mining/raw 下发给 mining 服务。
 service_url: http://localhost:8901
+port: 8901
 llm_service_url: http://localhost:8900
 max_workers: 4
-embedding_model: embedding-3
+mining_run_submission_engine: workflow
 upload:
   root: ./uploads
-  max_file_size: 104857600
-  max_archive_size: 524288000
+  max_file_size: 104857600          # 100MB
+  max_archive_size: 524288000       # 500MB
+  max_files_per_request: 100
+  disk_reserve_bytes: 1073741824    # 1GB
+  archive_extensions: .zip

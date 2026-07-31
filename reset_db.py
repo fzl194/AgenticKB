@@ -89,6 +89,11 @@ ALL_TABLES = [
     "asset_document_snapshots",
     "asset_documents",
     "asset_source_batches",
+    # kb management（asset_documents.kb_id → knowledge_bases；CASCADE 容错）
+    "kb_folders",
+    "kb_members",
+    "knowledge_bases",
+    "kb_users",
 ]
 
 # 要 DROP 的触发器函数
@@ -117,14 +122,35 @@ ALL_TRIGGERS = [
 # （ServingRuntimeSchemaInitializer / ParadigmSchemaInitializer）。它们写在按域路由的
 # DataSource 上，这个脚本只连 .env 那一个库，本来也覆盖不全。见 db_tables.OPTIONAL_TABLES。
 SCHEMA_FILES = [
+    # LLM runtime（llm_service 自管，同库；重建后重启 llm_service 会从 pack 重新注册 prompt 模板）
     REPO_ROOT / "databases" / "agent_llm_runtime" / "schemas" / "002_agent_llm_runtime_postgresql.sql",
-    REPO_ROOT / "databases" / "asset_core" / "schemas" / "002_asset_core_postgresql.sql",
+    # ── 顺序对齐 pg_schema.domain_schema_paths（含 KB 中心化挖掘的 005/006/007）──
+    REPO_ROOT / "databases" / "asset_core" / "schemas" / "002_asset_core_postgresql.sql",   # 扩展 + asset 基表
+    # KB 四表
+    REPO_ROOT / "databases" / "kb" / "schemas" / "001_kb_users.sql",
+    REPO_ROOT / "databases" / "kb" / "schemas" / "002_knowledge_bases.sql",
+    REPO_ROOT / "databases" / "kb" / "schemas" / "003_kb_members.sql",
+    REPO_ROOT / "databases" / "kb" / "schemas" / "004_kb_folders.sql",
+    # asset_documents 的 KB 列 + 文件元信息（需 knowledge_bases + asset_documents）
+    REPO_ROOT / "databases" / "asset_core" / "schemas" / "004_kb_isolation.sql",
+    REPO_ROOT / "databases" / "asset_core" / "schemas" / "005_kb_file_meta.sql",
+    # KB 挖掘范式绑定（knowledge_bases.mining_workflow_id）
+    REPO_ROOT / "databases" / "kb" / "schemas" / "005_kb_mining_binding.sql",
+    # mining_runtime（含 workflow 绑定 / 节点事件 / preflight）
     REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "002_mining_runtime_postgresql.sql",
     REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "003_mining_runtime_domain.sql",
     REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "004_mining_runtime_run_stage.sql",
     REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "005_mining_workflow_runtime.sql",
+    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "006_mining_run_preflight.sql",
+    # asset_core 域隔离 + snapshot workflow 绑定 + KB build 归属（需 mining_runs 已建）
     REPO_ROOT / "databases" / "asset_core" / "schemas" / "003_asset_core_domain_isolation.sql",
+    REPO_ROOT / "databases" / "asset_core" / "schemas" / "004_asset_snapshot_workflow_binding.sql",
+    REPO_ROOT / "databases" / "asset_core" / "schemas" / "006_asset_build_kb.sql",
+    # mining_runs 的 kb_id
+    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "007_mining_run_kb.sql",
+    # ontology（Domain DDL 中必须最后——FK 指向 asset_* / mining_runs）
     REPO_ROOT / "databases" / "ontology" / "schemas" / "001_ontology_concept_postgresql.sql",
+    # ── control（全局 Workflow 定义，主库最后）──
     REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql",
 ]
 

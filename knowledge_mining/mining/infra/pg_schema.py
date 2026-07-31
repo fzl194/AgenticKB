@@ -25,6 +25,19 @@ _ASSET_DOMAIN_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "003_a
 _ASSET_WORKFLOW_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "004_asset_snapshot_workflow_binding.sql"
 # Ontology concept layer — must apply AFTER asset/runtime (FKs target asset_* and mining_runs).
 _ONTOLOGY_DDL = _REPO_ROOT / "databases" / "ontology" / "schemas" / "001_ontology_concept_postgresql.sql"
+# KB management — kb 三表 + asset_documents 004 ALTER。
+# 004_kb_isolation 引用 knowledge_bases（FK），必须在 kb 三表之后；且引用 asset_documents，
+# 必须在 002_asset_core 之后。运行时按序：asset_core → kb 三表 → kb_isolation → runtime → ... → ontology。
+_KB_USERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "001_kb_users.sql"
+_KB_BASES_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "002_knowledge_bases.sql"
+_KB_MEMBERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "003_kb_members.sql"
+_KB_FOLDERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "004_kb_folders.sql"
+_KB_ISOLATION_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "004_kb_isolation.sql"
+_KB_FILE_META_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "005_kb_file_meta.sql"
+# KB 中心化挖掘（P2'）：kb 范式绑定 + build/run 的 kb_id 归属列。
+_KB_MINING_BINDING_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "005_kb_mining_binding.sql"
+_ASSET_BUILD_KB_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "006_asset_build_kb.sql"
+_MINING_RUN_KB_DDL = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "007_mining_run_kb.sql"
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -76,6 +89,14 @@ def domain_schema_paths() -> tuple[Path, ...]:
     """Return asset/runtime DDLs that are safe for every Domain database."""
     return (
         _ASSET_DDL,
+        # KB management — kb 三表 + folders（FK→knowledge_bases）+ asset_documents ALTER。
+        # kb_isolation 引用 knowledge_bases 与 asset_documents，必须在这两者之后。
+        _KB_USERS_DDL,
+        _KB_BASES_DDL,
+        _KB_MEMBERS_DDL,
+        _KB_FOLDERS_DDL,
+        _KB_ISOLATION_DDL,
+        _KB_FILE_META_DDL,
         _RUNTIME_DDL,
         _RUNTIME_DDL_V3,
         _RUNTIME_DDL_V4,
@@ -84,6 +105,10 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _ASSET_DOMAIN_DDL,
         _ASSET_WORKFLOW_DDL,
         _ONTOLOGY_DDL,
+        # KB 中心化挖掘（P2'）：放最后，确保引用的基表（knowledge_bases / asset_builds / mining_runs）都已建。
+        _KB_MINING_BINDING_DDL,
+        _ASSET_BUILD_KB_DDL,
+        _MINING_RUN_KB_DDL,
     )
 
 
@@ -113,6 +138,10 @@ def _ensure_schema_paths(cfg: MiningDbConfig, ddl_paths: tuple[Path, ...]) -> No
                     _RUNTIME_DDL_V6,
                     _ASSET_DOMAIN_DDL,
                     _ASSET_WORKFLOW_DDL,
+                    _KB_ISOLATION_DDL,
+                    _KB_MINING_BINDING_DDL,
+                    _ASSET_BUILD_KB_DDL,
+                    _MINING_RUN_KB_DDL,
                 ),
             )
             logger.info("Applied DDL: %s", ddl_path.name)

@@ -33,8 +33,8 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
 import {
-  Monitor, Management, Search, FolderOpened, Share,
-  Cpu, Setting, Collection, Connection, DataLine,
+  Monitor, Management, Search,
+  Cpu, Setting, Collection, Connection, DataLine, Files,
 } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 
@@ -43,12 +43,10 @@ const domainStore = useDomainStore()
 
 const navItems = [
   { path: '/', label: '概览', icon: Monitor },
-  { path: '/mining', label: '挖掘管理', icon: Management },
-  { path: '/mining/workflows', label: '挖掘 Workflow', icon: Management },
+  { path: '/kb', label: '知识库', icon: Files },
+  { path: '/mining/workflows', label: '挖掘范式', icon: Management },
   { path: '/search', label: '检索测试', icon: Search },
   { path: '/paradigm', label: '检索范式', icon: Connection },
-  { path: '/knowledge', label: '知识资产', icon: FolderOpened },
-  { path: '/graph', label: '知识图谱', icon: Share },
   { path: '/entities', label: '实体图谱', icon: Connection },
   { path: '/ontology', label: '本体版本', icon: Collection },
   { path: '/ontology/graph', label: '本体图谱', icon: DataLine },
@@ -58,10 +56,6 @@ const navItems = [
 
 function isActive(path: string): boolean {
   if (path === '/') return route.path === '/'
-  if (path === '/mining') {
-    return route.path === '/mining'
-      || (route.path.startsWith('/mining/') && !route.path.startsWith('/mining/workflows'))
-  }
   if (path === '/ontology') {
     return route.path === '/ontology'
   }

@@ -21,6 +21,7 @@ def select_or_create_snapshot(
     *,
     domain: str,
     batch_id: str | None = None,
+    existing_doc: dict[str, Any] | None = None,
     workflow_binding: Mapping[str, Any] | None = None,
     existing_document_id: str | None = None,
 ) -> tuple[str, str, str]:
@@ -28,14 +29,21 @@ def select_or_create_snapshot(
 
     Returns (document_id, snapshot_id, link_id).
     If snapshot already exists (same normalized_content_hash), reuses it.
+
+    Identity resolution precedence:
+    - KB 路径（existing_doc 非空）：身份已由 KB 预建（G1），直接复用 id，不再 upsert。
+    - Workflow 路径（existing_document_id 非空）：显式 id，校验域归属后复用。
+    - Legacy/by-key：按 document_key 查，命中复用 id，否则 upsert 新建。
     """
     from knowledge_mining.mining.ingestion import get_mime_type
 
     mime_type = get_mime_type(doc.file_type)
 
-    # 1. Upsert document (identity)
-    document_id = existing_document_id
-    if document_id is not None:
+    # 1. Resolve document identity.
+    if existing_doc:
+        document_id = existing_doc["id"]
+    elif existing_document_id is not None:
+        document_id = existing_document_id
         existing_doc = asset_db.get_document(domain=domain, document_id=document_id)
         if existing_doc is None:
             raise ValueError("existing_document_id does not belong to the Domain")

@@ -54,6 +54,7 @@
 !export_db.py
 !import_db.py
 !db_tables.py
+!backfill_default_kb.py
 
 # === But still exclude these within allowlisted dirs ===
 *.sqlite

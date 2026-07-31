@@ -46,8 +46,10 @@ const domainStore = useDomainStore()
 
 const pageTitles: Record<string, string> = {
   dashboard: '概览',
-  mining: '挖掘管理',
-  'mining-detail': 'Run 详情',
+  kb: '知识库',
+  'kb-detail': '知识库',
+  'mining-workflows': '挖掘范式',
+  'mining-workflow-editor': '挖掘范式',
   search: '检索测试',
   knowledge: '知识资产',
   'knowledge-detail': '文档详情',

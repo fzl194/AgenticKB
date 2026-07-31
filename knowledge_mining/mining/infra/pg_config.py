@@ -1,22 +1,22 @@
-"""PostgreSQL connection configuration for Mining v3.0.
+"""PostgreSQL connection configuration for Mining.
 
-All values come from .env (PG_HOST, PG_PORT, etc.).
-No hardcoded defaults — missing env vars will raise an error.
+配置来源：main_control_service 的 ``GET /api/v1/system/database/raw``
+（main_control_service/config/system/database.yaml 的 default 段）。**不再读 .env。**
 
-Per-domain connections use `conninfo_from_env()` which reads a
-postgresql:// URL from an environment variable specified in
-domain_registry.yaml.
+- 无参 ``MiningDbConfig()``：读控制面缓存（启动时 lifespan 预填）。
+- 显式 kwargs ``MiningDbConfig(pg_host=..., ...)``：直接构造（测试用）。
+
+per-domain 连接仍由 ``resolve_domain_database`` 从 domain_registry.yaml 解析；
+本类是"全局默认库"，供 workflow 目录 / KB 管理元数据等非 per-domain 表使用。
 """
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from psycopg.conninfo import make_conninfo
-from pydantic import Field
-from pydantic_settings import BaseSettings
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]  # knowledge_mining/mining/infra/ -> CoreMasterKB/
+from .control_plane import get_database_config
 
 
 def conninfo_from_url(url: str) -> str:
@@ -56,53 +56,55 @@ def conninfo_from_url(url: str) -> str:
         raise ValueError("Invalid PostgreSQL database URL") from exc
 
 
-def conninfo_from_env(env_var: str) -> str:
-    """Read a PostgreSQL URL from an environment variable and convert to psycopg conninfo.
-
-    Supports formats:
-    - postgresql://user:password@host:port/dbname
-    - postgres://user:password@host:port/dbname
-
-    Returns a psycopg-compatible conninfo string:
-        host=... port=... dbname=... user=... password=...
-    """
-    import os
-
-    url = os.environ.get(env_var, "")
-    if not url:
-        raise ValueError(
-            f"Environment variable '{env_var}' is not set or empty. "
-            f"Set it to a PostgreSQL URL, e.g. postgresql://user:pass@host:5432/dbname"
-        )
-
-    return conninfo_from_url(url)
+_DB_INT_FIELDS = ("pg_port", "pg_pool_min", "pg_pool_max")
 
 
-class MiningDbConfig(BaseSettings):
-    """PostgreSQL connection settings, loaded from environment variables."""
-
-    pg_host: str
-    pg_port: int = 5432
-    pg_dbname: str
-    pg_user: str
-    # Excluding the password from repr prevents pytest fixture diagnostics and
-    # incidental logging from printing a live database credential.
-    pg_password: str = Field(repr=False)
-    pg_sslmode: str = "disable"
-    pg_gssencmode: str = "disable"
-    pg_pool_min: int = 2
-    pg_pool_max: int = 10
-
-    model_config = {
-        "env_prefix": "",
-        "env_file": str(_REPO_ROOT / ".env"),
-        "env_file_encoding": "utf-8",
-        "extra": "ignore",
+def _coerce_db_fields(d: dict[str, Any]) -> dict[str, Any]:
+    """控制面 database.default dict → MiningDbConfig 字段（带类型规整）。"""
+    return {
+        "pg_host": str(d["host"]),
+        "pg_port": int(d.get("port", 5432)),
+        "pg_dbname": str(d["dbname"]),
+        "pg_user": str(d["user"]),
+        "pg_password": str(d["password"]),
+        "pg_sslmode": str(d.get("sslmode", "disable")),
+        "pg_gssencmode": str(d.get("gssencmode", "disable")),
+        "pg_pool_min": int(d.get("pool_min", 2)),
+        "pg_pool_max": int(d.get("pool_max", 10)),
     }
+
+
+class MiningDbConfig:
+    """PostgreSQL 连接配置。无参 → 控制面；显式 kwargs → 直接构造（测试）。"""
+
+    def __init__(self, **fields: Any) -> None:
+        if not fields:
+            data = get_database_config().get("default") or {}
+            if not data.get("host") or not data.get("dbname"):
+                raise ValueError(
+                    "Database config from control plane is missing host/dbname; "
+                    "check main_control_service/config/system/database.yaml and that "
+                    "main_control_service is reachable."
+                )
+            fields = _coerce_db_fields(data)
+        else:
+            # 显式构造（测试）：补默认 + 整型规整
+            fields = {
+                "pg_host": fields.get("pg_host", ""),
+                "pg_port": int(fields.get("pg_port", 5432)),
+                "pg_dbname": fields.get("pg_dbname", ""),
+                "pg_user": fields.get("pg_user", ""),
+                "pg_password": fields.get("pg_password", ""),
+                "pg_sslmode": fields.get("pg_sslmode", "disable"),
+                "pg_gssencmode": fields.get("pg_gssencmode", "disable"),
+                "pg_pool_min": int(fields.get("pg_pool_min", 2)),
+                "pg_pool_max": int(fields.get("pg_pool_max", 10)),
+            }
+        self.__dict__.update(fields)
 
     @property
     def conninfo(self) -> str:
-        """Build psycopg connection string."""
+        """psycopg connection string."""
         return make_conninfo(
             host=self.pg_host,
             port=self.pg_port,
@@ -124,4 +126,10 @@ class MiningDbConfig(BaseSettings):
             password=self.pg_password,
             sslmode=self.pg_sslmode,
             gssencmode=self.pg_gssencmode,
+        )
+
+    def __repr__(self) -> str:  # 不泄露 password
+        return (
+            f"MiningDbConfig(host={self.pg_host!r}, port={self.pg_port}, "
+            f"dbname={self.pg_dbname!r}, user={self.pg_user!r})"
         )

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Request
 
 from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+from knowledge_mining.mining.infra.domain_pack import get_default_domain
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -15,7 +16,7 @@ async def get_config(request: Request) -> dict:
     cfg: MiningDbConfig = request.app.state.db_config
     mining_cfg = MiningConfig()
     return {
-        "domain_pack": mining_cfg.domain_pack,
+        "default_domain": get_default_domain(),
         "max_workers": mining_cfg.max_workers,
         "llm_service_url": mining_cfg.llm_service_url,
         "database": {

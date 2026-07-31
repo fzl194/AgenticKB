@@ -83,7 +83,7 @@
             </el-table-column>
           </el-table>
           <div class="dashboard__table-footer">
-            <el-button text type="primary" size="small" @click="$router.push('/mining')">
+            <el-button text type="primary" size="small" @click="$router.push('/kb')">
               查看全部 →
             </el-button>
           </div>

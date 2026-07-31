@@ -1,3 +1,7 @@
+# 顶层默认域：未显式指定 domain 时的兜底。
+# mining 不再在自身配置里存默认域，统一从这里取（见 domain_pack.get_default_domain）。
+default_domain: cloud_core_network
+
 domains:
   cloud_core_network:
     display_name: Cloud Core Network
@@ -7,7 +11,7 @@ domains:
     database:
       host: 121.89.90.178
       port: 5432
-      dbname: coremasterkb
+      dbname: kb_db
       user: kb_user
       password: nis123qwe
       sslmode: disable
@@ -24,6 +28,16 @@ domains:
     enabled: true
     default_channel: prod
     scenario_pack: generic
+    database:
+      host: 121.89.90.178
+      port: 5432
+      dbname: kb_db
+      user: kb_user
+      password: nis123qwe
+      sslmode: disable
+      gssencmode: disable
+      pool_min: 2
+      pool_max: 10
     services:
       mining_url: http://localhost:8901
       serving_url: http://localhost:8081
@@ -37,7 +51,7 @@ domains:
     database:
       host: 121.89.90.178
       port: 5432
-      dbname: coremasterkb
+      dbname: kb_db
       user: kb_user
       password: nis123qwe
       sslmode: disable
@@ -57,7 +71,7 @@ domains:
     database:
       host: 121.89.90.178
       port: 5432
-      dbname: coremasterkb
+      dbname: kb_db
       user: kb_user
       password: nis123qwe
       sslmode: disable

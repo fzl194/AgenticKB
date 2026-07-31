@@ -132,41 +132,6 @@ class TestDomainPackLoader:
 
 
 # ---------------------------------------------------------------------------
-# Test: Per-domain DB connection
-# ---------------------------------------------------------------------------
-
-class TestPerDomainDbConnection:
-    def test_conninfo_from_env_valid(self, monkeypatch):
-        from knowledge_mining.mining.infra.pg_config import conninfo_from_env
-        monkeypatch.setenv("TEST_DB_URL", "postgresql://myuser:mypass@dbhost:5433/mydb?sslmode=require")
-        conninfo = conninfo_from_env("TEST_DB_URL")
-        assert "host=dbhost" in conninfo
-        assert "port=5433" in conninfo
-        assert "dbname=mydb" in conninfo
-        assert "user=myuser" in conninfo
-        assert "password=mypass" in conninfo
-        assert "sslmode=require" in conninfo
-
-    def test_conninfo_from_env_missing(self):
-        from knowledge_mining.mining.infra.pg_config import conninfo_from_env
-        with pytest.raises(ValueError, match="not set"):
-            conninfo_from_env("NONEXISTENT_VAR_12345")
-
-    def test_conninfo_from_env_invalid_scheme(self, monkeypatch):
-        from knowledge_mining.mining.infra.pg_config import conninfo_from_env
-        monkeypatch.setenv("BAD_URL", "http://not-postgres.com/db")
-        with pytest.raises(ValueError, match="Invalid URL scheme"):
-            conninfo_from_env("BAD_URL")
-
-    def test_conninfo_from_env_post_scheme(self, monkeypatch):
-        from knowledge_mining.mining.infra.pg_config import conninfo_from_env
-        monkeypatch.setenv("POST_URL", "postgres://u:p@h:5432/d")
-        conninfo = conninfo_from_env("POST_URL")
-        assert "host=h" in conninfo
-        assert "dbname=d" in conninfo
-
-
-# ---------------------------------------------------------------------------
 # Test: Entity Schema from Profile
 # ---------------------------------------------------------------------------
 
@@ -232,6 +197,30 @@ class TestDomainRetrievalPolicy:
         entity_cards = [u for u in units if u.unit_type == "entity_card"]
         # entity_card is "off" in cloud_core_network retrieval_policy, so no cards expected
         assert len(entity_cards) == 0
+
+    def test_cloud_table_row_off_overrides_manifest_param(self, cloud_profile):
+        """域包 retrieval_policy.table_row:'off' 覆盖工作流 manifest 冻结的 tableRowUnit:true。
+
+        已发布工作流的 compiled_manifest 编译期把算子默认 tableRowUnit=true 冻进节点 params，
+        改代码默认值改不到已发布 manifest。域包 "off" 必须权威覆盖，否则域级策略形同虚设。
+        （所有内置域包 table_row 均为 off，故 table_row 单元默认不应出现。）
+        """
+        from knowledge_mining.mining.stages.retrieval_units import build_retrieval_units
+        from knowledge_mining.mining.contracts.models import RawSegmentData
+
+        seg = RawSegmentData(
+            document_key="doc:test",
+            segment_index=0,
+            block_type="table",
+            raw_text="参数 值\nMCC 454\nMNC 12",
+            structure_json={
+                "columns": ["参数", "值"],
+                "rows": [{"参数": "MCC", "值": "454"}, {"参数": "MNC", "值": "12"}],
+            },
+        )
+        # cloud 域包 table_row=off：即便显式 table_row_unit=True（模拟 manifest 冻结值），也不生成
+        units = build_retrieval_units([seg], profile=cloud_profile, table_row_unit=True)
+        assert not any(u.unit_type == "table_row" for u in units)
 
     def test_generic_no_entity_cards(self, generic_profile):
         from knowledge_mining.mining.stages.retrieval_units import build_retrieval_units
@@ -311,11 +300,14 @@ class TestBackwardCompat:
         assert profile.domain_id == "cloud_core_network"
         assert "command" in profile.strong_entity_types
 
-    def test_mining_config_domain_field(self):
-        """MiningConfig.domain is the new primary field."""
+    def test_default_domain_comes_from_registry(self):
+        """默认域来自 domain_registry.yaml 顶层 default_domain，不在 MiningConfig。"""
+        from knowledge_mining.mining.infra.domain_pack import get_default_domain
+        assert get_default_domain() == "cloud_core_network"
+        # MiningConfig 不再持有 domain 字段（domain 统一由 registry 决定）
         from knowledge_mining.mining.infra.mining_config import MiningConfig
         cfg = MiningConfig(_env_file=None)
-        assert cfg.domain == "cloud_core_network"
+        assert not hasattr(cfg, "domain")
 
     def test_mining_config_defaults_to_workflow_submission(self, monkeypatch):
         """Workflow submission is enabled when no environment override exists."""

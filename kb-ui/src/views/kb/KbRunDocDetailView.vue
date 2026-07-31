@@ -1,7 +1,7 @@
 <template>
   <div class="doc-detail" v-loading="miningStore.loading">
     <div class="doc-detail__back">
-      <el-button text @click="$router.push(`/mining/${props.runId}`)">
+      <el-button text @click="$router.push(`/kb/${props.kbId}/run/${props.runId}`)">
         <el-icon><ArrowLeft /></el-icon> 返回 Run
       </el-button>
     </div>
@@ -212,7 +212,7 @@ import StatusBadge from '@/components/common/StatusBadge.vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
-const props = defineProps<{ runId: string; docId: string }>()
+const props = defineProps<{ kbId: string; runId: string; docId: string }>()
 const miningStore = useMiningStore()
 const miningApi = useMiningApi()
 

@@ -272,11 +272,16 @@ def build_retrieval_units(
     include_questions = (
         True if generated_question_unit is None else generated_question_unit
     )
-    include_table_rows = (
-        profile.retrieval_policy.table_row != "off"
-        if table_row_unit is None
-        else table_row_unit
-    )
+    # 域包 retrieval_policy.table_row:"off" 是域级禁用意图，权威高于工作流算子参数。
+    # 已发布工作流的 compiled_manifest 在编译期会把算子默认值冻进节点 params（如旧默认
+    # tableRowUnit=true），改代码默认值改不到已发布 manifest。让域包 "off" 始终覆盖参数，
+    # 域级策略才真正生效；非 "off" 时再按"参数优先、否则默认开"。
+    if profile.retrieval_policy.table_row == "off":
+        include_table_rows = False
+    elif table_row_unit is None:
+        include_table_rows = True
+    else:
+        include_table_rows = table_row_unit
 
     qgen = question_generator
     ctxer = contextualizer

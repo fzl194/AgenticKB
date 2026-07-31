@@ -1,57 +1,54 @@
-"""Mining pipeline configuration — all values from .env.
+"""Mining pipeline configuration — 来源：main_control_service。
 
-Uses pydantic-settings to load environment variables, same pattern as pg_config.py.
+配置来自 ``GET /api/v1/system/mining/raw``（main_control_service/config/system/mining.yaml）。
+**不再读 .env。** 无参 ``MiningConfig()`` 读控制面缓存（启动时预填）；显式 kwargs（测试）直接构造。
+
 Mining calls llm_service for both chat (template-based) and embedding.
-Only the embedding model name and dimensions need to be configured here;
-the actual API key, base URL for embedding are handled by llm_service.
+Only the embedding model name and dimensions need to be configured there;
+the actual API key, base URL for embedding are handled by llm_service。
+
+domain 不在 mining 配置里：统一来自 domain_registry.yaml（domain_pack.get_default_domain）。
 """
 from __future__ import annotations
 
-import warnings
-from pathlib import Path
-from typing import Literal
+from typing import Any
 
-from pydantic_settings import BaseSettings
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]  # knowledge_mining/mining/infra/ -> CoreMasterKB/
+from .control_plane import get_mining_service_config
 
 
-class MiningConfig(BaseSettings):
-    """Mining pipeline configuration, loaded from environment variables.
+class MiningConfig:
+    """Mining pipeline configuration.
 
-    Env vars:
-        LLM_SERVICE_URL:        llm_service address (default: http://localhost:8900)
-        DOMAIN:                 default domain ID
-        DOMAIN_PACK:            (Deprecated) use DOMAIN instead
-        MAX_WORKERS:            max concurrent workers for streaming pipeline
+    Fields:
+        llm_service_url:             llm_service address
+        max_workers:                 max concurrent workers for streaming pipeline
+        mining_run_submission_engine: 'legacy' | 'workflow'
+        port:                        mining API listen port
 
-    Model-level params (embedding_model, embedding_dimensions, bypass_proxy)
-    are managed by llm_service. Mining no longer configures them.
+    domain 由 domain_registry.yaml 决定，不在此处。
     """
 
-    # LLM Service
-    llm_service_url: str = "http://localhost:8900"
+    def __init__(self, **fields: Any) -> None:
+        if not fields:
+            data = get_mining_service_config()
+            fields = {
+                "llm_service_url": data.get("llm_service_url", "http://localhost:8900"),
+                "max_workers": int(data.get("max_workers", 4)),
+                "mining_run_submission_engine": data.get("mining_run_submission_engine", "workflow"),
+                "port": int(data.get("port", 8901)),
+            }
+        else:
+            # 显式构造（测试）：_env_file 等 pydantic 残留键被忽略
+            fields = {
+                "llm_service_url": fields.get("llm_service_url", "http://localhost:8900"),
+                "max_workers": int(fields.get("max_workers", 4)),
+                "mining_run_submission_engine": fields.get("mining_run_submission_engine", "workflow"),
+                "port": int(fields.get("port", 8901)),
+            }
+        self.__dict__.update(fields)
 
-    # Pipeline defaults
-    domain: str = "cloud_core_network"
-    domain_pack: str = ""
-    max_workers: int = 4
-    mining_run_submission_engine: Literal["legacy", "workflow"] = "workflow"
-
-    model_config = {
-        "env_prefix": "",
-        "env_file": str(_REPO_ROOT / ".env"),
-        "env_file_encoding": "utf-8",
-        "extra": "ignore",
-    }
-
-    def __init__(self, **kwargs: object) -> None:
-        super().__init__(**kwargs)
-        # Backward compat: if DOMAIN_PACK is set but DOMAIN is not, use DOMAIN_PACK
-        if self.domain_pack and self.domain == "cloud_core_network":
-            warnings.warn(
-                "DOMAIN_PACK env var is deprecated; use DOMAIN instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            self.domain = self.domain_pack
+    def __repr__(self) -> str:
+        return (
+            f"MiningConfig(llm_service_url={self.llm_service_url!r}, "
+            f"max_workers={self.max_workers}, port={self.port})"
+        )

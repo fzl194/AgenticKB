@@ -110,7 +110,8 @@ def main() -> None:
     # Full reset: uncomment the line below to drop & recreate all tables
     # recreate_all_tables(db_cfg)
 
-    domain = mining_cfg.domain  # e.g. "cloud_core_network"
+    from knowledge_mining.mining.infra.domain_pack import get_default_domain
+    domain = get_default_domain()  # 来自 domain_registry.yaml
     llm_url = mining_cfg.llm_service_url
 
     # Run mining pipeline (incremental)

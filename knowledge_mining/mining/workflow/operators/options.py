@@ -95,10 +95,15 @@ class RetrievalUnitOptions(OperatorOptions):
         alias="generatedQuestionUnit",
         title="生成问题检索单元",
     )
-    table_row_unit: bool = Field(
-        True,
+    table_row_unit: bool | None = Field(
+        None,
         alias="tableRowUnit",
         title="生成表格行检索单元",
+        description=(
+            "默认 None：按域包 retrieval_policy.table_row 决定（'off' 则不生成），"
+            "与 legacy 路径行为一致；显式 True/False 才覆盖域包。"
+            "（旧默认 True 会无视域包的 table_row:off，导致表格按行爆出大量单元。）"
+        ),
     )
     max_questions_per_segment: int = Field(
         2,

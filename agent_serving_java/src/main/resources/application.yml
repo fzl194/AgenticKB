@@ -2,16 +2,17 @@ server:
   port: 8081
 
 spring:
-  config:
-    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+  # 不再 import .env：serving 的库走 main_control 的 /api/v1/serving-config（per-domain，
+  # 由 DomainPoolManager 路由）。下面这个默认 DataSource 仅给非路由的全局表（operator_paradigm*）
+  # 用，取值与 main_control_service/config/system/database.yaml 的 default(kb_db) 一致。
   datasource:
-    url: jdbc:postgresql://${PG_HOST:localhost}:${PG_PORT:15432}/${PG_DBNAME:test_db}
-    username: ${PG_USER:zdy}
-    password: ${PG_PASSWORD:zdy1234}
+    url: jdbc:postgresql://121.89.90.178:5432/kb_db
+    username: kb_user
+    password: nis123qwe
     driver-class-name: org.postgresql.Driver
     hikari:
-      minimum-idle: ${PG_POOL_MIN:2}
-      maximum-pool-size: ${PG_POOL_MAX:10}
+      minimum-idle: 2
+      maximum-pool-size: 10
       connection-timeout: 5000
 
 mybatis:

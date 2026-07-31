@@ -2,6 +2,15 @@ import axios from 'axios'
 import { useDomainStore } from '@/stores/domain'
 
 /**
+ * Phase 1：无登录态，前端写死一个默认 KB 用户。经 main_control_service 代理透传
+ * 到 mining 的 X-KB-User 头，由 mining/kb/auth.current_user 解析为 kb_users.id。
+ * 仅对 mining 的 /api/kb* 路径注入（这些路由才依赖 current_user；其它 mining
+ * 路由不读该头，注入也只会在路由声明了依赖时才触发 upsert，副作用为零）。
+ * 接真登录时把这里换成「从登录态 store 读」即可，其余代码零改。
+ */
+const DEFAULT_KB_USER = import.meta.env.VITE_KB_DEFAULT_USER || 'admin'
+
+/**
  * Create an axios client that routes requests through the main_control_service
  * reverse proxy. The baseURL is resolved on every request via an interceptor,
  * so domain switching is reflected immediately.
@@ -26,6 +35,10 @@ export function createProxyClient(service: string, options: ProxyClientOptions =
     config.baseURL = `/api/control-plane/api/v1/proxy/${encodeURIComponent(requestedDomain)}/${service}`
     if (service === 'mining' && includeDomainQuery) {
       config.params = { ...params, domain: requestedDomain }
+      if (typeof config.url === 'string' && config.url.startsWith('/api/kb')) {
+        // axios 1.x 的 config.headers 是 AxiosHeaders 实例；用 .set() 才会进发送通道
+        config.headers.set('X-KB-User', DEFAULT_KB_USER)
+      }
     }
     return config
   })

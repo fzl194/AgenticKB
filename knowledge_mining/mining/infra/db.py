@@ -341,30 +341,56 @@ class AssetCoreDB(_DB):
         document_type: str | None = None,
         metadata_json: dict | None = None,
     ) -> str:
+        """Legacy 身份 upsert（仅 /api/runs 走，KB 路径不调）。
+
+        G1 后 (domain, document_key) 唯一约束已让位于 (kb_id, document_key)，不能再
+        用 ON CONFLICT(domain, document_key)。改为先查后插：legacy 文档 kb_id 为 NULL，
+        同域同 key 历史上只有一行，查得则更新，否则插入。
+        """
+        existing = self._fetchone(
+            "SELECT id FROM asset_documents WHERE domain = %s AND document_key = %s AND kb_id IS NULL",
+            (domain, document_key),
+        )
+        if existing:
+            self._execute(
+                """UPDATE asset_documents
+                   SET document_name = COALESCE(%s, document_name),
+                       document_type = COALESCE(%s, document_type),
+                       metadata_json = %s
+                   WHERE id = %s""",
+                (document_name, document_type, _json_dumps(metadata_json), existing["id"]),
+            )
+            return existing["id"]
         now = _utcnow()
         self._execute(
             """INSERT INTO asset_documents
                    (id, domain, document_key, document_name, document_type, metadata_json, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)
-               ON CONFLICT(domain, document_key) DO UPDATE SET
-                   document_name = COALESCE(excluded.document_name, asset_documents.document_name),
-                   document_type = COALESCE(excluded.document_type, asset_documents.document_type),
-                   metadata_json = excluded.metadata_json""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
             (
                 document_id, domain, document_key, document_name, document_type,
                 _json_dumps(metadata_json), now,
             ),
         )
-        row = self._fetchone(
-            "SELECT id FROM asset_documents WHERE domain = %s AND document_key = %s",
-            (domain, document_key),
-        )
-        return row["id"] if row else document_id
+        return document_id
 
     def get_document_by_key(self, *, domain: str, document_key: str) -> dict[str, Any] | None:
         return self._fetchone(
             "SELECT * FROM asset_documents WHERE domain = %s AND document_key = %s",
             (domain, document_key),
+        )
+
+    def get_document_by_storage_path(
+        self, *, domain: str, storage_path: str
+    ) -> dict[str, Any] | None:
+        """按落盘绝对路径查文档身份。
+
+        storage_path 含 ``<kb_id>`` 前缀 → 全库唯一，天然按 KB 隔离，消解
+        「多库同 document_key」歧义（设计：身份/位置分离，挖掘 walk 时按位置找身份）。
+        legacy 文档 storage_path 为 NULL，不会被命中（按 D2 不回落 document_key）。
+        """
+        return self._fetchone(
+            "SELECT * FROM asset_documents WHERE domain = %s AND storage_path = %s",
+            (domain, storage_path),
         )
 
     def get_document(self, *, domain: str, document_id: str) -> dict[str, Any] | None:
@@ -373,15 +399,38 @@ class AssetCoreDB(_DB):
             (document_id, domain),
         )
 
+    def get_document_storage_paths_by_ids(
+        self, *, domain: str, document_ids: list[str]
+    ) -> list[str]:
+        """按文档 id 批量取 storage_path。
+
+        选择性挖掘用：把前端勾选的 document id 翻成落盘绝对路径，在
+        ``_prepare_document_states`` 里按位置过滤 ``ingest_directory`` 的扫描结果。
+        只返回本域、storage_path 非空的行（legacy 行 storage_path 为 NULL，不参与）。
+        """
+        if not document_ids:
+            return []
+        rows = self._fetchall(
+            "SELECT storage_path FROM asset_documents "
+            "WHERE id = ANY(%s) AND domain = %s AND storage_path IS NOT NULL",
+            (list(document_ids), domain),
+        )
+        return [r["storage_path"] for r in rows]
+
     def get_document_lifecycle_state(
         self,
         *,
         domain: str,
         channel: str,
-        document_key: str,
+        storage_path: str,
         normalized_content_hash: str,
     ) -> dict[str, Any] | None:
         """Return domain-local history and the published active selection.
+
+        按 ``storage_path``（位置）定位身份，而非 ``document_key``。这样文件移动/改名
+        后（位置变、document_key 冻结不变）仍能找到同一身份，挖掘历史不断链；且
+        storage_path 全库唯一，消解多库同 key 歧义。返回的 ``document_key`` 是冻结键，
+        供调用方写入 ``mining_run_documents``。legacy 文档（storage_path NULL）不会被命中。
 
         The active release is the only source of current truth.  A newer build
         or link that has not been published must not affect classification.
@@ -467,7 +516,7 @@ class AssetCoreDB(_DB):
                    LIMIT 1
                ) AS active ON TRUE
                WHERE documents.domain = %s
-                 AND documents.document_key = %s""",
+                 AND documents.storage_path = %s""",
             (
                 domain,
                 domain,
@@ -478,7 +527,7 @@ class AssetCoreDB(_DB):
                 domain,
                 channel,
                 domain,
-                document_key,
+                storage_path,
             ),
         )
 
@@ -794,6 +843,27 @@ class AssetCoreDB(_DB):
             fetch="rowcount",
         )
 
+    def clear_snapshot_derived_assets(self, document_snapshot_id: str) -> None:
+        """清空一个 snapshot 的全部派生资产，保留 snapshot 行本身与 document 身份。
+
+        用于 force_redo 重跑前清理：persist_document_assets 见 snapshot 已有切片就会跳过持久化、
+        且按 unit_key upsert 不会删除不再生成的旧单元（如 table_row）。先整体清空，重跑才干净。
+        依赖：asset_retrieval_embeddings 由 retrieval_unit_id ON DELETE CASCADE 随单元删；
+        asset_segment_entity_mentions 由 segment_id ON DELETE CASCADE 随切片删。
+        """
+        self._execute(
+            "DELETE FROM asset_retrieval_units WHERE document_snapshot_id = %s",
+            (document_snapshot_id,),
+        )
+        self._execute(
+            "DELETE FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
+            (document_snapshot_id,),
+        )
+        self._execute(
+            "DELETE FROM asset_raw_segments WHERE document_snapshot_id = %s",
+            (document_snapshot_id,),
+        )
+
     def get_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> list[dict[str, Any]]:
         return self._fetchall(
             "SELECT * FROM asset_retrieval_units WHERE document_snapshot_id = %s",
@@ -843,16 +913,18 @@ class AssetCoreDB(_DB):
         mining_run_id: str | None = None,
         summary_json: dict | None = None,
         validation_json: dict | None = None,
+        kb_id: str | None = None,
     ) -> str:
         now = _utcnow()
         self._execute(
             """INSERT INTO asset_builds
                    (id, build_code, status, build_mode, domain, source_batch_id, parent_build_id,
-                    mining_run_id, summary_json, validation_json, created_at, finished_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)""",
+                    mining_run_id, summary_json, validation_json, kb_id, created_at, finished_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)""",
             (
                 build_id, build_code, status, build_mode, domain, source_batch_id, parent_build_id,
-                mining_run_id, _json_dumps(summary_json), _json_dumps(validation_json), now,
+                mining_run_id, _json_dumps(summary_json), _json_dumps(validation_json),
+                kb_id, now,
             ),
         )
         return build_id

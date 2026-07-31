@@ -180,6 +180,30 @@ def resolve_domain(domain_id: str) -> dict[str, Any]:
     return entry
 
 
+def get_default_domain() -> str:
+    """默认域：统一来自 domain_registry.yaml。
+
+    优先取顶层 ``default_domain``（且该域 enabled）；未配置或失效则回落到
+    registry 里第一个 enabled 域。mining 自身不在配置里存默认域——domain 一律
+    由 registry 决定。
+    """
+    registry = load_domain_registry()
+    domains = registry.get("domains", {})
+    default = registry.get("default_domain")
+    if (
+        default
+        and isinstance(default, str)
+        and default in domains
+        and domains[default].get("enabled", False)
+    ):
+        return default
+    for domain_id, entry in domains.items():
+        if entry.get("enabled", False):
+            return domain_id
+    raise ValueError("No enabled domain found in domain registry")
+
+
+
 # ---------------------------------------------------------------------------
 # YAML -> DomainProfile converter
 # ---------------------------------------------------------------------------
@@ -362,12 +386,12 @@ def load_domain_pack(domain_id: str, *, packs_root: Path | None = None) -> Domai
 # ---------------------------------------------------------------------------
 
 def get_default_profile() -> DomainProfile:
-    """Load the default (cloud_core_network) profile.
+    """Load the default domain's profile (from registry's default_domain).
 
     Provides backward compatibility for code that hasn't been migrated
     to explicitly pass a profile.
     """
-    return load_domain_pack("cloud_core_network")
+    return load_domain_pack(get_default_domain())
 
 
 # Deprecated: used by models.STRONG_ENTITY_TYPES alias

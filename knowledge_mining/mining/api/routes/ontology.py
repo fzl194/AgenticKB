@@ -24,12 +24,13 @@ from knowledge_mining.mining.infra.ontology_store import (
     OntologyStore, GraphStore, find_duplicate_type,
 )
 from knowledge_mining.mining.stages.graph_write import scoped_recompute
+from knowledge_mining.mining.infra.domain_pack import get_default_domain
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["ontology"])
 
-_DEFAULT_DOMAIN = "cloud_core_network"
+_DEFAULT_DOMAIN = get_default_domain()  # 来自 domain_registry.yaml，不再硬编码
 
 
 def _stores(request: Request, domain: str) -> tuple[OntologyStore, GraphStore]:

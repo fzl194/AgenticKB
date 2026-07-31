@@ -76,12 +76,13 @@ def resolve_domain_database(
     default: MiningDbConfig,
     environ: Mapping[str, str] | None = None,
 ) -> ResolvedDomainDatabase:
-    """Resolve env override, inline registry config, then global config."""
-    env = os.environ if environ is None else environ
-    env_name = str(entry.get("database_url_env") or "").strip()
-    env_url = str(env.get(env_name, "")).strip() if env_name else ""
-    if env_url:
-        return _resolved_from_url(env_url, source="env", default=default)
+    """Resolve inline registry config, then global config.
+
+    domain 的库只从 domain_registry.yaml 的内联 ``database:`` 块取；未配置则回落
+    全局默认（``default`` = 控制面 database.yaml）。**不再从环境变量取**——历史
+    的 ``database_url_env`` env 覆盖路径已移除，domain 库一律由 registry 决定。
+    ``environ`` 形参仅为签名兼容保留，不再使用。
+    """
     if entry.get("database") is not None:
         return _resolved_from_inline(entry["database"])
 

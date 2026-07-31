@@ -59,19 +59,47 @@ EXCEPTION WHEN duplicate_object THEN
 END
 $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_snapshot_legacy_content
-    ON asset_document_snapshots(domain, normalized_content_hash)
-    WHERE workflow_graph_hash IS NULL;
+-- partial unique 仅在无重复数据时创建——CREATE UNIQUE INDEX 的 IF NOT EXISTS 只查索引是否存在，
+-- 不查数据是否干净；存量重复行（legacy 或 workflow）会让建索引撞 unique_violation 而整个 schema
+-- 初始化失败。有重复时跳过（系统仍可运行，应用层 upsert 仍去重），待清理数据后再强约束。
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM asset_document_snapshots
+        WHERE workflow_graph_hash IS NULL
+        GROUP BY domain, normalized_content_hash HAVING COUNT(*) > 1
+    ) THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_snapshot_legacy_content
+            ON asset_document_snapshots(domain, normalized_content_hash)
+            WHERE workflow_graph_hash IS NULL;
+    ELSE
+        RAISE NOTICE 'Skip uq_asset_snapshot_legacy_content: duplicate legacy (domain, normalized_content_hash) rows exist.';
+    END IF;
+END
+$$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_snapshot_workflow_content
-    ON asset_document_snapshots(
-        domain,
-        normalized_content_hash,
-        workflow_id,
-        workflow_version,
-        workflow_graph_hash
-    )
-    WHERE workflow_graph_hash IS NOT NULL;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM asset_document_snapshots
+        WHERE workflow_graph_hash IS NOT NULL
+        GROUP BY domain, normalized_content_hash, workflow_id, workflow_version, workflow_graph_hash
+        HAVING COUNT(*) > 1
+    ) THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_snapshot_workflow_content
+            ON asset_document_snapshots(
+                domain,
+                normalized_content_hash,
+                workflow_id,
+                workflow_version,
+                workflow_graph_hash
+            )
+            WHERE workflow_graph_hash IS NOT NULL;
+    ELSE
+        RAISE NOTICE 'Skip uq_asset_snapshot_workflow_content: duplicate workflow rows exist.';
+    END IF;
+END
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_asset_snapshot_raw_workflow
     ON asset_document_snapshots(domain, raw_content_hash, workflow_graph_hash);

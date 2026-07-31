@@ -89,7 +89,7 @@ from knowledge_mining.mining.ingestion import ingest_directory
 from knowledge_mining.mining.stages.parse import create_parser
 from knowledge_mining.mining.stages.segment import DefaultSegmenter
 from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents, demo_quality_summary, publish_release
-from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack, resolve_domain
+from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack, resolve_domain, get_default_domain
 from knowledge_mining.mining.pipeline import (
     DocumentContext, PipelineConfig,
     StreamingPipeline,
@@ -148,7 +148,7 @@ def _run_legacy(
     cfg = MiningConfig()
     llm_base_url = llm_base_url or cfg.llm_service_url
     max_workers = max_workers or cfg.max_workers
-    domain = domain or cfg.domain
+    domain = domain or get_default_domain()
     input_path = Path(input_path)
     params = batch_params or BatchParams()
     registry_entry = resolve_domain(domain)
@@ -439,9 +439,7 @@ def run(
 ) -> dict[str, Any]:
     selected_domain = domain or domain_pack
     if selected_domain is None:
-        from knowledge_mining.mining.infra.mining_config import MiningConfig
-
-        selected_domain = MiningConfig().domain
+        selected_domain = get_default_domain()
     if run_id is not None and _persisted_execution_engine(
         run_id=run_id,
         domain=selected_domain,
@@ -704,6 +702,25 @@ class _WorkflowJobServices:
         docs, ingest_summary = ingest_directory(
             self.input_path, self.batch_params
         )
+        # 选择性挖掘：metadata_json.document_ids 非空时只挖所选文档子集。
+        # 按 storage_path（落盘绝对位置，全库唯一）过滤：ingest 出的 doc 按
+        # input_path/relative_path 复算位置后匹配。未在所选集合内的文档直接剔除，
+        # 不进 mining_run_documents、不产 snapshot——整库增量退化为子集增量。
+        run_meta = run_data.get("metadata_json")
+        if isinstance(run_meta, str):
+            run_meta = json.loads(run_meta)
+        run_meta = run_meta or {}
+        force_redo = bool(run_meta.get("force_redo"))
+        selected_ids = run_meta.get("document_ids") or []
+        if selected_ids:
+            selected_paths = set(self.asset_db.get_document_storage_paths_by_ids(
+                domain=self.profile.domain_id, document_ids=selected_ids,
+            ))
+            if selected_paths:
+                docs = [
+                    d for d in docs
+                    if str(Path(self.input_path) / d.relative_path) in selected_paths
+                ]
         batch_id = run_data.get("source_batch_id")
         if not batch_id:
             batch_id = (
@@ -802,16 +819,27 @@ class _WorkflowJobServices:
                 lifecycle_action = "UPDATE" if lifecycle else "NEW"
                 action = lifecycle_action
             else:
+                # G1 身份/位置分离：按 storage_path（含 <kb_id> 前缀、全库唯一）查身份，
+                # 而非 document_key。文件移动后位置变、document_key 冻结不变仍能命中同一身份。
+                storage_path = str(Path(self.input_path) / doc.relative_path)
                 lifecycle = self.asset_db.get_document_lifecycle_state(
                     domain=self.profile.domain_id,
                     channel=self.channel,
-                    document_key=doc_key,
+                    storage_path=storage_path,
                     normalized_content_hash=doc.normalized_content_hash,
                 )
                 lifecycle_action = decide_document_lifecycle_action(
                     lifecycle,
                     normalized_content_hash=doc.normalized_content_hash,
                 )
+                # force_redo：无视内容哈希去重，强制重跑（含 LLM 阶段）。先清空旧 snapshot 的派生
+                # 资产——否则 persist_document_assets 见已有切片会跳过持久化、旧单元（如 table_row）
+                # 也会按 unit_key upsert 残留。清空后 lifecycle 走 UPDATE 自然重生。
+                if force_redo and lifecycle_action in {"SKIP", "RESTORE"} and lifecycle:
+                    _snap = lifecycle.get("active_snapshot_id") or lifecycle.get("historical_snapshot_id")
+                    if _snap:
+                        self.asset_db.clear_snapshot_derived_assets(_snap)
+                    lifecycle_action = "UPDATE"
                 action = (
                     "SKIP"
                     if lifecycle_action in {"SKIP", "RESTORE"}
@@ -1687,13 +1715,21 @@ def _run_pipeline(
         _check_cancelled(runtime_db, run_id)
         rd_id = uuid.uuid4().hex
         doc_key = f"doc:/{doc.relative_path}"
+        # 身份/位置分离（G1）：按落盘绝对路径查身份。storage_path 含 <kb_id> 前缀，
+        # 全库唯一，消解「多库同 document_key」歧义；文件移动后位置变、document_key
+        # 冻结不变，仍能命中同一身份 → 挖掘历史不断链。
+        storage_path = str(input_path / doc.relative_path)
 
         lifecycle_state = asset_db.get_document_lifecycle_state(
             domain=profile.domain_id,
             channel=channel,
-            document_key=doc_key,
+            storage_path=storage_path,
             normalized_content_hash=doc.normalized_content_hash,
         )
+        # 命中已存在身份 → 用其冻结 document_key 写 mining_run_documents，保证跨 run
+        # 记录同一键（derive_document_status 的 join 不变、不断链）。新文档沿用 walk 派生值。
+        if lifecycle_state is not None:
+            doc_key = lifecycle_state["document_key"]
         lifecycle_action = decide_document_lifecycle_action(
             lifecycle_state,
             normalized_content_hash=doc.normalized_content_hash,
@@ -1947,6 +1983,13 @@ def _finalize_run(
     channel: str,
 ) -> dict[str, Any]:
     """B6：Phase 2 建库 + 发布 + 收尾。首跑无 Gate 触发、或 resume 审完两道 Gate 后都走这里。"""
+    # publish 意图持久化在 mining_runs.metadata_json["publish"]（默认 True）。
+    # KB 挖掘（mine_kb）写 False → 只 build 不 publish 到域级 active release，
+    # 避免 B1（同域多 KB 互相 retire）。读 metadata 而非参数透传，确保 review gate
+    # pause/resume 后意图不丢。/api/runs 不写该键 → 默认 True，行为不变。
+    _run_meta = (runtime_db.get_run(run_id) or {}).get("metadata_json") or {}
+    publish = _run_meta.get("publish", True)
+
     committed_count = counts["committed_count"]
     new_count = counts["new_count"]
     updated_count = counts["updated_count"]
@@ -1964,7 +2007,7 @@ def _finalize_run(
         if not tracker.set_run_phase(run_id, profile.domain_id, "publishing"):
             return {"run_id": run_id, "status": "cancelled"}
         evt = tracker.start_stage(run_id, "assemble_build")
-        should_publish = not has_failures or publish_on_partial_failure
+        should_publish = publish and (not has_failures or publish_on_partial_failure)
         with _domain_publish_transaction(asset_db, profile.domain_id):
             # Re-read the parent only after acquiring the domain lock.
             snapshot_decisions = classify_documents(
@@ -1982,6 +2025,7 @@ def _finalize_run(
                 snapshot_decisions=snapshot_decisions,
                 domain=profile.domain_id,
                 channel=channel,
+                kb_id=_run_meta.get("kb_id"),
             )
 
             # This read must see the build before the outer transaction commits.

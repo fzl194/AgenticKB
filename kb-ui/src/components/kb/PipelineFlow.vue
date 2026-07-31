@@ -59,12 +59,12 @@ const stages: PipelineStage[] = [
   { key: 'entity_extract', label: '实体抽取', backendKeys: ['entity_extract'], line: 'ontology' },
   { key: 'resolve', label: '实体归一', backendKeys: ['resolve'], line: 'ontology' },
   { key: 'entity_relations', label: '关系抽取', backendKeys: ['entity_relations'], line: 'ontology' },
-  { key: 'discourse', label: '语篇分析', backendKeys: ['discourse', 'discourse_relations'], line: 'discourse' },
+  { key: 'discourse', label: '语篇分析', backendKeys: ['discourse'], line: 'discourse' },
   { key: 'retrieval_units', label: '检索单元', backendKeys: ['retrieval_units'], line: 'discourse' },
   { key: 'embedding', label: '向量化', backendKeys: ['embedding'] },
   { key: 'db_write', label: '数据写入', backendKeys: ['db_write'] },
   { key: 'graph_write', label: '落图', backendKeys: ['graph_write'], line: 'ontology', scope: 'global' },
-  { key: 'build', label: '构建&发布', backendKeys: ['assemble_build', 'validate_build', 'publish_release'], scope: 'global' },
+  { key: 'build', label: '构建&发布', backendKeys: ['assemble_build', 'validate_build'], scope: 'global' },
 ]
 
 const stageIcons: Record<string, string> = {

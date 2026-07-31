@@ -593,7 +593,7 @@ def test_finalize_forwards_channel_to_parent_selection_and_publish(monkeypatch) 
         calls["classify"] = channel
         return decisions
 
-    def assemble(db, *, domain, channel, run_id, batch_id, snapshot_decisions):
+    def assemble(db, *, domain, channel, run_id, batch_id, snapshot_decisions, kb_id=None):
         calls["assemble"] = channel
         return "build-preview"
 

@@ -1,7 +1,7 @@
 <template>
   <div class="run-detail" v-loading="initialLoading">
     <div class="run-detail__back">
-      <el-button text @click="$router.push('/mining')">
+      <el-button text @click="$router.push(`/kb/${props.kbId}`)">
         <el-icon><ArrowLeft /></el-icon> 返回列表
       </el-button>
     </div>
@@ -120,14 +120,7 @@
 
       <!-- Pipeline Flow -->
       <div class="run-detail__section">
-        <h4 class="section-label">冻结 Workflow 执行图</h4>
-        <MiningWorkflowTrace v-if="trace" :trace="trace" />
-        <p v-else class="text-muted">正在加载 Run Trace…</p>
-      </div>
-
-      <!-- Compatible stage events -->
-      <div v-if="!isWorkflowRun" class="run-detail__section">
-        <h4 class="section-label">兼容阶段事件</h4>
+        <h4 class="section-label">Pipeline 阶段</h4>
         <PipelineFlow :stage-events="miningStore.stages" :all-docs-settled="allDocsSettled" />
         <div v-if="trace" class="ontology-line-stats">
           <span class="ontology-line-stats__tag">本体线产出</span>
@@ -160,7 +153,7 @@
           :data="filteredDocs"
           class="kb-table"
           :header-cell-style="{ background: 'transparent' }"
-          @row-click="(row: Record<string, unknown>) => $router.push(`/mining/${props.runId}/documents/${row.id}`)"
+          @row-click="(row: Record<string, unknown>) => $router.push(`/kb/${props.kbId}/run/${props.runId}/doc/${row.id}`)"
           style="cursor: pointer"
         >
           <el-table-column label="文件名" min-width="200">
@@ -223,10 +216,9 @@ import { useMiningStore } from '@/stores/mining'
 import { useMiningApi } from '@/api/mining'
 import type { RunTrace } from '@/types'
 import StatusBadge from '@/components/common/StatusBadge.vue'
-import PipelineFlow from '@/components/mining/PipelineFlow.vue'
-import MiningWorkflowTrace from '@/components/mining/workflow/MiningWorkflowTrace.vue'
+import PipelineFlow from '@/components/kb/PipelineFlow.vue'
 
-const props = defineProps<{ runId: string }>()
+const props = defineProps<{ kbId: string; runId: string }>()
 const domainStore = useDomainStore()
 const miningStore = useMiningStore()
 const miningApi = useMiningApi()
@@ -238,7 +230,6 @@ const resuming = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 // resume 后延迟启动轮询的句柄，需在卸载/切域时一并清除，避免离开页面后仍触发轮询
 let resumeTimer: ReturnType<typeof setTimeout> | null = null
-let requestGeneration = 0
 
 // ── Formatters ──
 
@@ -337,16 +328,6 @@ const allDocsSettled = computed(() => {
   return p.processing === 0 && (p.completed + p.failed + p.skipped) >= p.total
 })
 
-// 新执行引擎仍会写入兼容阶段事件用于存量接口与排障，但详情页只展示冻结 Workflow 执行图。
-// 同时检查 Run 与 Trace，既避免 Trace 加载期间闪现兼容区块，也兼容部分旧接口缺少 engine 字段。
-const isWorkflowRun = computed(() => {
-  const run = miningStore.currentRun
-  return trace.value?.execution_engine === 'workflow'
-    || Boolean(trace.value?.workflow)
-    || run?.execution_engine === 'workflow'
-    || Boolean(run?.workflow)
-})
-
 // ── Document filters ──
 
 const docFilters = computed(() => {
@@ -378,14 +359,9 @@ const filteredDocs = computed(() => {
 
 // ── Polling ──
 
-async function fetchTrace(runId: string, domain: string, generation: number) {
+async function fetchTrace() {
   try {
-    const result = await miningApi.getRunTrace(runId)
-    if (
-      generation === requestGeneration
-      && runId === props.runId
-      && domain === domainStore.currentDomain
-    ) trace.value = result
+    trace.value = await miningApi.getRunTrace(props.runId)
   } catch { /* trace 是叠加视图，失败不影响主流程 */ }
 }
 
@@ -411,20 +387,12 @@ async function handleResume() {
   }
 }
 
-async function pollOnce(
-  silent = false,
-  context = { generation: requestGeneration, runId: props.runId, domain: domainStore.currentDomain },
-) {
+async function pollOnce(silent = false) {
   await Promise.all([
-    miningStore.fetchProgress(context.runId),
-    miningStore.fetchRunDetail(context.runId, { silent }),
-    fetchTrace(context.runId, context.domain, context.generation),
+    miningStore.fetchProgress(props.runId),
+    miningStore.fetchRunDetail(props.runId, { silent }),
+    fetchTrace(),
   ])
-  if (
-    context.generation !== requestGeneration
-    || context.runId !== props.runId
-    || context.domain !== domainStore.currentDomain
-  ) return
   initialLoading.value = false
   if (miningStore.currentRun?.status !== 'running' && pollTimer) {
     clearInterval(pollTimer)
@@ -434,31 +402,19 @@ async function pollOnce(
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer)
-  const context = {
-    generation: ++requestGeneration,
-    runId: props.runId,
-    domain: domainStore.currentDomain,
-  }
-  trace.value = null
-  pollOnce(false, context).then(() => {
-    if (
-      context.generation === requestGeneration
-      && context.runId === props.runId
-      && context.domain === domainStore.currentDomain
-      && miningStore.currentRun?.status === 'running'
-    ) {
-      pollTimer = setInterval(() => pollOnce(true, context), 3000)
+  pollOnce(false).then(() => {
+    if (miningStore.currentRun?.status === 'running') {
+      pollTimer = setInterval(() => pollOnce(true), 3000)
     }
   })
 }
 
 onMounted(startPolling)
 onUnmounted(() => {
-  requestGeneration += 1
   if (pollTimer) clearInterval(pollTimer)
   if (resumeTimer) clearTimeout(resumeTimer)
 })
-watch([() => domainStore.currentDomain, () => props.runId], () => {
+watch(() => domainStore.currentDomain, () => {
   if (resumeTimer) clearTimeout(resumeTimer)
   resumeTimer = null
   miningStore.clearCurrentRun()

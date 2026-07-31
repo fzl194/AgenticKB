@@ -32,6 +32,10 @@ from knowledge_mining.mining.api.routes.workflows import router as workflows_rou
 from knowledge_mining.mining.api.routes.document_lifecycle import (
     router as document_lifecycle_router,
 )
+from knowledge_mining.mining.kb.routes.kbs import router as kb_router
+from knowledge_mining.mining.kb.routes.documents import router as kb_documents_router
+from knowledge_mining.mining.kb.routes.mining import router as kb_mining_router
+from knowledge_mining.mining.kb.routes.folders import router as kb_folders_router
 from knowledge_mining.mining.workflow.repositories.global_workflow_repository import (
     GlobalWorkflowRepository,
 )
@@ -45,6 +49,16 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize PostgreSQL pool and ensure schema exists."""
+    # 从主控制服务拉取全部配置并缓存（仿 llm_service）：mining.yaml + database.yaml。
+    # 之后 MiningDbConfig/MiningConfig/UploadConfig 无参构造直接读缓存，不再读 .env。
+    from knowledge_mining.mining.infra.control_plane import (
+        fetch_database_config,
+        fetch_mining_service_config,
+    )
+
+    fetch_mining_service_config(force=True)
+    fetch_database_config(force=True)
+
     cfg = MiningDbConfig()
 
     # Ensure database + schema (sync, runs once at startup)
@@ -99,6 +113,11 @@ async def lifespan(app: FastAPI):
         lambda: safe_config_fingerprint,
     )
 
+    # 预热挖掘管线重模块（jobs.run 拉起整条 parse/segment/embedding/...，冷导入实测约 2.5s）：
+    # 否则每个挖掘请求的后台线程首次冷导入会占 GIL，卡住 202 响应数秒——这正是"点挖掘要等
+    # 好几秒才弹进入队列"的根因。放启动期一次性付，请求期 import 命中缓存→瞬完。
+    import knowledge_mining.mining.jobs.run  # noqa: F401  (warm sys.modules cache)
+
     logger.info("Mining API started — PostgreSQL %s:%d/%s", cfg.pg_host, cfg.pg_port, cfg.pg_dbname)
 
     yield
@@ -126,6 +145,10 @@ def create_app() -> FastAPI:
     app.include_router(uploads_router)
     app.include_router(ontology_router)
     app.include_router(document_lifecycle_router)
+    app.include_router(kb_router)
+    app.include_router(kb_documents_router)
+    app.include_router(kb_mining_router)
+    app.include_router(kb_folders_router)
     app.include_router(workflows_router)
 
     # Allow cross-origin requests from the dev server and any local UI.
@@ -146,7 +169,11 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("MINING_API_PORT", "8901"))
+    from knowledge_mining.mining.infra.control_plane import fetch_mining_service_config
+    from knowledge_mining.mining.infra.mining_config import MiningConfig
+
+    fetch_mining_service_config()
+    port = MiningConfig().port
     uvicorn.run(
         "knowledge_mining.mining.api.app:app",
         host="0.0.0.0",

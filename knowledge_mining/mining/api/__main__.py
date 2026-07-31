@@ -41,5 +41,10 @@ def _timestamped_log_config() -> dict:
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("MINING_API_PORT", "8901"))
+    # 从主控制服务拉挖掘服务配置（含 port），仿 llm_service 启动范式。
+    from knowledge_mining.mining.infra.control_plane import fetch_mining_service_config
+    from knowledge_mining.mining.infra.mining_config import MiningConfig
+
+    fetch_mining_service_config()
+    port = MiningConfig().port
     uvicorn.run(app, host="0.0.0.0", port=port, log_config=_timestamped_log_config())

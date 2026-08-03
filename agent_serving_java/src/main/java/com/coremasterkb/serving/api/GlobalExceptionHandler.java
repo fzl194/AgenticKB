@@ -39,6 +39,25 @@ public class GlobalExceptionHandler {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "multiple_active_releases", "message", "Multiple active releases found"));
         }
+        // Forbidden and nonexistent knowledge bases deliberately share this response, so a caller
+        // cannot probe for which ids exist.
+        if ("kb_not_found".equals(ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "kb_not_found",
+                            "message", "One or more knowledge bases were not found"));
+        }
+        if ("kb_ids_required".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "kb_ids_required", "message", "At least one knowledge base id is required"));
+        }
+        // Mapped explicitly so an un-mined KB reports itself instead of collapsing into the
+        // generic bad_request below — "empty results" and "nothing mined yet" look identical
+        // to a caller otherwise.
+        if ("no_active_kb_build".equals(ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "no_active_kb_build",
+                            "message", "The selected knowledge bases have no mined content"));
+        }
         log.warn("Bad request: {}", ex.getMessage());
         return ResponseEntity.badRequest()
                 .body(Map.of("error", "bad_request", "message", "Bad request"));

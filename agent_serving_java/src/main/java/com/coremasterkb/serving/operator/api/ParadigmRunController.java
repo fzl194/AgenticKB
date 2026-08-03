@@ -43,12 +43,14 @@ public class ParadigmRunController {
      * Body: {@code { "paradigm": {nodes,edges,output}, "query": "...", "domain"?, "channel"?, "debug"? }}.
      */
     @PostMapping("/run")
-    public ResponseEntity<Map<String, Object>> run(@RequestBody JsonNode body) {
+    public ResponseEntity<Map<String, Object>> run(
+            @RequestBody JsonNode body,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
         JsonNode paradigm = body.get("paradigm");
         if (paradigm == null || paradigm.isNull()) {
             return ResponseEntity.badRequest().body(Map.of("error", "missing 'paradigm'"));
         }
-        var args = ParadigmRequests.toRunArgs(body);
+        var args = ParadigmRequests.toRunArgs(body, kbUser);
         return ResponseEntity.ok(executionService.run(paradigm, args));
     }
 }

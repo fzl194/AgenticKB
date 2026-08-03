@@ -56,6 +56,7 @@ public class SearchService {
     private final SearchMetrics metrics;
     private final TreeNavigator treeNavigator;
     private final AssetRetrievalUnitMapper retrievalUnitMapper;
+    private final KbAccessService kbAccessService;
     private final String defaultDomain;
     // Virtual-thread-per-task executor: no pool state to manage, no shutdown required.
     // Each CompletableFuture.supplyAsync spawns a new virtual thread that is cleaned up by the JVM.
@@ -78,6 +79,7 @@ public class SearchService {
             SearchMetrics metrics,
             TreeNavigator treeNavigator,
             AssetRetrievalUnitMapper retrievalUnitMapper,
+            KbAccessService kbAccessService,
             ServingProperties properties) {
         this.quEngine = quEngine;
         this.router = router;
@@ -95,6 +97,7 @@ public class SearchService {
         this.metrics = metrics;
         this.treeNavigator = treeNavigator;
         this.retrievalUnitMapper = retrievalUnitMapper;
+        this.kbAccessService = kbAccessService;
         this.defaultDomain = properties.defaultDomain();
         if (!embeddingClient.isConfigured()) {
             log.info("Embedding client not configured (LLM_SERVICE_URL blank) — dense retrieval disabled");
@@ -102,12 +105,24 @@ public class SearchService {
     }
 
     /**
-     * Execute the full search pipeline.
+     * Execute the full search pipeline as an anonymous caller.
      *
      * @param request search request containing query, domain, scope, etc.
      * @return assembled context pack with results
      */
     public ContextPack search(SearchRequest request) {
+        return search(request, null);
+    }
+
+    /**
+     * Execute the full search pipeline.
+     *
+     * @param request search request containing query, domain, scope, etc.
+     * @param kbUser  caller identity from {@code X-KB-User}; only consulted when the request
+     *                narrows to knowledge bases, so identity-less callers are unaffected
+     * @return assembled context pack with results
+     */
+    public ContextPack search(SearchRequest request, String kbUser) {
         if (request.query() == null || request.query().isBlank()) {
             throw new IllegalArgumentException("query_required");
         }
@@ -127,6 +142,17 @@ public class SearchService {
 
         // All DB operations on this thread now route to the domain's pool
         DomainContext.set(effectiveDomain);
+
+        // Authorize the KB narrowing before any LLM work: an unreadable KB should cost the caller
+        // nothing, and this must run here where DomainContext already selects the right pool.
+        final List<String> kbIds;
+        try {
+            kbIds = kbAccessService.authorize(effectiveDomain, request.kbIds(), kbUser);
+        } catch (RuntimeException e) {
+            DomainContext.clear();
+            throw e;
+        }
+
         // Propagate domain to LLM client BEFORE any parallel calls
         llmClient.setKnowledgeDomain(effectiveDomain);
 
@@ -212,12 +238,13 @@ public class SearchService {
 
         trace.startStage("resolve_scope");
         try {
-            scope = resolveActiveScope(effectiveDomain, channel);
+            scope = resolveActiveScope(effectiveDomain, channel, kbIds);
         } catch (IllegalArgumentException e) {
             trace.endStage("resolve_scope", "error=" + e.getMessage());
             throw e;
         }
-        trace.endStage("resolve_scope", "snapshots=" + scope.snapshotIds().size());
+        trace.endStage("resolve_scope", "snapshots=" + scope.snapshotIds().size()
+                + (kbIds.isEmpty() ? "" : ", kbs=" + kbIds.size()));
 
         // 3.4. Tree navigation: infer relevant chapters for query entities
         trace.startStage("tree_navigation");
@@ -413,7 +440,7 @@ public class SearchService {
             Map<String, Object> debugInfo = new LinkedHashMap<>();
             debugInfo.put("understanding", understandingToMap(understanding));
             debugInfo.put("route_plan", routePlanToMap(routePlan));
-            debugInfo.put("domain_context", domainContextToMap(effectiveDomain, channel, scope));
+            debugInfo.put("domain_context", domainContextToMap(effectiveDomain, channel, scope, kbIds));
             debugInfo.put("trace", traceToMap(fullTrace));
             debugInfo.put("candidate_count", ranked.size());
             debugInfo.put("fusion_method", routePlan.fusion().method());
@@ -498,8 +525,8 @@ public class SearchService {
     // Scope resolution
     // =========================================================================
 
-    private ActiveScope resolveActiveScope(String domain, String channel) {
-        return assetRepository.resolveActiveScope(domain, channel);
+    private ActiveScope resolveActiveScope(String domain, String channel, List<String> kbIds) {
+        return assetRepository.resolveActiveScope(domain, channel, kbIds);
     }
 
     private static String resolveWinningRerankMethod(List<RerankTraceStep> traces) {
@@ -568,7 +595,8 @@ public class SearchService {
         return db.host() + ":" + (db.port() != null ? db.port() : 5432) + "/" + db.dbname();
     }
 
-    private Map<String, Object> domainContextToMap(String domain, String channel, ActiveScope scope) {
+    private Map<String, Object> domainContextToMap(
+            String domain, String channel, ActiveScope scope, List<String> kbIds) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("domain", domain);
         map.put("channel", channel);
@@ -582,6 +610,7 @@ public class SearchService {
         map.put("release_id", scope.releaseId());
         map.put("build_id", scope.buildId());
         map.put("snapshot_count", scope.snapshotIds().size());
+        map.put("kb_ids", kbIds);
         return map;
     }
 

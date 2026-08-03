@@ -42,7 +42,7 @@ class OperatorCatalogTest {
         List<Operator> all = List.of(
                 new QueryEmbedOperator(null), new QueryUnderstandingOperator(null, null),
                 new HydeOperator(null), new MultiQueryOperator(null), new RequestInputOperator(),
-                new ScopeResolveOperator(null),
+                new ScopeResolveOperator(null, null),
                 new DenseVectorOperator(null), new FtsOperator(null),
                 new EntityExactOperator(null),
                 new com.coremasterkb.serving.operator.operators.retrieve.GraphExpandOperator(null),

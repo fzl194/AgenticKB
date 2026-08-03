@@ -63,8 +63,12 @@ class SearchServiceTest {
         when(domainRegistry.getDefaultChannel(anyString())).thenReturn("prod");
         when(domainRegistry.findEntry(anyString())).thenReturn(java.util.Optional.empty());
         when(domainPoolManager.getDataSource(anyString())).thenReturn(mock(javax.sql.DataSource.class));
-        when(assetRepo.resolveActiveScope(anyString(), anyString()))
+        when(assetRepo.resolveActiveScope(anyString(), anyString(), any()))
                 .thenReturn(new ActiveScope("rel1", "b1", List.of("snap1"), Map.of()));
+
+        // No kbIds in these requests, so authorize() is the identity on an empty list.
+        var kbAccessService = mock(KbAccessService.class);
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
 
         var multiQueryExpander = mock(MultiQueryExpander.class);
         when(multiQueryExpander.expand(anyString())).thenReturn(List.of("SMF配置"));
@@ -80,7 +84,7 @@ class SearchServiceTest {
                 embeddingClient, assetRepo,
                 mock(LlmClient.class),
                 multiQueryExpander, semanticCache, metrics, treeNavigator,
-                retrievalUnitMapper,
+                retrievalUnitMapper, kbAccessService,
                 new ServingProperties(null, null, "cloud_core_network", null, null));
     }
 
@@ -219,7 +223,7 @@ class SearchServiceTest {
             when(domainPackReader.getProfile(anyString())).thenReturn(null);
             when(quEngine.understand(anyString(), any())).thenReturn(understanding);
             when(router.route(any(), any())).thenReturn(routePlan);
-            when(assetRepo.resolveActiveScope(anyString(), anyString()))
+            when(assetRepo.resolveActiveScope(anyString(), anyString(), any()))
                     .thenThrow(new IllegalArgumentException("no_active_release"));
 
             var request = new SearchRequest("test", Map.of(), List.of(), false,

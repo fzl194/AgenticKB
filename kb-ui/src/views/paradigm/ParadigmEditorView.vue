@@ -89,6 +89,7 @@
               :key="selectedNode.id"
               :schema-json="selectedDef.paramSchemaJson"
               :model-value="selectedNode.data.params"
+              :option-sources="paramOptionSources"
               @update:model-value="updateSelectedParams"
             />
           </template>
@@ -187,12 +188,15 @@ import OperatorNode from '@/components/paradigm/OperatorNode.vue'
 import ParamForm from '@/components/paradigm/ParamForm.vue'
 import RunResultPanel from '@/components/paradigm/RunResultPanel.vue'
 import { useOperatorApi } from '@/api/operator'
+import { useKbApi } from '@/api/kb'
 import { useDomainStore } from '@/stores/domain'
+import type { ParamOption } from '@/components/workflow/JsonSchemaParamForm.vue'
 import type { OperatorDef, ParadigmGraph, ParadigmView, ParadigmVersionView, RunResult } from '@/types/operator'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const api = useOperatorApi()
+const kbApi = useKbApi()
 const { screenToFlowCoordinate } = useVueFlow()
 
 const operators = ref<OperatorDef[]>([])
@@ -212,6 +216,13 @@ const runResult = ref<RunResult | null>(null)
 const versions = ref<ParadigmVersionView[]>([])
 const runVersion = ref(0) // 0 = current/latest
 const hasPublished = computed(() => (paradigm.value?.currentVersion ?? 0) > 0)
+
+// ---- kb-picker options for scope_resolve.kbIds ----
+const kbOptions = ref<ParamOption[]>([])
+// 空数组也要下发：optionSources 里有这个键，控件才会渲染成选择器而不是自由输入框。
+const paramOptionSources = computed<Record<string, ParamOption[]>>(() => ({
+  'kb-picker': kbOptions.value,
+}))
 
 // ---- published API call info ----
 const domainStore = useDomainStore()
@@ -270,7 +281,31 @@ onMounted(async () => {
   } catch (e) {
     ElMessage.error('加载失败：' + errMsg(e))
   }
+  loadKbOptions()
 })
+
+/**
+ * scope_resolve 的 kbIds 参数（x-widget: kb-picker）的候选项。
+ *
+ * 知识库归 mining 管，所以这里跨服务取——检索范式编辑器唯一一次调 mining。取不到就
+ * 让参数退化成手填 id 的输入框（JsonSchemaParamForm 的默认数组控件），不挡编辑。
+ * 列表本身已按 X-KB-User 过滤，因此下拉里只会出现当前用户可见的库。
+ */
+async function loadKbOptions() {
+  const domain = domainStore.currentDomain
+  if (!domain) return
+  try {
+    const kbs = await kbApi.listKbs(domain)
+    kbOptions.value = kbs.map(kb => ({
+      value: kb.id,
+      label: kb.name,
+      hint: `${kb.document_count} 篇`,
+    }))
+  } catch (e) {
+    console.error('Failed to load knowledge bases for kb-picker:', e)
+    kbOptions.value = []
+  }
+}
 
 async function loadVersions() {
   if ((paradigm.value?.currentVersion ?? 0) <= 0) return

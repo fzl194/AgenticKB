@@ -22,10 +22,47 @@
     <!-- Domain & Options -->
     <div class="search-view__options">
       <label class="search-view__option">
+        <span class="search-view__option-label">知识库</span>
+        <el-select
+          v-model="selectedKbIds"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          clearable
+          filterable
+          size="small"
+          :loading="kbsLoading"
+          placeholder="全部（当前生效发布）"
+          class="search-view__kb-select"
+        >
+          <el-option
+            v-for="kb in kbs"
+            :key="kb.id"
+            :label="kb.name"
+            :value="kb.id"
+          >
+            <span>{{ kb.name }}</span>
+            <span class="search-view__kb-meta">{{ kb.document_count }} 篇</span>
+          </el-option>
+        </el-select>
+      </label>
+      <label class="search-view__option">
         <el-switch v-model="debugMode" size="small" />
         <span>Debug 模式</span>
       </label>
+      <span v-if="selectedKbIds.length" class="search-view__option-hint">
+        仅检索所选知识库已挖掘的内容
+      </span>
     </div>
+
+    <el-alert
+      v-if="searchError"
+      :title="searchError"
+      type="error"
+      show-icon
+      :closable="false"
+      class="search-view__error"
+    />
 
     <!-- Results -->
     <template v-if="result">
@@ -123,40 +160,91 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useServingApi } from '@/api/serving'
+import { useKbApi } from '@/api/kb'
+import { apiErrorDetail } from '@/api/proxyClient'
 import type { SearchResult } from '@/types'
+import type { KbSummary } from '@/types/kb'
 import EvidenceCard from '@/components/search/EvidenceCard.vue'
 import PipelineTrace from '@/components/search/PipelineTrace.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const domainStore = useDomainStore()
 const servingApi = useServingApi()
+const kbApi = useKbApi()
 
 const query = ref('')
 const searching = ref(false)
 const searchedOnce = ref(false)
+const searchError = ref('')
+const kbs = ref<KbSummary[]>([])
+const kbsLoading = ref(false)
+const selectedKbIds = ref<string[]>([])
 const result = ref<SearchResult | null>(null)
 const activeTab = ref('evidence')
 const debugMode = ref(true)
+
+/** 知识库列表按域取。列表本身已按 X-KB-User 过滤，所以选择器里只会出现可检索的库。 */
+async function loadKbs() {
+  const domain = domainStore.currentDomain
+  if (!domain) return
+  kbsLoading.value = true
+  try {
+    kbs.value = await kbApi.listKbs(domain)
+  } catch (e) {
+    // 取不到列表不该挡住检索——退化成「只能全域检索」。
+    console.error('Failed to load knowledge bases:', e)
+    kbs.value = []
+  } finally {
+    kbsLoading.value = false
+  }
+}
+
+onMounted(loadKbs)
+
+// 切域后旧域的 kb_id 一律失效（后端按 domain 过滤，留着必然 404），清空选择再重取。
+watch(() => domainStore.currentDomain, () => {
+  selectedKbIds.value = []
+  loadKbs()
+})
 
 async function handleSearch() {
   if (!query.value.trim()) return
   searching.value = true
   searchedOnce.value = true
+  searchError.value = ''
   try {
     result.value = await servingApi.search(query.value, {
       domain: domainStore.currentDomain,
       debug: debugMode.value,
+      kbIds: selectedKbIds.value,
     })
     activeTab.value = 'evidence'
   } catch (e) {
     console.error('Search failed:', e)
     result.value = null
+    searchError.value = await searchErrorMessage(e)
   } finally {
     searching.value = false
+  }
+}
+
+/** 把后端的错误码翻成人话——这几种检索侧最常见，其余回落到通用消息。 */
+async function searchErrorMessage(e: unknown): Promise<string> {
+  const code = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+  switch (code) {
+    case 'kb_not_found':
+      // 后端对「不存在」和「无权限」返回同一个码，不泄露知识库是否存在。
+      return '所选知识库不存在或无权访问，请刷新后重新选择'
+    case 'no_active_kb_build':
+      return '所选知识库还没有已挖掘的内容，请先在知识库里发起挖掘'
+    case 'no_active_release':
+      return '当前域没有生效的发布版本，无法检索'
+    default:
+      return await apiErrorDetail(e)
   }
 }
 </script>
@@ -197,6 +285,30 @@ async function handleSearch() {
   gap: 6px;
   font-size: 12px;
   color: var(--kb-text-secondary);
+}
+
+.search-view__option-label {
+  white-space: nowrap;
+}
+
+.search-view__kb-select {
+  width: 260px;
+}
+
+.search-view__kb-meta {
+  float: right;
+  margin-left: 12px;
+  font-size: 11px;
+  color: var(--kb-text-tertiary);
+}
+
+.search-view__option-hint {
+  font-size: 12px;
+  color: var(--kb-text-tertiary);
+}
+
+.search-view__error {
+  margin-top: -4px;
 }
 
 /* Summary */

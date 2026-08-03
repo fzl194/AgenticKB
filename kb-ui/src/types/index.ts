@@ -287,9 +287,19 @@ export interface SearchDebug {
     fusion_method: string
     rerank_method: string
   }
-  scope?: {
+  /**
+   * 后端的 debug 键名是 domain_context（SearchService.domainContextToMap）。
+   * release_id 在按知识库收窄时不是真实 release id，而是合成的 "kb:a,b" —— 它同时
+   * 是语义缓存的分区键，所以每种知识库组合各占一个缓存桶。
+   */
+  domain_context?: {
+    domain: string
+    channel: string
+    database?: string
     release_id: string
+    build_id: string | null
     snapshot_count: number
+    kb_ids?: string[]
   }
   trace?: {
     request_id: string

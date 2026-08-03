@@ -291,7 +291,13 @@ public class SearchService {
         List<CompletableFuture<Void>> variantFutures = new ArrayList<>();
 
         for (String variant : queryVariants) {
-            CompletableFuture<Void> f = CompletableFuture.runAsync(() -> {
+            // wrapRunnable, not a bare lambda: pipelineExecutor hands work to virtual threads, which
+            // do NOT inherit ThreadLocals. Without this the retrieval below runs with a null
+            // DomainContext — DomainRoutingDataSource then silently falls back to the default
+            // DataSource, and EntityGraphRouteRetriever (which has no other source of domain)
+            // returns nothing at all. RetrievalOrchestrator already wraps its own route fan-out,
+            // but it can only propagate what its caller had set.
+            CompletableFuture<Void> f = CompletableFuture.runAsync(DomainContext.wrapRunnable(() -> {
                 try {
                     long vt0 = System.nanoTime();
                     QueryUnderstanding varUnderstanding = variant.equals(request.query())
@@ -314,13 +320,14 @@ public class SearchService {
                 } catch (Exception e) {
                     log.error("Variant retrieval failed for '{}': {}", variant, e.getMessage());
                 }
-            }, pipelineExecutor);
+            }), pipelineExecutor);
             variantFutures.add(f);
         }
 
         // 6b. Sub-query decomposition (cap at 4) — also parallel
         for (SubQuery subQuery : understanding.subQueries().stream().limit(4).toList()) {
-            CompletableFuture<Void> f = CompletableFuture.runAsync(() -> {
+            // Same virtual-thread caveat as the variant loop above.
+            CompletableFuture<Void> f = CompletableFuture.runAsync(DomainContext.wrapRunnable(() -> {
                 try {
                     QueryUnderstanding subUnderstanding = buildSubQueryUnderstanding(finalUnderstanding, subQuery);
                     OrchestratorResult subResult = orchestrator.execute(
@@ -331,7 +338,7 @@ public class SearchService {
                 } catch (Exception e) {
                     log.error("Sub-query retrieval failed for '{}': {}", subQuery.text(), e.getMessage());
                 }
-            }, pipelineExecutor);
+            }), pipelineExecutor);
             variantFutures.add(f);
         }
 

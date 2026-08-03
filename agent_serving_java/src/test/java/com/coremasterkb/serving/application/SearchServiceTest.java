@@ -88,6 +88,58 @@ class SearchServiceTest {
     @DisplayName("full pipeline orchestration")
     class FullPipeline {
         @Test
+        @DisplayName("retrieval threads see the request's domain, not a null DomainContext")
+        void retrievalRunsWithDomainContext() {
+            // Retrieval is submitted to a virtual-thread executor, and virtual threads do not
+            // inherit ThreadLocals. If DomainContext is null there, DomainRoutingDataSource
+            // silently falls back to the default DataSource and entity_graph recall — which reads
+            // the domain from nowhere else — returns empty. Both failures are silent, so this
+            // assertion is the only thing standing between them and production.
+            var understanding = new QueryUnderstanding("SMF配置", "concept_lookup",
+                    List.of(), List.of(), Map.of(), List.of("SMF"),
+                    EvidenceNeed.empty(), List.of(), "rule", null);
+            var routePlan = new RetrievalRoutePlan(
+                    List.of(new RouteConfig("lexical_bm25", true, 1.0, 50)),
+                    Map.of(), new FusionConfig("identity", 60),
+                    new RerankConfig("score", "score"),
+                    AssemblyConfig.defaults(), ExpansionConfig.defaults());
+            var expectedPack = new ContextPack(null, List.of(), List.of(), List.of(),
+                    List.of(), List.of(), List.of(), Map.of());
+
+            var seenDomain = new java.util.concurrent.atomic.AtomicReference<String>();
+            var seenOnRequestThread = new java.util.concurrent.atomic.AtomicBoolean(true);
+            long requestThreadId = Thread.currentThread().threadId();
+
+            when(domainPackReader.getProfile(anyString())).thenReturn(null);
+            when(quEngine.understand(anyString(), any())).thenReturn(understanding);
+            when(router.route(any(), any())).thenReturn(routePlan);
+            when(orchestrator.execute(any(), any(), any(), anyList(), anyList()))
+                    .thenAnswer(inv -> {
+                        seenDomain.set(DomainContext.get());
+                        if (Thread.currentThread().threadId() != requestThreadId) {
+                            seenOnRequestThread.set(false);
+                        }
+                        return OrchestratorResult.empty();
+                    });
+            when(rerankPipeline.rerank(any(), any(), any()))
+                    .thenReturn(new RerankResult(List.of(), List.of()));
+            when(assembler.assemble(anyString(), any(), any(), any(), any(), any()))
+                    .thenReturn(expectedPack);
+
+            var request = new SearchRequest("SMF配置", Map.of(), List.of(), false,
+                    "cloud_core_network", null, "evidence");
+
+            searchService.search(request);
+
+            assertThat(seenOnRequestThread)
+                    .as("retrieval must actually run off the request thread, or this proves nothing")
+                    .isFalse();
+            assertThat(seenDomain.get())
+                    .as("DomainContext inside the retrieval thread")
+                    .isEqualTo("cloud_core_network");
+        }
+
+        @Test
         @DisplayName("all pipeline stages called in order")
         void allStagesCalled() {
             var understanding = new QueryUnderstanding("SMF配置", "concept_lookup",

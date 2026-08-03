@@ -99,6 +99,69 @@ public class AssetRepository {
         return resolveActiveScope(domain, "prod");
     }
 
+    /**
+     * Resolve scope, optionally narrowed to a set of knowledge bases.
+     *
+     * <p>Empty/null {@code kbIds} keeps the existing release-based behaviour untouched.</p>
+     */
+    public ActiveScope resolveActiveScope(String domain, String channel, List<String> kbIds) {
+        List<String> normalized = ActiveScope.normalizeKbIds(kbIds);
+        return normalized.isEmpty()
+                ? resolveActiveScope(domain, channel)
+                : resolveKbScope(domain, normalized);
+    }
+
+    /**
+     * Resolve scope from KB builds directly, bypassing releases.
+     *
+     * <p>KB mining runs with {@code publish=false} so KB content never reaches an active release —
+     * going through {@link #resolveActiveScope(String, String)} would always miss it. This resolves
+     * each KB document's current snapshot from the newest build of its own KB, matching the
+     * mining-side {@code KbDB.get_document_knowledge} contract.</p>
+     *
+     * <p>The resulting scope carries {@link ActiveScope#kbScopeKey(List)} as its {@code releaseId}
+     * so the semantic cache partitions per KB selection instead of pooling every KB into one
+     * bucket. {@code buildId} is null — a KB scope spans many builds.</p>
+     *
+     * @throws IllegalArgumentException("kb_ids_required") if no usable kb id was supplied
+     * @throws IllegalArgumentException("no_active_kb_build") if the selection yields zero snapshots
+     */
+    public ActiveScope resolveKbScope(String domain, List<String> kbIds) {
+        String effectiveDomain = (domain != null) ? domain : "default";
+        List<String> normalized = ActiveScope.normalizeKbIds(kbIds);
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("kb_ids_required");
+        }
+
+        List<AssetBuildDocumentSnapshot> snapshots =
+                buildSnapshotMapper.selectLatestKbSnapshots(effectiveDomain, normalized);
+
+        // Documents may share an immutable snapshot (content-level dedup), so the id list needs
+        // de-duplicating before it becomes an IN-list in every downstream retrieval query.
+        Set<String> snapshotIds = new LinkedHashSet<>();
+        Map<String, String> documentSnapshotMap = new HashMap<>();
+        for (AssetBuildDocumentSnapshot snap : snapshots) {
+            if (snap.getDocumentSnapshotId() != null) {
+                snapshotIds.add(snap.getDocumentSnapshotId());
+            }
+            if (snap.getDocumentId() != null && snap.getDocumentSnapshotId() != null) {
+                documentSnapshotMap.put(snap.getDocumentId(), snap.getDocumentSnapshotId());
+            }
+        }
+
+        if (snapshotIds.isEmpty()) {
+            log.warn("No mined content for KB scope: domain={}, kb_ids={}", effectiveDomain, normalized);
+            throw new IllegalArgumentException("no_active_kb_build");
+        }
+
+        log.debug("Resolved KB scope: domain={}, kb_ids={}, documents={}, snapshots={}",
+                effectiveDomain, normalized, documentSnapshotMap.size(), snapshotIds.size());
+
+        return new ActiveScope(
+                ActiveScope.kbScopeKey(normalized), null,
+                new ArrayList<>(snapshotIds), documentSnapshotMap);
+    }
+
     // -------------------------------------------------------------------------
     // Segment resolution
     // -------------------------------------------------------------------------

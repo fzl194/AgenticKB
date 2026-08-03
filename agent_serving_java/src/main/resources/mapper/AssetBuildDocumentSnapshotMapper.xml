@@ -18,4 +18,42 @@
           AND selection_status = #{selectionStatus}
     </select>
 
+    <!--
+      KB-narrowed scope resolution. Three things here are load-bearing:
+
+      1. b.kb_id = d.kb_id — only a build of the document's OWN kb may decide its current
+         snapshot. Without it, a sibling KB's build that carried forward a stale domain-release
+         selection could win on created_at and pin an outdated snapshot.
+      2. selection_status filtered OUTSIDE the DISTINCT ON — filtering it in the inner WHERE would
+         let a document that a later build marked 'removed' fall back to its older 'active' row.
+      3. d.domain guard — production runs all domains in one physical database, so a kb id from
+         another domain must not resolve here.
+
+      KB builds are always full-mode with no parent (assemble_build's parent lookup needs an active
+      release and KB runs never publish), so each build holds only that run's documents. Picking
+      per-document rather than per-build is what makes incremental/selective mining resolvable.
+    -->
+    <select id="selectLatestKbSnapshots" resultMap="buildSnapshotResult">
+        SELECT t.document_snapshot_id, t.build_id, t.document_id, t.selection_status
+        FROM (
+            SELECT DISTINCT ON (bs.document_id)
+                   bs.document_id,
+                   bs.document_snapshot_id,
+                   bs.selection_status,
+                   b.id AS build_id
+            FROM asset_build_document_snapshots bs
+            JOIN asset_builds    b ON b.id = bs.build_id
+            JOIN asset_documents d ON d.id = bs.document_id
+            WHERE b.status IN ('validated', 'published')
+              AND b.kb_id = d.kb_id
+              AND d.domain = #{domain}
+              AND d.kb_id IN
+              <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">
+                  #{kbId}
+              </foreach>
+            ORDER BY bs.document_id, b.created_at DESC, b.id DESC
+        ) t
+        WHERE t.selection_status = 'active'
+    </select>
+
 </mapper>

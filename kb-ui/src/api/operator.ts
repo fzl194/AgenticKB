@@ -56,8 +56,34 @@ export function useOperatorApi() {
       return data
     },
 
-    async publish(id: string, createdBy?: string): Promise<ParadigmVersionView> {
-      const { data } = await client.post(`/api/v1/paradigm/${id}/publish`, { createdBy })
+    /**
+     * Publish the draft as a new immutable version.
+     *
+     * `binding` optionally binds in the same call. It is applied after the publish commits and is
+     * not part of its transaction, so a rejected binding leaves the paradigm published-but-unbound
+     * and comes back as `bindingError` rather than as a thrown error.
+     */
+    async publish(
+      id: string,
+      createdBy?: string,
+      binding?: { domain: string; setDefault?: boolean },
+    ): Promise<ParadigmVersionView> {
+      const { data } = await client.post(`/api/v1/paradigm/${id}/publish`, { createdBy, ...binding })
+      return data
+    },
+
+    // ---- domain binding (MCP auto-matching) ----
+    /**
+     * Bind a published paradigm to a domain. With `isDefault`, it becomes the paradigm MCP
+     * auto-matches for that domain — replacing whichever one held the slot before.
+     */
+    async bindParadigm(id: string, domain: string, isDefault: boolean): Promise<ParadigmView> {
+      const { data } = await client.put(`/api/v1/paradigm/${id}/binding`, { domain, isDefault })
+      return data
+    },
+
+    async unbindParadigm(id: string): Promise<ParadigmView> {
+      const { data } = await client.delete(`/api/v1/paradigm/${id}/binding`)
       return data
     },
 

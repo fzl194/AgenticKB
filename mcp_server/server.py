@@ -52,11 +52,16 @@ def search_knowledge(
 ) -> dict:
     """按指定知识域检索知识证据。
 
+    检索策略由该知识域绑定的检索范式决定；未绑定的域走默认检索管线。返回结果里的
+    `_retrieval` 字段说明本次由哪条引擎作答。
+
     Args:
         query: 用户原问题。
         domain: 必填知识域标识，例如 civil_engineering 或 odn。
-        scope: 产品、对象或场景等附加约束。
+        scope: 产品、对象或场景等附加约束。**当前不影响检索结果**：后端检索管线不消费
+            该字段，传入只会在 `_retrieval.ignored_args` 中回报。
         entities: 已识别实体列表，每项包含 name，可选 type/normalized_name。
+            **当前同样不影响检索结果**——实体由后端查询理解自行抽取。
         debug: 是否返回检索过程诊断信息。
     """
     entity_refs = [EntityRef(**e) for e in entities] if entities else None

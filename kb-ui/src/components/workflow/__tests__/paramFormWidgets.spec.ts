@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import JsonSchemaParamForm from '@/components/workflow/JsonSchemaParamForm.vue'
+import type { ParamOption } from '@/components/workflow/JsonSchemaParamForm.vue'
 
 /**
  * x-widget dispatch for array params. The shared form is used by BOTH the mining workflow editor
@@ -34,7 +35,13 @@ const OPTION_STUB = {
   template: '<div class="option" :data-value="value">{{ label }}</div>',
 }
 
-function mountForm(schemaJson: string, modelValue: Record<string, unknown>, optionSources?: unknown) {
+function mountForm(
+  schemaJson: string,
+  modelValue: Record<string, unknown>,
+  // Typed rather than `unknown`: spreading an `unknown` into props widens it to `{}`, which does
+  // not satisfy the component's Record<string, ParamOption[]> and fails `vue-tsc -b`.
+  optionSources?: Record<string, ParamOption[]>,
+) {
   return mount(JsonSchemaParamForm, {
     props: { schemaJson, modelValue, ...(optionSources ? { optionSources } : {}) },
     global: { stubs: { ElSelect: SELECT_STUB, ElOption: OPTION_STUB } },

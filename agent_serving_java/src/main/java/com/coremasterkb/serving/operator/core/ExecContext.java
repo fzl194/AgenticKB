@@ -22,15 +22,22 @@ public final class ExecContext {
     private final String domain;
     private final String channel;
     private final boolean debug;
+    private final String username;
     private volatile String query;
     private final Map<String, Object> attributes = new ConcurrentHashMap<>();
     private final List<NodeTrace> nodeTraces = new CopyOnWriteArrayList<>();
 
     public ExecContext(String requestId, String domain, String channel, boolean debug) {
+        this(requestId, domain, channel, debug, null);
+    }
+
+    public ExecContext(String requestId, String domain, String channel, boolean debug,
+                       String username) {
         this.requestId = requestId;
         this.domain = domain;
         this.channel = channel;
         this.debug = debug;
+        this.username = username;
     }
 
     /** The request query, available to entry operators (e.g. request_input). */
@@ -41,6 +48,9 @@ public final class ExecContext {
     public String domain()    { return domain; }
     public String channel()   { return channel; }
     public boolean debug()    { return debug; }
+
+    /** Caller identity from the {@code X-KB-User} header; null when anonymous. */
+    public String username()  { return username; }
 
     public Map<String, Object> attributes() { return attributes; }
 

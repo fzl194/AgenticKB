@@ -116,9 +116,10 @@ public class ParadigmController {
     public Map<String, Object> search(
             @PathVariable String id,
             @RequestParam(required = false) Integer version,
-            @RequestBody JsonNode body) {
+            @RequestBody JsonNode body,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
         JsonNode graph = paradigmService.resolveExecutableGraph(id, version);
-        return executionService.run(graph, ParadigmRequests.toRunArgs(body));
+        return executionService.run(graph, ParadigmRequests.toRunArgs(body, kbUser));
     }
 
     /** Compile-validate the draft (no execution). */
@@ -134,9 +135,12 @@ public class ParadigmController {
 
     /** Execute the draft without persisting results (preview while editing). Body: run args. */
     @PostMapping("/{id}/dryrun")
-    public Map<String, Object> dryRun(@PathVariable String id, @RequestBody JsonNode body) {
+    public Map<String, Object> dryRun(
+            @PathVariable String id,
+            @RequestBody JsonNode body,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
         JsonNode draft = paradigmService.resolveDraftGraph(id);
-        return executionService.run(draft, ParadigmRequests.toRunArgs(body));
+        return executionService.run(draft, ParadigmRequests.toRunArgs(body, kbUser));
     }
 
     // ---- views ---------------------------------------------------------------------------

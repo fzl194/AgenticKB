@@ -20,8 +20,10 @@ public class SearchController {
     }
 
     @PostMapping("/search")
-    public ResponseEntity<Map<String, Object>> search(@RequestBody SearchRequest request) {
-        ContextPack pack = searchService.search(request);
+    public ResponseEntity<Map<String, Object>> search(
+            @RequestBody SearchRequest request,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+        ContextPack pack = searchService.search(request, kbUser);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("query", pack.query());

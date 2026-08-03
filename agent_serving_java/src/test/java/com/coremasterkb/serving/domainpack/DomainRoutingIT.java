@@ -15,18 +15,38 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
 
+/**
+ * Routing contract for {@link DomainPoolManager}: which domains get a dedicated pool, which reuse
+ * the default DataSource, and what happens when a configured database is unreachable.
+ *
+ * <p>Rewritten against the mechanism that actually exists. The previous version targeted the
+ * pre-unification {@code COREMASTERKB_DB_*} environment variables, which
+ * {@code DomainPoolManager} no longer reads at all — it resolves the registry's inline
+ * {@code database:} block. The result was one permanent failure (asserting cloud_core_network
+ * falls back to the default DataSource, untrue once the shipped registry gained inline blocks)
+ * plus four tests that skipped forever on {@code assumeTrue(envVar != null)}.</p>
+ *
+ * <p>It also opened a real pool to the production host in {@code domain_registry.yaml} on every
+ * run — {@code ensureSchema} DDL included — because it called {@code getDataSource} with a real
+ * domain name. This version builds its own {@link DomainPoolManager} over a stubbed
+ * {@link DomainRegistry} and the local test database, so no test reaches production, and the
+ * two-arg constructor's {@code DomainSchemaEnsurer.NOOP} means no DDL runs anywhere.</p>
+ */
 @SpringBootTest(classes = AgentServingApplication.class)
 @ActiveProfiles("test-pg")
 @Tag("pg-integration")
-@DisplayName("DomainPoolManager IT — split-database routing")
+@DisplayName("DomainPoolManager IT — per-domain routing")
 class DomainRoutingIT {
-
-    @Autowired
-    private DomainPoolManager domainPoolManager;
 
     @Autowired
     @Qualifier("defaultDataSource")
@@ -35,127 +55,158 @@ class DomainRoutingIT {
     @Autowired
     private Environment environment;
 
+    private DomainRegistry registry;
+    private DomainPoolManager poolManager;
+    private DatabaseConfig localDb;
+
     @BeforeEach
-    void skipIfDefaultDbUnreachable() {
+    void setUp() {
         try (Connection conn = defaultDataSource.getConnection()) {
             assumeTrue(conn.isValid(3), "Default PostgreSQL not reachable — skipping");
         } catch (SQLException e) {
             assumeTrue(false, "Default PostgreSQL not reachable — skipping");
         }
+
+        localDb = new DatabaseConfig(
+                environment.getProperty("spring.datasource.url"), null, null, null,
+                environment.getProperty("spring.datasource.username"),
+                environment.getProperty("spring.datasource.password"),
+                null, null, 1, 2);
+
+        registry = mock(DomainRegistry.class);
+        when(registry.findEntry(anyString())).thenReturn(Optional.empty());
+        poolManager = new DomainPoolManager(registry, defaultDataSource);
     }
 
-    // -------------------------------------------------------------------------
-    // 1. Fallback: blank env var → reuse default DataSource
-    // -------------------------------------------------------------------------
+    private void stubDomain(String domain, DatabaseConfig db) {
+        when(registry.findEntry(eq(domain)))
+                .thenReturn(Optional.of(new DomainRegistryEntry(domain, true, db, "prod")));
+    }
+
+    // ------------------------------------------------------------------ fallback to default
 
     @Test
-    @DisplayName("blank COREMASTERKB_DB_CLOUD_CORE → falls back to default DataSource")
-    void blankEnvVarFallsBackToDefault() {
-        String url = environment.getProperty("COREMASTERKB_DB_CLOUD_CORE");
-        assumeTrue(url == null || url.isBlank(),
-                "COREMASTERKB_DB_CLOUD_CORE is set — this test is for the fallback case");
-
-        DataSource ds = domainPoolManager.getDataSource("cloud_core_network");
-        assertThat(ds).as("should reuse default datasource when env var is blank")
+    @DisplayName("domain absent from the registry reuses the default DataSource")
+    void unknownDomainReusesDefault() {
+        assertThat(poolManager.getDataSource("no_such_domain_" + UUID.randomUUID()))
                 .isSameAs(defaultDataSource);
     }
 
-    // -------------------------------------------------------------------------
-    // 2. Split DB: dedicated pool is created and reachable
-    // -------------------------------------------------------------------------
-
     @Test
-    @DisplayName("COREMASTERKB_DB_CLOUD_CORE set → dedicated pool, connection valid")
-    void cloudCoreNetworkGetsDedicatedPool() throws SQLException {
-        String url = environment.getProperty("COREMASTERKB_DB_CLOUD_CORE");
-        assumeTrue(url != null && !url.isBlank(),
-                "COREMASTERKB_DB_CLOUD_CORE not set — skipping dedicated-pool test");
+    @DisplayName("domain with no inline database block reuses the default DataSource")
+    void domainWithoutDatabaseReusesDefault() {
+        stubDomain("d_nodb", null);
 
-        DataSource ds = domainPoolManager.getDataSource("cloud_core_network");
-        assertThat(ds).as("dedicated pool must not be the default datasource")
-                .isNotSameAs(defaultDataSource);
-
-        try (Connection conn = ds.getConnection()) {
-            assertThat(conn.isValid(3)).as("dedicated pool connection must be valid").isTrue();
-        }
+        assertThat(poolManager.getDataSource("d_nodb")).isSameAs(defaultDataSource);
     }
 
     @Test
-    @DisplayName("COREMASTERKB_DB_GENERIC set → dedicated pool, connection valid")
-    void genericGetsDedicatedPool() throws SQLException {
-        String url = environment.getProperty("COREMASTERKB_DB_GENERIC");
-        assumeTrue(url != null && !url.isBlank(),
-                "COREMASTERKB_DB_GENERIC not set — skipping dedicated-pool test");
+    @DisplayName("half-filled database block is not usable and reuses the default DataSource")
+    void unusableDatabaseReusesDefault() {
+        // isUsable() needs a jdbcUrl, or host AND dbname. A host alone must not build a pool.
+        stubDomain("d_partial", new DatabaseConfig(
+                null, "localhost", 5432, null, "u", "p", null, null, 1, 2));
 
-        DataSource ds = domainPoolManager.getDataSource("generic");
-        assertThat(ds).as("dedicated pool must not be the default datasource")
-                .isNotSameAs(defaultDataSource);
-
-        try (Connection conn = ds.getConnection()) {
-            assertThat(conn.isValid(3)).as("dedicated pool connection must be valid").isTrue();
-        }
+        assertThat(poolManager.getDataSource("d_partial")).isSameAs(defaultDataSource);
     }
 
-    // -------------------------------------------------------------------------
-    // 3. Isolation: two domains point to physically different databases
-    // -------------------------------------------------------------------------
+    // ------------------------------------------------------------------ dedicated pools
 
     @Test
-    @DisplayName("two domains with separate env vars → separate pools pointing to different DBs")
-    void twoDomainsGetIsolatedPools() throws SQLException {
-        String ccnUrl = environment.getProperty("COREMASTERKB_DB_CLOUD_CORE");
-        String genUrl = environment.getProperty("COREMASTERKB_DB_GENERIC");
-        assumeTrue(ccnUrl != null && !ccnUrl.isBlank(), "COREMASTERKB_DB_CLOUD_CORE not set");
-        assumeTrue(genUrl != null && !genUrl.isBlank(), "COREMASTERKB_DB_GENERIC not set");
+    @DisplayName("domain with a usable database block gets its own working pool")
+    void configuredDomainGetsDedicatedPool() throws SQLException {
+        stubDomain("d_own", localDb);
 
-        DataSource ccnDs = domainPoolManager.getDataSource("cloud_core_network");
-        DataSource genDs = domainPoolManager.getDataSource("generic");
+        DataSource ds = poolManager.getDataSource("d_own");
 
-        assertThat(ccnDs).isNotSameAs(defaultDataSource);
-        assertThat(genDs).isNotSameAs(defaultDataSource);
-        assertThat(ccnDs).isNotSameAs(genDs);
-
-        String ccnDbName = currentDatabase(ccnDs);
-        String genDbName = currentDatabase(genDs);
-        String defaultDbName = currentDatabase(defaultDataSource);
-
-        assertThat(ccnDbName).as("cloud_core_network DB must differ from default").isNotEqualTo(defaultDbName);
-        assertThat(genDbName).as("generic DB must differ from default").isNotEqualTo(defaultDbName);
-        assertThat(ccnDbName).as("cloud_core_network and generic must use different DBs").isNotEqualTo(genDbName);
+        assertThat(ds).isNotSameAs(defaultDataSource);
+        assertThat(currentDatabase(ds)).isNotBlank();
     }
-
-    // -------------------------------------------------------------------------
-    // 4. Schema check: each domain DB must have the expected tables
-    // -------------------------------------------------------------------------
 
     @Test
-    @DisplayName("cloud_core_network dedicated DB has required tables")
-    void cloudCoreNetworkDbHasSchema() throws SQLException {
-        String url = environment.getProperty("COREMASTERKB_DB_CLOUD_CORE");
-        assumeTrue(url != null && !url.isBlank(), "COREMASTERKB_DB_CLOUD_CORE not set");
+    @DisplayName("the pool is built once and cached per domain")
+    void poolIsCachedPerDomain() {
+        stubDomain("d_cached", localDb);
 
-        DataSource ds = domainPoolManager.getDataSource("cloud_core_network");
-        assertThat(tableExists(ds, "asset_retrieval_units"))
-                .as("asset_retrieval_units table must exist in cloud_core_network DB").isTrue();
-        assertThat(tableExists(ds, "asset_publish_releases"))
-                .as("asset_publish_releases table must exist in cloud_core_network DB").isTrue();
+        assertThat(poolManager.getDataSource("d_cached"))
+                .isSameAs(poolManager.getDataSource("d_cached"));
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
+    @Test
+    @DisplayName("two domains sharing one database still get separate pools")
+    void sameDatabaseStillMeansSeparatePools() {
+        // This is the shipped registry's situation: all four domains point at one physical
+        // database. Pools are keyed by domain, not by conninfo — unlike the mining side, which
+        // de-duplicates pools by conninfo. Pinned so the difference stays deliberate.
+        stubDomain("d_a", localDb);
+        stubDomain("d_b", localDb);
+
+        DataSource a = poolManager.getDataSource("d_a");
+        DataSource b = poolManager.getDataSource("d_b");
+
+        assertThat(a).isNotSameAs(defaultDataSource);
+        assertThat(b).isNotSameAs(defaultDataSource);
+        assertThat(a).isNotSameAs(b);
+    }
+
+    // ------------------------------------------------------------------ unreachable database
+
+    @Test
+    @DisplayName("unreachable database fails loudly instead of silently using the default")
+    void unreachableDatabaseThrows() {
+        // The source of the 503 domain_database_unavailable. Falling back to the default here
+        // would be the worst outcome: queries would silently read the wrong database.
+        stubDomain("d_dead", new DatabaseConfig(
+                "jdbc:postgresql://127.0.0.1:1/definitely_not_there", null, null, null,
+                "u", "p", null, null, 1, 2));
+
+        assertThatThrownBy(() -> poolManager.getDataSource("d_dead"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("domain_database_unavailable");
+    }
+
+    // ------------------------------------------------------------------ reload
+
+    @Test
+    @DisplayName("invalidate drops only the pool whose database config changed")
+    void invalidateDropsOnlyChangedPools() {
+        stubDomain("d_stable", localDb);
+        stubDomain("d_moving", localDb);
+        DataSource stableBefore = poolManager.getDataSource("d_stable");
+        DataSource movingBefore = poolManager.getDataSource("d_moving");
+
+        // Same connection target, different pool sizing → different signature() → must rebuild.
+        stubDomain("d_moving", new DatabaseConfig(
+                localDb.jdbcUrl(), null, null, null, localDb.user(), localDb.password(),
+                null, null, 3, 7));
+        poolManager.invalidate();
+
+        assertThat(poolManager.getDataSource("d_stable"))
+                .as("unchanged config must not cause a reconnect")
+                .isSameAs(stableBefore);
+        assertThat(poolManager.getDataSource("d_moving"))
+                .as("changed config must rebuild the pool")
+                .isNotSameAs(movingBefore);
+    }
+
+    @Test
+    @DisplayName("invalidate rebuilds as the default when a domain loses its database block")
+    void invalidateFallsBackWhenDatabaseRemoved() {
+        stubDomain("d_drop", localDb);
+        assertThat(poolManager.getDataSource("d_drop")).isNotSameAs(defaultDataSource);
+
+        stubDomain("d_drop", null);
+        poolManager.invalidate();
+
+        assertThat(poolManager.getDataSource("d_drop")).isSameAs(defaultDataSource);
+    }
+
+    // ------------------------------------------------------------------ helpers
 
     private static String currentDatabase(DataSource ds) throws SQLException {
         try (Connection conn = ds.getConnection();
              ResultSet rs = conn.createStatement().executeQuery("SELECT current_database()")) {
             return rs.next() ? rs.getString(1) : "";
-        }
-    }
-
-    private static boolean tableExists(DataSource ds, String tableName) throws SQLException {
-        try (Connection conn = ds.getConnection();
-             ResultSet rs = conn.getMetaData().getTables(null, "public", tableName, new String[]{"TABLE"})) {
-            return rs.next();
         }
     }
 }

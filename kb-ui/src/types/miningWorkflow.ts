@@ -37,6 +37,11 @@ export interface MiningJsonSchemaProperty {
   items?: MiningJsonSchemaProperty
   properties?: Record<string, MiningJsonSchemaProperty>
   additionalProperties?: boolean | MiningJsonSchemaProperty
+  /**
+   * 渲染提示，非 JSON Schema 关键字（校验器忽略未知关键字）。后端算子用它声明「这个
+   * 字段该用哪种控件」，由调用方通过 optionSources 提供候选项；没提供就退化成默认控件。
+   */
+  'x-widget'?: string
 }
 
 export interface MiningJsonSchema extends MiningJsonSchemaProperty {

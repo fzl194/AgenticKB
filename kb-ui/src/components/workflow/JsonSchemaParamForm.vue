@@ -33,6 +33,31 @@
         @update:model-value="set(field.key, $event)"
       />
 
+      <!-- 声明了 x-widget 且调用方提供了对应候选项：渲染成选择器 -->
+      <el-select
+        v-else-if="field.kind === 'array' && optionsFor(field)"
+        :model-value="(value(field.key) as unknown[]) ?? []"
+        multiple
+        collapse-tags
+        collapse-tags-tooltip
+        filterable
+        clearable
+        size="small"
+        :placeholder="field.placeholder || '请选择'"
+        style="width: 100%"
+        @update:model-value="set(field.key, $event)"
+      >
+        <el-option
+          v-for="option in optionsFor(field)"
+          :key="option.value"
+          :label="option.label"
+          :value="option.value"
+        >
+          <span>{{ option.label }}</span>
+          <span v-if="option.hint" class="param-form__option-hint">{{ option.hint }}</span>
+        </el-option>
+      </el-select>
+
       <el-select
         v-else-if="field.kind === 'array'"
         :model-value="(value(field.key) as unknown[]) ?? []"
@@ -80,9 +105,21 @@
 import { computed, reactive } from 'vue'
 import type { MiningJsonSchema, MiningJsonSchemaProperty } from '@/types/miningWorkflow'
 
+/** 候选项由调用方注入——共享组件不知道也不该知道它们从哪个服务来。 */
+export interface ParamOption {
+  value: string
+  label: string
+  hint?: string
+}
+
 const props = defineProps<{
   schemaJson: string | MiningJsonSchema
   modelValue: Record<string, unknown>
+  /**
+   * 按 x-widget 名字提供候选项。缺省或缺对应键时，字段退化成默认控件——所以挖掘范式
+   * 编辑器不传这个 prop 也完全正常，行为与改动前一致。
+   */
+  optionSources?: Record<string, ParamOption[]>
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Record<string, unknown>] }>()
 
@@ -96,6 +133,8 @@ interface Field {
   max?: number
   step?: number
   default?: unknown
+  widget?: string
+  placeholder?: string
 }
 
 const schema = computed<MiningJsonSchema>(() => {
@@ -112,7 +151,10 @@ const fields = computed<Field[]>(() => Object.entries(schema.value.properties ??
 
 function toField(key: string, property: MiningJsonSchemaProperty): Field {
   const title = property.title || key
-  const base = { key, title, description: property.description, default: property.default }
+  const base = {
+    key, title, description: property.description, default: property.default,
+    widget: property['x-widget'],
+  }
   if (property.enum) return { ...base, kind: 'enum', enum: property.enum }
   if (property.type === 'integer' || property.type === 'number') {
     return {
@@ -127,6 +169,24 @@ function toField(key: string, property: MiningJsonSchemaProperty): Field {
   if (property.type === 'array') return { ...base, kind: 'array' }
   if (property.type === 'object') return { ...base, kind: 'map' }
   return { ...base, kind: 'string' }
+}
+
+/**
+ * 该字段的候选项；没有对应 source 则返回 null，模板据此回退到自由输入控件。
+ *
+ * 已保存但不在候选里的值（知识库被删、或范式是在别的域下建的）会补成一个标注项，
+ * 而不是从选择器里消失——用户不该在打开表单时被静默改掉已保存的配置。
+ */
+function optionsFor(field: Field): ParamOption[] | null {
+  if (!field.widget) return null
+  const source = props.optionSources?.[field.widget]
+  if (!source) return null
+  const selected = (value(field.key) as unknown[]) ?? []
+  const known = new Set(source.map(option => option.value))
+  const orphans = selected
+    .filter((v): v is string => typeof v === 'string' && !known.has(v))
+    .map(v => ({ value: v, label: v, hint: '未知或不可见' }))
+  return orphans.length > 0 ? [...source, ...orphans] : source
 }
 
 function value(key: string): unknown {
@@ -188,5 +248,6 @@ function removeMapRow(key: string, index: number) {
 .param-form__description { font-size: 11px; color: var(--kb-text-tertiary); line-height: 1.4; }
 .param-form__map { display: flex; flex-direction: column; gap: 6px; }
 .param-form__map-row { display: grid; grid-template-columns: 1fr 110px 28px; gap: 6px; align-items: center; }
+.param-form__option-hint { float: right; margin-left: 12px; font-size: 11px; color: var(--kb-text-tertiary); }
 </style>
 

@@ -30,8 +30,17 @@ public class ParadigmExecutionService {
 
     private static final Logger log = LoggerFactory.getLogger(ParadigmExecutionService.class);
 
-    /** Per-call execution arguments (from the HTTP request body). */
-    public record RunArgs(String query, String domain, String channel, boolean debug) {}
+    /**
+     * Per-call execution arguments. Everything but {@code username} comes from the request body;
+     * {@code username} is the {@code X-KB-User} header, needed so a paradigm whose
+     * {@code scope_resolve} names knowledge bases is authorized against the actual caller.
+     */
+    public record RunArgs(String query, String domain, String channel, boolean debug,
+                          String username) {
+        public RunArgs(String query, String domain, String channel, boolean debug) {
+            this(query, domain, channel, debug, null);
+        }
+    }
 
     private final ParadigmCompiler compiler;
     private final ParadigmExecutor executor;
@@ -71,7 +80,8 @@ public class ParadigmExecutionService {
         // Validate DB reachable (lazy pool build + connectivity check) before executing.
         domainPoolManager.getDataSource(domain);
 
-        ExecContext ctx = new ExecContext(UUID.randomUUID().toString(), domain, channel, args.debug());
+        ExecContext ctx = new ExecContext(
+                UUID.randomUUID().toString(), domain, channel, args.debug(), args.username());
         ctx.setQuery(args.query());
         Object result = executor.execute(graph, ctx, Map.of("query", args.query()));
 

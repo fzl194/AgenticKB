@@ -41,6 +41,21 @@ public class QueryLogService {
      * @param durationMs wall-clock time measured by the aspect
      */
     public void record(String queryId, SearchRequest request, ContextPack pack, long durationMs) {
+        record(queryId, request, pack, durationMs, Map.of());
+    }
+
+    /**
+     * As above, plus engine attribution written to {@code metadata_json}.
+     *
+     * <p>Needed because two different engines now write to this table: the legacy
+     * {@code SearchService} pipeline and the operator-paradigm executor. Without a discriminator
+     * any analysis over {@code serving_query_logs} silently averages the two together — the same
+     * trap {@code agent_llm_tasks} has with its two independent persistence paths.</p>
+     *
+     * @param metadata engine attribution (e.g. {@code engine}, {@code paradigm_id}); may be empty
+     */
+    public void record(String queryId, SearchRequest request, ContextPack pack, long durationMs,
+                       Map<String, Object> metadata) {
         try {
             String domain = request.domain() != null && !request.domain().isBlank()
                     ? request.domain() : "default";
@@ -54,7 +69,7 @@ public class QueryLogService {
             entry.setQueriedAt(Instant.now().toString());
             entry.setDurationMs((int) Math.min(durationMs, Integer.MAX_VALUE));
             entry.setQueryText(request.query());
-            entry.setMetadataJson("{}");
+            entry.setMetadataJson(toJsonObject(metadata));
             entry.setKeywordsJson("[]");
             entry.setEntitiesJson("[]");
             entry.setScopeJson("{}");
@@ -154,6 +169,16 @@ public class QueryLogService {
             return objectMapper.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
             return obj instanceof java.util.Map ? "{}" : "[]";
+        }
+    }
+
+    /** Like {@link #toJson} but never degrades an object column to "[]" — metadata_json is JSONB. */
+    private String toJsonObject(Map<String, Object> map) {
+        if (map == null || map.isEmpty()) return "{}";
+        try {
+            return objectMapper.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            return "{}";
         }
     }
 }

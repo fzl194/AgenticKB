@@ -308,7 +308,13 @@ api/GlobalExceptionHandler.java    改     补错误码
 ## 8. 前端集成
 
 - `SearchView.vue` 每条结果加「查看全文」→ 抽屉展示完整 `text`，`window` 模式下把前后段落灰显。
-- 有 `hasRawFile` 时加「下载原件」→ 直接指向 §3.2 的 URL（走 `createProxyClient('serving')` 同一前缀）。
+- 有 `hasRawFile` 时加「下载原件」。
+
+> ⚠️ 实现修正：**下载必须走 axios 取 blob，不能给 `<a href>` 拼 URL**。`X-KB-User` 是 `proxyClient` 在请求拦截器里注入的，浏览器直接发起的导航根本不经过拦截器，会以匿名身份到达后端——私有知识库的文档就会莫名其妙 404。复用已有的 `utils/download.ts`（`saveBlob` + `filenameFromDisposition`）。
+>
+> 另一处：`kbIds` 作为 query 参数时要设 `paramsSerializer: { indexes: null }`。axios 默认发 `kbIds[]=a`，Spring 的 `@RequestParam List<String>` 不认，会当成没传而**静默退回全域范围**。
+>
+> 还有：前端必须**钉住产生当前结果的那次检索所用的 scope**（`resultScope`），不能用选择器的当前值——用户改了选择但没重新检索时，下钻会把结果全部查成 `out_of_scope`。
 - **注意原件是"当前文件"，快照是"挖掘时的内容"**。文件在挖掘后被重新上传过就对不上。UI 上标一句"原件可能已更新"，别让人误以为是引证不符。
 
 ---

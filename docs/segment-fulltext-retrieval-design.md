@@ -335,9 +335,17 @@ api/GlobalExceptionHandler.java    改     补错误码
 
 **L2 集成（需 PG）**
 
-- `AssetRepositoryFullTextIT`，放在 `AssetRepositoryKbScopeIT` 旁边：
-  - 造两个 KB、一份内容相同的文档（**必须覆盖共享 snapshot 的情况**），验证 kb-a 的调用者拿不到 kb-b 的片段
-  - 验证 `selectFullByIds` 不产生重复行（这是不 JOIN links 的回归锁）
+`AssetRepositoryFullTextIT`，放在 `AssetRepositoryKbScopeIT` 旁边，**自带 fixture**（按 token 造数据、`@AfterEach` 删干净），所以不依赖库里已有 release——这点很重要：其余多数 IT 在没有 active release 的库上会整体 skip。
+
+- `selectFullByIds` 在「一个 snapshot 挂两个文档」时仍只返回一行（不 JOIN links 的回归锁）
+- 三个 mapper 的 scope 过滤真的过滤
+- `selectWindows` 的 OR 拼接：区间闭合、多窗口不重复、**不跨 snapshot 串**
+- `selectFileLocations` 的 `DISTINCT`：一个文档挂多个在范围内的 snapshot 只出一行
+- legacy 文档 `kb_id`/`storage_path` 为 null，`selectDocumentSources` 带回 `kb_id`
+
+> 写 fixture 时的两个坑（都是真跑一次才会知道的）：
+> ① 实际库里 JSON 列是 **JSONB**（`002_asset_core_postgresql` 把 001 里声明的 TEXT 迁走了），字面量必须显式 `?::jsonb`，否则参数按 varchar 绑定、PG 直接拒绝赋值；
+> ② `unit_type`/`target_type`/`block_type`/`semantic_role` 都有 CHECK 约束，随手写个 `'qa'` 会插不进去。
 
 **回归**
 

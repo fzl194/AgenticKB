@@ -149,15 +149,35 @@ public class RawFileService {
      * reason to keep it: if a row ever is edited or corrupted, an unchecked path from the database
      * is a read of any file the process can open. Reported as {@code document_not_found}, not a
      * server error: the caller learns nothing either way, and the detail belongs in the log.</p>
+     *
+     * <p>Compares <em>real</em> paths, resolving symlinks, because {@code normalize()} alone works
+     * on the string: a symlink sitting inside the KB directory and pointing anywhere on the disk
+     * normalizes to a path that starts with the base and would sail through. Python's
+     * {@code Path.resolve()} on the mining side resolves links, so anything less here would not be
+     * the same check despite claiming to be.</p>
      */
     private Path safeResolve(DocumentFileRow row) {
-        Path base = uploadRoot.resolve(row.getKbId()).toAbsolutePath().normalize();
+        Path base;
         Path candidate;
         try {
-            candidate = Path.of(row.getStoragePath()).toAbsolutePath().normalize();
+            // Only the upload root is resolved for real — the KB directory may legitimately not
+            // exist yet, and requiring it would turn "this KB has no files" into an access
+            // decision instead of the plain missing-file answer it is.
+            base = uploadRoot.toRealPath().resolve(row.getKbId()).normalize();
+        } catch (InvalidPathException | IOException e) {
+            log.error("Upload root unresolvable: {}", uploadRoot);
+            throw new IllegalStateException("raw_file_storage_unavailable");
+        }
+        try {
+            candidate = Path.of(row.getStoragePath()).toRealPath();
         } catch (InvalidPathException e) {
             log.warn("Unusable storage_path for document {}", row.getId());
             throw new IllegalArgumentException("document_not_found");
+        } catch (IOException e) {
+            // The stored path does not resolve to anything on disk — a missing file, not an
+            // attempt to escape. Reported as such so the containment check below only ever speaks
+            // to real containment.
+            throw new IllegalArgumentException("raw_file_unavailable");
         }
         if (!candidate.startsWith(base)) {
             log.warn("storage_path escapes its KB directory: document={} kb={}",

@@ -180,6 +180,67 @@ class FullTextWebMvcTest {
                 .andExpect(jsonPath("$.error").value("empty_scope"));
     }
 
+    // --------------------------------------- validation inside the request record
+    //
+    // These go through real deserialization rather than a mocked throw. The record's compact
+    // constructor runs inside Jackson, so its IllegalArgumentException arrives wrapped in
+    // HttpMessageNotReadableException — the mapped codes below are unreachable unless the advice
+    // unwraps it, and a mocked-service test cannot tell the difference.
+
+    @Test
+    @DisplayName("an unknown granularity is a 400 with its own code, not a 500")
+    void unknownGranularityIsMapped() throws Exception {
+        mockMvc.perform(post("/api/v1/segments/fulltext")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refs\":[{\"type\":\"raw_segment\",\"id\":\"s1\"}],"
+                                + "\"granularity\":\"paragraph\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("unknown_granularity"));
+
+        verifyNoInteractions(fullTextService);
+    }
+
+    @Test
+    @DisplayName("an out-of-range window radius is a 400 with its own code")
+    void windowRadiusOutOfRangeIsMapped() throws Exception {
+        mockMvc.perform(post("/api/v1/segments/fulltext")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refs\":[{\"type\":\"raw_segment\",\"id\":\"s1\"}],"
+                                + "\"granularity\":\"window\",\"windowRadius\":99}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("window_radius_out_of_range"));
+    }
+
+    @Test
+    @DisplayName("an unknown ref type is a 400 with its own code")
+    void unknownRefTypeIsMapped() throws Exception {
+        mockMvc.perform(post("/api/v1/segments/fulltext")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refs\":[{\"type\":\"nonsense\",\"id\":\"s1\"}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("unknown_ref_type"));
+    }
+
+    @Test
+    @DisplayName("a blank ref id is a 400 with its own code")
+    void blankRefIdIsMapped() throws Exception {
+        mockMvc.perform(post("/api/v1/segments/fulltext")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refs\":[{\"type\":\"raw_segment\",\"id\":\"  \"}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("ref_id_required"));
+    }
+
+    @Test
+    @DisplayName("unparseable JSON is a 400 malformed_request, not a server error")
+    void malformedJsonIsClientError() throws Exception {
+        mockMvc.perform(post("/api/v1/segments/fulltext")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"refs\": [ truncated"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("malformed_request"));
+    }
+
     // ------------------------------------------------------- raw file endpoint
 
     @Test

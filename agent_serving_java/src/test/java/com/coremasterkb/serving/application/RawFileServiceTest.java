@@ -204,6 +204,31 @@ class RawFileServiceTest {
     }
 
     @Test
+    @DisplayName("a symlink inside the KB directory cannot point out of it")
+    void symlinkOutOfKbDirectoryIsRefused() throws Exception {
+        // normalize() alone would pass this: the path string starts with uploadRoot/kb-a and only
+        // the filesystem knows it leads elsewhere. Python's Path.resolve() on the mining side does
+        // resolve links, so anything weaker here would not be the same check.
+        Path outside = Files.writeString(uploadRoot.resolve("secrets.txt"), "not yours");
+        Path kbDir = Files.createDirectories(uploadRoot.resolve("kb-a"));
+        Path link = kbDir.resolve("innocent.pdf");
+        try {
+            Files.createSymbolicLink(link, outside);
+        } catch (UnsupportedOperationException | java.io.IOException e) {
+            // Windows needs developer mode or elevation to create symlinks.
+            org.junit.jupiter.api.Assumptions.assumeTrue(false, "symlinks unavailable here");
+        }
+
+        scopeSeesDoc1();
+        when(repo.resolveFileLocations(any(), any()))
+                .thenReturn(List.of(row("doc-1", "kb-a", link.toString(), "innocent.pdf")));
+
+        assertThatThrownBy(this::resolveDoc1)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("document_not_found");
+    }
+
+    @Test
     @DisplayName("a missing upload root is a 503 deployment fault, not a per-document 404")
     void missingUploadRootIsDistinct() {
         RawFileService broken = new RawFileService(repo, scopeResolver,

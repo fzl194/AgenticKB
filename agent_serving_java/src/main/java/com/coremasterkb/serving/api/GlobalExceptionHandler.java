@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -146,6 +147,33 @@ public class GlobalExceptionHandler {
         log.error("Unexpected state: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "internal_error", "message", "Internal server error"));
+    }
+
+    /**
+     * A request body that could not be turned into its DTO.
+     *
+     * <p>Exists because request records validate in their compact constructors — {@code
+     * SearchRequest} rejects a blank query, {@code FullTextRequest} rejects an unknown granularity
+     * or an out-of-range radius, {@code FullTextRequest.Ref} rejects an unknown ref type. All of
+     * those throw <em>during deserialization</em>, so Jackson wraps them and Spring re-wraps that
+     * as {@link HttpMessageNotReadableException}. Without this the carefully mapped 400 codes above
+     * were unreachable from the wire and every one of them surfaced as a 500 — the handler was
+     * only ever exercised by tests that threw from a mocked service, which skips deserialization
+     * entirely.</p>
+     *
+     * <p>Anything that is not one of our own validation failures (truncated JSON, wrong type for a
+     * field) is a malformed request, which is still the caller's problem, not a server fault.</p>
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, Object>> handleUnreadableBody(HttpMessageNotReadableException ex) {
+        for (Throwable cause = ex.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause instanceof IllegalArgumentException iae && iae.getMessage() != null) {
+                return handleIllegalArgument(iae);
+            }
+        }
+        log.warn("Malformed request body: {}", ex.getMostSpecificCause().getMessage());
+        return ResponseEntity.badRequest()
+                .body(Map.of("error", "malformed_request", "message", "Request body could not be parsed"));
     }
 
     @ExceptionHandler(NoResourceFoundException.class)

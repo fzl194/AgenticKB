@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from urllib.parse import quote
 
 import httpx
 
@@ -166,12 +167,15 @@ def _attach_raw_file_urls(body: dict, domain: str) -> None:
     """
     if not RAW_FILE_BASE_URL:
         return
+    # domain and the document id both arrive from the tool caller, so they are quoted rather than
+    # interpolated raw — an unescaped value would silently produce a link to a different request.
+    domain_q = quote(domain, safe="")
     for item in body.get("items", []):
         for segment in item.get("segments", []):
             if segment.get("hasRawFile") and segment.get("documentId"):
+                doc_q = quote(str(segment["documentId"]), safe="")
                 segment["rawFileUrl"] = (
-                    f"{RAW_FILE_BASE_URL}/api/v1/documents/{segment['documentId']}/raw"
-                    f"?domain={domain}"
+                    f"{RAW_FILE_BASE_URL}/api/v1/documents/{doc_q}/raw?domain={domain_q}"
                 )
 
 

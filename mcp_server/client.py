@@ -12,10 +12,12 @@ from __future__ import annotations
 import logging
 import os
 import time
+from urllib.parse import quote
 
 import httpx
 
 from mcp_server.schemas import (
+    FullTextInput,
     HealthResult,
     SearchInput,
 )
@@ -37,6 +39,14 @@ _FALSEY = {"0", "false", "no", "off", ""}
 #: mining side. The other way to roll back needs no restart at all: clear the domain's
 #: is_default binding and the next call resolves to nothing and falls back on its own.
 PARADIGM_ROUTING = os.environ.get("MCP_PARADIGM_ROUTING", "1").strip().lower() not in _FALSEY
+
+FULLTEXT_TIMEOUT = float(os.environ.get("FULLTEXT_TIMEOUT", "30.0"))
+
+#: Serving's base URL *as the reader of the answer can reach it*, used to build download links for
+#: the original files. Left empty by default on purpose: ``BACKEND_URL`` is localhost inside the
+#: deployed container, so deriving links from it would hand out URLs that resolve to nothing on the
+#: caller's machine — worse than no link, because it looks like it should work.
+RAW_FILE_BASE_URL = os.environ.get("MCP_RAW_FILE_BASE_URL", "").strip().rstrip("/")
 
 _client = httpx.Client(trust_env=False)
 
@@ -84,6 +94,89 @@ def search_knowledge(inp: SearchInput) -> dict:
     if target is not None:
         return _search_via_paradigm(target, inp, ignored)
     return _search_via_legacy(inp, ignored)
+
+
+def get_segment_fulltext(inp: FullTextInput) -> dict:
+    """POST /api/v1/segments/fulltext — the uncompressed text behind search-result ids.
+
+    Routed through the *same* paradigm the search used, by resolving the domain's binding again.
+    That is the point: a paradigm's ``scope_resolve`` can name knowledge bases, and looking the ids
+    up against a different corpus than the one that produced them would report them missing.
+
+    A resolve failure here degrades differently from :func:`search_knowledge`. There, falling back
+    means answering from the legacy pipeline; here it means looking in the domain's active release
+    instead of the paradigm's knowledge bases. KB content never reaches a release (KB mining runs
+    ``publish=false``), so the failure mode is "found nothing", never "found something it should
+    not have" — the safe direction, but noisy enough to warrant the warning below.
+    """
+    if not inp.refs:
+        return {"error": "refs_required", "items": []}
+
+    target = _resolve_paradigm(inp.domain) if PARADIGM_ROUTING else None
+    payload: dict = {
+        "domain": inp.domain,
+        "refs": [{"type": r.type, "id": r.id} for r in inp.refs],
+        "granularity": inp.granularity,
+        "windowRadius": inp.window_radius,
+    }
+    if target is not None:
+        payload["paradigm_id"] = target["paradigmId"]
+    else:
+        logger.info(
+            "fulltext for domain=%r resolved no paradigm; looking in the active release. "
+            "If the search that produced these ids ran on a bound paradigm, they will not be found",
+            inp.domain,
+        )
+
+    try:
+        resp = _client.post(
+            f"{BACKEND_URL}/api/v1/segments/fulltext",
+            json=payload,
+            timeout=FULLTEXT_TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("fulltext lookup failed: %s", exc)
+        return {"error": str(exc), "_retrieval": _meta(target, [])}
+
+    if resp.status_code != 200:
+        logger.warning("fulltext lookup returned HTTP %d", resp.status_code)
+        return {
+            "error": f"HTTP {resp.status_code}",
+            "raw": resp.text[:500],
+            "_retrieval": _meta(target, []),
+        }
+
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        logger.warning("fulltext lookup returned non-JSON: %s", exc)
+        return {"error": "invalid_json_response", "_retrieval": _meta(target, [])}
+
+    if isinstance(body, dict):
+        _attach_raw_file_urls(body, inp.domain)
+        body["_retrieval"] = _meta(target, [])
+    return body
+
+
+def _attach_raw_file_urls(body: dict, domain: str) -> None:
+    """Add a download link to segments whose document still has its original file.
+
+    Only when :data:`RAW_FILE_BASE_URL` is configured — see the note there. The file itself is not
+    exposed as a tool: handing an agent a 200-page PDF costs a great deal of context and answers
+    nothing the segment text did not, so the link is for a person or a UI to follow.
+    """
+    if not RAW_FILE_BASE_URL:
+        return
+    # domain and the document id both arrive from the tool caller, so they are quoted rather than
+    # interpolated raw — an unescaped value would silently produce a link to a different request.
+    domain_q = quote(domain, safe="")
+    for item in body.get("items", []):
+        for segment in item.get("segments", []):
+            if segment.get("hasRawFile") and segment.get("documentId"):
+                doc_q = quote(str(segment["documentId"]), safe="")
+                segment["rawFileUrl"] = (
+                    f"{RAW_FILE_BASE_URL}/api/v1/documents/{doc_q}/raw?domain={domain_q}"
+                )
 
 
 # ── paradigm routing ─────────────────────────────────────────────────────

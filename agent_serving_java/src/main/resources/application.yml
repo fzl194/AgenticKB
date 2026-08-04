@@ -35,5 +35,9 @@ serving:
   domain-registry-path: ${DOMAIN_REGISTRY_PATH:../main_control_service/config/domain_registry.yaml}
   # 需要覆盖时用环境变量 SERVING_DEFAULT_DOMAIN（Spring 宽松绑定，无需写占位符）。
   default-domain: cloud_core_network
+  # KB 上传文件的根目录，用于 GET /api/v1/documents/{id}/raw 直接回原件。
+  # 必须与 main_control_service/config/system/mining.yaml 的 upload.root 指向同一目录
+  # （容器内 cwd=/app，那边写的 ./uploads 即此处的 /app/uploads）。
+  upload-root: ${SERVING_UPLOAD_ROOT:/app/uploads}
   llm:
     base-url: ${LLM_SERVICE_URL:http://localhost:8900}

@@ -101,6 +101,7 @@
               :key="item.id"
               :item="item"
               :idx="idx"
+              @view-full-text="openFullText"
             />
           </div>
           <EmptyState v-if="!result.items?.length" text="无检索结果" />
@@ -156,6 +157,16 @@
 
     <!-- Empty -->
     <EmptyState v-if="!result && !searching && searchedOnce" text="未找到相关结果，换个关键词试试" />
+
+    <FullTextDrawer
+      v-model="fullTextOpen"
+      :result="fullTextResult"
+      :loading="fullTextLoading"
+      :error="fullTextError"
+      :domain="resultScope.domain"
+      :kb-ids="resultScope.kbIds"
+      :kbs="kbs"
+    />
   </div>
 </template>
 
@@ -166,9 +177,10 @@ import { useDomainStore } from '@/stores/domain'
 import { useServingApi } from '@/api/serving'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
-import type { SearchResult } from '@/types'
+import type { FullTextResult, SearchContextItem, SearchResult } from '@/types'
 import type { KbSummary } from '@/types/kb'
 import EvidenceCard from '@/components/search/EvidenceCard.vue'
+import FullTextDrawer from '@/components/search/FullTextDrawer.vue'
 import PipelineTrace from '@/components/search/PipelineTrace.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
@@ -186,6 +198,13 @@ const selectedKbIds = ref<string[]>([])
 const result = ref<SearchResult | null>(null)
 const activeTab = ref('evidence')
 const debugMode = ref(true)
+
+/** 产生当前结果的那次检索所用的范围，见 handleSearch。 */
+const resultScope = ref<{ domain: string; kbIds: string[] }>({ domain: '', kbIds: [] })
+const fullTextOpen = ref(false)
+const fullTextLoading = ref(false)
+const fullTextError = ref('')
+const fullTextResult = ref<FullTextResult | null>(null)
 
 /** 知识库列表按域取。列表本身已按 X-KB-User 过滤，所以选择器里只会出现可检索的库。 */
 async function loadKbs() {
@@ -217,11 +236,16 @@ async function handleSearch() {
   searchedOnce.value = true
   searchError.value = ''
   try {
+    const domain = domainStore.currentDomain
+    const kbIds = [...selectedKbIds.value]
     result.value = await servingApi.search(query.value, {
-      domain: domainStore.currentDomain,
+      domain,
       debug: debugMode.value,
-      kbIds: selectedKbIds.value,
+      kbIds,
     })
+    // 钉住本次检索的范围。原文下钻必须用同一个范围去查，用「当前选择器的值」会在用户
+    // 改了选择但没重新检索时把结果全部查成 out_of_scope。
+    resultScope.value = { domain, kbIds }
     activeTab.value = 'evidence'
   } catch (e) {
     console.error('Search failed:', e)
@@ -229,6 +253,32 @@ async function handleSearch() {
     searchError.value = await searchErrorMessage(e)
   } finally {
     searching.value = false
+  }
+}
+
+/**
+ * 展开某条证据的完整原文。
+ *
+ * ref.type 用条目自己的 kind：命中项是 retrieval_unit，上下文/支撑项是 raw_segment。
+ * 不能靠 id 前缀猜——猜错会查错表，然后报成「找不到」。
+ */
+async function openFullText(item: SearchContextItem) {
+  const type = item.kind === 'retrieval_unit' ? 'retrieval_unit' : 'raw_segment'
+  fullTextOpen.value = true
+  fullTextLoading.value = true
+  fullTextError.value = ''
+  fullTextResult.value = null
+  try {
+    fullTextResult.value = await servingApi.fetchFullText(
+      [{ type, id: item.id }],
+      // 带一段前后文：切分边界常把一句话劈成两段，只给命中段读起来是断的。
+      { ...resultScope.value, granularity: 'window', windowRadius: 1 },
+    )
+  } catch (e) {
+    console.error('Full text lookup failed:', e)
+    fullTextError.value = await searchErrorMessage(e)
+  } finally {
+    fullTextLoading.value = false
   }
 }
 

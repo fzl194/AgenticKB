@@ -77,6 +77,11 @@ export interface ParadigmView {
   draftGraph: ParadigmGraph | null
   createdAt: string | null
   updatedAt: string | null
+  /** Domain this paradigm serves; null = unbound (still callable by id, excluded from matching). */
+  boundDomain: string | null
+  /** Whether MCP auto-matches this paradigm for boundDomain. At most one per domain. */
+  isDefault: boolean
+  boundAt: string | null
 }
 
 export interface ParadigmVersionView {

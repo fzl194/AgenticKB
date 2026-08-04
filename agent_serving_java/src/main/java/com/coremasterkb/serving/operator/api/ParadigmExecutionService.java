@@ -31,14 +31,30 @@ public class ParadigmExecutionService {
     private static final Logger log = LoggerFactory.getLogger(ParadigmExecutionService.class);
 
     /**
-     * Per-call execution arguments. Everything but {@code username} comes from the request body;
-     * {@code username} is the {@code X-KB-User} header, needed so a paradigm whose
-     * {@code scope_resolve} names knowledge bases is authorized against the actual caller.
+     * Per-call execution arguments. Everything but {@code username} and the paradigm reference
+     * comes from the request body; {@code username} is the {@code X-KB-User} header, needed so a
+     * paradigm whose {@code scope_resolve} names knowledge bases is authorized against the actual
+     * caller.
+     *
+     * <p>{@code paradigmId}/{@code paradigmVersion} identify a <em>stored</em> paradigm and exist
+     * purely so {@code QueryLogAspect} can attribute the query log to it. Both are null for inline
+     * ({@code /paradigm/run}) execution, and the version is null for a draft dry-run. They are
+     * never read by execution itself.</p>
      */
     public record RunArgs(String query, String domain, String channel, boolean debug,
-                          String username) {
+                          String username, String paradigmId, Integer paradigmVersion) {
+
         public RunArgs(String query, String domain, String channel, boolean debug) {
             this(query, domain, channel, debug, null);
+        }
+
+        public RunArgs(String query, String domain, String channel, boolean debug, String username) {
+            this(query, domain, channel, debug, username, null, null);
+        }
+
+        /** Attach the stored-paradigm reference for query-log attribution. */
+        public RunArgs withParadigm(String id, Integer version) {
+            return new RunArgs(query, domain, channel, debug, username, id, version);
         }
     }
 

@@ -25,9 +25,9 @@ knowledge_mining  :8901                      agent_serving_java :8081
          └──── 写 asset_*/kb_* 表 ──► PostgreSQL ──── 只读 ──────┘
 ```
 
-`agent_serving_java` 对全部 `asset_*` 表**只读**（7 个 `Asset*` mapper + `OntologyGraphMapper` 全是 `<select>`；13 个 mapper XML 里只有 `ServingQueryLog`/`SemanticCache`/`Paradigm`/`ParadigmVersion` 有写）。**写方不再是「mining 独占全部 asset_\*」**：KB 中心化后，`asset_documents` **文档身份由 `knowledge_mining/mining/kb/` 包独占写**，mining 只**读**文档身份（按 `storage_path`）并产 snapshot 及以下派生资产。serving 自己只写 `serving_query_logs` / `serving_query_cache` / `operator_paradigm*`。详见下文「KB 层」。
+`agent_serving_java` 对全部 `asset_*` 表**只读**（7 个 `Asset*` mapper + `OntologyGraphMapper` + `KnowledgeBaseMapper` 全是 `<select>`；14 个 mapper XML 里只有 `ServingQueryLog`/`SemanticCache`/`Paradigm`/`ParadigmVersion` 有写）。**写方不再是「mining 独占全部 asset_\*」**：KB 中心化后，`asset_documents` **文档身份由 `knowledge_mining/mining/kb/` 包独占写**，mining 只**读**文档身份（按 `storage_path`）并产 snapshot 及以下派生资产。serving 自己只写 `serving_query_logs` / `serving_query_cache` / `operator_paradigm*`。详见下文「KB 层」。
 
-**发布语义**：mining 挖完的内容不会立刻可检索。必须 build 成不可变快照并 `publish` 成 release；`asset_publish_releases` 上有部分唯一索引 `WHERE status='active'` 保证「一个 **(domain, channel)** 至多一个 active release」。serving 只认 active release。这也是 `no_active_release` / `multiple_active_releases` 报错的来源。发布用 `acquire_domain_publish_lock(domain)` 的按域 advisory 锁串行化，`activate_release()` 在同一事务里退旧启新。**⚠️ 但 KB 触发的挖掘 `publish=False`（只 build 不发布）**——见「KB 层」。
+**发布语义**：mining 挖完的内容不会立刻可检索。必须 build 成不可变快照并 `publish` 成 release；`asset_publish_releases` 上有部分唯一索引 `WHERE status='active'` 保证「一个 **(domain, channel)** 至多一个 active release」。serving **默认**只认 active release，这也是 `no_active_release` / `multiple_active_releases` 报错的来源；**唯一例外是按 `kbIds` 收窄的检索，它绕过 release 直接从 build 解析**（见「serving 的 KB 感知」）。发布用 `acquire_domain_publish_lock(domain)` 的按域 advisory 锁串行化，`activate_release()` 在同一事务里退旧启新。**⚠️ 但 KB 触发的挖掘 `publish=False`（只 build 不发布）**——见「KB 层」。
 
 ### ⚠️ 重大变化（务必先读）
 
@@ -183,7 +183,20 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 
 ## Java 检索线：控制面集成 + 按域分库
 
-> **⚠️ serving 目前完全不感知 KB。** KB 中心化只改了 mining/DB/前端；`agent_serving_java` 本次只改了 `application.yml`（默认数据源 → `kb_db`）。检索仍按 `ActiveScope.snapshotIds`（域级 active release 解析出的快照集）走，**没有按 `kb_id` 收窄范围、也没有 KB 来源标注**。需求里「范式设计态选一组 KB」在 serving 侧尚未实现——落点是 `ScopeResolveOperator` 加 `kbIds` 参数 + `AssetRepository.resolveActiveScope` 按 `document_id→kb_id` 收窄快照集（检索 SQL 本身不用改，因为已是快照级过滤）。
+### serving 的 KB 感知：按 kb_id 收窄检索范围
+
+两条检索入口都接了身份与 KB 范围：
+
+- `POST /api/v1/search` 的 body 收 `kbIds`（`@JsonAlias("kb_ids")`，默认空 = 老的全域行为）。**注意 `SearchRequest` 里 `scope` 和 `kbIds` 无关**：`scope` 过滤文档内部结构（章节等），`kbIds` 决定检索哪个语料库。
+- 范式侧由 `scope_resolve` 的 **`kbIds` 节点参数**承载——它是**设计态**属性，冻结进存储的图，不是每请求传。参数 schema 带 `x-widget: "kb-picker"`（JSON Schema 忽略未知关键字，纯 UI 提示），前端 `ParadigmEditorView` 据此渲染知识库选择器。
+
+**身份与鉴权**：`X-KB-User` 头（同 mining 的内网信任头）→ `KbAccessService.authorize()`，**每次执行都校验**，存图不会变成绕过可见性的后门。`KnowledgeBaseMapper.selectAccessibleKbIds` 用 `LEFT JOIN kb_users` 解析用户，无头/未知用户只剩 `public` KB（`mcp_server` 就是这种匿名调用）。任一请求 id 不可读则**整个**请求失败成 `kb_not_found`（400），不做静默子集——返回子集与「那个 KB 没有匹配内容」无法区分；不存在与无权限也共用同一错误，不泄露存在性。
+
+**关键：KB 范围不走 release，走 build。** 因为 KB 挖掘 `publish=False`，域级 active release 里压根没有 KB 内容，走 `resolveActiveScope` 必然落空。`AssetRepository.resolveActiveScope(domain, channel, kbIds)` 在 `kbIds` 非空时改派给 `resolveKbScope()`，从 `asset_build_document_snapshots` 按**每个文档自己 KB 的最新 build** 解析（`AssetBuildDocumentSnapshotMapper.selectLatestKbSnapshots`：`DISTINCT ON (document_id)` 按 `b.created_at DESC`，`b.kb_id = d.kb_id` 防兄弟 KB 的 build 抢答，`selection_status='active'` **必须在外层过滤**否则被后续 build 标 removed 的文档会回落到旧 active 行，`d.domain` 防跨域同名 id）。零命中抛 `no_active_kb_build`。
+
+返回的 `ActiveScope` 有两处刻意的错位：`releaseId` 塞的是 `ActiveScope.kbScopeKey(kbIds)`（让语义缓存按 KB 选择分桶，而不是把所有 KB 混一个桶），`buildId=null`（一个 KB 范围跨多个 build）。`kbIds` 为空时**完全走老路径**，行为逐字不变。
+
+检索 SQL 本身没改（本来就是快照级过滤）。**仍缺的是结果里的 KB 来源标注**——`ContextItem` / `SourceRef` 都没有 `kb_id` 字段，只有 `/api/v1/search` 的 `debug.domain_context.kb_ids` 和范式 trace 的 `kbIds` 属性能看出用了哪些库。
 
 ### 检索流水线：实际 12 个 trace 阶段，路由按复杂度
 
@@ -220,7 +233,6 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 
 ### 仍然存在的坑（逐条已复核仍在）
 
-- **虚拟线程不继承 ThreadLocal。** `DomainContext` 是普通 `ThreadLocal`（非 `InheritableThreadLocal`）。`SearchService.search()` 只在请求线程 `set()` 一次，但**所有检索都在 `newVirtualThreadPerTaskExecutor()` 的 `CompletableFuture.*Async` lambda 里跑**，变体循环和子查询循环**都没 `DomainContext.set()`**。后果：`EntityGraphRouteRetriever` 读 `DomainContext.get()` 为 null → `entity_graph` 路由在 `/api/v1/search` **恒返回空**；更深的坑是 `DomainRoutingDataSource` 把 null→default，所以配了 inline `database:` 的域，那些虚拟线程上的检索**静默查了默认库**。`DomainContext` 提供了 `wrapRunnable/wrapCallable/wrapSupplier`，但检索路径没用。
 - **`AssetRawSegmentMapper.selectWithMeta` 会按 snapshot 链接数放大行**：`LEFT JOIN asset_document_snapshot_links`（1:N）且无 `DISTINCT`，同一 `raw_segment` id 返回多行。`ContextAssembler` 已按 id 去重、`GraphExpander` 靠 BFS visited 去重。**任何新消费 `selectWithMeta` 的代码都要自己按 segment id 去重**，别假设行唯一。
 - **`scenario_pack_missing` 是死代码**：`GlobalExceptionHandler` 映射它、测试也测了，但**无人抛**——`DomainPackReader.getProfile()` 找不到 pack 时回落 `ServingDomainProfile.defaults()`，空 `serving:{}` 与「合法没 override」无法区分。
 - **语义缓存污染**（见 `docs/TODO-known-issues.md`）：`SemanticCacheService.store()` 只挡 `queryVector==null`，不挡空/降级结果，降级期的空结果被写进 `serving_query_cache`，恢复后同 query 仍命中返回空（cos≥0.92，TTL 24h）。`evict(domain)` 存在但**无调用点**。修前先看那份台账。
@@ -380,7 +392,7 @@ docker compose exec app supervisorctl restart mining
 
 **算子系统的 `scope` 必须显式连线（Java）。** `ParadigmCompiler.ENTRY_SLOTS` **只有 `query`**，`scope` 被故意排除——否则图「编译通过但运行时 scope 为 null，静默检索不到」。所有需要 scope 的检索算子必须连到 `scope_resolve`。这是 `missing_required_input` 的来源。
 
-**虚拟线程不继承 `DomainContext`（Java）。** 任何 `CompletableFuture.runAsync` 提交的任务都要显式 `DomainContext.set()` 或用 `DomainContext.wrapRunnable`。`ParadigmExecutor` 每节点都做了；`SearchService` 的变体/子查询检索**漏了**（已知 bug，`entity_graph` 恒空 + 分库域静默走默认库）。
+**虚拟线程不继承 `DomainContext`（Java）。** `DomainContext` 是普通 `ThreadLocal`（非 `InheritableThreadLocal`），而检索都跑在 `newVirtualThreadPerTaskExecutor()` 上。任何 `CompletableFuture.*Async` 提交的任务都必须用 `DomainContext.wrapRunnable/wrapCallable/wrapSupplier` 或显式 `set()`。现有调用点都已包好（`ParadigmExecutor` 每节点、`RetrievalOrchestrator` 的路由扇出、`SearchService` 的变体循环与子查询循环），**新加并行分支时别漏**——漏了不会报错：`DomainRoutingDataSource` 把 null 域静默当 default，配了 inline `database:` 的域会悄悄查默认库，而 `EntityGraphRouteRetriever`（除 `DomainContext` 外没有域来源）会恒返回空。
 
 **新增 Java 算子只需打 `@Component`**，`OperatorRegistry` 靠构造注入自动收集，type 重复启动失败。前端按算子 `paramSchemaJson`（JSON Schema draft-07）自动渲染参数表单，加参数只改后端 schema。
 

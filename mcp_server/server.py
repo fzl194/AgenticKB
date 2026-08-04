@@ -1,4 +1,4 @@
-"""FastMCP server — two tools, instructions carry full usage guide."""
+"""FastMCP server — tool definitions; instructions carry the full usage guide."""
 
 from __future__ import annotations
 
@@ -7,12 +7,15 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from mcp_server import __version__
+from mcp_server.client import get_segment_fulltext as _get_segment_fulltext
 from mcp_server.client import health_check as _health_check
 from mcp_server.client import search_knowledge as _search_knowledge
 from mcp_server.schemas import (
     EntityRef,
+    FullTextInput,
     HealthResult,
     SearchInput,
+    SegmentRef,
 )
 
 mcp = FastMCP(
@@ -23,6 +26,9 @@ mcp = FastMCP(
 使用 search_knowledge 检索指定知识域中的证据。每次调用都必须显式指定 domain，
 不得使用隐式默认领域，也不得根据问题内容擅自猜测领域。如果无法确定 domain，
 先要求调用者明确选择知识域。
+
+search_knowledge 返回的证据文本是压缩过的。需要准确引用条款、参数或步骤原文时，
+用 get_segment_fulltext 取回完整版本再作答——不要依据被截断的文本推测缺失内容。
 
 回答时应区分证据直接支持的内容、基于证据的推断，以及当前缺失或不确定的信息；
 不得编造命令、参数、约束、依赖或步骤。
@@ -74,3 +80,30 @@ def search_knowledge(
         debug=debug,
     )
     return _search_knowledge(inp)
+
+
+@mcp.tool()
+def get_segment_fulltext(domain: str, refs: list[dict]) -> dict:
+    """取回 search_knowledge 结果中某几条证据的**完整原文**。
+
+    search_knowledge 返回的 `text` 是按上下文预算压缩过的：命中项被硬截断（末尾常见
+    `...`），其余项只保留与问题最相关的句子。**当你需要引用条款、参数、步骤的准确原文，
+    或看到文本被截断时，用这个工具取回未压缩的版本再作答，不要根据残文推测缺失内容。**
+
+    Args:
+        domain: 与产生这些证据的那次 search_knowledge 相同的知识域。必须一致——
+            不同知识域对应不同语料范围，跨域查会一条都找不到。
+        refs: 要展开的条目，每项 `{"type": ..., "id": ...}`。直接取自 search_knowledge
+            结果：`type` 用条目的 `kind`（命中项是 `retrieval_unit`，上下文/支撑项是
+            `raw_segment`），`id` 用条目的 `id`。单次最多 50 条。
+
+    Returns:
+        `items` 与 refs 一一对应。`found=false` 表示该 id 已不在当前可检索范围内
+        （内容被重新挖掘或该库不可见），此时应基于已有证据作答并说明这一点，不要重试。
+        `segments[].documentName` / `kbId` 可用于标注出处。
+    """
+    inp = FullTextInput(
+        domain=domain,
+        refs=[SegmentRef(**r) for r in refs],
+    )
+    return _get_segment_fulltext(inp)

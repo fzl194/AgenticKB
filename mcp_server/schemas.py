@@ -37,3 +37,22 @@ class SearchInput(BaseModel):
     scope: dict | None = None
     entities: list[EntityRef] | None = None
     debug: bool = False
+
+
+# --- get_segment_fulltext input ---
+
+class SegmentRef(BaseModel):
+    """One thing to expand, taken straight off a search result item.
+
+    ``type`` is the item's ``kind`` (``retrieval_unit`` for seeds, ``raw_segment`` for the context
+    and support items around them) and ``id`` is its ``id``. Required rather than inferred: ids
+    carry no reliable prefix, and guessing wrong searches the wrong table and reports a miss.
+    """
+
+    type: str
+    id: str
+
+
+class FullTextInput(BaseModel):
+    domain: DomainId
+    refs: list[SegmentRef]

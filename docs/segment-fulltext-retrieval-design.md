@@ -134,7 +134,7 @@
 }
 ```
 
-- `role` ∈ `target | before | after`（`window` 模式下邻居标 before/after，按 `segment_index` 判定）。
+- `role` ∈ `target | before | after`（`window` 模式下邻居标 before/after，按 `segment_index` 判定）。`segments` 按 `(snapshotId, segmentIndex)` 排序返回——**按原文顺序而不是"命中在前、上下文在后"**，因为要窗口的理由正是那段话跨了切分边界，乱序就白给了。
 - `unit` 仅在 `type=retrieval_unit` 时出现。
 - `hasRawFile` = 该文档 `kb_id` 与 `storage_path` 均非空——直接告诉调用方能不能调 §3.2，省一次试错。
 
@@ -192,13 +192,14 @@ List<SegmentFullRow> selectFullByIds(
         @Param("segmentIds") List<String> segmentIds,
         @Param("snapshotIds") List<String> snapshotIds);
 
-/** window 模式：按 (snapshot, segment_index) 取邻居。 */
-List<SegmentFullRow> selectWindowBySnapshot(
-        @Param("snapshotId") String snapshotId,
-        @Param("fromIndex") int fromIndex,
-        @Param("toIndex") int toIndex,
+/** window 模式：一次查完所有目标的邻居窗口（OR 拼接），而不是每个目标一次往返。 */
+List<SegmentFullRow> selectWindows(
+        @Param("windows") List<SegmentWindow> windows,
         @Param("snapshotIds") List<String> snapshotIds);
 ```
+
+> 实现修正：邻居查询按 `List<SegmentWindow>`（`snapshotId + fromIndex + toIndex`）批量 OR 拼接。一次结果里常有多条命中落在同一文档、窗口彼此重叠，逐个查是 N 次往返。
+> 服务层判定邻居时**必须同时比对 snapshotId**，不能只看 `segment_index` 距离——mapper 只做 scope 过滤，返回的行里会有别的文档同样索引的段落。
 
 **SQL 与 `selectWithMeta` 的三点不同**（不要复用它）：
 

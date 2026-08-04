@@ -4,6 +4,7 @@ import com.coremasterkb.serving.config.ServingProperties;
 import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.domain.FullTextRequest;
 import com.coremasterkb.serving.domain.FullTextResponse;
+import com.coremasterkb.serving.mapper.param.SegmentWindow;
 import com.coremasterkb.serving.mapper.result.DocumentFileRow;
 import com.coremasterkb.serving.mapper.result.FtsResultRow;
 import com.coremasterkb.serving.mapper.result.SegmentFullRow;
@@ -11,6 +12,7 @@ import com.coremasterkb.serving.repository.AssetRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Map;
@@ -260,6 +262,151 @@ class FullTextServiceTest {
         assertThat(res.items().get(0).found()).isTrue();
         assertThat(res.items().get(0).segments()).isEmpty();
         verify(repo, never()).resolveSegmentsFull(any(), any());
+    }
+
+    // ---------------------------------------------------------------- window
+
+    private static SegmentFullRow indexed(String id, String snapshotId, int index, String text) {
+        SegmentFullRow row = segment(id, snapshotId, text);
+        row.setSegmentIndex(index);
+        return row;
+    }
+
+    private static FullTextRequest windowReq(List<FullTextRequest.Ref> refs, int radius) {
+        return new FullTextRequest(refs, DOMAIN, null, null, null, null, "window", radius);
+    }
+
+    @Test
+    @DisplayName("segment granularity asks for no neighbours at all")
+    void segmentGranularitySkipsWindowQuery() {
+        scopeIs(releaseScope());
+        when(repo.resolveSegmentsFull(any(), any()))
+                .thenReturn(List.of(indexed("seg-5", "snap-1", 5, "命中段")));
+        stubEmptyFiles();
+
+        service.fetch(req(List.of(segRef("seg-5"))), "alice");
+
+        verify(repo, never()).resolveSegmentWindows(any(), any());
+    }
+
+    @Test
+    @DisplayName("window mode returns neighbours in reading order, roles marked around the target")
+    void windowReturnsNeighboursInOrder() {
+        scopeIs(releaseScope());
+        when(repo.resolveSegmentsFull(any(), any()))
+                .thenReturn(List.of(indexed("seg-5", "snap-1", 5, "命中段")));
+        when(repo.resolveSegmentWindows(any(), any())).thenReturn(List.of(
+                indexed("seg-4", "snap-1", 4, "上一段"),
+                indexed("seg-5", "snap-1", 5, "命中段"),
+                indexed("seg-6", "snap-1", 6, "下一段")));
+        stubEmptyFiles();
+
+        FullTextResponse res = service.fetch(windowReq(List.of(segRef("seg-5")), 1), "alice");
+
+        // Reading order, not targets-first: the point of a window is continuous prose.
+        assertThat(res.items().get(0).segments())
+                .extracting(FullTextResponse.Segment::id)
+                .containsExactly("seg-4", "seg-5", "seg-6");
+        assertThat(res.items().get(0).segments())
+                .extracting(FullTextResponse.Segment::role)
+                .containsExactly("before", "target", "after");
+    }
+
+    @Test
+    @DisplayName("the requested radius bounds the window it asks the database for")
+    void windowRadiusBoundsTheQuery() {
+        scopeIs(releaseScope());
+        when(repo.resolveSegmentsFull(any(), any()))
+                .thenReturn(List.of(indexed("seg-5", "snap-1", 5, "命中段")));
+        when(repo.resolveSegmentWindows(any(), any())).thenReturn(List.of());
+        stubEmptyFiles();
+
+        service.fetch(windowReq(List.of(segRef("seg-5")), 2), "alice");
+
+        ArgumentCaptor<List<SegmentWindow>> captor = ArgumentCaptor.forClass(List.class);
+        verify(repo).resolveSegmentWindows(captor.capture(), any());
+        assertThat(captor.getValue())
+                .containsExactly(new SegmentWindow("snap-1", 3, 7));
+    }
+
+    @Test
+    @DisplayName("a target at index 0 does not ask for negative indexes")
+    void windowClampsAtDocumentStart() {
+        scopeIs(releaseScope());
+        when(repo.resolveSegmentsFull(any(), any()))
+                .thenReturn(List.of(indexed("seg-0", "snap-1", 0, "首段")));
+        when(repo.resolveSegmentWindows(any(), any())).thenReturn(List.of());
+        stubEmptyFiles();
+
+        service.fetch(windowReq(List.of(segRef("seg-0")), 2), "alice");
+
+        ArgumentCaptor<List<SegmentWindow>> captor = ArgumentCaptor.forClass(List.class);
+        verify(repo).resolveSegmentWindows(captor.capture(), any());
+        assertThat(captor.getValue().get(0).fromIndex()).isZero();
+    }
+
+    @Test
+    @DisplayName("a neighbour from another document is not pulled in by index alone")
+    void windowDoesNotCrossDocuments() {
+        scopeIs(releaseScope());
+        when(repo.resolveSegmentsFull(any(), any()))
+                .thenReturn(List.of(indexed("seg-5", "snap-1", 5, "命中段")));
+        // Same index, different snapshot — the mapper is scope-filtered, not window-filtered,
+        // so proximity has to be checked per snapshot rather than on the index alone.
+        when(repo.resolveSegmentWindows(any(), any())).thenReturn(List.of(
+                indexed("other-4", "snap-2", 4, "别的文档"),
+                indexed("seg-6", "snap-1", 6, "下一段")));
+        stubEmptyFiles();
+
+        FullTextResponse res = service.fetch(windowReq(List.of(segRef("seg-5")), 1), "alice");
+
+        assertThat(res.items().get(0).segments())
+                .extracting(FullTextResponse.Segment::id)
+                .containsExactly("seg-5", "seg-6");
+    }
+
+    @Test
+    @DisplayName("a segment that is both target and neighbour appears once, as the target")
+    void overlappingWindowsDoNotDuplicate() {
+        scopeIs(releaseScope());
+        when(repo.resolveSegmentsFull(any(), any())).thenReturn(List.of(
+                indexed("seg-5", "snap-1", 5, "命中段甲"),
+                indexed("seg-6", "snap-1", 6, "命中段乙")));
+        when(repo.resolveSegmentWindows(any(), any())).thenReturn(List.of(
+                indexed("seg-5", "snap-1", 5, "命中段甲"),
+                indexed("seg-6", "snap-1", 6, "命中段乙"),
+                indexed("seg-7", "snap-1", 7, "下一段")));
+        stubEmptyFiles();
+
+        FullTextResponse res = service.fetch(
+                windowReq(List.of(segRef("seg-5"), segRef("seg-6")), 1), "alice");
+
+        assertThat(res.items().get(0).segments())
+                .extracting(FullTextResponse.Segment::id)
+                .containsExactly("seg-5", "seg-6");
+        assertThat(res.items().get(0).segments().get(0).role()).isEqualTo("target");
+    }
+
+    @Test
+    @DisplayName("granularity and radius are validated at the request boundary")
+    void invalidWindowArgumentsAreRejected() {
+        List<FullTextRequest.Ref> refs = List.of(segRef("seg-1"));
+
+        assertThatThrownBy(() ->
+                new FullTextRequest(refs, DOMAIN, null, null, null, null, "paragraph", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("unknown_granularity");
+
+        assertThatThrownBy(() ->
+                new FullTextRequest(refs, DOMAIN, null, null, null, null, "window", 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("window_radius_out_of_range");
+
+        // Bounded so one request cannot walk a whole document a few neighbours at a time.
+        assertThatThrownBy(() ->
+                new FullTextRequest(refs, DOMAIN, null, null, null, null, "window", 6))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("window_radius_out_of_range");
     }
 
     // ---------------------------------------------------- document attribution

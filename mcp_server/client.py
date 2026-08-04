@@ -115,6 +115,8 @@ def get_segment_fulltext(inp: FullTextInput) -> dict:
     payload: dict = {
         "domain": inp.domain,
         "refs": [{"type": r.type, "id": r.id} for r in inp.refs],
+        "granularity": inp.granularity,
+        "windowRadius": inp.window_radius,
     }
     if target is not None:
         payload["paradigm_id"] = target["paradigmId"]

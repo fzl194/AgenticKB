@@ -43,11 +43,16 @@ export function useServingApi() {
      * out_of_scope。所以调用方应把当次检索用的 kbIds 原样传回来，而不是传当前
      * 选择器里的值（用户可能已经改过了）。
      */
-    async fetchFullText(refs: FullTextRef[], options?: SearchOptions): Promise<FullTextResult> {
+    async fetchFullText(
+      refs: FullTextRef[],
+      options?: SearchOptions & { granularity?: 'segment' | 'window'; windowRadius?: number },
+    ): Promise<FullTextResult> {
       const payload: Record<string, unknown> = {
         refs,
         domain: options?.domain,
       }
+      if (options?.granularity) payload.granularity = options.granularity
+      if (options?.windowRadius != null) payload.windowRadius = options.windowRadius
       const kbIds = options?.kbIds?.map(id => id?.trim()).filter((id): id is string => !!id)
       if (kbIds && kbIds.length > 0) payload.kbIds = kbIds
 

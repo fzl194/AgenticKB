@@ -83,7 +83,12 @@ def search_knowledge(
 
 
 @mcp.tool()
-def get_segment_fulltext(domain: str, refs: list[dict]) -> dict:
+def get_segment_fulltext(
+    domain: str,
+    refs: list[dict],
+    granularity: str = "segment",
+    window_radius: int = 1,
+) -> dict:
     """取回 search_knowledge 结果中某几条证据的**完整原文**。
 
     search_knowledge 返回的 `text` 是按上下文预算压缩过的：命中项被硬截断（末尾常见
@@ -96,14 +101,21 @@ def get_segment_fulltext(domain: str, refs: list[dict]) -> dict:
         refs: 要展开的条目，每项 `{"type": ..., "id": ...}`。直接取自 search_knowledge
             结果：`type` 用条目的 `kind`（命中项是 `retrieval_unit`，上下文/支撑项是
             `raw_segment`），`id` 用条目的 `id`。单次最多 50 条。
+        granularity: `segment` 只返回该片段本身；`window` 额外带回前后相邻片段。
+            **当原文在片段开头或结尾处语义不完整（条件、例外、后续步骤像是被切断）时，
+            用 `window` 再取一次**——切分边界常把一句话或一个条款劈成两段。
+        window_radius: `window` 模式下前后各取几段，1-5，默认 1。
 
     Returns:
         `items` 与 refs 一一对应。`found=false` 表示该 id 已不在当前可检索范围内
         （内容被重新挖掘或该库不可见），此时应基于已有证据作答并说明这一点，不要重试。
-        `segments[].documentName` / `kbId` 可用于标注出处。
+        `segments` 按原文顺序排列，`role` 为 `target` 的是命中片段，`before`/`after`
+        是上下文。`segments[].documentName` / `kbId` 可用于标注出处。
     """
     inp = FullTextInput(
         domain=domain,
         refs=[SegmentRef(**r) for r in refs],
+        granularity=granularity,
+        window_radius=window_radius,
     )
     return _get_segment_fulltext(inp)

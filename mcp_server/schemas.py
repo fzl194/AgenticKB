@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
 
 # --- health_check output ---
@@ -56,3 +56,6 @@ class SegmentRef(BaseModel):
 class FullTextInput(BaseModel):
     domain: DomainId
     refs: list[SegmentRef]
+    #: ``window`` 额外带回前后相邻片段。切分边界常把一句话劈成两段，只看命中段读起来是断的。
+    granularity: Literal["segment", "window"] = "segment"
+    window_radius: int = Field(default=1, ge=1, le=5)

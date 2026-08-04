@@ -5,7 +5,7 @@ import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.domain.FullTextRequest;
 import com.coremasterkb.serving.domain.FullTextResponse;
 import com.coremasterkb.serving.domainpack.DomainContext;
-import com.coremasterkb.serving.domainpack.DomainRegistry;
+import com.coremasterkb.serving.mapper.param.SegmentWindow;
 import com.coremasterkb.serving.mapper.result.DocumentFileRow;
 import com.coremasterkb.serving.mapper.result.FtsResultRow;
 import com.coremasterkb.serving.mapper.result.SegmentFullRow;
@@ -17,11 +17,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -109,25 +112,35 @@ public class FullTextService {
                     : bySegmentId(assetRepository.resolveSegmentsFull(
                             List.copyOf(allSegmentIds), scope.snapshotIds()));
 
+            // Neighbours are resolved against the segments that survived the scope filter, so a
+            // window can never reach outside what the caller may already read.
+            List<SegmentFullRow> neighbours = request.wantsWindow()
+                    ? loadNeighbours(segments.values(), request.windowRadius(), scope)
+                    : List.of();
+
             // Document attribution comes from the scope's own map, not from a SQL join: the link
             // table is 1:N (snapshots are content-deduplicated across documents), and resolving it
             // this way both de-duplicates and confines attribution to documents in scope.
             Map<String, List<String>> snapshotToDocuments = invert(scope.documentSnapshotMap());
+            List<SegmentFullRow> allRows = new ArrayList<>(segments.values());
+            allRows.addAll(neighbours);
             Map<String, DocumentFileRow> files =
-                    loadFileLocations(segments.values(), snapshotToDocuments, scope);
+                    loadFileLocations(allRows, snapshotToDocuments, scope);
 
             List<FullTextResponse.Item> items = new ArrayList<>(refs.size());
             int hits = 0;
             for (FullTextRequest.Ref ref : refs) {
                 FullTextResponse.Item item = buildItem(
-                        ref, units, unitSegmentIds, segments, snapshotToDocuments, files);
+                        ref, units, unitSegmentIds, segments, neighbours,
+                        request.wantsWindow() ? request.windowRadius() : 0,
+                        snapshotToDocuments, files);
                 if (item.found()) hits++;
                 items.add(item);
             }
 
-            log.info("[fulltext] domain={} user={} refs={} hits={} snapshots={}",
+            log.info("[fulltext] domain={} user={} refs={} hits={} granularity={} snapshots={}",
                     domain, username != null ? username : "<anonymous>",
-                    refs.size(), hits, scope.snapshotIds().size());
+                    refs.size(), hits, request.granularity(), scope.snapshotIds().size());
 
             return new FullTextResponse(
                     new FullTextResponse.ScopeInfo(
@@ -151,34 +164,132 @@ public class FullTextService {
             Map<String, FtsResultRow> units,
             Map<String, List<String>> unitSegmentIds,
             Map<String, SegmentFullRow> segments,
+            List<SegmentFullRow> neighbours,
+            int windowRadius,
             Map<String, List<String>> snapshotToDocuments,
             Map<String, DocumentFileRow> files) {
 
+        FullTextResponse.Unit unit = null;
+        List<SegmentFullRow> targets = new ArrayList<>();
+
         if (FullTextRequest.TYPE_RETRIEVAL_UNIT.equals(ref.type())) {
-            FtsResultRow unit = units.get(ref.id());
-            if (unit == null) {
+            FtsResultRow unitRow = units.get(ref.id());
+            if (unitRow == null) {
                 return FullTextResponse.Item.miss(ref);
             }
-            List<FullTextResponse.Segment> segs = new ArrayList<>();
+            unit = new FullTextResponse.Unit(
+                    unitRow.getId(), unitRow.getUnitType(), unitRow.getTitle(), unitRow.getText());
             for (String segId : unitSegmentIds.getOrDefault(ref.id(), List.of())) {
                 SegmentFullRow row = segments.get(segId);
-                if (row != null) {
-                    segs.add(toSegment(row, "target", snapshotToDocuments, files));
-                }
+                if (row != null) targets.add(row);
             }
-            return FullTextResponse.Item.hit(
-                    ref,
-                    new FullTextResponse.Unit(
-                            unit.getId(), unit.getUnitType(), unit.getTitle(), unit.getText()),
-                    segs);
+        } else {
+            SegmentFullRow row = segments.get(ref.id());
+            if (row == null) {
+                return FullTextResponse.Item.miss(ref);
+            }
+            targets.add(row);
         }
 
-        SegmentFullRow row = segments.get(ref.id());
-        if (row == null) {
-            return FullTextResponse.Item.miss(ref);
-        }
         return FullTextResponse.Item.hit(
-                ref, null, List.of(toSegment(row, "target", snapshotToDocuments, files)));
+                ref, unit,
+                buildSegments(targets, neighbours, windowRadius, snapshotToDocuments, files));
+    }
+
+    /**
+     * The item's target segments, plus their neighbours in window mode, in reading order.
+     *
+     * <p>Ordered by {@code segment_index} rather than targets-then-neighbours so the result reads
+     * as continuous prose — the whole reason to ask for a window is that the passage you want
+     * straddles a segment boundary, and interleaving it out of order defeats that.</p>
+     */
+    private List<FullTextResponse.Segment> buildSegments(
+            List<SegmentFullRow> targets,
+            List<SegmentFullRow> neighbours,
+            int windowRadius,
+            Map<String, List<String>> snapshotToDocuments,
+            Map<String, DocumentFileRow> files) {
+
+        Map<String, SegmentFullRow> picked = new LinkedHashMap<>();
+        Set<String> targetIds = new LinkedHashSet<>();
+        for (SegmentFullRow t : targets) {
+            picked.put(t.getId(), t);
+            targetIds.add(t.getId());
+        }
+
+        if (windowRadius > 0) {
+            for (SegmentFullRow candidate : neighbours) {
+                if (picked.containsKey(candidate.getId())) continue;
+                if (isNeighbourOfAny(candidate, targets, windowRadius)) {
+                    picked.put(candidate.getId(), candidate);
+                }
+            }
+        }
+
+        List<SegmentFullRow> ordered = new ArrayList<>(picked.values());
+        ordered.sort(Comparator
+                .comparing(SegmentFullRow::getDocumentSnapshotId,
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(SegmentFullRow::getSegmentIndex,
+                        Comparator.nullsLast(Comparator.naturalOrder())));
+
+        List<FullTextResponse.Segment> out = new ArrayList<>(ordered.size());
+        for (SegmentFullRow row : ordered) {
+            String role = targetIds.contains(row.getId())
+                    ? "target"
+                    : (precedesEveryTarget(row, targets) ? "before" : "after");
+            out.add(toSegment(row, role, snapshotToDocuments, files));
+        }
+        return out;
+    }
+
+    /** Whether this row falls inside any target's window — same snapshot, index within radius. */
+    private static boolean isNeighbourOfAny(
+            SegmentFullRow candidate, List<SegmentFullRow> targets, int radius) {
+        for (SegmentFullRow target : targets) {
+            if (target.getSegmentIndex() == null || candidate.getSegmentIndex() == null) continue;
+            if (!Objects.equals(target.getDocumentSnapshotId(), candidate.getDocumentSnapshotId())) {
+                continue;
+            }
+            if (Math.abs(candidate.getSegmentIndex() - target.getSegmentIndex()) <= radius) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean precedesEveryTarget(SegmentFullRow row, List<SegmentFullRow> targets) {
+        for (SegmentFullRow target : targets) {
+            if (target.getSegmentIndex() == null || row.getSegmentIndex() == null) continue;
+            if (!Objects.equals(target.getDocumentSnapshotId(), row.getDocumentSnapshotId())) {
+                continue;
+            }
+            if (row.getSegmentIndex() > target.getSegmentIndex()) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Fetch the neighbours of every target in one query.
+     *
+     * <p>Windows are built from segments that already passed the scope filter, and the mapper
+     * applies that filter again, so this cannot reach content the caller could not already read —
+     * it only widens within a document they can see.</p>
+     */
+    private List<SegmentFullRow> loadNeighbours(
+            Collection<SegmentFullRow> targets, int radius, ActiveScope scope) {
+        List<SegmentWindow> windows = new ArrayList<>();
+        for (SegmentFullRow row : targets) {
+            if (row.getSegmentIndex() == null || row.getDocumentSnapshotId() == null) continue;
+            windows.add(new SegmentWindow(
+                    row.getDocumentSnapshotId(),
+                    Math.max(0, row.getSegmentIndex() - radius),
+                    row.getSegmentIndex() + radius));
+        }
+        if (windows.isEmpty()) {
+            return List.of();
+        }
+        return assetRepository.resolveSegmentWindows(windows, scope.snapshotIds());
     }
 
     private FullTextResponse.Segment toSegment(

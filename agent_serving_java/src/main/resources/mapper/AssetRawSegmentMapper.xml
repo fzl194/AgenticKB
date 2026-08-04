@@ -100,6 +100,35 @@
         ORDER BY rs.document_snapshot_id, rs.segment_index
     </select>
 
+    <!-- Scope filter unconditional here too; see selectWindows' Javadoc. -->
+    <select id="selectWindows" resultMap="segmentFullResult">
+        SELECT rs.id,
+               rs.document_snapshot_id,
+               rs.segment_key,
+               rs.segment_index,
+               rs.raw_text,
+               rs.block_type,
+               rs.semantic_role,
+               rs.section_path,
+               rs.section_title,
+               rs.token_count,
+               rs.metadata_json,
+               ds.title AS snapshot_title
+        FROM asset_raw_segments rs
+        LEFT JOIN asset_document_snapshots ds
+               ON rs.document_snapshot_id = ds.id
+        WHERE rs.document_snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+        AND
+        <foreach collection="windows" item="w" open="(" separator=" OR " close=")">
+            (rs.document_snapshot_id = #{w.snapshotId}
+             AND rs.segment_index BETWEEN #{w.fromIndex} AND #{w.toIndex})
+        </foreach>
+        ORDER BY rs.document_snapshot_id, rs.segment_index
+    </select>
+
     <resultMap id="sectionPathCountMap"
                type="com.coremasterkb.serving.mapper.result.SectionPathCountRow">
         <result column="section_path" property="sectionPath"/>

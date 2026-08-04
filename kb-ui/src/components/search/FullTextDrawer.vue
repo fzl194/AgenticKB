@@ -28,14 +28,24 @@
             <p class="fulltext__text">{{ item.unit.text }}</p>
           </div>
 
-          <div v-for="seg in item.segments" :key="seg.id" class="fulltext__block">
+          <!--
+            命中段与前后文一起按原文顺序返回。上下文淡显，让人一眼看出哪一段是检索命中的，
+            又不必在两个抽屉之间来回切。
+          -->
+          <div
+            v-for="seg in item.segments"
+            :key="seg.id"
+            class="fulltext__block"
+            :class="{ 'fulltext__block--context': seg.role !== 'target' }"
+          >
             <div class="fulltext__label">
               <span>{{ seg.sectionPath?.length ? seg.sectionPath.join(' › ') : (seg.sectionTitle || '正文') }}</span>
               <span v-if="seg.blockType" class="fulltext__tag">{{ seg.blockType }}</span>
+              <span v-if="seg.role === 'target'" class="fulltext__tag fulltext__tag--target">命中</span>
             </div>
             <p class="fulltext__text">{{ seg.text }}</p>
 
-            <div class="fulltext__source">
+            <div class="fulltext__source" v-if="seg.role === 'target'">
               <span class="fulltext__doc">{{ seg.documentName || seg.documentKey || '未知来源' }}</span>
               <span v-if="seg.kbId" class="fulltext__tag">{{ kbLabel(seg.kbId) }}</span>
               <el-button
@@ -53,7 +63,7 @@
               原件是磁盘上「当前的」文件，片段来自挖掘那一刻的快照。文档重传过就对不上，
               说清楚比让人自己发现强。
             -->
-            <div v-if="seg.hasRawFile" class="fulltext__hint">
+            <div v-if="seg.role === 'target' && seg.hasRawFile" class="fulltext__hint">
               原件为文档当前版本，若挖掘后重新上传过，内容可能与上方片段不一致
             </div>
           </div>
@@ -129,6 +139,15 @@ async function download(seg: FullTextSegment) {
   border-radius: var(--kb-radius-sm);
 }
 
+.fulltext__block--context {
+  background: transparent;
+  border-style: dashed;
+}
+
+.fulltext__block--context .fulltext__text {
+  color: var(--kb-text-secondary);
+}
+
 .fulltext__label {
   display: flex;
   align-items: center;
@@ -170,6 +189,11 @@ async function download(seg: FullTextSegment) {
   background: var(--kb-border-light);
   color: var(--kb-text-secondary);
   font-weight: 500;
+}
+
+.fulltext__tag--target {
+  background: var(--kb-accent-soft);
+  color: var(--kb-accent);
 }
 
 .fulltext__hint {

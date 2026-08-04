@@ -1,5 +1,6 @@
 package com.coremasterkb.serving.mapper;
 
+import com.coremasterkb.serving.mapper.param.SegmentWindow;
 import com.coremasterkb.serving.mapper.result.SectionPathCountRow;
 import com.coremasterkb.serving.mapper.result.SegmentFullRow;
 import com.coremasterkb.serving.mapper.result.SegmentWithMetaRow;
@@ -29,6 +30,19 @@ public interface AssetRawSegmentMapper {
      */
     List<SegmentFullRow> selectFullByIds(
             @Param("segmentIds") List<String> segmentIds,
+            @Param("snapshotIds") List<String> snapshotIds);
+
+    /**
+     * Fetch every segment falling inside any of the given index windows.
+     *
+     * <p>One query for all windows rather than one per target: a result set commonly has several
+     * hits in the same document, and their windows may overlap. {@code snapshotIds} is applied on
+     * top as an unconditional scope filter — the windows are derived from segments that were
+     * already scope-checked, so it is redundant by construction, which is exactly why it is cheap
+     * to keep as the thing that stays true if that construction ever changes.</p>
+     */
+    List<SegmentFullRow> selectWindows(
+            @Param("windows") List<SegmentWindow> windows,
             @Param("snapshotIds") List<String> snapshotIds);
 
     List<SectionPathCountRow> selectSectionPathsByEntities(

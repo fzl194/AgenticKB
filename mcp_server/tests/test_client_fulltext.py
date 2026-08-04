@@ -11,6 +11,7 @@ import json
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from mcp_server import client as mcp_client
 from mcp_server.schemas import FullTextInput, SegmentRef
@@ -109,7 +110,51 @@ def test_lookup_uses_the_same_paradigm_the_search_used(monkeypatch, calls):
     assert payload["paradigm_id"] == "pd-abc"
     assert payload["domain"] == "odn"
     assert payload["refs"] == [{"type": "raw_segment", "id": "seg-1"}]
+    assert payload["granularity"] == "segment"
     assert out["_retrieval"]["engine"] == "paradigm"
+
+
+def test_window_granularity_is_forwarded(monkeypatch, calls):
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json=UNBOUND),
+            fulltext=httpx.Response(200, json=FULLTEXT_BODY),
+        ),
+        calls,
+    )
+
+    mcp_client.get_segment_fulltext(
+        FullTextInput(
+            domain="odn",
+            refs=[SegmentRef(type="raw_segment", id="seg-1")],
+            granularity="window",
+            window_radius=3,
+        )
+    )
+
+    payload = json.loads(calls[1].content)
+    assert payload["granularity"] == "window"
+    assert payload["windowRadius"] == 3
+
+
+def test_window_radius_is_bounded_at_the_schema(monkeypatch, calls):
+    """Bounded so an agent cannot walk a whole document a few neighbours at a time."""
+    for bad in (0, 6):
+        with pytest.raises(ValidationError):
+            FullTextInput(
+                domain="odn",
+                refs=[SegmentRef(type="raw_segment", id="seg-1")],
+                granularity="window",
+                window_radius=bad,
+            )
+
+    with pytest.raises(ValidationError):
+        FullTextInput(
+            domain="odn",
+            refs=[SegmentRef(type="raw_segment", id="seg-1")],
+            granularity="paragraph",
+        )
 
 
 def test_unbound_domain_sends_no_paradigm(monkeypatch, calls):

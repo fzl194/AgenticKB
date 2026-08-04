@@ -271,7 +271,8 @@ async function openFullText(item: SearchContextItem) {
   try {
     fullTextResult.value = await servingApi.fetchFullText(
       [{ type, id: item.id }],
-      resultScope.value,
+      // 带一段前后文：切分边界常把一句话劈成两段，只给命中段读起来是断的。
+      { ...resultScope.value, granularity: 'window', windowRadius: 1 },
     )
   } catch (e) {
     console.error('Full text lookup failed:', e)

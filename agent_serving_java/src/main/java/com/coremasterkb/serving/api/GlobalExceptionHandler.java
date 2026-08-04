@@ -79,6 +79,17 @@ public class GlobalExceptionHandler {
                     .body(Map.of("error", "unknown_ref_type",
                             "message", "Ref type must be 'retrieval_unit' or 'raw_segment'"));
         }
+        if ("unknown_granularity".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "unknown_granularity",
+                            "message", "Granularity must be 'segment' or 'window'"));
+        }
+        if ("window_radius_out_of_range".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "window_radius_out_of_range",
+                            "message", "windowRadius must be between 1 and "
+                                    + com.coremasterkb.serving.domain.FullTextRequest.MAX_WINDOW_RADIUS));
+        }
         if ("ref_id_required".equals(ex.getMessage())) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "ref_id_required", "message", "Each ref needs a non-blank id"));

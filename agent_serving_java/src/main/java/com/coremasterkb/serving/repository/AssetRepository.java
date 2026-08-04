@@ -4,6 +4,7 @@ import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.entity.AssetBuildDocumentSnapshot;
 import com.coremasterkb.serving.entity.AssetPublishRelease;
 import com.coremasterkb.serving.mapper.*;
+import com.coremasterkb.serving.mapper.param.SegmentWindow;
 import com.coremasterkb.serving.mapper.result.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -194,6 +195,16 @@ public class AssetRepository {
             return Collections.emptyList();
         }
         return rawSegmentMapper.selectFullByIds(segmentIds, snapshotIds);
+    }
+
+    /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */
+    public List<SegmentFullRow> resolveSegmentWindows(
+            List<SegmentWindow> windows, List<String> snapshotIds) {
+        requireScope(snapshotIds);
+        if (windows == null || windows.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return rawSegmentMapper.selectWindows(windows, snapshotIds);
     }
 
     /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */

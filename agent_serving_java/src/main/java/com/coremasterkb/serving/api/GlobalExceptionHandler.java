@@ -91,6 +91,19 @@ public class GlobalExceptionHandler {
                     .body(Map.of("error", "empty_scope",
                             "message", "The requested scope contains no readable content"));
         }
+        // Out of scope, nonexistent, and a stored path that escapes its KB directory all land
+        // here with the same body — the caller learns nothing about which case it was.
+        if ("document_not_found".equals(ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "document_not_found", "message", "Document not found"));
+        }
+        // Distinct from document_not_found: the document is visible, it simply has no original
+        // file — legacy documents ingested through /api/runs never had one.
+        if ("raw_file_unavailable".equals(ex.getMessage())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "raw_file_unavailable",
+                            "message", "This document has no original file available"));
+        }
         log.warn("Bad request: {}", ex.getMessage());
         return ResponseEntity.badRequest()
                 .body(Map.of("error", "bad_request", "message", "Bad request"));
@@ -103,6 +116,15 @@ public class GlobalExceptionHandler {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "scenario_pack_missing",
                             "message", "Scenario pack not found — deployment configuration error"));
+        }
+        // A deployment problem, not a per-document one: serving.upload-root does not point at the
+        // directory mining writes to. Kept separate from raw_file_unavailable so this shows up as
+        // "the file store is wrong" rather than "none of your documents have files".
+        if ("raw_file_storage_unavailable".equals(ex.getMessage())) {
+            log.error("Raw file storage unavailable — serving.upload-root misconfigured");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("error", "raw_file_storage_unavailable",
+                            "message", "Document file storage is unavailable"));
         }
         if ("domain_database_unavailable".equals(ex.getMessage())) {
             log.error("Domain database unavailable");

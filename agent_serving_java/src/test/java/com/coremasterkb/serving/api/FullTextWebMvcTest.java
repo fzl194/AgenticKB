@@ -1,22 +1,28 @@
 package com.coremasterkb.serving.api;
 
 import com.coremasterkb.serving.application.FullTextService;
+import com.coremasterkb.serving.application.RawFileService;
 import com.coremasterkb.serving.domain.FullTextRequest;
 import com.coremasterkb.serving.domain.FullTextResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -36,12 +42,14 @@ class FullTextWebMvcTest {
 
     private MockMvc mockMvc;
     private FullTextService fullTextService;
+    private RawFileService rawFileService;
 
     @BeforeEach
     void setUp() {
         fullTextService = mock(FullTextService.class);
+        rawFileService = mock(RawFileService.class);
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new FullTextController(fullTextService))
+                .standaloneSetup(new FullTextController(fullTextService, rawFileService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }
@@ -170,5 +178,80 @@ class FullTextWebMvcTest {
                         .content("{\"refs\":[{\"type\":\"raw_segment\",\"id\":\"seg-1\"}]}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("empty_scope"));
+    }
+
+    // ------------------------------------------------------- raw file endpoint
+
+    @Test
+    @DisplayName("raw streams the file with an RFC 5987 filename so Chinese names survive")
+    void rawStreamsFile(@TempDir Path tmp) throws Exception {
+        Path file = Files.writeString(tmp.resolve("f.pdf"), "PDF-BYTES");
+        when(rawFileService.resolve(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new RawFileService.RawFile(
+                        file, "核心网规范.pdf", "application/pdf", Files.size(file)));
+
+        var result = mockMvc.perform(get("/api/v1/documents/doc-1/raw")
+                        .param("domain", "cloud_core_network")
+                        .header("X-KB-User", "alice"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType("application/pdf"))
+                .andReturn();
+
+        String disposition = result.getResponse().getHeader("Content-Disposition");
+        assertThat(disposition).contains("filename*=UTF-8''");
+        // The raw name must not appear unencoded — that is the form that arrives mojibake.
+        assertThat(disposition).doesNotContain("核心网规范.pdf");
+        assertThat(result.getResponse().getContentAsString()).isEqualTo("PDF-BYTES");
+    }
+
+    @Test
+    @DisplayName("raw passes scope parameters and identity through to the service")
+    void rawBindsScopeParameters(@TempDir Path tmp) throws Exception {
+        Path file = Files.writeString(tmp.resolve("f.pdf"), "x");
+        when(rawFileService.resolve(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new RawFileService.RawFile(file, "f.pdf", "application/pdf", 1));
+
+        mockMvc.perform(get("/api/v1/documents/doc-1/raw")
+                        .param("domain", "cloud_core_network")
+                        .param("channel", "staging")
+                        .param("kbIds", "kb-a", "kb-b")
+                        .header("X-KB-User", "alice"))
+                .andExpect(status().isOk());
+
+        verify(rawFileService).resolve("doc-1", "cloud_core_network", "staging",
+                null, null, List.of("kb-a", "kb-b"), "alice");
+    }
+
+    @Test
+    @DisplayName("a document with no original file is 404 raw_file_unavailable, not document_not_found")
+    void rawFileUnavailableIsDistinct() throws Exception {
+        when(rawFileService.resolve(any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new IllegalArgumentException("raw_file_unavailable"));
+
+        mockMvc.perform(get("/api/v1/documents/doc-legacy/raw"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("raw_file_unavailable"));
+    }
+
+    @Test
+    @DisplayName("an out-of-scope document is 404 document_not_found")
+    void rawDocumentNotFound() throws Exception {
+        when(rawFileService.resolve(any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new IllegalArgumentException("document_not_found"));
+
+        mockMvc.perform(get("/api/v1/documents/doc-other/raw"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("document_not_found"));
+    }
+
+    @Test
+    @DisplayName("a misconfigured upload root is 503, telling ops apart from a missing file")
+    void rawStorageUnavailableIs503() throws Exception {
+        when(rawFileService.resolve(any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("raw_file_storage_unavailable"));
+
+        mockMvc.perform(get("/api/v1/documents/doc-1/raw"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("raw_file_storage_unavailable"));
     }
 }

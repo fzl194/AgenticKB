@@ -159,6 +159,8 @@ Query 参数：`domain`、`channel`、`paradigmId` 或重复的 `kbIds`（语义
 
 **配置**：新增 `serving.upload-root`，`application.yml` 里 `${SERVING_UPLOAD_ROOT:/app/uploads}`。
 
+> 实现补充：scope 解析被抽成了独立的 `ScopeResolver`，两个端点共用。它不是为了少写几行——**步骤顺序本身就是安全属性**（读 KB ids → 授权 → 解析 scope → 拒绝空 scope），复制一份然后漂移一步，编译器不会有任何反应。
+
 > ⚠️ 这个值必须与 mining 的 `main_control_service/config/system/mining.yaml` 里 `upload.root`（当前 `./uploads`，容器内 cwd=/app 即 `/app/uploads`）一致。两处配置**没有共享真相源**，会漂移。
 > 缓解：serving 启动时若 `upload-root` 不存在则打 WARN，且该端点直接返回 `503 raw_file_storage_unavailable`——把"配置错了"和"这个文档恰好没有原件"区分开，否则会得到一片查不出原因的 404。
 > 更彻底的做法是把 upload root 加进 `/api/v1/serving-config` 快照下发，但那要动 `MainControlClient.parseDatabase` 那对**平行复制**的解析逻辑（改一侧不改另一侧会让 HTTP 路径与本地回落路径静默分叉，只有 `MainControlClientTest` 拦得住）。**本期不做**，用配置项 + 启动校验，风险记在案。

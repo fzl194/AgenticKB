@@ -4,13 +4,10 @@ import com.coremasterkb.serving.config.ServingProperties;
 import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.domain.FullTextRequest;
 import com.coremasterkb.serving.domain.FullTextResponse;
-import com.coremasterkb.serving.domainpack.DomainRegistry;
 import com.coremasterkb.serving.mapper.result.DocumentFileRow;
 import com.coremasterkb.serving.mapper.result.FtsResultRow;
 import com.coremasterkb.serving.mapper.result.SegmentFullRow;
-import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import com.coremasterkb.serving.repository.AssetRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,21 +33,19 @@ class FullTextServiceTest {
     private static final String DOMAIN = "cloud_core_network";
 
     private AssetRepository repo;
-    private KbAccessService kbAccess;
-    private ParadigmService paradigmService;
-    private DomainRegistry registry;
+    private ScopeResolver scopeResolver;
     private FullTextService service;
 
     @BeforeEach
     void setUp() {
         repo = mock(AssetRepository.class);
-        kbAccess = mock(KbAccessService.class);
-        paradigmService = mock(ParadigmService.class);
-        registry = mock(DomainRegistry.class);
-        when(registry.getDefaultChannel(anyString())).thenReturn("prod");
+        scopeResolver = mock(ScopeResolver.class);
+        service = new FullTextService(repo, scopeResolver,
+                new ServingProperties(null, null, DOMAIN, null, null, null));
+    }
 
-        service = new FullTextService(repo, kbAccess, paradigmService, registry,
-                new ServingProperties(null, null, DOMAIN, null, null));
+    private void scopeIs(ActiveScope scope) {
+        when(scopeResolver.resolve(eq(DOMAIN), any(), any(), any(), any(), any())).thenReturn(scope);
     }
 
     // ---------------------------------------------------------------- helpers
@@ -94,8 +89,7 @@ class FullTextServiceTest {
     @DisplayName("segment text comes back uncompressed, with the scope echoed")
     void returnsFullSegmentText() {
         String longText = "完整原文".repeat(500);
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(releaseScope());
+        scopeIs(releaseScope());
         when(repo.resolveSegmentsFull(any(), any()))
                 .thenReturn(List.of(segment("seg-1", "snap-1", longText)));
         stubEmptyFiles();
@@ -113,23 +107,11 @@ class FullTextServiceTest {
     }
 
     @Test
-    @DisplayName("scope that resolves to zero snapshots fails instead of reading everything")
-    void emptyScopeIsRejected() {
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any()))
-                .thenReturn(new ActiveScope("rel-1", "build-1", List.of(), Map.of()));
-
-        assertThatThrownBy(() -> service.fetch(req(List.of(segRef("seg-1"))), "alice"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("empty_scope");
-
-        verify(repo, never()).resolveSegmentsFull(any(), any());
-    }
-
-    @Test
-    @DisplayName("an unauthorized kbId fails the whole request — no partial answer")
-    void unauthorizedKbFailsEverything() {
-        when(kbAccess.authorize(eq(DOMAIN), any(), any()))
+    @DisplayName("a rejected scope stops the request before a single row is read")
+    void scopeRejectionShortCircuits() {
+        // Scope resolution owns the access decision (see ScopeResolverTest); what matters here is
+        // that the failure is not caught and softened into an empty-but-successful response.
+        when(scopeResolver.resolve(eq(DOMAIN), any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("kb_not_found"));
 
         FullTextRequest request = new FullTextRequest(
@@ -140,44 +122,21 @@ class FullTextServiceTest {
                 .hasMessage("kb_not_found");
 
         verify(repo, never()).resolveSegmentsFull(any(), any());
-        verify(repo, never()).resolveActiveScope(anyString(), anyString(), any());
+        verify(repo, never()).resolveUnitsFull(any(), any());
     }
 
     @Test
-    @DisplayName("paradigmId and kbIds together are rejected rather than silently resolved")
-    void conflictingScopeSource() {
-        FullTextRequest request = new FullTextRequest(
-                List.of(segRef("seg-1")), DOMAIN, null, "p-1", null, List.of("kb-a"));
-
-        assertThatThrownBy(() -> service.fetch(request, "alice"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("conflicting_scope_source");
-
-        verifyNoInteractions(kbAccess);
-    }
-
-    @Test
-    @DisplayName("paradigmId reads kbIds off the stored scope_resolve node, then authorizes them")
-    void paradigmScopeIsAuthorizedNotTrusted() throws Exception {
-        String graph = """
-                {"nodes":[
-                  {"nodeId":"sr","operatorType":"scope_resolve","params":{"kbIds":["kb-a","kb-b"]}},
-                  {"nodeId":"q","operatorType":"query_understanding","params":{}}
-                ]}""";
-        when(paradigmService.resolveExecutableGraph(eq("p-1"), any()))
-                .thenReturn(new ObjectMapper().readTree(graph));
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of("kb-a", "kb-b"));
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any()))
-                .thenReturn(new ActiveScope("kb:kb-a,kb-b", null, List.of("snap-1"), Map.of()));
+    @DisplayName("the request's scope inputs are handed to the resolver verbatim")
+    void scopeInputsArePassedThrough() {
+        scopeIs(releaseScope());
         when(repo.resolveSegmentsFull(any(), any())).thenReturn(List.of());
         stubEmptyFiles();
 
         FullTextRequest request = new FullTextRequest(
-                List.of(segRef("seg-1")), DOMAIN, null, "p-1", null, null);
+                List.of(segRef("seg-1")), DOMAIN, "staging", "p-1", 3, null);
         service.fetch(request, "alice");
 
-        // The stored graph supplies the ids; the caller's identity still decides.
-        verify(kbAccess).authorize(DOMAIN, List.of("kb-a", "kb-b"), "alice");
+        verify(scopeResolver).resolve(DOMAIN, "staging", "p-1", 3, List.of(), "alice");
     }
 
     // ---------------------------------------------------------------- misses
@@ -185,8 +144,7 @@ class FullTextServiceTest {
     @Test
     @DisplayName("an id outside the scope reads exactly like an id that never existed")
     void outOfScopeAndNonexistentAreIndistinguishable() {
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(releaseScope());
+        scopeIs(releaseScope());
         // Both ids fall outside the scope filter, so the mapper returns neither.
         when(repo.resolveSegmentsFull(any(), any())).thenReturn(List.of());
         stubEmptyFiles();
@@ -206,8 +164,7 @@ class FullTextServiceTest {
     @Test
     @DisplayName("one stale ref does not discard the others")
     void partialMissKeepsGoodResults() {
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(releaseScope());
+        scopeIs(releaseScope());
         when(repo.resolveSegmentsFull(any(), any()))
                 .thenReturn(List.of(segment("seg-1", "snap-1", "有效原文")));
         stubEmptyFiles();
@@ -247,8 +204,7 @@ class FullTextServiceTest {
         unit.setUnitType("qa");
         unit.setSourceRefsJson("{\"raw_segment_ids\":[\"seg-1\"]}");
 
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(releaseScope());
+        scopeIs(releaseScope());
         when(repo.resolveUnitsFull(any(), any())).thenReturn(List.of(unit));
         when(repo.resolveSegmentsFull(any(), any()))
                 .thenReturn(List.of(segment("seg-1", "snap-1", "段落原文")));
@@ -274,8 +230,7 @@ class FullTextServiceTest {
         // knew "raw_segment_ids" would report no provenance for them at all.
         unit.setTargetRefJson("{\"raw_segment_id\":\"seg-1\"}");
 
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(releaseScope());
+        scopeIs(releaseScope());
         when(repo.resolveUnitsFull(any(), any())).thenReturn(List.of(unit));
         when(repo.resolveSegmentsFull(any(), any()))
                 .thenReturn(List.of(segment("seg-1", "snap-1", "段落原文")));
@@ -296,8 +251,7 @@ class FullTextServiceTest {
         unit.setText("单元全文");
         unit.setSourceRefsJson("{}");
 
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(releaseScope());
+        scopeIs(releaseScope());
         when(repo.resolveUnitsFull(any(), any())).thenReturn(List.of(unit));
         stubEmptyFiles();
 
@@ -320,8 +274,7 @@ class FullTextServiceTest {
         file.setDocumentName("spec.pdf");
         file.setDocumentKey("doc:/spec.pdf");
 
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(releaseScope());
+        scopeIs(releaseScope());
         when(repo.resolveSegmentsFull(any(), any()))
                 .thenReturn(List.of(segment("seg-1", "snap-1", "原文")));
         when(repo.resolveFileLocations(any(), any())).thenReturn(List.of(file));
@@ -343,8 +296,7 @@ class FullTextServiceTest {
         file.setDocumentKey("doc:/legacy.md");
         // kb_id and storage_path stay null: ingested through /api/runs, never uploaded to a KB.
 
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(releaseScope());
+        scopeIs(releaseScope());
         when(repo.resolveSegmentsFull(any(), any()))
                 .thenReturn(List.of(segment("seg-1", "snap-1", "原文")));
         when(repo.resolveFileLocations(any(), any())).thenReturn(List.of(file));
@@ -364,8 +316,7 @@ class FullTextServiceTest {
                 "rel-1", "build-1", List.of("snap-1"),
                 Map.of("doc-1", "snap-1", "doc-2", "snap-1"));
 
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any())).thenReturn(shared);
+        scopeIs(shared);
         when(repo.resolveSegmentsFull(any(), any()))
                 .thenReturn(List.of(segment("seg-1", "snap-1", "原文")));
 

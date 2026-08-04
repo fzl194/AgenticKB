@@ -9,7 +9,6 @@ import com.coremasterkb.serving.domainpack.DomainRegistry;
 import com.coremasterkb.serving.mapper.result.DocumentFileRow;
 import com.coremasterkb.serving.mapper.result.FtsResultRow;
 import com.coremasterkb.serving.mapper.result.SegmentFullRow;
-import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import com.coremasterkb.serving.repository.AssetRepository;
 import com.coremasterkb.serving.util.JsonUtils;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -49,21 +48,15 @@ public class FullTextService {
     public static final int MAX_REFS = 50;
 
     private final AssetRepository assetRepository;
-    private final KbAccessService kbAccessService;
-    private final ParadigmService paradigmService;
-    private final DomainRegistry domainRegistry;
+    private final ScopeResolver scopeResolver;
     private final String defaultDomain;
 
     public FullTextService(
             AssetRepository assetRepository,
-            KbAccessService kbAccessService,
-            ParadigmService paradigmService,
-            DomainRegistry domainRegistry,
+            ScopeResolver scopeResolver,
             ServingProperties properties) {
         this.assetRepository = assetRepository;
-        this.kbAccessService = kbAccessService;
-        this.paradigmService = paradigmService;
-        this.domainRegistry = domainRegistry;
+        this.scopeResolver = scopeResolver;
         this.defaultDomain = properties.defaultDomain();
     }
 
@@ -88,7 +81,9 @@ public class FullTextService {
         String domain = effectiveDomain(request.domain());
         DomainContext.set(domain);
         try {
-            ActiveScope scope = resolveScope(request, domain, username);
+            ActiveScope scope = scopeResolver.resolve(
+                    domain, request.channel(), request.paradigmId(), request.paradigmVersion(),
+                    request.kbIds(), username);
 
             List<String> unitIds = refs.stream()
                     .filter(r -> FullTextRequest.TYPE_RETRIEVAL_UNIT.equals(r.type()))
@@ -141,68 +136,6 @@ public class FullTextService {
         } finally {
             DomainContext.clear();
         }
-    }
-
-    // =========================================================================
-    // Scope resolution
-    // =========================================================================
-
-    /**
-     * Resolve the snapshot scope this request may read.
-     *
-     * <p>Three sources, and they are not interchangeable: a {@code paradigmId} means "the same
-     * knowledge bases that paradigm searched", read out of the stored graph so the caller never
-     * gets to widen it; explicit {@code kbIds} means the caller names them and gets authorized;
-     * neither means the ordinary domain-wide active release. Supplying both is rejected rather
-     * than silently resolved — picking one would turn a caller's mistake into an access decision
-     * nobody reviewed.</p>
-     */
-    ActiveScope resolveScope(FullTextRequest request, String domain, String username) {
-        boolean hasParadigm = request.paradigmId() != null && !request.paradigmId().isBlank();
-        boolean hasKbIds = request.kbIds() != null && !request.kbIds().isEmpty();
-        if (hasParadigm && hasKbIds) {
-            throw new IllegalArgumentException("conflicting_scope_source");
-        }
-
-        List<String> requestedKbIds = hasParadigm
-                ? kbIdsOfParadigm(request.paradigmId(), request.paradigmVersion())
-                : request.kbIds();
-
-        // Authorized even when the ids came from a stored graph: a saved paradigm must not become
-        // a way to read a knowledge base the caller cannot open.
-        List<String> kbIds = kbAccessService.authorize(domain, requestedKbIds, username);
-
-        String channel = (request.channel() != null && !request.channel().isBlank())
-                ? request.channel()
-                : domainRegistry.getDefaultChannel(domain);
-
-        ActiveScope scope = assetRepository.resolveActiveScope(domain, channel, kbIds);
-        if (scope.snapshotIds().isEmpty()) {
-            throw new IllegalArgumentException("empty_scope");
-        }
-        return scope;
-    }
-
-    /** Read the {@code kbIds} param off the paradigm's {@code scope_resolve} node(s). */
-    private List<String> kbIdsOfParadigm(String paradigmId, Integer version) {
-        JsonNode graph = paradigmService.resolveExecutableGraph(paradigmId, version);
-        JsonNode nodes = graph != null ? graph.get("nodes") : null;
-        if (nodes == null || !nodes.isArray()) {
-            return List.of();
-        }
-        Set<String> kbIds = new LinkedHashSet<>();
-        for (JsonNode node : nodes) {
-            JsonNode type = node.get("operatorType");
-            if (type == null || !"scope_resolve".equals(type.asText())) continue;
-            JsonNode params = node.get("params");
-            JsonNode ids = params != null ? params.get("kbIds") : null;
-            if (ids == null || !ids.isArray()) continue;
-            for (JsonNode id : ids) {
-                String text = id.asText(null);
-                if (text != null && !text.isBlank()) kbIds.add(text.trim());
-            }
-        }
-        return List.copyOf(kbIds);
     }
 
     private String effectiveDomain(String requested) {

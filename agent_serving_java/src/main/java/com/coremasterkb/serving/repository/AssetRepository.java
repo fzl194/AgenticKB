@@ -26,6 +26,7 @@ public class AssetRepository {
     private final AssetRawSegmentRelationMapper relationMapper;
     private final AssetDocumentMapper documentMapper;
     private final AssetRetrievalEmbeddingMapper embeddingMapper;
+    private final AssetRetrievalUnitMapper unitMapper;
 
     public AssetRepository(
             AssetPublishReleaseMapper releaseMapper,
@@ -33,13 +34,15 @@ public class AssetRepository {
             AssetRawSegmentMapper rawSegmentMapper,
             AssetRawSegmentRelationMapper relationMapper,
             AssetDocumentMapper documentMapper,
-            AssetRetrievalEmbeddingMapper embeddingMapper) {
+            AssetRetrievalEmbeddingMapper embeddingMapper,
+            AssetRetrievalUnitMapper unitMapper) {
         this.releaseMapper       = releaseMapper;
         this.buildSnapshotMapper = buildSnapshotMapper;
         this.rawSegmentMapper    = rawSegmentMapper;
         this.relationMapper      = relationMapper;
         this.documentMapper      = documentMapper;
         this.embeddingMapper     = embeddingMapper;
+        this.unitMapper          = unitMapper;
     }
 
     // -------------------------------------------------------------------------
@@ -172,6 +175,49 @@ public class AssetRepository {
             return Collections.emptyList();
         }
         return rawSegmentMapper.selectWithMeta(segmentIds, snapshotIds);
+    }
+
+    // -------------------------------------------------------------------------
+    // Full-text drill-down
+    //
+    // Every method here takes ids supplied by the caller rather than ids produced by a
+    // scope-filtered retrieval, so each one requires a non-empty scope and says so loudly.
+    // requireScope() exists because the alternative failure mode is silent: an empty IN-list
+    // would either match nothing or, in mappers that guard the filter with <if>, match
+    // everything.
+    // -------------------------------------------------------------------------
+
+    /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */
+    public List<SegmentFullRow> resolveSegmentsFull(List<String> segmentIds, List<String> snapshotIds) {
+        requireScope(snapshotIds);
+        if (segmentIds == null || segmentIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return rawSegmentMapper.selectFullByIds(segmentIds, snapshotIds);
+    }
+
+    /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */
+    public List<FtsResultRow> resolveUnitsFull(List<String> unitIds, List<String> snapshotIds) {
+        requireScope(snapshotIds);
+        if (unitIds == null || unitIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return unitMapper.fetchDetailsByIdsInScope(unitIds, snapshotIds);
+    }
+
+    /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */
+    public List<DocumentFileRow> resolveFileLocations(List<String> documentIds, List<String> snapshotIds) {
+        requireScope(snapshotIds);
+        if (documentIds == null || documentIds.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return documentMapper.selectFileLocations(documentIds, snapshotIds);
+    }
+
+    private static void requireScope(List<String> snapshotIds) {
+        if (snapshotIds == null || snapshotIds.isEmpty()) {
+            throw new IllegalArgumentException("empty_scope");
+        }
     }
 
     // -------------------------------------------------------------------------

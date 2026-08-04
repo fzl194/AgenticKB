@@ -58,6 +58,39 @@ public class GlobalExceptionHandler {
                     .body(Map.of("error", "no_active_kb_build",
                             "message", "The selected knowledge bases have no mined content"));
         }
+        // ---- full-text drill-down ----
+        if ("conflicting_scope_source".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "conflicting_scope_source",
+                            "message", "Supply either paradigmId or kbIds, not both"));
+        }
+        if ("too_many_refs".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "too_many_refs",
+                            "message", "Too many refs in one request (max "
+                                    + com.coremasterkb.serving.application.FullTextService.MAX_REFS + ")"));
+        }
+        if ("refs_required".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "refs_required", "message", "At least one ref is required"));
+        }
+        if ("unknown_ref_type".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "unknown_ref_type",
+                            "message", "Ref type must be 'retrieval_unit' or 'raw_segment'"));
+        }
+        if ("ref_id_required".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "ref_id_required", "message", "Each ref needs a non-blank id"));
+        }
+        // Reached when a scope resolves to zero snapshots. Mapped explicitly because the
+        // alternative — letting an empty snapshot list through — is an unfiltered read, so this
+        // code existing at all is the visible half of that guard.
+        if ("empty_scope".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "empty_scope",
+                            "message", "The requested scope contains no readable content"));
+        }
         log.warn("Bad request: {}", ex.getMessage());
         return ResponseEntity.badRequest()
                 .body(Map.of("error", "bad_request", "message", "Bad request"));

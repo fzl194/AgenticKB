@@ -53,6 +53,53 @@
         </if>
     </select>
 
+    <resultMap id="segmentFullResult"
+               type="com.coremasterkb.serving.mapper.result.SegmentFullRow">
+        <result column="id"                   property="id"/>
+        <result column="document_snapshot_id" property="documentSnapshotId"/>
+        <result column="segment_key"          property="segmentKey"/>
+        <result column="segment_index"        property="segmentIndex"/>
+        <result column="raw_text"             property="rawText"/>
+        <result column="block_type"           property="blockType"/>
+        <result column="semantic_role"        property="semanticRole"/>
+        <result column="section_path"         property="sectionPath"/>
+        <result column="section_title"        property="sectionTitle"/>
+        <result column="token_count"          property="tokenCount"/>
+        <result column="snapshot_title"       property="snapshotTitle"/>
+        <result column="metadata_json"        property="metadataJson"/>
+    </resultMap>
+
+    <!--
+        No join to asset_document_snapshot_links: that link is 1:N and would duplicate rows.
+        The snapshot filter is unconditional on purpose — see the Javadoc on selectFullByIds.
+    -->
+    <select id="selectFullByIds" resultMap="segmentFullResult">
+        SELECT rs.id,
+               rs.document_snapshot_id,
+               rs.segment_key,
+               rs.segment_index,
+               rs.raw_text,
+               rs.block_type,
+               rs.semantic_role,
+               rs.section_path,
+               rs.section_title,
+               rs.token_count,
+               rs.metadata_json,
+               ds.title AS snapshot_title
+        FROM asset_raw_segments rs
+        LEFT JOIN asset_document_snapshots ds
+               ON rs.document_snapshot_id = ds.id
+        WHERE rs.id IN
+        <foreach collection="segmentIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        AND rs.document_snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+        ORDER BY rs.document_snapshot_id, rs.segment_index
+    </select>
+
     <resultMap id="sectionPathCountMap"
                type="com.coremasterkb.serving.mapper.result.SectionPathCountRow">
         <result column="section_path" property="sectionPath"/>

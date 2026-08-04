@@ -190,6 +190,7 @@ import RunResultPanel from '@/components/paradigm/RunResultPanel.vue'
 import { useOperatorApi } from '@/api/operator'
 import { useKbApi } from '@/api/kb'
 import { useDomainStore } from '@/stores/domain'
+import { copyToClipboard } from '@/utils/clipboard'
 import type { ParamOption } from '@/components/workflow/JsonSchemaParamForm.vue'
 import type { OperatorDef, ParadigmGraph, ParadigmView, ParadigmVersionView, RunResult } from '@/types/operator'
 
@@ -236,12 +237,8 @@ const curlExample = computed(() =>
   + `  -d '{"query":"aa-interface","domain":"${domainStore.currentDomain}"}'`)
 
 async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本')
-  }
+  if (await copyToClipboard(text)) ElMessage.success('已复制')
+  else ElMessage.warning('复制失败，请手动选择文本')
 }
 
 const saving = ref(false)

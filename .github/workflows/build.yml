@@ -48,6 +48,59 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
+      # 镜像要构建 3 分半，push 权限不对的话最后一刻才炸，太浪费。
+      # 这里先探一次写权限：申请 pull,push token → 开一个 blob upload 会话 → 立刻取消。
+      # 不产生任何镜像内容。GHCR 的 token 是不透明串（不是带 access 声明的 JWT），
+      # 所以只能实打实探一次，不能靠解 scope。
+      # 只在「确凿被拒」（token DENIED / upload 401、403）时提前失败；
+      # 其余情况（网络抖动、404 等未知响应）一律告警放行，绝不误伤能成功的构建。
+      - name: Preflight GHCR push permission
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_PASS: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          USING_PAT: ${{ secrets.GHCR_TOKEN != '' }}
+        run: |
+          if [ "$USING_PAT" = "true" ]; then echo "凭据来源：secrets.GHCR_TOKEN (PAT)"
+          else echo "凭据来源：GITHUB_TOKEN（未配置 GHCR_TOKEN）"; fi
+
+          fail() {
+            echo "::error::$1"
+            echo "修法二选一："
+            echo "  1) Settings → Actions → General → Workflow permissions 改成 Read and write"
+            echo "  2) 生成 classic PAT（勾 write:packages），存为仓库 secret GHCR_TOKEN"
+            exit 1
+          }
+
+          resp=$(curl -sS -u "$GHCR_USER:$GHCR_PASS" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${IMAGE_NAME}:pull,push") \
+            || { echo "::warning::预检请求失败，跳过检查"; exit 0; }
+
+          case "$resp" in
+            *DENIED*|*denied*) fail "GHCR 拒绝发放 ${IMAGE_NAME} 的 push token：$resp" ;;
+          esac
+          tok=$(printf '%s' "$resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          [ -n "$tok" ] || { echo "::warning::未拿到 token，跳过检查：$resp"; exit 0; }
+
+          # 开一个上传会话再取消：202 = 确实能写，401/403 = 确实不能写。
+          hdr=$(mktemp)
+          code=$(curl -sS -o /dev/null -D "$hdr" -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $tok" \
+            "https://ghcr.io/v2/${IMAGE_NAME}/blobs/uploads/") \
+            || { echo "::warning::上传探测请求失败，跳过检查"; exit 0; }
+
+          case "$code" in
+            202)
+              loc=$(sed -n 's/^[Ll]ocation: *//p' "$hdr" | tr -d '\r')
+              case "$loc" in
+                https://*) curl -sS -o /dev/null -X DELETE -H "Authorization: Bearer $tok" "$loc" || true ;;
+                /*)        curl -sS -o /dev/null -X DELETE -H "Authorization: Bearer $tok" "https://ghcr.io$loc" || true ;;
+              esac
+              echo "OK：对 ${IMAGE_NAME} 有 push 权限，继续构建"
+              ;;
+            401|403) fail "凭据对 ${IMAGE_NAME} 没有写权限（HTTP $code），构建会白跑。" ;;
+            *)       echo "::warning::上传探测返回 HTTP $code，无法判定，继续构建" ;;
+          esac
+
       - name: Derive tags
         id: meta
         uses: docker/metadata-action@v6

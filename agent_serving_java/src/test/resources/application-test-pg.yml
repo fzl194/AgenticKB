@@ -17,6 +17,10 @@ mybatis:
   type-aliases-package: com.coremasterkb.serving.entity
 
 serving:
+  main-control:
+    # 集成测试必须只连上面那个一次性库。开发机上很可能正开着 main_control(8910)，
+    # 若让它下发默认库地址，启动期的建表 DDL 就会打进生产 kb_db。
+    default-database-enabled: false
   domain-registry-path: ../main_control_service/config/domain_registry.yaml
   scenario-packs-dir: ${SCENARIO_PACKS_DIR:../main_control_service/config/scenario_packs}
   default-domain: cloud_core_network

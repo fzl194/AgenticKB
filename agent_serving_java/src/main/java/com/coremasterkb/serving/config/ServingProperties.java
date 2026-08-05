@@ -17,10 +17,21 @@ public record ServingProperties(
         }
     }
 
-    /** Config source: main_control's base URL (e.g. http://localhost:8910). */
-    public record MainControl(String baseUrl) {
+    /**
+     * Config source: main_control's base URL (e.g. http://localhost:8910).
+     *
+     * @param defaultDatabaseEnabled whether the default DataSource takes its address from
+     *        main_control ({@code system/database.yaml}'s {@code default} block). True in
+     *        production — that file is the single source of truth. Set false where the process
+     *        must own its own database regardless of what a main_control on this host would
+     *        hand back: integration tests point {@code spring.datasource.*} at a throwaway DB,
+     *        and picking up a developer's running main_control instead would run the startup
+     *        DDL against the real one.
+     */
+    public record MainControl(String baseUrl, Boolean defaultDatabaseEnabled) {
         public MainControl {
             if (baseUrl == null || baseUrl.isBlank()) baseUrl = "http://localhost:8910";
+            if (defaultDatabaseEnabled == null) defaultDatabaseEnabled = Boolean.TRUE;
         }
     }
 
@@ -37,6 +48,6 @@ public record ServingProperties(
         // 快照下发，那要同步改 MainControlClient 与 ConfigReloadService 两份平行解析。
         if (uploadRoot == null || uploadRoot.isBlank()) uploadRoot = "/app/uploads";
         if (llm == null) llm = new LlmConfig("");
-        if (mainControl == null) mainControl = new MainControl("http://localhost:8910");
+        if (mainControl == null) mainControl = new MainControl("http://localhost:8910", Boolean.TRUE);
     }
 }

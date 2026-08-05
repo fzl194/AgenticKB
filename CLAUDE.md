@@ -37,7 +37,8 @@ knowledge_mining  :8901                      agent_serving_java :8081
 |---|---|
 | 挖掘执行 | **新 run 默认走 workflow 算子 DAG**（`mining_config.py` 默认 `workflow`）。legacy 固定流水线仍在，作为回退引擎，按 run 的 `execution_engine` 列（不可变）决定，二者永久共存 |
 | **配置来源（最大坑）** | **mining 已不读 `.env`**：service + DB 配置改走 HTTP 控制面（`control_plane.py`，`GET /api/v1/system/mining\|database/raw`），与 llm_service/serving 同构。唯一还读文件系统的是 `domain_pack.py` 的域 registry/scenario pack。serving 也去掉了 `.env` 导入。`.env` 已废弃，勿恢复 |
-| 库名 | 全线 `coremasterkb` → **`kb_db`**（registry、`system/database.yaml`、serving `application.yml` 默认数据源）。4 个域现在都有 inline `database:` 块、都指向同一个 `kb_db` |
+| 库名 | 全线 `coremasterkb` → **`kb_db`**（registry、`system/database.yaml`）。4 个域现在都有 inline `database:` 块、都指向同一个 `kb_db` |
+| **DB 地址真相源** | **`main_control_service/config/` 是唯一真相源，Java 侧最后一处硬编码已消除**。serving 的默认数据源改从 `GET {control}/api/v1/system/database` 的 `default` 块构造（`ServingBeans.defaultDataSource`）。`application.yml` 的 `spring.datasource.*` 出厂**留空**，只做控制面不可达时的兜底；两者都没有则启动失败报 `default_datasource_unresolved`——**故意不静默回落**，因为静默连上旧库正是它从前的坑 |
 | **文档身份归属** | `asset_documents` 身份由 **KB 包独占写**；UNIQUE 从 `(domain, document_key)` 改成 `(kb_id, document_key)`；mining 的 `upsert_document` 退到只服务 legacy `/api/runs` |
 | `deploy-server.sh --force` | **不删配置**：`--force` 把宿主机 `main_control_service/config` 复制进暂存快照再换入（`deploy-server.sh:502-506`），保留配置。只有 `--force-config`（或 config 目录不存在）才覆盖配置 |
 | `reset_db.py` 的 `SCHEMA_FILES` | **已与 `pg_schema.py` 对齐**（补回了曾漏的 `004_asset_snapshot_workflow_binding` + `006_mining_run_preflight`，并加了全部 kb schema） |
@@ -77,7 +78,7 @@ nginx 只有一条后端路由（`/api/control-plane/` → `127.0.0.1:8910`）�
 | 组件 | 配置从哪来 | 热重载 |
 |---|---|---|
 | `llm_service` | **纯 HTTP 拉控制面**：`GET {control}/api/v1/system/llm_service/raw` + `/system/database/raw`。**只读 `CONTROL_PLANE_BASE_URL` 一个环境变量**，其余完全不读 `.env` | `POST /api/v1/admin/reload-config`（只拉 service config，**不碰 db_config**，host/port 也不热切） |
-| `agent_serving_java` | **HTTP 拉控制面**：`GET {control}/api/v1/serving-config`；不可达时回落本地文件。默认数据源（非路由的 `operator_paradigm*` 等）硬编码在 `application.yml` 指向 `kb_db`，不再读 `.env` `PG_*` | `POST /api/v1/admin/reload-config`；控制面扇出：`POST {control}/api/v1/admin/reload-serving` |
+| `agent_serving_java` | **HTTP 拉控制面**：per-domain 走 `GET {control}/api/v1/serving-config`（不可达时回落本地文件）；默认数据源（非路由的 `operator_paradigm*` 等）走 `GET {control}/api/v1/system/database` 的 `default` 块，与 mining 同源。不再读 `.env` `PG_*`，`application.yml` 里也**不再硬编码**地址 | `POST /api/v1/admin/reload-config`（只重载 per-domain；**默认数据源不热切**，改了要重启 serving）；控制面扇出：`POST {control}/api/v1/admin/reload-serving` |
 | `knowledge_mining` | **HTTP 拉控制面**（`control_plane.py`）：service 配置 `GET {control}/api/v1/system/mining/raw`、DB 配置 `GET /system/database/raw`，启动时抓一次缓存。**不再读 `.env`/`PG_*`/`MINING_API_PORT`**。**唯一还读文件系统的**是 `domain_pack.py` 加载 `domain_registry.yaml` + `scenario_packs/*/domain.yaml`（域知识，非 service/DB 配置） | 无，改配置必须重启 |
 | `kb-ui` | HTTP 走控制面 | — |
 
@@ -221,9 +222,11 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 ### 控制面集成（从 v4 移植回来的能力）
 
 - `MainControlClient.fetchServingConfig()` → `GET {baseUrl}/api/v1/serving-config` → `ServingConfigSnapshot`。
-- `ConfigReloadService.reload()` 顺序喂给 `DomainRegistry.apply → DomainPackReader.apply → DomainPoolManager.invalidate()`；main_control 失败才回落本地文件（`SCENARIO_PACKS_DIR` / `DOMAIN_REGISTRY_PATH`）。
+- `MainControlClient.fetchDefaultDatabase()` → `GET {baseUrl}/api/v1/system/database` → 取 `default` 块 → `DatabaseConfig`。**启动时**在 `ServingBeans.defaultDataSource` 里调用（5 次重试、间隔 2s，因为 supervisord 的 priority 只保证 control 先启动、不保证它的 HTTP 已 ready）。**刻意不并进 `/serving-config` 快照**：那份快照可热重载，而 Hikari 池的 JDBC URL 建成后不可变，换默认库只能重启 serving。
+- `ConfigReloadService.reload()` 顺序喂给 `DomainRegistry.apply → DomainPackReader.apply → DomainPoolManager.invalidate()`；main_control 失败才回落本地文件（`SCENARIO_PACKS_DIR` / `DOMAIN_REGISTRY_PATH`）。**它不碰默认数据源**（与 llm_service 的 reload「不碰 db_config」一致）。
 - base-url：`application.yml` 的 `${SERVING_MAIN_CONTROL_BASEURL:http://localhost:8910}`；`ServingProperties.java` 也有一份默认值，**要改一起改**。
-- **`parseDatabase` 被复制了两份**：`MainControlClient.parseDatabase` 与 `ConfigReloadService.parseDatabase` 逐字平行（后者 Javadoc 明说 mirrors 前者）。给一侧加字段必须同步另一侧，否则 HTTP 路径与本地回落路径静默分叉。契约由 `MainControlClientTest` 锁住（它按 Python `get_serving_config()` 输出逐键构造 payload）——**改任何一侧键名，这个测试是唯一能拦住你的东西，编译器拦不住。**
+- `serving.main-control.default-database-enabled`（默认 true）：默认数据源是否也向控制面要地址。**生产别关**。存在的唯一理由是集成测试——开发机上常开着 main_control(8910)，若让它下发默认库，`ParadigmSchemaInitializer` / `ServingRuntimeSchemaInitializer` 的启动建表 DDL 就会打进生产 `kb_db`。`application-test-pg.yml` 里设成 false，测试只认自己的 `spring.datasource.*`。
+- **`parseDatabase` 被复制了两份**：`MainControlClient.parseDatabase` 与 `ConfigReloadService.parseDatabase` 逐字平行（后者 Javadoc 明说 mirrors 前者）。给一侧加字段必须同步另一侧，否则 HTTP 路径与本地回落路径静默分叉。契约由 `MainControlClientTest` 锁住（两个 `@Nested`：`Payload` 按 Python `get_serving_config()` 逐键构造 payload，`DefaultDatabase` 按 `system/database.yaml` 的 `default` 块构造）——**改任何一侧键名，这个测试是唯一能拦住你的东西，编译器拦不住。**（`fetchDefaultDatabase` 复用 `MainControlClient.parseDatabase`，不涉及 `ConfigReloadService` 那份副本。）
 
 ### registry 的 `database:` 块是活的（Java 侧真分库）
 
@@ -269,9 +272,13 @@ GET {main_control}/api/v1/serving-config
        serving : scenario pack 的 serving: 段（ontology:/mining: 不下发——serving 从不读）
   → MainControlClient 解析成 ServingConfigSnapshot
   → ConfigReloadService 原子地喂给 DomainRegistry / DomainPackReader / DomainPoolManager
+
+GET {main_control}/api/v1/system/database          ← 只在启动时拉一次
+  → system/database.yaml 原样 JSON，取 default 块
+  → MainControlClient.fetchDefaultDatabase() → ServingBeans 建 defaultDataSource
 ```
 
-`generic` 域没有 inline `database:` → 快照里 `database: null` → 用默认库。scenario pack 的 `serving:` 段被当根解析（`route_policy`/`query_understanding`/`extractor_rules`/`intent_strategy` 同级，无 ontology/mining 嵌套）。
+`generic` 域没有 inline `database:` → 快照里 `database: null` → 用默认库（即上面那份 `default` 块）。scenario pack 的 `serving:` 段被当根解析（`route_policy`/`query_understanding`/`extractor_rules`/`intent_strategy` 同级，无 ontology/mining 嵌套）。
 
 ### mining 侧怎么拿到它
 
@@ -393,6 +400,8 @@ docker compose exec app supervisorctl restart mining
 **算子系统的 `scope` 必须显式连线（Java）。** `ParadigmCompiler.ENTRY_SLOTS` **只有 `query`**，`scope` 被故意排除——否则图「编译通过但运行时 scope 为 null，静默检索不到」。所有需要 scope 的检索算子必须连到 `scope_resolve`。这是 `missing_required_input` 的来源。
 
 **虚拟线程不继承 `DomainContext`（Java）。** `DomainContext` 是普通 `ThreadLocal`（非 `InheritableThreadLocal`），而检索都跑在 `newVirtualThreadPerTaskExecutor()` 上。任何 `CompletableFuture.*Async` 提交的任务都必须用 `DomainContext.wrapRunnable/wrapCallable/wrapSupplier` 或显式 `set()`。现有调用点都已包好（`ParadigmExecutor` 每节点、`RetrievalOrchestrator` 的路由扇出、`SearchService` 的变体循环与子查询循环），**新加并行分支时别漏**——漏了不会报错：`DomainRoutingDataSource` 把 null 域静默当 default，配了 inline `database:` 的域会悄悄查默认库，而 `EntityGraphRouteRetriever`（除 `DomainContext` 外没有域来源）会恒返回空。
+
+**serving 启动现在硬依赖 main_control 可达**（或显式配 `SPRING_DATASOURCE_URL`）。`ServingBeans.defaultDataSource` 要先拿到 `system/database.yaml` 的 `default` 块才能建池，拉不到且无兜底就抛 `default_datasource_unresolved` 启动失败。这是**故意的**：以前它硬编码地址，改配置不生效、服务照常起来、悄悄连着旧库，比起不来难查得多。容器里 supervisord 的 priority 已保证 control(10) 先于 serving(30)，另有 5 次 ×2s 重试兜住 control 的 HTTP 尚未 ready。跑 IntelliJ / 裸 `mvn spring-boot:run` 时记得先起 8910，或设 `SPRING_DATASOURCE_URL`。
 
 **新增 Java 算子只需打 `@Component`**，`OperatorRegistry` 靠构造注入自动收集，type 重复启动失败。前端按算子 `paramSchemaJson`（JSON Schema draft-07）自动渲染参数表单，加参数只改后端 schema。
 

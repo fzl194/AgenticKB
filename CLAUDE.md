@@ -51,7 +51,7 @@ knowledge_mining  :8901                      agent_serving_java :8081
 | `llm_service` | 8900 | 20 | 统一 LLM 运行时，租约式任务队列（`FOR UPDATE SKIP LOCKED`） |
 | `knowledge_mining` (mining) | 8901 | 30 | 挖掘线 |
 | `agent_serving_java` (serving) | 8081 | 30 | 检索线 |
-| `mcp_server` (mcp) | 9000 | 40 | 把检索包装成 MCP tool，**直连 8081，绕过控制面** |
+| `mcp_server` (mcp) | 9000 | 40 | 把检索+原文下钻包装成 2 个 MCP tool，按域绑定路由到范式，**直连 8081，绕过控制面** |
 | `kb-ui` (nginx) | 80 | 40 | Vue 3 前端，经 nginx |
 
 启动顺序由 `docker/supervisord.conf` 的 `priority` 决定，`control` 必须最先（它是配置中心）。另有一个 `eval` 服务（域 registry 里配了 `eval_url:8810`，代理层 `SERVICE_MAP` 也认 `eval`）——但它**不在本仓库、不在这 6 个容器程序里**，前端也没用它，是个外部服务占位。
@@ -197,7 +197,24 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 
 返回的 `ActiveScope` 有两处刻意的错位：`releaseId` 塞的是 `ActiveScope.kbScopeKey(kbIds)`（让语义缓存按 KB 选择分桶，而不是把所有 KB 混一个桶），`buildId=null`（一个 KB 范围跨多个 build）。`kbIds` 为空时**完全走老路径**，行为逐字不变。
 
-检索 SQL 本身没改（本来就是快照级过滤）。**仍缺的是结果里的 KB 来源标注**——`ContextItem` / `SourceRef` 都没有 `kb_id` 字段，只有 `/api/v1/search` 的 `debug.domain_context.kb_ids` 和范式 trace 的 `kbIds` 属性能看出用了哪些库。
+检索 SQL 本身没改（本来就是快照级过滤）。结果里的 KB 归属：**`SourceRef` 有 `kbId`**（legacy `/api/runs` 文档为 null），`FullTextResponse.Segment` 也有；**`ContextItem` 仍没有**。另可从 `/api/v1/search` 的 `debug.domain_context.kb_ids` 和范式 trace 的 `kbIds` 属性看出用了哪些库。
+
+**⚠️ 纯 KB 部署下「不选知识库」是死路。** 空 `kbIds` 走的是域级 active release 分支，而 KB 挖掘 `publish=False` 永不产 release，`/api/releases` 也只有 GET（没有把 KB build 提升成 release 的接口）——所以只用 KB 入口挖掘的域，任何不带 `kbIds` 的检索/任何 `scope_resolve` 没选库的范式，都必然报 `no_active_release`。域级发布语料只有 legacy `/api/runs` 线才产生（它的全局尾段有 `publish_release`）。参数描述写的「留空 = 全域生效发布」不会提示该域压根没有发布。
+
+### 下钻端点：从检索结果回到原文（`FullTextController`）
+
+`ContextAssembler` 按字符预算硬截断 + 抽取式摘要，所以 `/search` 返回的 `text` **不是库里存的**。两个端点拿回真货：
+
+- `POST /api/v1/segments/fulltext` —— 批量（`MAX_REFS=50`），`refs[].type ∈ {retrieval_unit, raw_segment}`（= 结果项的 `kind`，**必填不推断**），`granularity=window` + `windowRadius`(1–5) 额外带回相邻段落。
+- `GET /api/v1/documents/{documentId}/raw` —— 流式返回原始上传文件。用 GET+query 是为了能直接喂 `<a download>` / 预览 iframe；`kbIds` 要发成重复参数 `kbIds=a&kbIds=b`（Spring 不认 `kbIds[]=`，前端为此改过 axios 序列化）。
+
+两者共用 `ScopeResolver.resolve()`——**步骤顺序本身是安全属性**（读 kbIds/从范式图读 → 授权 → 解析 scope → 空 scope 拒），所以抽成一个类而不是复制方法。范围三选一：`paradigmId`（读该范式 `scope_resolve` 的 kbIds，调用方无法拓宽）、显式 `kbIds`、都不给 = 域级 active release；同时给前两个报 `conflicting_scope_source`，不静默挑一个。**从范式图读出来的 id 一样要 `authorize`**。
+
+关键差别：检索路径的 id 由已被 scope 过滤的查询产出；下钻路径的 id **来自调用方**，scope 是猜 id 和别人知识库之间唯一的屏障。`RawFileService.safeResolve` 另有路径逃逸防护，比较 `toRealPath()`（解析符号链接后）是否仍在 `{upload_root}/{kb_id}` 下——镜像 mining 侧 `DocumentService.download_path`；`normalize()` 挡不住 KB 目录里的软链。
+
+错误码：`kb_not_found` 404 · `kb_ids_required` 400 · `no_active_kb_build` 404（"选中的库还没挖过"，刻意与空结果区分）· `conflicting_scope_source` 400 · `empty_scope` 400 · `too_many_refs`/`unknown_ref_type`/`window_radius_out_of_range` 400 · `document_not_found` 404（越权/不存在/路径逃逸同一响应）· `raw_file_unavailable` 404（文档可见但没原文件＝legacy 入库的）· `raw_file_storage_unavailable` 503（`serving.upload-root` 配错，与前者分开是为了别把部署问题读成数据问题）。单条 ref 未命中不失败整个请求，报 `found:false / out_of_scope`（与 `kbIds` 越权的处理相反：那里调用方是在断言范围，部分结果与空结果无法区分）。
+
+测试：`FullTextServiceTest` / `FullTextWebMvcTest`（L1，无需 DB）、`AssetRepositoryFullTextIT`（`@Tag("pg-integration")`，测 mocked mapper 看不见的 SQL 保证）、前端 `servingFullText.test.ts`。UI 在 `SearchView` → 「查看原文」→ `FullTextDrawer`，它会**钉住本次检索的 kbIds**（不是选择器当前值）。
 
 ### 检索流水线：实际 12 个 trace 阶段，路由按复杂度
 
@@ -218,6 +235,18 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 - output(2)：`assemble, collect`
 
 `ENTRY_SLOTS` 只有 `Map.of("query", STRING)`——`scope` 被**故意排除**。`checkRequiredInputs()` 里，凡需要 `scope` 输入的算子（`fts/dense_vector/entity_graph/graph_expand`）**必须**连到 `scope_resolve` 节点，否则编译报 `missing_required_input`——防止「图编译过、运行时 scope 为 null、静默检索不到东西」。
+
+### 范式的域绑定：MCP 靠它感知，**发布 ≠ 可见**
+
+MCP 只有 domain、没有 paradigm id，靠「域绑定」找范式（`ParadigmBindingService`，设计见 `docs/mcp-paradigm-routing-design.md`）：
+
+- 绑定入口：`PUT /api/v1/paradigm/{id}/binding`（body `{domain, isDefault}`），或 `POST /{id}/publish` 的 body 带 `{domain, setDefault}` 一步到位。
+- 查询入口：`GET /api/v1/paradigm/resolve?domain=`，未绑定返回 **200 + `{"bound":false}`** 而不是 404——404 与网络故障、URL 写错无法区分，调用方就得把「回落 legacy」和「服务坏了」当同一件事。它映射在 `/{id}` 之上（字面量段优先于路径变量，`ParadigmResolveWebMvcTest` 钉住）。
+- **publish 与 bind 不同事务**（绑定校验读域库、发布写控制库，一个事务跨不了）。绑定被拒时 publish 已提交，错误在响应的 `bindingError` 字段里而 HTTP 仍是 200——**别只看状态码**。
+
+四道绑定校验：`unknown_domain`（拼错的域会"绑定成功"然后永远匹配不上）· `paradigm_not_published` · `paradigm_not_servable`（必须以 `assemble`/输出槽 `contextPack` 结尾；`collect` 是评测用的裸候选）· **`paradigm_requires_identity`**（`scope_resolve` 引用了匿名读不到的库——MCP 不发 `X-KB-User`，只能读 `public` KB；判定复用运行时同一个 `authorize(..., null)` 防漂移，失败路径才二次查询把违规库名列进 `details`，因为运行时的 `kb_not_found` 故意不说）。
+
+`ParadigmBindingService` 里**顺序是承重的**：域库读（KB 校验，需 `DomainContext`）必须全部先做完并清掉 context，才能开控制库的事务——事务管理器坐在路由 DataSource 上、整个事务钉住一条连接，两者无法交错。
 
 ### 控制面集成（从 v4 移植回来的能力）
 
@@ -409,7 +438,24 @@ docker compose exec app supervisorctl restart mining
 
 **mining 的 `execution_engine` 是每 run 不可变、从 DB 读的。** legacy run 永不自动升级；`_run_legacy`/`StreamingPipeline` 是活代码（回退引擎），不能当废弃删。切换/回滚引擎绝不改已有 run 的 `execution_engine`/workflow 绑定字段/manifest/节点事件。
 
-**mcp_server 直连 serving、有硬编码远程 IP 兜底。** `BACKEND_URL` 默认 `http://121.89.90.178:8081`，只有 supervisord 把它覆盖成 localhost。它只暴露一个 tool `search_knowledge`（`POST /api/v1/search` 透传），transport 默认 `streamable-http`（模块 docstring 说 stdio 是过时的）。
+**mcp_server 直连 serving、有硬编码远程 IP 兜底。** `BACKEND_URL` 读环境变量 **`SERVING_URL`**，默认 `http://121.89.90.178:8081`，只有 supervisord 把它覆盖成 localhost（本地手测不设它就是在打线上那台）。transport 默认 `streamable-http`（模块 docstring 说 stdio 是过时的）。
+
+**mcp_server 暴露 2 个 tool，且不再是透传。**
+
+| tool | 打到哪 |
+|---|---|
+| `search_knowledge(query, domain, scope?, entities?, debug?)` | 先 `GET /api/v1/paradigm/resolve?domain=`，命中走 `POST /api/v1/paradigm/{id}/search`，否则回落 `POST /api/v1/search` |
+| `get_segment_fulltext(domain, refs, granularity?, window_radius?)` | `POST /api/v1/segments/fulltext`，同样先 resolve 并带上 `paradigm_id`——范式的 `scope_resolve` 圈定了语料，拿别的语料查这些 id 只会全部 not found |
+
+`health_check` 写了但**注释掉了**（`server.py:44`），只作内部 `_health_check()` 存在。原始文件不做成 tool：给 agent 灌 200 页 PDF 烧上下文却答不出 segment 文本没答出的东西；只有配了 `MCP_RAW_FILE_BASE_URL` 时才在响应里挂 `rawFileUrl`（默认关闭，因为 `SERVING_URL` 在容器里是 localhost，据它拼的链接在调用方机器上解析不到，比没链接更糟）。
+
+几条易误判的行为：
+- **resolve 刻意不缓存**——一次索引行查询相对 120s 检索预算可忽略，换来的是「绑定完下一次查询就生效」，不用重启、没有过期窗口。
+- **范式执行失败不回落 legacy**（只有 *resolve* 失败才回落——那时还没做出选择）。回落会让坏掉的绑定范式被无限期掩盖，并悄悄用运维没配置的引擎作答。
+- 两种引擎的响应被 `_normalize_paradigm_body` 归一成同一信封，**`_retrieval.engine` 是唯一判据**（`paradigm` / `legacy`）；`debug=true` 的逐节点 trace 挂在 `_retrieval.trace`，刻意避开 `debug` 键防与 legacy 撞车。
+- `scope` / `entities` 两个工具参数**后端根本不消费**，报在 `_retrieval.ignored_args` 里（报出来而不是吞掉）。
+- 回滚两条路：`MCP_PARADIGM_ROUTING=0`（要重启 mcp），或直接 `DELETE /api/v1/paradigm/{id}/binding`（下次调用自己回落，**不用重启**）。
+- 测试：`pytest mcp_server/tests/test_client_routing.py mcp_server/tests/test_client_fulltext.py`。
 
 **改了挖掘算子/范式/域包检索策略后，已挖文档不会自动重生**（内容哈希去重 → SKIP 复用旧 snapshot）。要应用新逻辑：重启 mining（加载新代码）+ 前端勾「强制重挖」（或换范式时自动 force_redo）。常见坑：① **检索单元 `table_row` 爆量**——已发布 workflow 的 manifest 编译期冻结算子参数，但域包 `retrieval_policy.table_row:"off"` 是**域级权威、会覆盖 manifest**（改算子默认值对已发布 manifest 无效）；② **移动文件后状态卡 `uploaded`**——移动/改名必须同步 `document_key`（见「KB 层」）；③ **挖掘请求延迟数秒**——后台线程冷导入 `mining.jobs.run`（~2.5s 占 GIL），已在 lifespan 预热，别再在请求路径里懒导入重模块。完整运维见 `docs/开发与发布流程.md`。
 
@@ -437,6 +483,8 @@ docker compose exec app supervisorctl restart mining
 | `docs/开发与发布流程.md` | ✅ **准确**，分支/测试/PR（merge commit 不 squash）/部署/挖掘运维的权威流程。改代码前应读（尤其「配置不读 .env」「测试只打 `_test` 库」「改挖掘逻辑要强制重挖」） |
 | `docs/kb-management-design.md`、`kb-management-implementation-plan.md`、`kb-filesystem-plan.md` | ✅ KB 中心化的需求/技术设计/实现计划，与已落地代码基本对得上，可作背景。注意仍是设计视角，个别表名/细节以源码为准 |
 | `docs/mining-workflow-rollout-runbook.md` | ✅ **准确**，挖掘 workflow 灰度/回滚的权威规程，与源码对得上（16 算子、控制库/域库边界、冻结 manifest、`MINING_RUN_SUBMISSION_ENGINE`） |
+| `docs/mcp-paradigm-routing-design.md` | ✅ 质量高，MCP↔范式域绑定的设计依据（数据模型、回落语义、响应归一）。**一处已被后续改动超越**：它写「保持单工具 `search_knowledge`」，现在是 2 个 tool（下钻工具是后加的） |
+| `docs/segment-fulltext-retrieval-design.md` | ✅ 质量高，原文下钻的设计依据；§0 那六条现状事实（`selectWithMeta` 空 scope 退化成不过滤、snapshot 1:N）本身就值得单读 |
 | `agent_serving_java/docs/ontology-retrieval-explained.md` | ✅ **准确**，与源码逐行对得上 |
 | `agent_serving_java/docs/检索范式使用说明.md` | ✅ 质量高。小偏差：算子实际 19 个（漏列 `entity_graph`） |
 | `agent_serving_java/docs/TODO-known-issues.md` | ✅ serving 侧「已确认未修复」问题台账（当前：语义缓存污染）。修前先看 |

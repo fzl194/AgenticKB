@@ -42,6 +42,22 @@
           <span v-else class="pd-list__muted">—</span>
         </template>
       </el-table-column>
+      <el-table-column label="Agent 可见" width="150">
+        <template #default="{ row }">
+          <el-tag
+            v-if="visibilityDisplay[row.id]?.state === 'visible'"
+            size="small" type="success"
+          >可见</el-tag>
+          <el-tooltip
+            v-else-if="visibilityDisplay[row.id]?.state === 'hidden'"
+            placement="top"
+            :content="reasonText(visibilityDisplay[row.id].reason, visibilityDisplay[row.id].details)"
+          >
+            <el-tag size="small" :type="visibilityDisplay[row.id].tagType">不可见</el-tag>
+          </el-tooltip>
+          <span v-else class="pd-list__muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="updatedAt" label="更新时间" width="180" />
       <el-table-column label="操作" width="250" fixed="right">
         <template #default="{ row }">
@@ -109,7 +125,16 @@
           <el-input v-model="form.name" placeholder="唯一名称，如 emb-only-baseline" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" :rows="2" />
+          <el-input
+            v-model="form.description"
+            type="textarea"
+            :rows="3"
+            placeholder="例：查 ODN 拓扑、端口占用与光路走向；不适合查参数表格"
+          />
+          <div class="pd-list__field-hint">
+            <strong>这段是给 AI 看的</strong>：说清什么问题该用这个范式。Agent 就是靠它决定选不选，
+            写成给人看的介绍会让它选不准。建议一两句话、200 字以内。
+          </div>
         </el-form-item>
         <el-form-item label="模板">
           <el-select v-model="form.template" style="width: 100%">
@@ -165,7 +190,77 @@ async function load() {
   } finally {
     loading.value = false
   }
+  loadVisibility()
 }
+
+// ---- Agent 可见性 ----
+
+/** paradigm id → visibility. Absent = not looked up (yet, or the catalog is unreachable). */
+const visibility = ref<Record<string, { visible: boolean; reason?: string; details?: string[] }>>({})
+
+/**
+ * Answers the question the binding dialog cannot: "I published it — can an agent use it?"
+ *
+ * Fetched separately from the list rather than folded into it, so a catalog outage degrades this
+ * one column to "—" instead of taking the whole page down with it. Not domain-filtered: the list
+ * itself is global, and a paradigm bound to another domain should still show why it is hidden.
+ */
+async function loadVisibility() {
+  try {
+    const catalog = await api.getMcpCatalog()
+    const next: Record<string, { visible: boolean; reason?: string; details?: string[] }> = {}
+    for (const e of catalog.paradigms) next[e.id] = { visible: true }
+    for (const h of catalog.hidden) {
+      next[h.id] = {
+        visible: false,
+        reason: h.reason,
+        details: h.undisclosedCount > 0
+          ? [...h.details, `另有 ${h.undisclosedCount} 个不可见的知识库`]
+          : h.details,
+      }
+    }
+    visibility.value = next
+  } catch (e) {
+    // Deliberately silent: the column falls back to "—". A toast on every list load would be
+    // noise about a feature the operator may not even be using.
+    console.warn('Failed to load the MCP catalog; agent visibility unavailable:', e)
+    visibility.value = {}
+  }
+}
+
+/**
+ * Per-row display state, derived once for every row so the template never has to null-check.
+ *
+ * `unknown` covers two different situations that look the same to an operator and need no
+ * distinction: the paradigm is unpublished (never in the catalog, and that is expected), or the
+ * catalog could not be fetched.
+ */
+const visibilityDisplay = computed(() => {
+  const out: Record<
+    string,
+    { state: 'unknown' | 'visible' | 'hidden'; reason?: string; details?: string[]; tagType: string }
+  > = {}
+  for (const p of paradigms.value) {
+    const known = p.status === 'active' && p.currentVersion >= 1
+      ? visibility.value[p.id]
+      : undefined
+    if (!known) {
+      out[p.id] = { state: 'unknown', tagType: 'info' }
+    } else if (known.visible) {
+      out[p.id] = { state: 'visible', tagType: 'success' }
+    } else {
+      out[p.id] = {
+        state: 'hidden',
+        reason: known.reason,
+        details: known.details,
+        // A collect terminus is a deliberate choice (evaluation paradigms are meant to be
+        // unservable), so it is grey. The rest are configuration to fix, so they are amber.
+        tagType: known.reason === 'not_servable' ? 'info' : 'warning',
+      }
+    }
+  }
+  return out
+})
 
 function openCreate() {
   form.value = { name: '', description: '', template: 'blank' }
@@ -307,23 +402,43 @@ async function doUnbind(row: ParadigmView) {
   }
 }
 
+/**
+ * Why a paradigm is unusable, in words.
+ *
+ * Shared by the binding dialog and the "Agent 可见" column on purpose: the two surfaces report the
+ * same underlying conditions (a `collect` terminus, non-public knowledge bases), and wording them
+ * differently would read as two unrelated problems. Binding prefixes "绑定失败"; the column shows
+ * the bare reason.
+ */
+function reasonText(code: string | undefined, details: string[] = []): string {
+  const detail = details.length ? `：${details.join('、')}` : ''
+  switch (code) {
+    case 'unknown_domain':
+      return '知识域不存在或已停用'
+    case 'paradigm_not_published':
+    case 'version_missing':
+      return '范式尚未发布，请先发布一个版本'
+    case 'paradigm_not_servable':
+    case 'not_servable':
+      return '已发布版本的终点不是 assemble。只有产出 ContextPack 的范式能给 Agent 用'
+    case 'paradigm_requires_identity':
+    case 'kb_not_anonymously_readable':
+      return `范式引用了非公开知识库${detail}。MCP 匿名调用读不到它们，请改为公开或从图中移除`
+    case 'unbound_kb_scope':
+      return '范式引用了知识库但未绑定知识域，无法核验可见性。绑定一个知识域即可'
+    case 'domain_unavailable':
+      return '该知识域的数据库当前连不上，无法核验可见性——这是部署问题，不是范式问题'
+    default:
+      return ''
+  }
+}
+
 /** Binding rejections carry a stable code; a raw code is useless to whoever is configuring this. */
 function bindErrMsg(e: unknown): string {
   const data = (e as { response?: { data?: { error?: string; message?: string; details?: string[] } } })
     ?.response?.data
-  const detail = data?.details?.length ? `：${data.details.join('、')}` : ''
-  switch (data?.error) {
-    case 'unknown_domain':
-      return '绑定失败：知识域不存在或已停用'
-    case 'paradigm_not_published':
-      return '绑定失败：范式尚未发布，请先发布一个版本'
-    case 'paradigm_not_servable':
-      return '绑定失败：已发布版本的终点不是 assemble。只有产出 ContextPack 的范式能绑定到知识域'
-    case 'paradigm_requires_identity':
-      return `绑定失败：范式引用了非公开知识库${detail}。MCP 匿名调用读不到它们，请改为公开或从图中移除`
-    default:
-      return '绑定失败：' + errMsg(e)
-  }
+  const known = reasonText(data?.error, data?.details ?? [])
+  return known ? '绑定失败：' + known : '绑定失败：' + errMsg(e)
 }
 
 function errMsg(e: unknown): string {

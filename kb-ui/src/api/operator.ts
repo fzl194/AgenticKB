@@ -1,7 +1,7 @@
 import { createProxyClient } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
 import type {
-  OperatorDef, ParadigmGraph, ParadigmView, ParadigmVersionView, RunResult,
+  McpCatalog, OperatorDef, ParadigmGraph, ParadigmView, ParadigmVersionView, RunResult,
 } from '@/types/operator'
 
 /**
@@ -22,6 +22,20 @@ export function useOperatorApi() {
     async getCatalog(): Promise<OperatorDef[]> {
       const { data } = await client.get('/api/v1/operator/catalog')
       return data.operators ?? []
+    },
+
+    /**
+     * Which published paradigms agents can actually use, and why the rest cannot.
+     *
+     * The `hidden` half only comes back because `createProxyClient('serving')` injects
+     * `X-KB-User` on every serving request — serving withholds it from anonymous callers since it
+     * names knowledge bases.
+     */
+    async getMcpCatalog(domain?: string): Promise<McpCatalog> {
+      const { data } = await client.get('/api/v1/paradigm/mcp-catalog', {
+        params: domain ? { domain } : undefined,
+      })
+      return { paradigms: data.paradigms ?? [], hidden: data.hidden ?? [] }
     },
 
     // ---- paradigm CRUD ----

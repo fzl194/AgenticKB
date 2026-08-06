@@ -110,7 +110,7 @@ mining 启动期（`knowledge_mining/mining/infra/control_plane.py` 已在拉控
 
 | 方法 | 路径 | 鉴权 | 用途 |
 |---|---|---|---|
-| POST | `/api/kb/auth/verify` | **内部**：`X-Internal-Auth` 头 = `auth.yaml.internal_verify_secret`（缺失/不符 → 403） | 验 `{username, password}` → `{ok, user:{username, display_name, site_role}}` 或 401。供 main_control 内部调用 |
+| POST | `/api/kb/auth/verify` | **内部**：`X-Internal-Auth` 头 = `auth.yaml.internal_verify_secret`（缺失/不符 → **401**，与 `current_user` 一致：未证明身份） | 验 `{username, password}` → `{ok, user:{username, display_name, site_role}}` 或 401。供 main_control 内部调用 |
 | GET | `/api/kb/users` | `require_admin` | 列用户（id/username/display_name/site_role/status/has_password） |
 | POST | `/api/kb/users` | `require_admin` | 建用户 `{username, password, display_name, site_role}` |
 | PATCH | `/api/kb/users/{id}` | `require_admin` | 改 display_name / site_role / status |
@@ -133,6 +133,8 @@ mining 启动期（`knowledge_mining/mining/infra/control_plane.py` 已在拉控
 ### 7.3 mining 启动期拉 `auth.yaml`
 
 `infra/control_plane.py` 增 `fetch_auth_config()`（复用 `_get_raw("auth")`）。app 启动时调用一次 → 跑 §5.2 播种。`internal_verify_secret` 也从这里取，存模块级供 `current_user` / verify 端点校验。
+
+**启动期 best-effort，不 fail-fast**：若控制面不可达，记 warning 并继续（与现有 `MiningDbConfig` 回落策略一致）—— 此时 `internal_verify_secret` 缺位，`current_user` 一律 401，mining 暂不可用直到下次 reload 拉到。提供运行期重新拉取路径（admin `reload-config` 触发，或定时重试）。
 
 ## 8. 后端 · main_control（保持纯 YAML 网关）
 
@@ -270,7 +272,7 @@ bootstrap:
 | 登录失败 | LoginView 提示"用户名或密码错误" |
 | member 触达 admin 路由 | 前端守卫挡回 /；后端 admin 白名单 / `require_admin` 也 403（双层） |
 | 网络错误 | 复用现有 `apiErrorDetail` |
-| mining verify 直连且无/错内部头 | 403 |
+| mining verify 直连且无/错内部头 | 401（与 current_user 统一） |
 | 表单输入校验 | LoginView/UserManagementTab 用 el-form rules（非空、密码长度 ≥ 8） |
 
 ## 12. 安全考量与边界
@@ -296,7 +298,7 @@ bootstrap:
 - `/api/kb/users/me/password`：旧密码错 → 拒，对 → 改成功
 - bootstrap 幂等 + **不变量**：无 admin 时播种；**已有 admin 时二次启动不改其 `password_hash`/`site_role`**（显式断言两字段不变 —— 防重蹈"每次操作扣两次额度"类静默回归）
 - `upsert_user_by_username` 冲突不变量：对已存在 admin 用户名重复 upsert，`site_role`/`password_hash` 不变
-- **conftest 调整**：所有打 mining `/api/kb/*` 的测试请求须带 `X-Internal-Auth` 头（取测试用 secret）；既有 `test_mining.py`/`test_kb_db.py` 等套件的请求 fixture 同步补该头，保持绿。
+- **conftest 调整**：所有打 mining `/api/kb/*` 的测试请求须带 `X-Internal-Auth` 头（取测试用 secret）；既有 `test_mining.py`/`test_kb_db.py` 等套件的请求 fixture 同步补该头，保持绿。**做法**：在 `conftest.py` 暴露一个共享 `auth_headers` fixture（返回 `{'X-KB-User': <测试用户>, 'X-Internal-Auth': <测试 secret>}`），各测试模块统一引用，最小化每文件改动。
 
 ### 13.2 Python · main_control（TestClient，无 DB，monkeypatch mining verify）
 

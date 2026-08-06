@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from knowledge_mining.mining.kb.routes.documents import router as docs_router
 from knowledge_mining.mining.kb.routes.kbs import router as kb_router
 from knowledge_mining.mining.kb.routes.mining import router as kb_mining_router
+from knowledge_mining.tests.conftest import kb_headers
 
 pytestmark = pytest.mark.asyncio
 DOMAIN = "cloud_core_network"
@@ -69,13 +70,13 @@ async def _make_kb_with_upload(c, headers, name="KBm"):
 
 async def test_mine_not_found(async_pool, upload_root):
     async with await _client(async_pool) as c:
-        r = await c.post("/api/kb/nope-kb/mine", headers={"X-KB-User": "alice"})
+        r = await c.post("/api/kb/nope-kb/mine", headers=kb_headers("alice"))
         assert r.status_code == 404
 
 
 async def test_mine_other_user_private_404(async_pool, upload_root):
     async with await _client(async_pool) as c:
-        h_a, h_b = {"X-KB-User": "alice"}, {"X-KB-User": "bob"}
+        h_a, h_b = kb_headers("alice"), kb_headers("bob")
         kb_id = await _make_kb_with_upload(c, h_a, name="priv-mine")
         r = await c.post(f"/api/kb/{kb_id}/mine", headers=h_b)
         assert r.status_code == 404  # bob 看不到 alice 的 private
@@ -83,7 +84,7 @@ async def test_mine_other_user_private_404(async_pool, upload_root):
 
 async def test_mine_viewer_forbidden(async_pool, upload_root):
     async with await _client(async_pool) as c:
-        h_a, h_b = {"X-KB-User": "alice"}, {"X-KB-User": "bob"}
+        h_a, h_b = kb_headers("alice"), kb_headers("bob")
         kb_id = await _make_kb_with_upload(c, h_a, name="shared-mine")
         await c.post("/api/kb", json={"domain": DOMAIN, "name": "tmp"}, headers=h_b)  # upsert bob
         await c.post(f"/api/kb/{kb_id}/members", json={"username": "bob", "role": "viewer"}, headers=h_a)
@@ -93,7 +94,7 @@ async def test_mine_viewer_forbidden(async_pool, upload_root):
 
 async def test_mine_no_uploads_400(async_pool, upload_root):
     async with await _client(async_pool) as c:
-        h = {"X-KB-User": "alice"}
+        h = kb_headers("alice")
         kb_id = (await c.post("/api/kb", json={"domain": DOMAIN, "name": "empty-kb"}, headers=h)).json()["id"]
         r = await c.post(f"/api/kb/{kb_id}/mine", headers=h)
         assert r.status_code == 400
@@ -111,7 +112,7 @@ async def test_mine_owner_202_creates_run_row(async_pool, upload_root, monkeypat
     )
 
     async with await _client(async_pool) as c:
-        h = {"X-KB-User": "alice"}
+        h = kb_headers("alice")
         kb_id = await _make_kb_with_upload(c, h, name="ok-mine")
         # KB 必须先选挖掘范式（mine_kb 校验 mining_workflow_id 非空，否则 400）
         pr = await c.patch(f"/api/kb/{kb_id}", json={"mining_workflow_id": "wf-test"}, headers=h)
@@ -150,7 +151,7 @@ async def test_mine_force_redo_propagates_to_metadata(async_pool, upload_root, m
         lambda _d: {"default_channel": "prod"},
     )
     async with await _client(async_pool) as c:
-        h = {"X-KB-User": "alice"}
+        h = kb_headers("alice")
         kb_id = await _make_kb_with_upload(c, h, name="force-mine")
         await c.patch(f"/api/kb/{kb_id}", json={"mining_workflow_id": "wf-test"}, headers=h)
         r = await c.post(f"/api/kb/{kb_id}/mine", json={"force_redo": True}, headers=h)
@@ -175,7 +176,7 @@ async def test_mine_auto_force_redo_on_signature_change(async_pool, upload_root,
         lambda _d: {"default_channel": "prod"},
     )
     async with await _client(async_pool) as c:
-        h = {"X-KB-User": "alice"}
+        h = kb_headers("alice")
         kb_id = await _make_kb_with_upload(c, h, name="sig-mine")
         await c.patch(f"/api/kb/{kb_id}", json={"mining_workflow_id": "wf-test"}, headers=h)
         # 伪造一条已完成 run，签名与本次(stub: wf-test:1:graph-hash-test)不同

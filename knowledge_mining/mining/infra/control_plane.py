@@ -23,6 +23,7 @@ CONTROL_PLANE_BASE_URL = os.getenv("CONTROL_PLANE_BASE_URL", "http://localhost:8
 
 _service_config_cache: dict[str, Any] | None = None
 _database_config_cache: dict[str, Any] | None = None
+_auth_config_cache: dict[str, Any] | None = None
 
 
 def _get_raw(service_name: str, *, timeout: float = 5.0) -> dict[str, Any]:
@@ -84,3 +85,32 @@ def override_upload_root(root: str) -> None:
     if _service_config_cache is None:
         set_mining_service_config({})
     _service_config_cache.setdefault("upload", {})["root"] = root
+
+
+# ── auth.yaml（Phase 2：内部校验凭证 + bootstrap）──────────────────────────────
+def fetch_auth_config(*, force: bool = False) -> dict[str, Any]:
+    """拉取并缓存 auth.yaml。best-effort：控制面不可达抛异常由调用方兜底。"""
+    global _auth_config_cache
+    if _auth_config_cache is None or force:
+        _auth_config_cache = _get_raw("auth")
+    return _auth_config_cache
+
+
+def get_auth_config() -> dict[str, Any]:
+    if _auth_config_cache is None:
+        return fetch_auth_config()
+    return _auth_config_cache
+
+
+def set_auth_config(cfg: dict[str, Any]) -> None:
+    """预填 auth 配置缓存（启动 / 测试用）。"""
+    global _auth_config_cache
+    _auth_config_cache = cfg
+
+
+def get_internal_verify_secret() -> str | None:
+    """current_user 校验 X-Internal-Auth 用的内部凭证。缓存未就绪 → None（current_user 一律 401）。"""
+    if _auth_config_cache is None:
+        return None
+    val = _auth_config_cache.get("internal_verify_secret")
+    return val if isinstance(val, str) and val else None

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from knowledge_mining.mining.kb.routes.kbs import router as kb_router
+from knowledge_mining.tests.conftest import kb_headers
 
 pytestmark = pytest.mark.asyncio
 DOMAIN = "cloud_core_network"
@@ -26,7 +27,7 @@ async def test_auth_missing_header_rejected(async_pool):
 
 async def test_create_list_get_update_delete(async_pool):
     async with await _client(async_pool) as c:
-        h = {"X-KB-User": "alice"}
+        h = kb_headers("alice")
         r = await c.post("/api/kb", json={"domain": DOMAIN, "name": "KB-A", "visibility": "private"}, headers=h)
         assert r.status_code == 201, r.text
         kb_id = r.json()["id"]
@@ -49,7 +50,7 @@ async def test_create_list_get_update_delete(async_pool):
 
 async def test_other_user_cannot_see_private(async_pool):
     async with await _client(async_pool) as c:
-        h_alice, h_bob = {"X-KB-User": "alice"}, {"X-KB-User": "bob"}
+        h_alice, h_bob = kb_headers("alice"), kb_headers("bob")
         r = await c.post("/api/kb", json={"domain": DOMAIN, "name": "priv", "visibility": "private"}, headers=h_alice)
         kb_id = r.json()["id"]
 
@@ -62,7 +63,7 @@ async def test_other_user_cannot_see_private(async_pool):
 
 async def test_shared_member_read_but_not_write(async_pool):
     async with await _client(async_pool) as c:
-        h_alice, h_bob = {"X-KB-User": "alice"}, {"X-KB-User": "bob"}
+        h_alice, h_bob = kb_headers("alice"), kb_headers("bob")
         r = await c.post("/api/kb", json={"domain": DOMAIN, "name": "sh", "visibility": "shared"}, headers=h_alice)
         kb_id = r.json()["id"]
 
@@ -91,13 +92,13 @@ async def test_shared_member_read_but_not_write(async_pool):
 
 async def test_invalid_domain_rejected(async_pool):
     async with await _client(async_pool) as c:
-        r = await c.post("/api/kb", json={"domain": "no-such-domain", "name": "X"}, headers={"X-KB-User": "alice"})
+        r = await c.post("/api/kb", json={"domain": "no-such-domain", "name": "X"}, headers=kb_headers("alice"))
         assert r.status_code == 400
 
 
 async def test_duplicate_name_conflict(async_pool):
     async with await _client(async_pool) as c:
-        h = {"X-KB-User": "alice"}
+        h = kb_headers("alice")
         await c.post("/api/kb", json={"domain": DOMAIN, "name": "dup"}, headers=h)
         r = await c.post("/api/kb", json={"domain": DOMAIN, "name": "dup"}, headers=h)
         assert r.status_code == 409

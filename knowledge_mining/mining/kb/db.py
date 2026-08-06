@@ -87,18 +87,112 @@ class KbDB:
     async def upsert_user_by_username(
         self, username: str, *, display_name: str | None = None
     ) -> dict[str, Any]:
-        """Idempotent user upsert by username (Phase 1: header-injected identity)."""
+        """Idempotent user upsert by username.
+
+        冲突时只更新 display_name —— 绝不动 site_role / password_hash（§5.3 不变量），
+        否则某 admin 用户的日常 KB 流量会把他降级或清空密码。
+        """
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """INSERT INTO kb_users (id, username, display_name, status, created_at)
                    VALUES (%(id)s, %(u)s, %(d)s, 'active', %(t)s)
                    ON CONFLICT (username) DO UPDATE
                      SET display_name = COALESCE(%(d)s, kb_users.display_name)
-                   RETURNING id, username, display_name, status""",
+                   RETURNING id, username, display_name, status, site_role""",
                 {"id": _new_id(), "u": username, "d": display_name, "t": _utcnow()},
             )
             row = await cur.fetchone()
             return dict(row)  # type: ignore[arg-type]
+
+    # ---------------------------------------------------- user management (Phase 2)
+
+    async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, username, display_name, status, site_role, password_hash, created_at
+                   FROM kb_users WHERE username = %s""",
+                [username],
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def get_user(self, user_id: str) -> dict[str, Any] | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, username, display_name, status, site_role, password_hash, created_at
+                   FROM kb_users WHERE id = %s""",
+                [user_id],
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def list_users(self) -> list[dict[str, Any]]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, username, display_name, status, site_role,
+                          (password_hash IS NOT NULL) AS has_password, created_at
+                   FROM kb_users ORDER BY created_at""",
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def create_user(
+        self, *, username: str, password_hash: str | None = None,
+        site_role: str = "member", display_name: str | None = None,
+    ) -> dict[str, Any]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """INSERT INTO kb_users (id, username, display_name, status, created_at,
+                                         password_hash, site_role)
+                   VALUES (%(id)s, %(u)s, %(d)s, 'active', %(t)s, %(ph)s, %(sr)s)
+                   RETURNING id, username, display_name, status, site_role, password_hash, created_at""",
+                {"id": _new_id(), "u": username, "d": display_name, "t": _utcnow(),
+                 "ph": password_hash, "sr": site_role},
+            )
+            return dict(await cur.fetchone())  # type: ignore[arg-type]
+
+    async def update_user(
+        self, user_id: str, *,
+        display_name: str | None = None, site_role: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        """PATCH 风格：只更新提供的字段；未提供的不动。None = 不传（非 SET NULL）。"""
+        sets: list[str] = []
+        params: dict[str, Any] = {"id": user_id}
+        if display_name is not None:
+            params["d"] = display_name
+            sets.append("display_name = %(d)s")
+        if site_role is not None:
+            params["sr"] = site_role
+            sets.append("site_role = %(sr)s")
+        if status is not None:
+            params["st"] = status
+            sets.append("status = %(st)s")
+        if not sets:
+            return await self.get_user(user_id)
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "UPDATE kb_users SET " + ", ".join(sets) + " WHERE id = %(id)s "
+                "RETURNING id, username, display_name, status, site_role, created_at",
+                params,
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def set_password_hash(self, user_id: str, password_hash: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE kb_users SET password_hash = %s WHERE id = %s",
+                [password_hash, user_id],
+            )
+
+    async def has_admin(self) -> bool:
+        """是否存在可登录的 admin（site_role='admin' AND password_hash IS NOT NULL）。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT 1 FROM kb_users "
+                "WHERE site_role='admin' AND password_hash IS NOT NULL LIMIT 1"
+            )
+            return (await cur.fetchone()) is not None
 
     # -------------------------------------------------------- knowledge bases
 

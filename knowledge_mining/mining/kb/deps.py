@@ -23,3 +23,8 @@ async def get_document_service(request: Request) -> DocumentService:
 async def get_folder_service(request: Request):
     from knowledge_mining.mining.kb.services.folder_service import FolderService
     return FolderService(KbDB(request.app.state.pg_pool))
+
+
+async def get_user_service(request: Request) -> UserService:
+    from knowledge_mining.mining.kb.services.user_service import UserService
+    return UserService(KbDB(request.app.state.pg_pool))

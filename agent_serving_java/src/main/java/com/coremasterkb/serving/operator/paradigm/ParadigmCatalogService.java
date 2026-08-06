@@ -62,6 +62,10 @@ public class ParadigmCatalogService {
     static final String NOT_SERVABLE = "not_servable";
     /** Scopes knowledge bases an anonymous caller cannot read. */
     static final String KB_NOT_READABLE = "kb_not_anonymously_readable";
+    /** Scopes knowledge bases but is bound to no domain, so readability cannot be verified. */
+    static final String UNBOUND_KB_SCOPE = "unbound_kb_scope";
+    /** {@code current_version} points at a version row that does not exist. */
+    static final String VERSION_MISSING = "version_missing";
 
     private final ParadigmService paradigmService;
     private final ParadigmVersionMapper versionMapper;
@@ -98,12 +102,18 @@ public class ParadigmCatalogService {
 
         for (int i = 0; i < candidates.size(); i++) {
             Candidate c = candidates.get(i);
-            if (!ParadigmGraphs.isServable(c.graph())) {
+            if (c.graph() == null) {
+                verdicts[i] = Verdict.hidden(VERSION_MISSING);
+            } else if (!ParadigmGraphs.isServable(c.graph())) {
                 verdicts[i] = Verdict.hidden(NOT_SERVABLE);
             } else if (c.kbIds().isEmpty()) {
                 // No KB scope → resolves against the domain's active release, which any domain can
                 // do. Nothing to verify against a domain DB, so no round trip at all.
                 verdicts[i] = Verdict.VISIBLE;
+            } else if (c.domain() == null) {
+                // kb ids are unique per domain; without one there is nothing to resolve them
+                // against, and executing would be a coin flip.
+                verdicts[i] = Verdict.hidden(UNBOUND_KB_SCOPE);
             } else {
                 byDomain.computeIfAbsent(c.domain(), d -> new ArrayList<>()).add(i);
             }
@@ -126,6 +136,11 @@ public class ParadigmCatalogService {
         List<Candidate> out = new ArrayList<>();
         for (ParadigmEntity p : paradigmService.listPublished()) {
             String domain = blankToNull(p.getBoundDomain());
+            // A domain-agnostic paradigm (no binding) stays in a filtered listing: the caller
+            // supplies the domain at execution time, so it is usable in every one of them.
+            if (domainFilter != null && domain != null && !domainFilter.equals(domain)) {
+                continue;
+            }
             JsonNode graph = graphOf(p);
             out.add(new Candidate(p, domain, graph,
                     graph != null ? ParadigmGraphs.kbIdsOf(graph) : List.of()));
@@ -139,7 +154,8 @@ public class ParadigmCatalogService {
      * <p>Read straight from the version mapper rather than through
      * {@code ParadigmService.resolveExecutableGraph}: that would re-fetch the entity we already
      * hold, and it throws on a missing version. A catalog listing must degrade one row instead of
-     * failing the whole request.</p>
+     * failing the whole request, so a dangling {@code current_version} becomes
+     * {@link #VERSION_MISSING}.</p>
      */
     private JsonNode graphOf(ParadigmEntity p) {
         try {
@@ -210,7 +226,7 @@ public class ParadigmCatalogService {
                         c.entity().getCurrentVersion(), c.entity().getIsDefault()));
             } else {
                 hidden.add(new Hidden(c.entity().getId(), c.entity().getName(),
-                        v != null ? v.reason() : NOT_SERVABLE, List.of(), 0));
+                        v != null ? v.reason() : VERSION_MISSING, List.of(), 0));
             }
         }
         log.debug("[paradigm/catalog] visible={} hidden={}", visible.size(), hidden.size());

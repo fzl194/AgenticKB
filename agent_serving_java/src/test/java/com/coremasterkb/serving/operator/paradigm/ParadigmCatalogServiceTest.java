@@ -18,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -26,7 +27,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The connection-orchestration contract, all mocked (no DB).
+ * Catalog visibility rules + the connection-orchestration contract, all mocked (no DB).
  */
 @DisplayName("ParadigmCatalogService")
 class ParadigmCatalogServiceTest {
@@ -34,6 +35,10 @@ class ParadigmCatalogServiceTest {
     private static final String SERVABLE = """
             {"nodes":[{"nodeId":"asm","operatorType":"assemble"}],
              "output":{"nodeId":"asm","slot":"contextPack"}}""";
+
+    private static final String COLLECT_ONLY = """
+            {"nodes":[{"nodeId":"out","operatorType":"collect"}],
+             "output":{"nodeId":"out","slot":"candidates"}}""";
 
     private static final String SERVABLE_WITH_KBS = """
             {"nodes":[{"nodeId":"sc","operatorType":"scope_resolve",
@@ -93,6 +98,11 @@ class ParadigmCatalogServiceTest {
 
     private static List<String> idsOf(List<ParadigmCatalogService.Entry> entries) {
         return entries.stream().map(ParadigmCatalogService.Entry::id).toList();
+    }
+
+    private static ParadigmCatalogService.Hidden hiddenOf(
+            ParadigmCatalogService.Catalog c, String id) {
+        return c.hidden().stream().filter(h -> h.id().equals(id)).findFirst().orElseThrow();
     }
 
     // =====================================================================================
@@ -188,4 +198,133 @@ class ParadigmCatalogServiceTest {
         }
     }
 
+    // =====================================================================================
+    // Visibility rules
+    // =====================================================================================
+
+    @Nested
+    @DisplayName("visibility")
+    class Visibility {
+
+        @Test
+        @DisplayName("published + servable + anonymously readable → visible")
+        void visibleWhenAllThreeHold() {
+            give("pd-1", "ODN 拓扑排障", "odn", true, SERVABLE_WITH_KBS);
+
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            assertThat(c.hidden()).isEmpty();
+            assertThat(c.paradigms()).singleElement().satisfies(e -> {
+                assertThat(e.id()).isEqualTo("pd-1");
+                assertThat(e.name()).isEqualTo("ODN 拓扑排障");
+                assertThat(e.description()).isEqualTo("desc of ODN 拓扑排障");
+                assertThat(e.domain()).isEqualTo("odn");
+                assertThat(e.version()).isEqualTo(3);
+                assertThat(e.isDomainDefault()).isTrue();
+            });
+        }
+
+        @Test
+        @DisplayName("collect terminus → hidden(not_servable)")
+        void collectIsHidden() {
+            give("pd-1", "评测基线", "odn", false, COLLECT_ONLY);
+
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            assertThat(c.paradigms()).isEmpty();
+            assertThat(hiddenOf(c, "pd-1").reason())
+                    .isEqualTo(ParadigmCatalogService.NOT_SERVABLE);
+        }
+
+        @Test
+        @DisplayName("kbIds an anonymous caller cannot read → hidden(kb_not_anonymously_readable)")
+        void unreadableKbsAreHidden() {
+            give("pd-1", "内部资料", "odn", false, SERVABLE_WITH_KBS);
+            when(kbAccessService.authorize(eq("odn"), anyList(), isNull()))
+                    .thenThrow(new IllegalArgumentException("kb_not_found"));
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            assertThat(c.paradigms()).isEmpty();
+            assertThat(hiddenOf(c, "pd-1").reason())
+                    .isEqualTo(ParadigmCatalogService.KB_NOT_READABLE);
+        }
+
+        @Test
+        @DisplayName("kbIds but no bound domain → hidden(unbound_kb_scope), unverifiable")
+        void unboundKbScopeIsHidden() {
+            give("pd-1", "无绑定", null, false, SERVABLE_WITH_KBS);
+
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            assertThat(hiddenOf(c, "pd-1").reason())
+                    .isEqualTo(ParadigmCatalogService.UNBOUND_KB_SCOPE);
+            verify(poolManager, never()).getDataSource(anyString());
+        }
+
+        @Test
+        @DisplayName("no kbIds and no binding → visible with a null domain (caller supplies it)")
+        void unscopedUnboundIsDomainAgnostic() {
+            give("pd-1", "通用", null, false, SERVABLE);
+
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            assertThat(c.paradigms()).singleElement()
+                    .extracting(ParadigmCatalogService.Entry::domain).isNull();
+        }
+
+        @Test
+        @DisplayName("current_version pointing at a missing row → hidden(version_missing), not a 500")
+        void danglingVersionIsHiddenNotFatal() {
+            give("pd-1", "坏行", "odn", false, null);   // no version row stubbed
+            give("pd-2", "好行", "odn", false, SERVABLE);
+
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            assertThat(hiddenOf(c, "pd-1").reason())
+                    .isEqualTo(ParadigmCatalogService.VERSION_MISSING);
+            assertThat(idsOf(c.paradigms())).containsExactly("pd-2");
+        }
+    }
+
+    // =====================================================================================
+    // Domain filter
+    // =====================================================================================
+
+    @Nested
+    @DisplayName("domain filter")
+    class Filter {
+
+        @Test
+        @DisplayName("keeps the domain's own paradigms and the domain-agnostic ones")
+        void keepsOwnAndAgnostic() {
+            give("pd-odn", "odn", "odn", false, SERVABLE);
+            give("pd-ccn", "ccn", "cloud_core_network", false, SERVABLE);
+            give("pd-any", "any", null, false, SERVABLE);
+
+            ParadigmCatalogService.Catalog c = service.build("odn", null);
+
+            assertThat(idsOf(c.paradigms())).containsExactly("pd-odn", "pd-any");
+        }
+
+        @Test
+        @DisplayName("filters hidden entries too — another domain's problems are not this one's")
+        void filtersHiddenAsWell() {
+            give("pd-ccn", "ccn", "cloud_core_network", false, COLLECT_ONLY);
+
+            ParadigmCatalogService.Catalog c = service.build("odn", "admin");
+
+            assertThat(c.paradigms()).isEmpty();
+            assertThat(c.hidden()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("no filter returns every domain")
+        void noFilterReturnsEverything() {
+            give("pd-odn", "odn", "odn", false, SERVABLE);
+            give("pd-ccn", "ccn", "cloud_core_network", false, SERVABLE);
+
+            assertThat(idsOf(service.build(null, null).paradigms()))
+                    .containsExactly("pd-odn", "pd-ccn");
+        }
+    }
 }

@@ -3,6 +3,7 @@ package com.coremasterkb.serving.operator.paradigm;
 import com.coremasterkb.serving.application.KbAccessService;
 import com.coremasterkb.serving.domainpack.DomainContext;
 import com.coremasterkb.serving.domainpack.DomainPoolManager;
+import com.coremasterkb.serving.mapper.KnowledgeBaseMapper;
 import com.coremasterkb.serving.operator.paradigm.mapper.ParadigmVersionMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,20 +37,21 @@ class ParadigmCatalogServiceTest {
             {"nodes":[{"nodeId":"asm","operatorType":"assemble"}],
              "output":{"nodeId":"asm","slot":"contextPack"}}""";
 
-    private static final String COLLECT_ONLY = """
-            {"nodes":[{"nodeId":"out","operatorType":"collect"}],
-             "output":{"nodeId":"out","slot":"candidates"}}""";
-
     private static final String SERVABLE_WITH_KBS = """
             {"nodes":[{"nodeId":"sc","operatorType":"scope_resolve",
                        "params":{"kbIds":["kb-a","kb-b"]}},
                       {"nodeId":"asm","operatorType":"assemble"}],
              "output":{"nodeId":"asm","slot":"contextPack"}}""";
 
+    private static final String COLLECT_ONLY = """
+            {"nodes":[{"nodeId":"out","operatorType":"collect"}],
+             "output":{"nodeId":"out","slot":"candidates"}}""";
+
     private ParadigmService paradigmService;
     private ParadigmVersionMapper versionMapper;
     private DomainPoolManager poolManager;
     private KbAccessService kbAccessService;
+    private KnowledgeBaseMapper knowledgeBaseMapper;
     private ParadigmCatalogService service;
 
     private final List<ParadigmEntity> published = new ArrayList<>();
@@ -60,8 +62,9 @@ class ParadigmCatalogServiceTest {
         versionMapper = mock(ParadigmVersionMapper.class);
         poolManager = mock(DomainPoolManager.class);
         kbAccessService = mock(KbAccessService.class);
+        knowledgeBaseMapper = mock(KnowledgeBaseMapper.class);
         service = new ParadigmCatalogService(
-                paradigmService, versionMapper, poolManager, kbAccessService);
+                paradigmService, versionMapper, poolManager, kbAccessService, knowledgeBaseMapper);
         published.clear();
         when(paradigmService.listPublished()).thenAnswer(inv -> List.copyOf(published));
         // Default: every KB is anonymously readable. Tests that care override it.
@@ -242,6 +245,9 @@ class ParadigmCatalogServiceTest {
             give("pd-1", "内部资料", "odn", false, SERVABLE_WITH_KBS);
             when(kbAccessService.authorize(eq("odn"), anyList(), isNull()))
                     .thenThrow(new IllegalArgumentException("kb_not_found"));
+            when(knowledgeBaseMapper.selectAccessibleKbIds(eq("odn"), anyList(), isNull()))
+                    .thenReturn(List.of("kb-a"));
+
             ParadigmCatalogService.Catalog c = service.build(null, null);
 
             assertThat(c.paradigms()).isEmpty();
@@ -283,6 +289,92 @@ class ParadigmCatalogServiceTest {
             assertThat(hiddenOf(c, "pd-1").reason())
                     .isEqualTo(ParadigmCatalogService.VERSION_MISSING);
             assertThat(idsOf(c.paradigms())).containsExactly("pd-2");
+        }
+    }
+
+    // =====================================================================================
+    // Degradation
+    // =====================================================================================
+
+    @Nested
+    @DisplayName("degradation")
+    class Degradation {
+
+        /**
+         * One domain's database being down must not blank out the other domains' paradigms — the
+         * same reasoning that keeps the MCP client's tool set when a catalog fetch fails.
+         */
+        @Test
+        @DisplayName("an unreachable domain hides only its own paradigms")
+        void unreachableDomainIsConfined() {
+            give("pd-1", "odn one", "odn", false, SERVABLE_WITH_KBS);
+            give("pd-2", "ccn one", "cloud_core_network", false, SERVABLE_WITH_KBS);
+            when(poolManager.getDataSource("odn"))
+                    .thenThrow(new IllegalStateException("domain_database_unavailable"));
+
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            assertThat(hiddenOf(c, "pd-1").reason())
+                    .isEqualTo(ParadigmCatalogService.DOMAIN_UNAVAILABLE);
+            assertThat(idsOf(c.paradigms())).containsExactly("pd-2");
+            assertThat(DomainContext.get()).as("context must not leak from the failed group").isNull();
+        }
+
+        @Test
+        @DisplayName("a mapper blowing up mid-group hides that group, context still cleared")
+        void mapperFailureIsConfined() {
+            give("pd-1", "odn one", "odn", false, SERVABLE_WITH_KBS);
+            when(kbAccessService.authorize(eq("odn"), anyList(), isNull()))
+                    .thenThrow(new RuntimeException("connection reset"));
+
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            assertThat(hiddenOf(c, "pd-1").reason())
+                    .isEqualTo(ParadigmCatalogService.DOMAIN_UNAVAILABLE);
+            assertThat(DomainContext.get()).isNull();
+        }
+    }
+
+    // =====================================================================================
+    // Disclosure of hidden details
+    // =====================================================================================
+
+    @Nested
+    @DisplayName("hidden details disclosure")
+    class Disclosure {
+
+        @BeforeEach
+        void kbsAreNotAnonymouslyReadable() {
+            give("pd-1", "内部资料", "odn", false, SERVABLE_WITH_KBS);
+            when(kbAccessService.authorize(eq("odn"), anyList(), isNull()))
+                    .thenThrow(new IllegalArgumentException("kb_not_found"));
+            when(knowledgeBaseMapper.selectAccessibleKbIds(eq("odn"), anyList(), isNull()))
+                    .thenReturn(List.of());          // neither kb is public
+        }
+
+        @Test
+        @DisplayName("anonymous caller is told how many, never which")
+        void anonymousGetsCountOnly() {
+            ParadigmCatalogService.Catalog c = service.build(null, null);
+
+            ParadigmCatalogService.Hidden h = hiddenOf(c, "pd-1");
+            assertThat(h.details()).isEmpty();
+            assertThat(h.undisclosedCount()).isEqualTo(2);
+            // No second query: there is no identity to filter by, so none is issued.
+            verify(knowledgeBaseMapper, never()).selectAccessibleKbIds(anyString(), anyList(), anyString());
+        }
+
+        @Test
+        @DisplayName("identified caller is told only about the KBs they can already see")
+        void identifiedCallerSeesOnlyTheirOwn() {
+            when(knowledgeBaseMapper.selectAccessibleKbIds(eq("odn"), anyList(), eq("admin")))
+                    .thenReturn(List.of("kb-a"));
+
+            ParadigmCatalogService.Catalog c = service.build(null, "admin");
+
+            ParadigmCatalogService.Hidden h = hiddenOf(c, "pd-1");
+            assertThat(h.details()).containsExactly("kb-a");
+            assertThat(h.undisclosedCount()).as("kb-b stays unnamed").isEqualTo(1);
         }
     }
 

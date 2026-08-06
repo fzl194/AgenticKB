@@ -84,6 +84,40 @@ export interface ParadigmView {
   boundAt: string | null
 }
 
+/** One paradigm an anonymous MCP caller can actually use. */
+export interface McpCatalogEntry {
+  id: string
+  name: string
+  description: string | null
+  /** Bound domain, or null when the paradigm works in any of them. */
+  domain: string | null
+  version: number
+  isDomainDefault: boolean
+}
+
+/**
+ * Why a published paradigm is NOT offered to agents.
+ *
+ * Only returned to an identified caller — `details` names knowledge bases, and serving withholds
+ * their existence from anonymous ones.
+ */
+export interface McpCatalogHidden {
+  id: string
+  name: string
+  /** Stable code: not_servable | kb_not_anonymously_readable | unbound_kb_scope |
+   *  domain_unavailable | version_missing */
+  reason: string
+  /** Offending kb ids this user is allowed to be told about. */
+  details: string[]
+  /** How many more there are that they are not. */
+  undisclosedCount: number
+}
+
+export interface McpCatalog {
+  paradigms: McpCatalogEntry[]
+  hidden: McpCatalogHidden[]
+}
+
 export interface ParadigmVersionView {
   id: string
   paradigmId: string

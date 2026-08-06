@@ -1,6 +1,7 @@
 package com.coremasterkb.serving.operator.api;
 
 import com.coremasterkb.serving.operator.paradigm.ParadigmBindingService;
+import com.coremasterkb.serving.operator.paradigm.ParadigmCatalogService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmEntity;
 import com.coremasterkb.serving.operator.paradigm.ParadigmNotFoundException;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
@@ -41,6 +42,7 @@ class ParadigmResolveWebMvcTest {
                 .standaloneSetup(new ParadigmController(
                         paradigmService,
                         mock(ParadigmBindingService.class),
+                        mock(ParadigmCatalogService.class),
                         mock(ParadigmExecutionService.class)))
                 .setControllerAdvice(new OperatorExceptionHandler())
                 .build();

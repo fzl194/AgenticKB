@@ -1,0 +1,54 @@
+# Test-only domain registry: the shipped domains, with NO inline `database:` blocks.
+#
+# Why this file exists. The real main_control_service/config/domain_registry.yaml gives all four
+# domains an inline `database:` block pointing at the production host. Any test that routes by
+# domain therefore opens a pool to production — and DomainPoolManager.getDataSource runs
+# ensureSchema (CREATE TABLE IF NOT EXISTS ...) on every pool it builds, so it runs DDL there too.
+# DomainRoutingIT's Javadoc records having been fixed for exactly this.
+#
+# With no `database:` block, DomainPoolManager reuses the default DataSource — which under the
+# test-pg profile is the disposable local test database. Domain routing still exercises its real
+# code path; it just lands somewhere safe.
+#
+# Keep the domain ids, channels and scenario_pack names in sync with the real registry: tests read
+# scenario packs from the real directory (serving.scenario-packs-dir), so a name that does not
+# exist there would silently fall back to ServingDomainProfile.defaults().
+default_domain: cloud_core_network
+
+domains:
+  cloud_core_network:
+    display_name: Cloud Core Network
+    enabled: true
+    default_channel: prod
+    scenario_pack: cloud_core_network
+    services:
+      mining_url: http://localhost:8901
+      serving_url: http://localhost:8081
+      llm_url: http://localhost:8900
+  generic:
+    display_name: Generic
+    enabled: true
+    default_channel: prod
+    scenario_pack: generic
+    services:
+      mining_url: http://localhost:8901
+      serving_url: http://localhost:8081
+      llm_url: http://localhost:8900
+  civil_engineering:
+    display_name: Civil Engineering
+    enabled: true
+    default_channel: prod
+    scenario_pack: civil_engineering
+    services:
+      mining_url: http://localhost:8901
+      serving_url: http://localhost:8081
+      llm_url: http://localhost:8900
+  odn:
+    display_name: ODN
+    enabled: true
+    default_channel: prod
+    scenario_pack: odn
+    services:
+      mining_url: http://localhost:8901
+      serving_url: http://localhost:8081
+      llm_url: http://localhost:8900

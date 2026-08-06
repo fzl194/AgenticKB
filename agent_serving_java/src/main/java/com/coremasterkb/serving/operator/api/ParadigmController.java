@@ -2,6 +2,7 @@ package com.coremasterkb.serving.operator.api;
 
 import com.coremasterkb.serving.operator.paradigm.ParadigmBindingException;
 import com.coremasterkb.serving.operator.paradigm.ParadigmBindingService;
+import com.coremasterkb.serving.operator.paradigm.ParadigmCatalogService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmEntity;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmVersionEntity;
@@ -24,14 +25,17 @@ public class ParadigmController {
 
     private final ParadigmService paradigmService;
     private final ParadigmBindingService bindingService;
+    private final ParadigmCatalogService catalogService;
     private final ParadigmExecutionService executionService;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public ParadigmController(ParadigmService paradigmService,
                               ParadigmBindingService bindingService,
+                              ParadigmCatalogService catalogService,
                               ParadigmExecutionService executionService) {
         this.paradigmService = paradigmService;
         this.bindingService = bindingService;
+        this.catalogService = catalogService;
         this.executionService = executionService;
     }
 
@@ -89,6 +93,31 @@ public class ParadigmController {
             m.put("description", e.getDescription());
             m.put("version", e.getCurrentVersion());
             m.put("url", "/api/v1/paradigm/" + e.getId() + "/search");
+        }
+        return m;
+    }
+
+    /**
+     * Which published paradigms an anonymous MCP caller can actually use, and why the rest cannot.
+     *
+     * <p>Mapped above {@code /{id}} for the same reason as {@code /resolve}, and pinned by the same
+     * kind of test.</p>
+     *
+     * <p>{@code hidden} is returned only to an identified caller. It names knowledge bases that an
+     * anonymous one could not read, and {@code KbAccessService} deliberately does not reveal whether
+     * a knowledge base exists — serving has no auth of its own, so the header is the only thing
+     * separating "the operator debugging their paradigm" from "anyone who can reach the port". MCP
+     * sends no header and never reads {@code hidden} anyway.</p>
+     */
+    @GetMapping("/mcp-catalog")
+    public Map<String, Object> mcpCatalog(
+            @RequestParam(required = false) String domain,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+        ParadigmCatalogService.Catalog catalog = catalogService.build(domain, kbUser);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("paradigms", catalog.paradigms());
+        if (kbUser != null && !kbUser.isBlank()) {
+            m.put("hidden", catalog.hidden());
         }
         return m;
     }

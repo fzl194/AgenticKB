@@ -104,7 +104,7 @@ def _resolve_target_url(domain_services: dict, service: str) -> str:
 
 
 def _build_forward_headers(request: Request) -> dict[str, str]:
-    """Strip hop-by-hop and sensitive headers, add proxy context."""
+    """Strip hop-by-hop/sensitive, add proxy context + gateway-injected identity."""
     headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _STRIP_REQUEST_HEADERS
@@ -114,6 +114,17 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
     client_ip = request.client.host if request.client else "unknown"
     headers["X-Forwarded-For"] = f"{existing_xff}, {client_ip}" if existing_xff else client_ip
     headers["X-Forwarded-Proto"] = request.url.scheme
+
+    # Phase 2：AuthMiddleware 已把身份挂 request.state.user；反代把派生头注入给 mining。
+    # X-KB-User/X-KB-Role/X-Internal-Auth 都不在 _STRIP_REQUEST_HEADERS，会被转发；
+    # 浏览器自带的 Authorization 仍被剥。mining 的 current_user 校验 X-Internal-Auth。
+    user = getattr(request.state, "user", None)
+    if user:
+        headers["X-KB-User"] = str(user.get("username", ""))
+        headers["X-KB-Role"] = str(user.get("role", ""))
+        ivs = getattr(request.app.state, "internal_verify_secret", "") or ""
+        if ivs:
+            headers["X-Internal-Auth"] = ivs
     return headers
 
 

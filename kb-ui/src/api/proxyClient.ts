@@ -1,14 +1,41 @@
-import axios from 'axios'
+import axios, { type AxiosInstance } from 'axios'
 import { useDomainStore } from '@/stores/domain'
+import { loadToken, clearToken } from './tokenStorage'
 
 /**
- * Phase 1：无登录态，前端写死一个默认 KB 用户。经 main_control_service 代理透传
- * 到 mining 的 X-KB-User 头，由 mining/kb/auth.current_user 解析为 kb_users.id。
- * 仅对 mining 的 /api/kb* 路径注入（这些路由才依赖 current_user；其它 mining
- * 路由不读该头，注入也只会在路由声明了依赖时才触发 upsert，副作用为零）。
- * 接真登录时把这里换成「从登录态 store 读」即可，其余代码零改。
+ * Phase 2：真实登录。前端不再写死 X-KB-User（改由网关从 JWT 注入）。
+ * 每个 axios 客户端装两个拦截器：
+ *   - 请求拦截：从 tokenStorage 读 token，加 Authorization: Bearer。
+ *   - 响应拦截：401 → 清 token + 跳 /login（token 过期/失效统一兜底）。
+ * 用 tokenStorage 叶模块而非 auth store，是为了打断 store ↔ api ↔ proxyClient 的循环依赖。
  */
-const DEFAULT_KB_USER = import.meta.env.VITE_KB_DEFAULT_USER || 'admin'
+export function installAuthInterceptors(client: AxiosInstance): void {
+  // 防御：测试里部分 axios.create() mock 不带 interceptors（只测 API 形状），
+  // 生产环境真实 axios 总有 interceptors，照常安装。
+  if (!client?.interceptors?.request?.use || !client?.interceptors?.response?.use) {
+    return
+  }
+  client.interceptors.request.use((config) => {
+    const token = loadToken()
+    if (token) {
+      config.headers.set('Authorization', `Bearer ${token}`)
+    }
+    return config
+  })
+  client.interceptors.response.use(
+    (r) => r,
+    (error) => {
+      if (error?.response?.status === 401 && typeof window !== 'undefined') {
+        clearToken()
+        const path = window.location.pathname
+        if (!path.startsWith('/login')) {
+          window.location.href = `/login?redirect=${encodeURIComponent(path)}`
+        }
+      }
+      return Promise.reject(error)
+    },
+  )
+}
 
 /**
  * Create an axios client that routes requests through the main_control_service
@@ -22,6 +49,7 @@ export interface ProxyClientOptions {
 export function createProxyClient(service: string, options: ProxyClientOptions = {}) {
   const includeDomainQuery = options.includeDomainQuery ?? true
   const client = axios.create()
+  installAuthInterceptors(client)
   client.interceptors.request.use((config) => {
     const domainStore = useDomainStore()
     const params = config.params && typeof config.params === 'object'
@@ -35,10 +63,6 @@ export function createProxyClient(service: string, options: ProxyClientOptions =
     config.baseURL = `/api/control-plane/api/v1/proxy/${encodeURIComponent(requestedDomain)}/${service}`
     if (service === 'mining' && includeDomainQuery) {
       config.params = { ...params, domain: requestedDomain }
-      if (typeof config.url === 'string' && config.url.startsWith('/api/kb')) {
-        // axios 1.x 的 config.headers 是 AxiosHeaders 实例；用 .set() 才会进发送通道
-        config.headers.set('X-KB-User', DEFAULT_KB_USER)
-      }
     }
     return config
   })

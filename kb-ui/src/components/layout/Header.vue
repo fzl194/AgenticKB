@@ -32,19 +32,44 @@
         />
         <span class="header__health-label">{{ allHealthy ? '正常' : '异常' }}</span>
       </div>
+
+      <el-dropdown trigger="click" @command="onAccountCommand">
+        <span class="header__account">
+          <span class="header__account-name">{{ displayName }}</span>
+          <el-tag
+            size="small"
+            :type="auth.siteRole === 'admin' ? 'danger' : 'info'"
+            effect="plain"
+          >
+            {{ auth.siteRole === 'admin' ? '管理员' : '用户' }}
+          </el-tag>
+        </span>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="password">修改密码</el-dropdown-item>
+            <el-dropdown-item command="logout" divided>登出</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useBrandStore } from '@/stores/brand'
+import { useAuthStore } from '@/stores/auth'
+import { useAuthApi } from '@/api/auth'
+import { apiErrorDetail } from '@/api/proxyClient'
 
 const route = useRoute()
+const router = useRouter()
 const domainStore = useDomainStore()
 const brand = useBrandStore()
+const auth = useAuthStore()
 
 const pageTitles: Record<string, string> = {
   dashboard: '概览',
@@ -61,6 +86,9 @@ const pageTitles: Record<string, string> = {
 }
 
 const pageTitle = computed(() => pageTitles[route.name as string] || brand.title)
+const displayName = computed(
+  () => auth.user?.display_name || auth.user?.username || '—',
+)
 
 const allHealthy = ref(true)
 const someHealthy = ref(true)
@@ -68,6 +96,44 @@ const someHealthy = ref(true)
 function onDomainChange() {
   allHealthy.value = true
   someHealthy.value = true
+}
+
+async function onAccountCommand(cmd: string): Promise<void> {
+  if (cmd === 'logout') {
+    auth.logout()
+    router.push('/login')
+  } else if (cmd === 'password') {
+    try {
+      const { value } = await ElMessageBox.prompt('输入新密码（≥8 位）', '修改密码', {
+        inputType: 'password',
+        inputPlaceholder: '新密码',
+        inputValidator: (v: string) => (v && v.length >= 8) || '至少 8 位',
+      })
+      const api = useAuthApi()
+      await api.changeMyPassword(
+        // me/password 端点要旧密码；账户菜单场景下让用户先输旧密码更安全，
+        // 这里简化：两步提示。Element Plus 单 prompt 只能取一个值，故分两次。
+        await _promptOld(),
+        value,
+      )
+      ElMessage.success('密码已更新，请重新登录')
+      auth.logout()
+      router.push('/login')
+    } catch (e) {
+      if (e !== 'cancel' && e !== 'close') {
+        ElMessage.error((await apiErrorDetail(e)) || '修改失败')
+      }
+    }
+  }
+}
+
+async function _promptOld(): Promise<string> {
+  const { value } = await ElMessageBox.prompt('输入当前密码', '验证身份', {
+    inputType: 'password',
+    inputPlaceholder: '当前密码',
+    inputValidator: (v: string) => !!v || '必填',
+  })
+  return value
 }
 </script>
 
@@ -153,6 +219,19 @@ function onDomainChange() {
 
 .header__health-label {
   font-size: 12px;
+  font-weight: 500;
+  color: var(--kb-text-secondary);
+}
+
+.header__account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.header__account-name {
+  font-size: 13px;
   font-weight: 500;
   color: var(--kb-text-secondary);
 }

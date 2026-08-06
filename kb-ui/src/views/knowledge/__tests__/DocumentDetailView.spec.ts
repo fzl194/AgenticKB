@@ -25,6 +25,7 @@ vi.mock('@/utils/download', () => downloads)
 vi.mock('@/api/proxyClient', () => ({
   apiErrorDetail: async (error: unknown) =>
     (error as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? '请求失败',
+  installAuthInterceptors: vi.fn(),
 }))
 vi.mock('vue-router', () => ({ useRouter: () => router }))
 vi.mock('element-plus', () => ({

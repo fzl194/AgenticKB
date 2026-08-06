@@ -45,26 +45,33 @@ import {
 } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useBrandStore, resolveIcon } from '@/stores/brand'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const domainStore = useDomainStore()
 const brand = useBrandStore()
+const auth = useAuthStore()
 
 // 有图标时显示 <img>；空则回落 logoText 渐变块。
 const logoSrc = computed(() => (brand.icon.trim() ? resolveIcon(brand.icon) : ''))
 
-const navItems = [
-  { path: '/', label: '概览', icon: Monitor },
-  { path: '/kb', label: '知识库', icon: Files },
-  { path: '/mining/workflows', label: '挖掘范式', icon: Management },
-  { path: '/search', label: '检索测试', icon: Search },
-  { path: '/paradigm', label: '检索范式', icon: Connection },
-  { path: '/entities', label: '实体图谱', icon: Connection },
-  { path: '/ontology', label: '本体版本', icon: Collection },
-  { path: '/ontology/graph', label: '本体图谱', icon: DataLine },
-  { path: '/llm', label: 'LLM 服务', icon: Cpu },
-  { path: '/settings', label: '系统设置', icon: Setting },
+// 导航项：requiresAdmin 标记管理类项，member 不渲染。
+const ALL_NAV = [
+  { path: '/', label: '概览', icon: Monitor, requiresAdmin: false },
+  { path: '/kb', label: '知识库', icon: Files, requiresAdmin: false },
+  { path: '/mining/workflows', label: '挖掘范式', icon: Management, requiresAdmin: true },
+  { path: '/search', label: '检索测试', icon: Search, requiresAdmin: false },
+  { path: '/paradigm', label: '检索范式', icon: Connection, requiresAdmin: true },
+  { path: '/entities', label: '实体图谱', icon: Connection, requiresAdmin: true },
+  { path: '/ontology', label: '本体版本', icon: Collection, requiresAdmin: true },
+  { path: '/ontology/graph', label: '本体图谱', icon: DataLine, requiresAdmin: true },
+  { path: '/llm', label: 'LLM 服务', icon: Cpu, requiresAdmin: true },
+  { path: '/settings', label: '系统设置', icon: Setting, requiresAdmin: true },
 ]
+
+const navItems = computed(() =>
+  ALL_NAV.filter((it) => !it.requiresAdmin || auth.siteRole === 'admin'),
+)
 
 function isActive(path: string): boolean {
   if (path === '/') return route.path === '/'

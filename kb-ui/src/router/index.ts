@@ -1,9 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import { useDomainStore } from '@/stores/domain'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('@/views/LoginView.vue'),
+      meta: { public: true },
+    },
     {
       path: '/',
       component: () => import('@/components/layout/AppLayout.vue'),
@@ -133,10 +140,33 @@ const router = createRouter({
   ],
 })
 
-// Load domain list from main_control_service before first navigation
+// admin-only 路由名（member 命中 → 挡回 /）。KB 详情类（kb-*）对 member 开放——那是
+// 普通用户的主战场；知识资产/图谱/范式/本体/LLM/设置 属管理类。
+const ADMIN_ROUTES = new Set([
+  'mining-workflows', 'mining-workflow-editor',
+  'paradigm', 'paradigm-edit',
+  'entities', 'ontology', 'ontology-graph', 'ontology-review', 'mentions-review',
+  'knowledge', 'knowledge-detail', 'graph',
+  'llm', 'llm-task-detail', 'settings',
+])
+
 let domainsInitialized = false
-router.beforeEach(async () => {
-  if (!domainsInitialized) {
+router.beforeEach(async (to) => {
+  const auth = useAuthStore()
+  // 未登录且非 public → 登录页（带 redirect 回来）
+  if (!to.meta.public && !auth.isAuthenticated) {
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
+  // 已登录又访问 /login → 回首页
+  if (to.meta.public && auth.isAuthenticated) {
+    return { name: 'dashboard' }
+  }
+  // member 深链 admin 路由 → 挡回 /
+  if (ADMIN_ROUTES.has(to.name as string) && auth.siteRole !== 'admin') {
+    return { name: 'dashboard' }
+  }
+  // 首次登录态导航时加载域列表（原来的 beforeEach 职责）
+  if (!domainsInitialized && auth.isAuthenticated) {
     domainsInitialized = true
     const domainStore = useDomainStore()
     await domainStore.fetchDomains()

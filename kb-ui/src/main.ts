@@ -8,6 +8,7 @@ import router from './router'
 import './styles/variables.css'
 import './styles/global.css'
 import { useBrandStore } from './stores/brand'
+import { useAuthStore } from './stores/auth'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -15,10 +16,15 @@ app.use(pinia)
 app.use(router)
 app.use(ElementPlus)
 
-// 启动期注入品牌（title/favicon），在 mount 前完成以避免首屏闪烁。
-// fetchBrand 内部已捕获异常并兜底默认，finally 必触发——不会阻塞挂载。
+// 启动期注入品牌 + 恢复登录态。token 存在时 fetchMe 取 profile，使首屏侧边栏按角色渲染。
 const brand = useBrandStore(pinia)
-brand.fetchBrand().finally(() => {
+const auth = useAuthStore(pinia)
+auth.restore() // 从 localStorage 恢复 token（不触发网络）
+
+Promise.allSettled([
+  brand.fetchBrand(),
+  auth.token ? auth.fetchMe() : Promise.resolve(),
+]).finally(() => {
   brand.applyBrand()
   app.mount('#app')
 })

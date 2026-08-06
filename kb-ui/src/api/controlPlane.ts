@@ -1,7 +1,9 @@
 import axios from 'axios'
+import { installAuthInterceptors } from './proxyClient'
 
 const baseURL = import.meta.env.VITE_CONTROL_PLANE_API_BASE || '/api/control-plane'
 const client = axios.create({ baseURL })
+installAuthInterceptors(client)
 
 export function useControlPlaneApi() {
   return {

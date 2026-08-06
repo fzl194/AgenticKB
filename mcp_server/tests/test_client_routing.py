@@ -9,6 +9,8 @@ without the ``mcp`` package installed.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -353,3 +355,62 @@ def test_paradigm_request_body_carries_query_domain_debug(monkeypatch, calls):
     body = json.loads(calls[-1].content)
     assert body == {"query": "SMF 配置", "domain": "odn", "debug": True}
     assert calls[0].url.params["domain"] == "odn"
+
+
+# ── regression guard for the paradigm-selection change ───────────────────
+
+
+def test_request_without_a_named_paradigm_is_byte_identical(monkeypatch, calls):
+    """The no-``paradigm`` path must keep issuing exactly the requests it always did.
+
+    Written before the ``paradigm`` parameter existed and kept green through it: everything about
+    agent-visible behaviour is allowed to grow, but a caller that names no paradigm must reach the
+    same endpoints with the same bodies as before, or the change stops being additive.
+
+    Asserts the *requests*, not the response — ``_retrieval`` gains fields by design.
+    """
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json={"domain": "generic", "bound": False}),
+            search=httpx.Response(200, json=dict(LEGACY_BODY)),
+        ),
+        calls,
+    )
+
+    mcp_client.search_knowledge(q(domain="generic", query="AA 接口"))
+
+    searches = [c for c in calls if c.url.path == "/api/v1/search"]
+    assert len(searches) == 1
+    assert json.loads(searches[0].content) == {
+        "query": "AA 接口",
+        "domain": "generic",
+        "debug": False,
+    }
+
+    resolves = [c for c in calls if c.url.path == "/api/v1/paradigm/resolve"]
+    assert len(resolves) == 1
+    assert resolves[0].url.params["domain"] == "generic"
+
+
+def test_bound_paradigm_request_is_byte_identical(monkeypatch, calls):
+    """Same guard for the domain-default path: same URL, same body."""
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json=BOUND),
+            paradigm=httpx.Response(200, json=PARADIGM_BODY),
+        ),
+        calls,
+    )
+
+    mcp_client.search_knowledge(q(query="AA 接口"))
+
+    executed = [c for c in calls if c.url.path.endswith("/search") and "paradigm" in c.url.path]
+    assert len(executed) == 1
+    assert executed[0].url.path == "/api/v1/paradigm/pd-abc/search"
+    assert json.loads(executed[0].content) == {
+        "query": "AA 接口",
+        "domain": "odn",
+        "debug": False,
+    }

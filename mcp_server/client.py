@@ -237,7 +237,11 @@ class _SelectionError(Exception):
 
     def envelope(self, domain: str) -> dict:
         out: dict = {"error": self.code, "message": self.message}
-        out["_retrieval"] = _meta(None, [], domain, selected_by="rejected")
+        # The available-paradigms hint comes from the catalog. For `catalog_unavailable` that is
+        # precisely what just failed, and asking again here would make the agent wait a second
+        # timeout for an answer the first attempt already gave us.
+        hint_domain = None if self.code == "catalog_unavailable" else domain
+        out["_retrieval"] = _meta(None, [], hint_domain, selected_by="rejected")
         return out
 
 
@@ -267,8 +271,14 @@ def _fetch_catalog(*, force: bool = False) -> list[dict] | None:
                 "paradigm catalog returned HTTP %d; continuing without it", resp.status_code
             )
             return None
-        entries = resp.json().get("paradigms") or []
-    except (httpx.HTTPError, ValueError) as exc:
+        # Normalized once, here, so nothing downstream has to guard: an entry with no usable id
+        # cannot be selected or executed, and letting one through would turn a malformed response
+        # into a KeyError that fails the search — which is exactly what a hint must never do.
+        entries = [
+            e for e in (resp.json().get("paradigms") or [])
+            if isinstance(e, dict) and isinstance(e.get("id"), str) and e["id"]
+        ]
+    except (httpx.HTTPError, ValueError, AttributeError, TypeError) as exc:
         logger.warning("paradigm catalog fetch failed (%s); continuing without it", exc)
         return None
 
@@ -355,7 +365,8 @@ def _select_paradigm(named: str, domain: str) -> dict:
 def _match(entries: list[dict], named: str) -> dict | None:
     key = named.strip().casefold()
     for e in entries:
-        if e.get("id", "").casefold() == key or (e.get("name") or "").strip().casefold() == key:
+        # `id` is guaranteed a non-empty str by _fetch_catalog; `name` is not guaranteed at all.
+        if e["id"].casefold() == key or str(e.get("name") or "").strip().casefold() == key:
             return e
     return None
 

@@ -330,3 +330,52 @@ def test_fulltext_without_a_paradigm_id_keeps_resolving_the_domain(monkeypatch, 
 
     posts = [c for c in calls if c.url.path == "/api/v1/segments/fulltext"]
     assert json.loads(posts[0].content)["paradigm_id"] == "pd-3f2a1b7c"
+
+
+# ── self-review follow-ups ───────────────────────────────────────────────
+
+
+def test_catalog_unavailable_does_not_pay_the_timeout_twice(monkeypatch, calls):
+    """The hint we would attach is the very thing that just failed to load.
+
+    Asking again doubles the wall-clock an agent waits for an error the first attempt already
+    determined — with MCP_CATALOG_TIMEOUT at 5s that is 10 seconds of nothing.
+    """
+    install(monkeypatch, backend(catalog=httpx.Response(503, text="down")), calls)
+
+    out = mcp_client.search_knowledge(q(paradigm="某个中文范式名"))
+
+    assert out["error"] == "catalog_unavailable"
+    assert [c.url.path for c in calls].count(CATALOG_PATH) == 1
+    assert "available_paradigms" not in out["_retrieval"]
+
+
+def test_unknown_paradigm_still_lists_the_options(monkeypatch, calls):
+    """The opposite case: the catalog is fine, so the error must carry what IS valid."""
+    install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
+
+    out = mcp_client.search_knowledge(q(paradigm="不存在"))
+
+    assert out["error"] == "unknown_paradigm"
+    assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]
+
+
+def test_malformed_catalog_entries_are_dropped_not_fatal(monkeypatch, calls):
+    """A hint must never be the reason a search fails — including on a malformed response."""
+    install(
+        monkeypatch,
+        backend(
+            catalog=httpx.Response(200, json={"paradigms": [
+                {"name": "没有 id 的条目"},
+                {"id": None, "name": "id 是 null"},
+                "不是对象",
+                ODN_TOPOLOGY,
+            ]}),
+        ),
+        calls,
+    )
+
+    out = mcp_client.search_knowledge(q())
+
+    assert "error" not in out
+    assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]

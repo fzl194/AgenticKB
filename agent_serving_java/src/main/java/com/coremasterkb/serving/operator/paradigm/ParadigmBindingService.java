@@ -1,7 +1,6 @@
 package com.coremasterkb.serving.operator.paradigm;
 
 import com.coremasterkb.serving.application.KbAccessService;
-import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.domainpack.DomainContext;
 import com.coremasterkb.serving.domainpack.DomainPoolManager;
 import com.coremasterkb.serving.domainpack.DomainRegistry;
@@ -32,9 +31,6 @@ import java.util.Set;
 public class ParadigmBindingService {
 
     private static final Logger log = LoggerFactory.getLogger(ParadigmBindingService.class);
-
-    private static final String SCOPE_RESOLVE = "scope_resolve";
-    private static final String CONTEXT_PACK_SLOT = "contextPack";
 
     private final ParadigmService paradigmService;
     private final DomainRegistry domainRegistry;
@@ -116,11 +112,13 @@ public class ParadigmBindingService {
      * went through {@code ContextAssembler}'s source drill-down, graph expansion, evidence grouping
      * and compression. Serving those to an agent is both lower quality and a different response
      * shape. Rejecting at bind time keeps that from becoming a runtime surprise.</p>
+     *
+     * <p>The predicate itself lives in {@link ParadigmGraphs} so that binding and any other consumer
+     * of "is this servable" cannot drift apart.</p>
      */
     private void validateServable(JsonNode graph) {
-        JsonNode output = graph.get("output");
-        String slot = (output != null && output.hasNonNull("slot")) ? output.get("slot").asText() : null;
-        if (!CONTEXT_PACK_SLOT.equals(slot)) {
+        if (!ParadigmGraphs.isServable(graph)) {
+            String slot = ParadigmGraphs.outputSlotOf(graph);
             throw new ParadigmBindingException("paradigm_not_servable",
                     "a domain-bound paradigm must end in 'assemble' (output slot 'contextPack'), "
                             + "found output slot: " + (slot != null ? slot : "<none>"));
@@ -139,7 +137,7 @@ public class ParadigmBindingService {
      * purely to name the offending knowledge bases.</p>
      */
     private void validateAnonymouslyReadable(String domain, JsonNode graph) {
-        List<String> kbIds = extractKbIds(graph);
+        List<String> kbIds = ParadigmGraphs.kbIdsOf(graph);
         if (kbIds.isEmpty()) {
             return;
         }
@@ -177,32 +175,5 @@ public class ParadigmBindingService {
             log.warn("Could not enumerate non-public KBs for domain={}: {}", domain, e.getMessage());
             return List.of();
         }
-    }
-
-    /** Collect kbIds from every {@code scope_resolve} node — a graph may legitimately have several. */
-    private static List<String> extractKbIds(JsonNode graph) {
-        JsonNode nodes = graph.get("nodes");
-        if (nodes == null || !nodes.isArray()) {
-            return List.of();
-        }
-        Set<String> collected = new LinkedHashSet<>();
-        for (JsonNode node : nodes) {
-            JsonNode type = node.get("operatorType");
-            if (type == null || !SCOPE_RESOLVE.equals(type.asText())) {
-                continue;
-            }
-            JsonNode params = node.get("params");
-            JsonNode ids = (params != null) ? params.get("kbIds") : null;
-            if (ids == null || !ids.isArray()) {
-                continue;
-            }
-            for (JsonNode id : ids) {
-                if (id.isTextual() && !id.asText().isBlank()) {
-                    collected.add(id.asText().trim());
-                }
-            }
-        }
-        // Normalize the same way the runtime does, so the check sees exactly what execution will.
-        return ActiveScope.normalizeKbIds(new ArrayList<>(collected));
     }
 }

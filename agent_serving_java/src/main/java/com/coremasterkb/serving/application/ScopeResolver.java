@@ -2,14 +2,12 @@ package com.coremasterkb.serving.application;
 
 import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.domainpack.DomainRegistry;
+import com.coremasterkb.serving.operator.paradigm.ParadigmGraphs;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import com.coremasterkb.serving.repository.AssetRepository;
-import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Works out which corpus a drill-down request may read, and authorizes it.
@@ -84,25 +82,14 @@ public class ScopeResolver {
         return scope;
     }
 
-    /** Read the {@code kbIds} param off the paradigm's {@code scope_resolve} node(s). */
+    /**
+     * Read the {@code kbIds} param off the paradigm's {@code scope_resolve} node(s).
+     *
+     * <p>The walk itself lives in {@link ParadigmGraphs} — bind-time validation and the drill-down
+     * path must extract the same set, or a paradigm could be bound against one scope and read
+     * against another.</p>
+     */
     private List<String> kbIdsOfParadigm(String paradigmId, Integer version) {
-        JsonNode graph = paradigmService.resolveExecutableGraph(paradigmId, version);
-        JsonNode nodes = graph != null ? graph.get("nodes") : null;
-        if (nodes == null || !nodes.isArray()) {
-            return List.of();
-        }
-        Set<String> kbIds = new LinkedHashSet<>();
-        for (JsonNode node : nodes) {
-            JsonNode type = node.get("operatorType");
-            if (type == null || !"scope_resolve".equals(type.asText())) continue;
-            JsonNode params = node.get("params");
-            JsonNode ids = params != null ? params.get("kbIds") : null;
-            if (ids == null || !ids.isArray()) continue;
-            for (JsonNode id : ids) {
-                String text = id.asText(null);
-                if (text != null && !text.isBlank()) kbIds.add(text.trim());
-            }
-        }
-        return List.copyOf(kbIds);
+        return ParadigmGraphs.kbIdsOf(paradigmService.resolveExecutableGraph(paradigmId, version));
     }
 }

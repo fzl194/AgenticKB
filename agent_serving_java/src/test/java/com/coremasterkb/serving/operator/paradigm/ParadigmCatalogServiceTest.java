@@ -353,15 +353,20 @@ class ParadigmCatalogServiceTest {
         }
 
         @Test
-        @DisplayName("anonymous caller is told how many, never which")
-        void anonymousGetsCountOnly() {
+        @DisplayName("anonymous caller costs no disclosure query at all")
+        void anonymousSkipsDisclosureEntirely() {
             ParadigmCatalogService.Catalog c = service.build(null, null);
 
+            // Still reported as hidden with its reason — that part is not privileged.
             ParadigmCatalogService.Hidden h = hiddenOf(c, "pd-1");
+            assertThat(h.reason()).isEqualTo(ParadigmCatalogService.KB_NOT_READABLE);
             assertThat(h.details()).isEmpty();
-            assertThat(h.undisclosedCount()).isEqualTo(2);
-            // No second query: there is no identity to filter by, so none is issued.
-            verify(knowledgeBaseMapper, never()).selectAccessibleKbIds(anyString(), anyList(), anyString());
+
+            // But nothing is computed about *which* KBs: there is no identity to disclose to, and
+            // the controller drops the whole hidden block for such a caller. Doing the work anyway
+            // would be two queries per hidden paradigm on MCP's 30s polling path, discarded at the
+            // edge.
+            verify(knowledgeBaseMapper, never()).selectAccessibleKbIds(anyString(), anyList(), any());
         }
 
         @Test

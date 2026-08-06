@@ -238,6 +238,12 @@ public class ParadigmCatalogService {
             kbAccessService.authorize(domain, kbIds, null);
             return Verdict.VISIBLE;
         } catch (IllegalArgumentException notReadable) {
+            // No identity, nothing to disclose to — and the controller drops the whole `hidden`
+            // block for such a caller anyway. Computing it would be two extra queries per hidden
+            // paradigm on MCP's polling path, thrown away at the edge.
+            if (username == null || username.isBlank()) {
+                return Verdict.hidden(KB_NOT_READABLE);
+            }
             return Verdict.hidden(KB_NOT_READABLE, disclosableOffenders(domain, kbIds, username));
         }
     }
@@ -249,6 +255,8 @@ public class ParadigmCatalogService {
      * serving has no authentication of its own. Listing every offending id here would hand that
      * information to anyone who can reach the port. So the ids are filtered to what the requesting
      * user can already see, and the rest is reported only as a count.</p>
+     *
+     * <p>Only reached for an identified caller — see {@link #verifyReadable}.</p>
      */
     private Disclosure disclosableOffenders(String domain, List<String> kbIds, String username) {
         List<String> anonymouslyOk = safeAccessible(domain, kbIds, null);
@@ -263,9 +271,6 @@ public class ParadigmCatalogService {
             // authorize() said no but the diff says yes — a concurrent visibility change between
             // the two reads. Report the failure without naming anything.
             return new Disclosure(List.of(), 0);
-        }
-        if (username == null || username.isBlank()) {
-            return new Disclosure(List.of(), denied.size());
         }
         List<String> visibleToUser = safeAccessible(domain, denied, username);
         return new Disclosure(visibleToUser, denied.size() - visibleToUser.size());
@@ -294,11 +299,18 @@ public class ParadigmCatalogService {
                 visible.add(new Entry(c.entity().getId(), c.entity().getName(),
                         c.entity().getDescription(), c.domain(),
                         c.entity().getCurrentVersion(), c.entity().getIsDefault()));
-            } else {
-                Disclosure d = (v != null) ? v.disclosure() : Disclosure.NONE;
+            } else if (v != null) {
                 hidden.add(new Hidden(c.entity().getId(), c.entity().getName(),
-                        v != null ? v.reason() : DOMAIN_UNAVAILABLE,
-                        d.details(), d.undisclosedCount()));
+                        v.reason(), v.disclosure().details(), v.disclosure().undisclosedCount()));
+            } else {
+                // Unreachable: every candidate is either classified in phase 1 or assigned by
+                // phase 2, whose failure paths fill in the whole group. Kept as a loud default
+                // rather than a plausible-looking reason, because a wrong reason here would send
+                // whoever debugs it after the wrong thing entirely.
+                log.error("[paradigm/catalog] {} was never classified — this is a bug",
+                        c.entity().getId());
+                hidden.add(new Hidden(c.entity().getId(), c.entity().getName(),
+                        "unclassified", List.of(), 0));
             }
         }
         log.debug("[paradigm/catalog] visible={} hidden={}", visible.size(), hidden.size());

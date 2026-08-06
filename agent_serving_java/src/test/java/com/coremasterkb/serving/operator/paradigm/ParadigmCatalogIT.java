@@ -122,12 +122,13 @@ class ParadigmCatalogIT {
     }
 
     @Test
-    @DisplayName("an anonymous caller is told how many KBs blocked it, never which")
-    void anonymousDisclosureIsCountOnly() {
+    @DisplayName("an anonymous caller learns that it is hidden, and nothing about which KBs")
+    void anonymousLearnsNothingAboutTheKbs() {
         ParadigmCatalogService.Hidden h = hidden(catalogService.build(DOMAIN, null), pdPrivate);
 
+        assertThat(h.reason()).isEqualTo(ParadigmCatalogService.KB_NOT_READABLE);
         assertThat(h.details()).isEmpty();
-        assertThat(h.undisclosedCount()).isEqualTo(1);
+        assertThat(h.undisclosedCount()).isZero();
     }
 
     @Test

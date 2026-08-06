@@ -34,6 +34,9 @@ DomainId = Annotated[
 class SearchInput(BaseModel):
     query: str
     domain: DomainId
+    #: Name (as listed in ``_retrieval.available_paradigms``) or id of a specific retrieval
+    #: paradigm. Omitted = the domain's default, i.e. exactly the pre-existing behaviour.
+    paradigm: str | None = None
     scope: dict | None = None
     entities: list[EntityRef] | None = None
     debug: bool = False
@@ -56,6 +59,11 @@ class SegmentRef(BaseModel):
 class FullTextInput(BaseModel):
     domain: DomainId
     refs: list[SegmentRef]
+    #: The paradigm whose corpus produced these ids, copied verbatim from the search result's
+    #: ``_retrieval.paradigm_id``. Id only, never a name: this is a machine hand-back, and every
+    #: additional accepted form is another way for it to fail to resolve. Omitted = look up the
+    #: domain's default paradigm, which is right only when the search did the same.
+    paradigm_id: str | None = None
     #: ``window`` 额外带回前后相邻片段。切分边界常把一句话劈成两段，只看命中段读起来是断的。
     granularity: Literal["segment", "window"] = "segment"
     window_radius: int = Field(default=1, ge=1, le=5)

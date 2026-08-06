@@ -9,6 +9,8 @@ without the ``mcp`` package installed.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -69,15 +71,37 @@ def install(monkeypatch, handler, calls):
     monkeypatch.setattr(mcp_client, "PARADIGM_ROUTING", True)
 
 
+CATALOG_PATH = "/api/v1/paradigm/mcp-catalog"
+
+
 def paths(calls):
+    """The retrieval path taken, excluding the advisory catalog fetch.
+
+    The catalog is a hint attached to the answer, not part of deciding it, and it is cached — so
+    whether it appears in a given call says nothing about routing. Tests that care about the fetch
+    itself use :func:`all_paths`.
+    """
+    return [c.url.path for c in calls if c.url.path != CATALOG_PATH]
+
+
+def all_paths(calls):
     return [c.url.path for c in calls]
 
 
-def route(*, resolve, search=None, paradigm=None):
-    """Build a handler from per-endpoint canned responses."""
+def route(*, resolve, search=None, paradigm=None, catalog=None):
+    """Build a handler from per-endpoint canned responses.
+
+    ``catalog`` defaults to a 503: tests that say nothing about the catalog are asserting the
+    behaviour of everything else, and an unreachable catalog is the case where those assertions
+    must hold unchanged.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if path == "/api/v1/paradigm/mcp-catalog":
+            if catalog is None:
+                return httpx.Response(503, text="catalog not stubbed for this test")
+            return catalog(request) if callable(catalog) else catalog
         if path == "/api/v1/paradigm/resolve":
             return resolve(request) if callable(resolve) else resolve
         if path.startswith("/api/v1/paradigm/") and path.endswith("/search"):
@@ -114,6 +138,7 @@ def test_bound_domain_goes_to_its_paradigm(monkeypatch, calls):
         "paradigm_id": "pd-abc",
         "name": "odn-production",
         "version": 3,
+        "selected_by": "domain_default",
     }
 
 
@@ -315,7 +340,11 @@ def test_dead_tool_args_are_reported_on_the_legacy_path_too(monkeypatch, calls):
 
     out = mcp_client.search_knowledge(q(scope={"product": "X"}))
 
-    assert out["_retrieval"] == {"engine": "legacy", "ignored_args": ["scope"]}
+    assert out["_retrieval"] == {
+        "engine": "legacy",
+        "selected_by": "fallback",
+        "ignored_args": ["scope"],
+    }
 
 
 def test_no_ignored_args_key_when_nothing_was_dropped(monkeypatch, calls):
@@ -350,6 +379,72 @@ def test_paradigm_request_body_carries_query_domain_debug(monkeypatch, calls):
 
     mcp_client.search_knowledge(q(debug=True))
 
-    body = json.loads(calls[-1].content)
+    # Selected by path, not by position: the advisory catalog fetch also lands in `calls`, and
+    # positional indexing would silently start asserting against whichever request happened to be
+    # last.
+    executed = [c for c in calls if c.url.path.endswith("/search")]
+    assert len(executed) == 1
+    body = json.loads(executed[0].content)
     assert body == {"query": "SMF 配置", "domain": "odn", "debug": True}
-    assert calls[0].url.params["domain"] == "odn"
+
+    resolves = [c for c in calls if c.url.path == "/api/v1/paradigm/resolve"]
+    assert resolves[0].url.params["domain"] == "odn"
+
+
+# ── regression guard for the paradigm-selection change ───────────────────
+
+
+def test_request_without_a_named_paradigm_is_byte_identical(monkeypatch, calls):
+    """The no-``paradigm`` path must keep issuing exactly the requests it always did.
+
+    Written before the ``paradigm`` parameter existed and kept green through it: everything about
+    agent-visible behaviour is allowed to grow, but a caller that names no paradigm must reach the
+    same endpoints with the same bodies as before, or the change stops being additive.
+
+    Asserts the *requests*, not the response — ``_retrieval`` gains fields by design.
+    """
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json={"domain": "generic", "bound": False}),
+            search=httpx.Response(200, json=dict(LEGACY_BODY)),
+        ),
+        calls,
+    )
+
+    mcp_client.search_knowledge(q(domain="generic", query="AA 接口"))
+
+    searches = [c for c in calls if c.url.path == "/api/v1/search"]
+    assert len(searches) == 1
+    assert json.loads(searches[0].content) == {
+        "query": "AA 接口",
+        "domain": "generic",
+        "debug": False,
+    }
+
+    resolves = [c for c in calls if c.url.path == "/api/v1/paradigm/resolve"]
+    assert len(resolves) == 1
+    assert resolves[0].url.params["domain"] == "generic"
+
+
+def test_bound_paradigm_request_is_byte_identical(monkeypatch, calls):
+    """Same guard for the domain-default path: same URL, same body."""
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json=BOUND),
+            paradigm=httpx.Response(200, json=PARADIGM_BODY),
+        ),
+        calls,
+    )
+
+    mcp_client.search_knowledge(q(query="AA 接口"))
+
+    executed = [c for c in calls if c.url.path.endswith("/search") and "paradigm" in c.url.path]
+    assert len(executed) == 1
+    assert executed[0].url.path == "/api/v1/paradigm/pd-abc/search"
+    assert json.loads(executed[0].content) == {
+        "query": "AA 接口",
+        "domain": "odn",
+        "debug": False,
+    }

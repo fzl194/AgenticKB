@@ -13,11 +13,17 @@ from knowledge_mining.mining.kb.security import hash_password
 
 logger = logging.getLogger(__name__)
 
+# 占位符：auth.yaml 样板里的默认值，拒绝用它播种（防误部署留下已知密码）。
+_PLACEHOLDER_PASSWORDS = {"", "change-me-on-first-login"}
+
 
 async def seed_initial_admin(pool: Any, *, admin_password: str) -> None:
     """若无可登录 admin，播种 admin/<admin_password>。幂等。"""
-    if not admin_password:
-        logger.warning("bootstrap.admin_password 为空，跳过播种首 admin")
+    if admin_password in _PLACEHOLDER_PASSWORDS:
+        logger.warning(
+            "bootstrap: admin_password 为空或仍是样板占位符，跳过播种 "
+            "（请在 auth.yaml 设真实密码后再重启）"
+        )
         return
     db = KbDB(pool)
     if await db.has_admin():
@@ -30,8 +36,12 @@ async def seed_initial_admin(pool: Any, *, admin_password: str) -> None:
             username="admin", password_hash=hashed, site_role="admin",
             display_name="Administrator",
         )
+    elif existing.get("password_hash"):
+        # admin 用户名已存在且已设密码（有人故意配过）—— 不覆盖。
+        logger.info("bootstrap: admin 用户名已存在且有密码，跳过（不覆盖）")
+        return
     else:
-        # admin 用户名存在但不是可登录 admin（如 Phase 1 upsert 出来的无密码行）→ 提权 + 设密
+        # admin 用户名存在但无密码（如 Phase 1 upsert 出来的行）→ 提权 + 设密
         await db.update_user(existing["id"], site_role="admin")
         await db.set_password_hash(existing["id"], hashed)
     logger.warning(

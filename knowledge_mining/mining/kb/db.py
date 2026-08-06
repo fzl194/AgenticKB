@@ -194,6 +194,15 @@ class KbDB:
             )
             return (await cur.fetchone()) is not None
 
+    async def count_active_admins(self) -> int:
+        """启用的 admin 数（site_role='admin' AND status='active'）—— last-admin 守卫用。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT COUNT(*) AS n FROM kb_users "
+                "WHERE site_role='admin' AND status='active'"
+            )
+            return int((await cur.fetchone())["n"])
+
     # -------------------------------------------------------- knowledge bases
 
     async def create_kb(

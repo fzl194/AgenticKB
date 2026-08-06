@@ -23,3 +23,9 @@ def test_internal_verify_secret_none_when_missing():
 def test_internal_verify_secret_none_when_empty_string():
     control_plane.set_auth_config({"internal_verify_secret": ""})
     assert control_plane.get_internal_verify_secret() is None
+
+
+def test_internal_verify_secret_rejects_placeholder():
+    """样板占位符（仓库公开）必须视为无 secret，防误部署后直连伪造。"""
+    control_plane.set_auth_config({"internal_verify_secret": "change-me-internal-verify-secret"})
+    assert control_plane.get_internal_verify_secret() is None

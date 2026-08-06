@@ -121,13 +121,13 @@ async def create_user(
 @router.patch("/users/{user_id}")
 async def update_user(
     user_id: str, body: UpdateUserReq,
-    _admin: dict = Depends(require_admin),
+    admin: dict = Depends(require_admin),
     svc: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     try:
         return await svc.update_user(
-            user_id=user_id, display_name=body.display_name,
-            site_role=body.site_role, status=body.status,
+            user_id=user_id, actor_id=admin["id"],
+            display_name=body.display_name, site_role=body.site_role, status=body.status,
         )
     except (UserNotFound, InvalidRole, UserError) as exc:
         raise _map_user_error(exc) from None

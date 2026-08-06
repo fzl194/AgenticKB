@@ -21,12 +21,15 @@ SERVICE_MAP: dict[str, str] = {
     "eval": "eval_url",
 }
 
-# Headers stripped before forwarding to backend (hop-by-hop + sensitive)
+# Headers stripped before forwarding to backend (hop-by-hop + sensitive).
+# X-KB-* / X-Internal-Auth 是网关派生的身份凭证，只由 _build_forward_headers 注入 ——
+# 客户端自带的同名头必须剥掉，防伪造（纵深防御）。
 _STRIP_REQUEST_HEADERS = frozenset({
     "host", "content-length", "connection", "keep-alive",
     "transfer-encoding", "upgrade", "proxy-connection",
     "proxy-authenticate", "proxy-authorization",
     "cookie", "authorization",
+    "x-kb-user", "x-kb-role", "x-internal-auth",
 })
 
 # Cloud metadata endpoint — the only blocked network.

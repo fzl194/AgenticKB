@@ -12,17 +12,23 @@
       <el-table-column label="操作" width="240">
         <template #default="{ row }">
           <el-button size="small" link @click="resetPw(row)">重置密码</el-button>
-          <el-button size="small" link @click="toggleStatus(row)">
+          <el-button
+            v-if="!isSelf(row)"
+            size="small"
+            link
+            @click="toggleStatus(row)"
+          >
             {{ row.status === 'active' ? '禁用' : '启用' }}
           </el-button>
           <el-button
-            v-if="row.site_role !== 'admin'"
+            v-if="!isSelf(row)"
             size="small"
             link
             @click="toggleRole(row)"
           >
             设为{{ row.site_role === 'admin' ? '用户' : '管理员' }}
           </el-button>
+          <span v-if="isSelf(row)" class="um__self-mark">（你）</span>
         </template>
       </el-table-column>
     </el-table>
@@ -51,6 +57,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthApi } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { AuthUser, SiteRole } from '@/types/auth'
 
@@ -61,7 +68,13 @@ interface UserRow extends AuthUser {
 }
 
 const api = useAuthApi()
+const auth = useAuthStore()
 const users = ref<UserRow[]>([])
+
+/** 不能禁用/降级自己（否则把自己锁死）；后端有同义守卫兜底。 */
+function isSelf(row: UserRow): boolean {
+  return !!auth.user && row.username === auth.user.username
+}
 const createVisible = ref(false)
 const form = ref<{ username: string; display_name: string; password: string; site_role: SiteRole }>({
   username: '', display_name: '', password: '', site_role: 'member',

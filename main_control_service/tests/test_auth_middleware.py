@@ -128,6 +128,18 @@ def test_reload_via_endpoint(tmp_path):
         assert c.get("/api/v1/system").status_code == 200
 
 
+def test_placeholder_secrets_force_disabled(tmp_path):
+    """jwt_secret/internal_verify_secret 仍是样板占位符 → enabled 强制视为 false（防误部署伪造）。"""
+    with TestClient(_mw_app(tmp_path, auth_text=(
+        "enabled: true\n"
+        "jwt_secret: change-me-to-a-strong-random-32byte-hex\n"
+        "token_ttl_seconds: 3600\n"
+        "internal_verify_secret: change-me-internal-verify-secret\n"
+    ))) as c:
+        # 占位符 secret → 强制关闭 → 无 token 放行（运维会因 mining 全 401 立刻发现）
+        assert c.get("/api/v1/me").status_code == 200
+
+
 def test_cors_preflight_passes_before_auth(tmp_path):
     """中间件顺序：CORS 须在 Auth 之外 —— OPTIONS preflight 不被 auth 401。"""
     from main_control_service.main import create_app

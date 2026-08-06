@@ -109,8 +109,14 @@ def set_auth_config(cfg: dict[str, Any]) -> None:
 
 
 def get_internal_verify_secret() -> str | None:
-    """current_user 校验 X-Internal-Auth 用的内部凭证。缓存未就绪 → None（current_user 一律 401）。"""
+    """current_user 校验 X-Internal-Auth 用的内部凭证。
+
+    缓存未就绪 / 空 / 仍是 auth.yaml 样板占位符 → None（current_user 一律 401）。
+    拒占位符是防误部署：占位符在仓库公开，若接受则任何人能直连 8901 伪造 X-Internal-Auth。
+    """
     if _auth_config_cache is None:
         return None
     val = _auth_config_cache.get("internal_verify_secret")
-    return val if isinstance(val, str) and val else None
+    if not isinstance(val, str) or not val or val.startswith("change-me"):
+        return None
+    return val

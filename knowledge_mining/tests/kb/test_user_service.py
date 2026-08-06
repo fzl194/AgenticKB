@@ -73,3 +73,42 @@ async def test_verify_credentials_disabled_user(svc):
     u = await svc.create_user(username="dis", password="pw123456", site_role="member")
     await svc.update_user(user_id=u["id"], status="disabled")
     assert await svc.verify_credentials(username="dis", password="pw123456") is None
+
+
+@pytest.mark.asyncio
+async def test_cannot_disable_self(svc, async_pool):
+    admin = await svc.create_user(username="root", password="pw123456", site_role="admin")
+    with pytest.raises(UserError):
+        await svc.update_user(user_id=admin["id"], actor_id=admin["id"], status="disabled")
+
+
+@pytest.mark.asyncio
+async def test_cannot_demote_self(svc):
+    admin = await svc.create_user(username="root", password="pw123456", site_role="admin")
+    with pytest.raises(UserError):
+        await svc.update_user(user_id=admin["id"], actor_id=admin["id"], site_role="member")
+
+
+@pytest.mark.asyncio
+async def test_cannot_demote_last_admin(svc):
+    """仅剩一个 active admin 时，降级他 → 拒（即便不是 self）。"""
+    admin = await svc.create_user(username="root", password="pw123456", site_role="admin")
+    other = await svc.create_user(username="other", password="pw123456", site_role="member")
+    with pytest.raises(UserError):
+        await svc.update_user(user_id=admin["id"], actor_id=other["id"], site_role="member")
+
+
+@pytest.mark.asyncio
+async def test_can_demote_admin_when_two_remain(svc):
+    a1 = await svc.create_user(username="a1", password="pw123456", site_role="admin")
+    a2 = await svc.create_user(username="a2", password="pw123456", site_role="admin")
+    # a2 把 a1 降级（a2 自己仍是 admin）→ 允许
+    updated = await svc.update_user(user_id=a1["id"], actor_id=a2["id"], site_role="member")
+    assert updated["site_role"] == "member"
+
+
+@pytest.mark.asyncio
+async def test_password_too_long_rejected(svc):
+    with pytest.raises(UserError):
+        await svc.create_user(username="x", password="a" * 2000, site_role="member")
+

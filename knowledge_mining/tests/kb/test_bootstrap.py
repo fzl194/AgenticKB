@@ -55,3 +55,23 @@ async def test_promotes_existing_admin_username_row(async_pool):
 async def test_empty_password_skips(async_pool):
     await bootstrap.seed_initial_admin(async_pool, admin_password="")
     assert await KbDB(async_pool).has_admin() is False
+
+
+@pytest.mark.asyncio
+async def test_placeholder_password_skips(async_pool):
+    """样板占位符（仓库公开）不能用来播种首 admin。"""
+    await bootstrap.seed_initial_admin(async_pool, admin_password="change-me-on-first-login")
+    assert await KbDB(async_pool).has_admin() is False
+
+
+@pytest.mark.asyncio
+async def test_does_not_clobber_existing_admin_with_password(async_pool):
+    """admin 用户名已存在且已设密码（有人配过）→ 不覆盖。"""
+    db = KbDB(async_pool)
+    await db.create_user(
+        username="admin", password_hash="$algo$1$AA$BB", site_role="member",
+    )  # 故意 member + 有密码
+    await bootstrap.seed_initial_admin(async_pool, admin_password="realpass1")
+    admin = await db.get_user_by_username("admin")
+    assert admin["password_hash"] == "$algo$1$AA$BB"  # 未被覆盖
+

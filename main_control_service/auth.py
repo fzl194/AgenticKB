@@ -40,9 +40,16 @@ def _is_admin_only(method: str, path: str) -> bool:
         return True
     if method == "POST" and path == "/api/v1/code-sync":
         return True
-    if method == "GET" and path.startswith("/api/v1/logs/"):
+    if method == "GET" and path.startswith("/api/v1/logs"):
         return True
     return False
+
+
+_PLACEHOLDER_PREFIX = "change-me"
+
+
+def _secret_valid(v: Any) -> bool:
+    return isinstance(v, str) and bool(v) and not v.startswith(_PLACEHOLDER_PREFIX)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -59,14 +66,30 @@ class AuthMiddleware(BaseHTTPMiddleware):
         else:
             logger.info("auth config not found at %s — auth disabled", self._config_path)
             self._state = {}
+        if bool(self._state.get("enabled", False)) and not self.secrets_valid:
+            # 占位符/空 secret 在仓库公开 —— 拒绝以它们运行（防伪造 JWT/直连伪造）。
+            # 强制关闭鉴权：mining 侧同步拒占位符 internal_verify_secret → 全链路 401，
+            # 运维会立刻发现并改真实 secret。比「带着公开 secret 继续」安全得多。
+            logger.critical(
+                "auth.yaml enabled=true 但 jwt_secret/internal_verify_secret 缺失或仍是样板占位符 "
+                "—— 鉴权强制关闭。请在 auth.yaml 设真实强随机 secret 后 reload。"
+            )
         return {
             "enabled": self.enabled,
             "token_ttl_seconds": self.token_ttl_seconds,
+            "secrets_valid": self.secrets_valid,
         }
 
     @property
+    def secrets_valid(self) -> bool:
+        return _secret_valid(self._state.get("jwt_secret")) and _secret_valid(
+            self._state.get("internal_verify_secret")
+        )
+
+    @property
     def enabled(self) -> bool:
-        return bool(self._state.get("enabled", False))
+        # enabled 要求 secrets 有效：占位符/空 secret 时强制视为关闭。
+        return bool(self._state.get("enabled", False)) and self.secrets_valid
 
     @property
     def jwt_secret(self) -> str:

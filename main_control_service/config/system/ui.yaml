@@ -1,3 +1,13 @@
+# 站点品牌（部署级，整站统一）。前端启动期 GET /api/v1/system/ui 拉取并应用，
+# 在「系统设置 → 品牌外观」Tab 可视化编辑；改后即时生效、重启/重建前端不丢。
+site:
+  title: CoreMasterKB        # 浏览器标签 <title> + 页头兜底名
+  name: CoreMaster           # 侧边栏 logo 主名
+  badge: Knowledge Base      # 侧边栏 logo 副标题
+  logo_text: KB              # 无图标时渐变方框里的字母标记
+  icon: ""                   # data URI 或 http(s) URL；空 → 回落 /favicon.svg + logo_text
+
+# 以下 api_base 为历史键：当前前端走相对 /api/control-plane，并不读取；保留以免无关回退。
 mining_api_base: http://localhost:8901
 serving_api_base: http://localhost:8081
 llm_api_base: http://localhost:8900

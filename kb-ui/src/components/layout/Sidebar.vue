@@ -1,10 +1,16 @@
 <template>
   <aside class="sidebar">
     <div class="sidebar__logo">
-      <div class="sidebar__logo-icon">KB</div>
+      <div
+        class="sidebar__logo-icon"
+        :class="{ 'sidebar__logo-icon--img': !!logoSrc }"
+      >
+        <img v-if="logoSrc" :src="logoSrc" alt="logo" class="sidebar__logo-img" />
+        <template v-else>{{ brand.logoText }}</template>
+      </div>
       <div class="sidebar__logo-text">
-        <span class="sidebar__logo-name">CoreMaster</span>
-        <span class="sidebar__logo-badge">Knowledge Base</span>
+        <span class="sidebar__logo-name">{{ brand.name }}</span>
+        <span class="sidebar__logo-badge">{{ brand.badge }}</span>
       </div>
     </div>
 
@@ -31,15 +37,21 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Monitor, Management, Search,
   Cpu, Setting, Collection, Connection, DataLine, Files,
 } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
+import { useBrandStore, resolveIcon } from '@/stores/brand'
 
 const route = useRoute()
 const domainStore = useDomainStore()
+const brand = useBrandStore()
+
+// 有图标时显示 <img>；空则回落 logoText 渐变块。
+const logoSrc = computed(() => (brand.icon.trim() ? resolveIcon(brand.icon) : ''))
 
 const navItems = [
   { path: '/', label: '概览', icon: Monitor },
@@ -100,6 +112,17 @@ function isActive(path: string): boolean {
   justify-content: center;
   letter-spacing: -0.5px;
   flex-shrink: 0;
+}
+
+.sidebar__logo-icon--img {
+  background: transparent;
+  overflow: hidden;
+}
+
+.sidebar__logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .sidebar__logo-text {

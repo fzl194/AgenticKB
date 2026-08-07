@@ -40,9 +40,11 @@
 import { ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDomainStore } from '@/stores/domain'
+import { useBrandStore } from '@/stores/brand'
 
 const route = useRoute()
 const domainStore = useDomainStore()
+const brand = useBrandStore()
 
 const pageTitles: Record<string, string> = {
   dashboard: '概览',
@@ -58,7 +60,7 @@ const pageTitles: Record<string, string> = {
   settings: '系统设置',
 }
 
-const pageTitle = computed(() => pageTitles[route.name as string] || 'CoreMasterKB')
+const pageTitle = computed(() => pageTitles[route.name as string] || brand.title)
 
 const allHealthy = ref(true)
 const someHealthy = ref(true)

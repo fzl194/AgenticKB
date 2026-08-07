@@ -11,6 +11,11 @@ export function useControlPlaneApi() {
       return data.items ?? []
     },
 
+    async getSystemConfig(name: string): Promise<Record<string, unknown>> {
+      const { data } = await client.get(`/api/v1/system/${name}`)
+      return data
+    },
+
     async getSystemConfigRaw(name: string): Promise<string> {
       const { data } = await client.get(`/api/v1/system/${name}/raw`, { responseType: 'text' })
       return typeof data === 'string' ? data : JSON.stringify(data)

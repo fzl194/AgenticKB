@@ -156,11 +156,13 @@ def create_app() -> FastAPI:
     app.include_router(uploads_router)
     app.include_router(ontology_router)
     app.include_router(document_lifecycle_router)
+    # kb_auth_router 必须在 kb_router 之前注册：其静态路由 /api/kb/users、/api/kb/auth/verify
+    # 否则会被 kb_router 的动态 /api/kb/{kb_id} 抢先匹配（GET /api/kb/users 被当成 kb_id="users" → 404）。
+    app.include_router(kb_auth_router)
     app.include_router(kb_router)
     app.include_router(kb_documents_router)
     app.include_router(kb_mining_router)
     app.include_router(kb_folders_router)
-    app.include_router(kb_auth_router)
     app.include_router(workflows_router)
 
     # Allow cross-origin requests from the dev server and any local UI.

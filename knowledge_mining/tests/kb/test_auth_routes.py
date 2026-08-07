@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.routes.auth import router as auth_router
+from knowledge_mining.mining.kb.routes.kbs import router as kb_router
 from knowledge_mining.tests.conftest import kb_headers
 
 
@@ -135,3 +136,18 @@ async def test_change_my_password(async_pool):
                          headers=kb_headers("alice"))
         assert r.status_code == 200, r.text
     assert verify_password("newpw345", (await db.get_user(u["id"]))["password_hash"])
+
+
+@pytest.mark.asyncio
+async def test_users_route_not_shadowed_by_kb_id(async_pool):
+    """回归：真实 app 同时挂 kb_router（GET /api/kb/{kb_id}）+ auth_router（GET /api/kb/users）。
+    auth_router 必须先注册，否则 GET /api/kb/users 被当成 kb_id="users" → 404（点「系统设置」报错的根因）。"""
+    await _make_admin(async_pool, "root")
+    app = FastAPI()
+    app.state.pg_pool = async_pool
+    app.include_router(auth_router)   # 与 app.py 同序：auth 先
+    app.include_router(kb_router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/kb/users", headers=kb_headers("root"))
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json(), list)

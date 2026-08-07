@@ -18,6 +18,14 @@ import java.util.Map;
  * {@link ContextAssembler} to turn candidates into a {@link ContextPack} (seed items → source
  * drill-down → graph expansion → evidence roles → compression), the same structure the existing
  * {@code /api/v1/search} returns.
+ *
+ * <p><b>{@code understanding} is optional.</b> It is the only slot here that no retrieval step
+ * needs, and {@code query_understanding} — its sole producer — is an LLM call. Declaring it
+ * required forced every servable paradigm (binding demands this operator as the terminus) to carry
+ * that call, including pure-vector ones that never read an intent or an entity. {@link
+ * ContextAssembler} was already null-tolerant throughout, so the constraint bought nothing.
+ * Without it the pack's {@code query} block loses intent/entities/keywords and the issue
+ * heuristics degrade; the items themselves are unchanged.</p>
  */
 @Component
 public class AssembleOperator implements Operator {
@@ -42,7 +50,7 @@ public class AssembleOperator implements Operator {
                 "终点算子：把候选组装为 ContextPack（含图扩展/证据分组/压缩）",
                 List.of(
                         SlotDecl.required("candidates", SlotType.CANDIDATE_LIST, "候选"),
-                        SlotDecl.required("understanding", SlotType.QUERY_UNDERSTANDING, "查询理解"),
+                        SlotDecl.optional("understanding", SlotType.QUERY_UNDERSTANDING, "查询理解(可选)"),
                         SlotDecl.required("scope", SlotType.SCOPE, "检索范围")),
                 List.of(SlotDecl.required("contextPack", SlotType.CONTEXT_PACK, "上下文包(终点)")),
                 PARAM_SCHEMA,
@@ -65,7 +73,12 @@ public class AssembleOperator implements Operator {
         RetrievalRoutePlan routePlan = new RetrievalRoutePlan(
                 List.of(), Map.of(), null, null, assembly, null);
 
-        String query = understanding != null ? understanding.originalQuery() : "";
+        // Fall back to the request query rather than "": without an understanding node that string
+        // is all the pack's query field and the compressor's relevance scoring have to work with.
+        String query = understanding != null ? understanding.originalQuery() : ctx.query();
+        if (query == null) {
+            query = "";
+        }
         ContextPack pack = assembler.assemble(query, understanding, scope, candidates, routePlan);
         return SlotValues.of("contextPack", pack);
     }

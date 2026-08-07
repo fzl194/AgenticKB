@@ -248,11 +248,31 @@ class KbDB:
     async def list_visible(self, *, user_id: str, domain: str) -> list[dict[str, Any]]:
         """KBs visible to user in domain: owned + member + public, status='active'.
 
-        附带 my_role（owner/editor/viewer 有效访问级别）与 document_count（KB 内文档数），
+        site admin 短路：看域内全部 KB，my_role='admin'（admin 全通）。
+        其余附带 my_role（owner/editor/viewer 有效访问级别）与 document_count（KB 内文档数），
         供列表页一次拿全、免 N+1。my_role 语义：owner 优先；否则 editor 成员；否则 viewer
         （含 viewer 成员与 public 的非成员读者——都是「只读有效角色」）。
         """
         async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT site_role FROM kb_users WHERE id = %(uid)s", {"uid": user_id},
+            )
+            urow = await cur.fetchone()
+            if urow and urow.get("site_role") == "admin":
+                # admin：域内全部 active KB，my_role='admin'
+                cur = await conn.execute(
+                    """SELECT kb.id, kb.domain, kb.name, kb.description,
+                              kb.owner_id, kb.visibility, kb.created_at,
+                              kb.mining_workflow_id,
+                              'admin' AS my_role,
+                              (SELECT COUNT(*) FROM asset_documents d
+                               WHERE d.kb_id = kb.id) AS document_count
+                       FROM knowledge_bases kb
+                       WHERE kb.domain = %(dom)s AND kb.status = 'active'
+                       ORDER BY kb.created_at DESC""",
+                    {"dom": domain},
+                )
+                return [dict(r) for r in await cur.fetchall()]
             cur = await conn.execute(
                 """SELECT kb.id, kb.domain, kb.name, kb.description,
                           kb.owner_id, kb.visibility, kb.created_at,
@@ -447,30 +467,34 @@ class KbDB:
     # ------------------------------------------------------------- visibility
 
     async def is_visible(self, *, kb_id: str, user_id: str) -> bool:
-        """True iff user can read this KB (owner / member / public) and KB is active."""
+        """True iff user can read this KB (admin 全通 / owner / member / public) and KB is active."""
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT 1 FROM knowledge_bases kb
                    WHERE kb.id = %s AND kb.status = 'active'
-                     AND (kb.owner_id = %s
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %s AND u.site_role = 'admin')
+                          OR kb.owner_id = %s
                           OR kb.visibility = 'public'
                           OR EXISTS (SELECT 1 FROM kb_members m
                                      WHERE m.kb_id = kb.id AND m.user_id = %s))""",
-                [kb_id, user_id, user_id],
+                [kb_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 
     async def can_write(self, *, kb_id: str, user_id: str) -> bool:
-        """True iff user can write this KB (owner, or editor member) and KB is active."""
+        """True iff user can write this KB (admin 全通 / owner / editor member) and KB is active."""
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT 1 FROM knowledge_bases kb
                    WHERE kb.id = %s AND kb.status = 'active'
-                     AND (kb.owner_id = %s
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %s AND u.site_role = 'admin')
+                          OR kb.owner_id = %s
                           OR EXISTS (SELECT 1 FROM kb_members m
                                      WHERE m.kb_id = kb.id AND m.user_id = %s AND m.role = 'editor'))
                    """,
-                [kb_id, user_id, user_id],
+                [kb_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 

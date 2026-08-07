@@ -35,6 +35,33 @@ async def test_verify_wrong_internal_secret_401(async_pool):
 
 
 @pytest.mark.asyncio
+async def test_identify_modes(async_pool):
+    """identify 端点：admin→password / member→member / 不在库→not_found。"""
+    db = KbDB(async_pool)
+    await db.create_user(username="root", password_hash="x", site_role="admin")
+    await db.create_user(username="alice", password_hash=None, site_role="member")
+    async with await _client(async_pool) as c:
+        r = await c.post("/api/kb/auth/identify", json={"username": "root"}, headers=kb_headers("i"))
+        assert r.json()["mode"] == "password"
+        r = await c.post("/api/kb/auth/identify", json={"username": "alice"}, headers=kb_headers("i"))
+        assert r.json()["mode"] == "member"
+        r = await c.post("/api/kb/auth/identify", json={"username": "nobody"}, headers=kb_headers("i"))
+        assert r.json()["mode"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_verify_member_no_password_passes(async_pool):
+    """工号 member 无密码 → verify 直接通过（SSO 口子现恒 True）。"""
+    db = KbDB(async_pool)
+    await db.create_user(username="alice", password_hash=None, site_role="member")
+    async with await _client(async_pool) as c:
+        r = await c.post("/api/kb/auth/verify", json={"username": "alice"},
+                         headers=kb_headers("i"))  # 不传 password
+        assert r.status_code == 200, r.text
+        assert r.json()["user"]["site_role"] == "member"
+
+
+@pytest.mark.asyncio
 async def test_verify_missing_internal_secret_401(async_pool):
     async with await _client(async_pool) as c:
         r = await c.post("/api/kb/auth/verify", json={"username": "x", "password": "y"})

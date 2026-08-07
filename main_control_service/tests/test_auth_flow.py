@@ -71,6 +71,25 @@ def test_me_without_token_401(tmp_path):
         assert c.get("/api/v1/auth/me").status_code == 401
 
 
+def test_identify_returns_mode(tmp_path):
+    with _client(tmp_path) as c:
+        with patch("main_control_service.main.identify_via_mining", new_callable=AsyncMock) as m:
+            m.return_value = {"mode": "password"}
+            r = c.post("/api/v1/auth/identify", json={"username": "root"})
+            assert r.status_code == 200, r.text
+            assert r.json()["mode"] == "password"
+
+
+def test_login_member_no_password(tmp_path):
+    """工号 member 无密码也能登录（password 可空）。"""
+    with _client(tmp_path) as c:
+        with patch("main_control_service.main.verify_user_via_mining", new_callable=AsyncMock) as m:
+            m.return_value = {"ok": True, "user": {"username": "alice", "display_name": "Alice", "site_role": "member"}}
+            r = c.post("/api/v1/auth/login", json={"username": "alice"})  # 无 password
+            assert r.status_code == 200, r.text
+            assert r.json()["user"]["site_role"] == "member"
+
+
 def test_build_forward_headers_injects_kb_headers():
     """有 request.state.user 时，转发头注入 X-KB-User/X-KB-Role/X-Internal-Auth。"""
     req = SimpleNamespace(

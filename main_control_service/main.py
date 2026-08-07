@@ -50,6 +50,26 @@ async def verify_user_via_mining(
     return None
 
 
+async def identify_via_mining(
+    verify_url: str, internal_secret: str, username: str,
+) -> dict | None:
+    """POST mining /api/kb/auth/identify（带 X-Internal-Auth）。返回 {mode,...} 或 None。"""
+    if not internal_secret:
+        return None
+    try:
+        resp = await get_proxy_client().post(
+            f"{verify_url}/api/kb/auth/identify",
+            json={"username": username},
+            headers={"X-Internal-Auth": internal_secret},
+            timeout=10.0,
+        )
+    except Exception:  # noqa: BLE001 — best-effort
+        return None
+    if resp.status_code == 200:
+        return resp.json()
+    return None
+
+
 def create_app(
     *,
     config_dir: Path | None = None,
@@ -107,9 +127,9 @@ def create_app(
     async def login(request: Request) -> Response:
         body = await request.json()
         username = str(body.get("username") or "").strip()
-        password = str(body.get("password") or "")
-        if not username or not password:
-            return JSONResponse(status_code=400, content={"detail": "username and password required"})
+        password = body.get("password")  # 可空：工号 member 无密码
+        if not username:
+            return JSONResponse(status_code=400, content={"detail": "username required"})
         # auth 是全局的 —— 取任一启用域的 mining_url 即可（验密码与域无关）。
         mining_url: str | None = None
         for entry in service.list_domains():
@@ -142,6 +162,36 @@ def create_app(
             secret, ttl=int(ttl),
         )
         return JSONResponse(content={"token": token, "user": u})
+
+    @app.post("/api/v1/auth/identify")
+    async def identify(request: Request) -> Response:
+        """登录第一步：按用户名判定模式（password/member/not_found）。透传 mining。"""
+        body = await request.json()
+        username = str(body.get("username") or "").strip()
+        if not username:
+            return JSONResponse(status_code=400, content={"detail": "username required"})
+        mining_url: str | None = None
+        for entry in service.list_domains():
+            if not entry.get("enabled", True):
+                continue
+            did = entry.get("domain_id")
+            if not did:
+                continue
+            try:
+                svcs = service.get_domain_services(did)
+            except Exception:  # noqa: BLE001
+                continue
+            if svcs.get("mining_url"):
+                mining_url = str(svcs["mining_url"]).rstrip("/")
+                break
+        if not mining_url:
+            return JSONResponse(status_code=503, content={"detail": "mining backend unavailable"})
+        result = await identify_via_mining(
+            mining_url, request.app.state.internal_verify_secret, username,
+        )
+        if result is None:
+            return JSONResponse(status_code=502, content={"detail": "mining identify unavailable"})
+        return JSONResponse(content=result)
 
     @app.get("/api/v1/auth/me")
     def me(request: Request) -> Response:

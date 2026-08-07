@@ -52,17 +52,25 @@ class UserService:
         return await self._db.list_users()
 
     async def create_user(
-        self, *, username: str, password: str, site_role: str = "member",
+        self, *, username: str, password: str | None = None, site_role: str = "member",
         display_name: str | None = None,
     ) -> dict[str, Any]:
         if site_role not in _VALID_ROLES:
             raise InvalidRole(site_role)
         if not username or not username.strip():
             raise UserError("username required")
-        _validate_password(password)
+        if site_role == "admin":
+            # admin 必须有密码
+            if not password:
+                raise UserError("admin 必须设置密码")
+            _validate_password(password)
+            pw_hash: str | None = hash_password(password)
+        else:
+            # member（工号）—— 无密码（白名单 = 表里有此行即信任）
+            pw_hash = None
         try:
             return await self._db.create_user(
-                username=username.strip(), password_hash=hash_password(password),
+                username=username.strip(), password_hash=pw_hash,
                 site_role=site_role, display_name=display_name,
             )
         except UniqueViolation as exc:
@@ -78,6 +86,10 @@ class UserService:
         target = await self._db.get_user(user_id)
         if target is None:
             raise UserNotFound(user_id)
+        promoting = site_role == "admin" and target["site_role"] != "admin"
+        # 升 admin：目标必须有密码（工号无密码不能直接升 admin）
+        if promoting and not target.get("password_hash"):
+            raise UserError("升管理员前请先为该用户设置密码")
         demoting = (
             site_role is not None and target["site_role"] == "admin" and site_role != "admin"
         )
@@ -108,15 +120,46 @@ class UserService:
             raise WrongPassword("old password mismatch")
         await self._db.set_password_hash(user_id, hash_password(new))
 
-    async def verify_credentials(self, *, username: str, password: str) -> dict[str, Any] | None:
-        """登录校验：返回 user（含 site_role/display_name）或 None。
+    async def verify_intranet_auth(self, username: str) -> bool:
+        """【SSO 口子】当前内网鉴权未接入 → 恒 True（白名单 = kb_users 表里有此行即信任）。
 
-        用户不存在/无密码/被禁用时仍跑一次 dummy PBKDF2，消除用户存在性时序侧信道。
+        未来：把这里换成「跳内网 SSO → 回跳带 ticket → 校验 ticket」。
+        verify_credentials 的 member 分支只调本函数，换 SSO 不动调用方。
+        """
+        return True
+
+    async def identify(self, username: str) -> dict[str, Any]:
+        """登录第一步：按用户名判定登录模式。
+
+        - not_found：不在库 / 被禁用。
+        - password：admin 或有密码账号 → 前端弹密码框。
+        - member：工号账号（在库、无密码）→ 前端直接登录（未来跳 SSO）。
         """
         user = await self._db.get_user_by_username(username)
-        if user is None or not user.get("password_hash") or user.get("status") == "disabled":
-            verify_password(password, _DUMMY_HASH)  # 恒定耗时 dummy
+        if user is None or user.get("status") == "disabled":
+            return {"mode": "not_found"}
+        if user.get("password_hash"):
+            return {"mode": "password"}
+        return {"mode": "member", "display_name": user.get("display_name")}
+
+    async def verify_credentials(
+        self, *, username: str, password: str | None = None,
+    ) -> dict[str, Any] | None:
+        """登录校验：返回 user（含 site_role/display_name）或 None。
+
+        - 有 password_hash（admin）→ 验密码。
+        - 无 password_hash（工号 member）→ 走 SSO 口子（verify_intranet_auth）。
+        - 不存在 / 禁用 → dummy PBKDF2（恒定耗时）+ None。
+        """
+        user = await self._db.get_user_by_username(username)
+        if user is None or user.get("status") == "disabled":
+            verify_password(password or "", _DUMMY_HASH)  # 恒定耗时 dummy
             return None
-        if not verify_password(password, user["password_hash"]):
+        if user.get("password_hash"):
+            if not verify_password(password or "", user["password_hash"]):
+                return None
+            return user
+        # 工号 member（无密码）→ SSO 口子
+        if not await self.verify_intranet_auth(username):
             return None
         return user

@@ -29,12 +29,16 @@ router = APIRouter(prefix="/api/kb", tags=["kb-auth"])
 
 class VerifyReq(BaseModel):
     username: str
-    password: str
+    password: str | None = None
+
+
+class IdentifyReq(BaseModel):
+    username: str
 
 
 class CreateUserReq(BaseModel):
     username: str
-    password: str
+    password: str | None = None  # admin 必填；member（工号）无密码
     site_role: str = "member"
     display_name: str | None = None
 
@@ -76,6 +80,16 @@ def _map_user_error(exc: Exception) -> HTTPException:
 
 
 # ---------------------------------------------------------------- verify (internal)
+
+@router.post("/auth/identify")
+async def identify(
+    body: IdentifyReq, request: Request,
+    svc: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    """登录第一步：按用户名判定模式（password / member / not_found）。内部端点。"""
+    _require_internal(request)
+    return await svc.identify(body.username)
+
 
 @router.post("/auth/verify")
 async def verify_credentials(

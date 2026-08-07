@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _SKIP_PATHS: frozenset[str] = frozenset({
     "/health",
     "/api/v1/auth/login",
+    "/api/v1/auth/identify",  # 登录前探测（按用户名判定模式），无 token
 })
 
 

@@ -2,6 +2,7 @@ package com.coremasterkb.serving.operator;
 
 import com.coremasterkb.serving.operator.core.Operator;
 import com.coremasterkb.serving.operator.core.OperatorDef;
+import com.coremasterkb.serving.operator.core.exceptions.ParadigmCompileException;
 import com.coremasterkb.serving.operator.engine.ParadigmCompiler;
 import com.coremasterkb.serving.operator.operators.fuse.IdentityOperator;
 import com.coremasterkb.serving.operator.operators.fuse.RrfOperator;
@@ -42,7 +43,7 @@ class OperatorCatalogTest {
         List<Operator> all = List.of(
                 new QueryEmbedOperator(null), new QueryUnderstandingOperator(null, null),
                 new HydeOperator(null), new MultiQueryOperator(null), new RequestInputOperator(),
-                new ScopeResolveOperator(null),
+                new ScopeResolveOperator(null, null),
                 new DenseVectorOperator(null), new FtsOperator(null),
                 new EntityExactOperator(null),
                 new com.coremasterkb.serving.operator.operators.retrieve.GraphExpandOperator(null),
@@ -149,5 +150,48 @@ class OperatorCatalogTest {
               {"fromNode":"qu","fromSlot":"understanding","toNode":"asm","toSlot":"understanding"},
               {"fromNode":"scope","fromSlot":"scope","toNode":"asm","toSlot":"scope"}],
              "output":{"nodeId":"asm","slot":"contextPack"}}""")));
+    }
+
+    /**
+     * The cheapest servable graph: terminates in {@code assemble} — so it is bindable — yet carries
+     * no {@code query_understanding} node. That operator is the only producer of the
+     * {@code understanding} slot and it is an LLM call, so a required slot here would have taxed
+     * every pure-vector paradigm with a roundtrip it never reads.
+     */
+    @Test
+    void servableParadigm_withoutQueryUnderstanding_compiles() {
+        assertDoesNotThrow(() -> compiler().compile(json("""
+            {"nodes":[
+              {"nodeId":"qe","operatorType":"query_embed"},
+              {"nodeId":"scope","operatorType":"scope_resolve"},
+              {"nodeId":"dv","operatorType":"dense_vector"},
+              {"nodeId":"asm","operatorType":"assemble","params":{"relationExpansion":false,"maxExpanded":0}}],
+             "edges":[
+              {"fromNode":"qe","fromSlot":"queryEmbedding","toNode":"dv","toSlot":"queryEmbedding"},
+              {"fromNode":"scope","fromSlot":"scope","toNode":"dv","toSlot":"scope"},
+              {"fromNode":"dv","fromSlot":"candidates","toNode":"asm","toSlot":"candidates"},
+              {"fromNode":"scope","fromSlot":"scope","toNode":"asm","toSlot":"scope"}],
+             "output":{"nodeId":"asm","slot":"contextPack"}}""")));
+    }
+
+    /** {@code scope} stays required — dropping it is what {@code ENTRY_SLOTS} deliberately prevents. */
+    @Test
+    void assembleWithoutScope_failsToCompile() {
+        var e = assertThrows(ParadigmCompileException.class, () -> compiler().compile(json("""
+            {"nodes":[
+              {"nodeId":"qe","operatorType":"query_embed"},
+              {"nodeId":"scope","operatorType":"scope_resolve"},
+              {"nodeId":"dv","operatorType":"dense_vector"},
+              {"nodeId":"asm","operatorType":"assemble"}],
+             "edges":[
+              {"fromNode":"qe","fromSlot":"queryEmbedding","toNode":"dv","toSlot":"queryEmbedding"},
+              {"fromNode":"scope","fromSlot":"scope","toNode":"dv","toSlot":"scope"},
+              {"fromNode":"dv","fromSlot":"candidates","toNode":"asm","toSlot":"candidates"}],
+             "output":{"nodeId":"asm","slot":"contextPack"}}""")));
+        assertTrue(e.errors().stream().anyMatch(
+                        err -> "missing_required_input".equals(err.kind())
+                                && "asm".equals(err.nodeId())
+                                && err.message().contains("scope")),
+                "expected a missing_required_input error on 'asm' naming scope, got: " + e.errors());
     }
 }

@@ -170,13 +170,26 @@ public class ContextAssembler {
             }
         }
 
+        // Built from every row rather than the deduplicated map above: selectWithMeta joins the
+        // 1:N snapshot-link table, so a segment whose snapshot backs several documents appears
+        // once per document. Collapsing to a single row here would pick an arbitrary winner and
+        // then present it as the seed's provenance.
+        Map<String, Set<String>> segToDocuments = new HashMap<>();
+        for (var seg : sourceSegments) {
+            if (seg.getId() != null && seg.getDocumentId() != null && !seg.getDocumentId().isBlank()) {
+                segToDocuments.computeIfAbsent(seg.getId(), k -> new LinkedHashSet<>())
+                        .add(seg.getDocumentId());
+            }
+        }
+
         // Build section prefix map for tree-nav section bias
         Map<String, String> segDiscourseRole = buildDiscourseRoleMap(sourceSegments);
         Map<String, String> segSectionPrefix = buildSectionPrefixMap(sourceSegments);
 
         // 3. Build seed items (tree-nav section bias, then discourse nucleus-first)
         List<ContextItem> seedItems = buildSeedItems(
-                candidates, understanding, segDiscourseRole, segSectionPrefix, navigatedSections);
+                candidates, understanding, segDiscourseRole, segSectionPrefix, navigatedSections,
+                segToDocuments);
         List<ContextItem> sourceItems = buildSourceItems(sourceSegments);
 
         // 4. Graph expansion if enabled
@@ -359,7 +372,8 @@ public class ContextAssembler {
             QueryUnderstanding understanding,
             Map<String, String> segDiscourseRole,
             Map<String, String> segSectionPrefix,
-            Set<String> navigatedSections) {
+            Set<String> navigatedSections,
+            Map<String, Set<String>> segToDocuments) {
         List<ContextItem> items = new ArrayList<>();
         for (var c : candidates) {
             Map<String, Object> citation = buildCitation(c);
@@ -387,7 +401,7 @@ public class ContextAssembler {
                     getMetadataString(c.metadata(), "title", null),
                     getMetadataString(c.metadata(), "block_type", "unknown"),
                     getMetadataString(c.metadata(), "semantic_role", "unknown"),
-                    null,
+                    resolveSeedDocumentId(c, segToDocuments),
                     null,
                     safeJsonParse(getMetadataString(c.metadata(), "source_refs_json", "{}")),
                     metadata,
@@ -496,6 +510,31 @@ public class ContextAssembler {
             }
         }
         return null;
+    }
+
+    /**
+     * The document a seed came from, or null when that is not a single answer.
+     *
+     * <p>Seeds carried no {@code sourceId} at all before: a caller holding the item that actually
+     * matched had to walk {@code citation.raw_segment_ids} and look each one up just to learn which
+     * document it belonged to — while the {@code raw_segment} items around it had the id already.</p>
+     *
+     * <p>Null when the candidate's segments resolve to more than one document. Snapshots are
+     * content-deduplicated ({@code UNIQUE (domain, normalized_content_hash)}), so identical files
+     * share segments, and naming one of them would put a confident but arbitrary provenance label
+     * on a citation. Same rule as {@code FullTextService}.</p>
+     */
+    private String resolveSeedDocumentId(
+            RetrievalCandidate candidate, Map<String, Set<String>> segToDocuments) {
+        Set<String> docs = new LinkedHashSet<>();
+        for (String segId : resolveCandidateSources(candidate)) {
+            Set<String> forSeg = segToDocuments.get(segId);
+            if (forSeg != null) {
+                docs.addAll(forSeg);
+                if (docs.size() > 1) return null;
+            }
+        }
+        return docs.size() == 1 ? docs.iterator().next() : null;
     }
 
     private Map<String, Object> buildCitation(RetrievalCandidate candidate) {
@@ -648,6 +687,7 @@ public class ContextAssembler {
                     doc.getDocumentKey() != null ? doc.getDocumentKey() : "",
                     doc.getTitle(),
                     doc.getRelativePath(),
+                    doc.getKbId(),
                     safeJsonParse(doc.getScopeJson() != null ? doc.getScopeJson() : "{}"),
                     Map.of()
             ));

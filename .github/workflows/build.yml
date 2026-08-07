@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Dockerfile 有 COPY .env，而 .env 不进版本库（含真密钥）。
       # 用 .env.example 占位即可：构建期没有任何 RUN 读它的内容，
@@ -36,18 +36,89 @@ jobs:
         run: cp .env.example .env
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
+      # 优先用 GHCR_TOKEN（classic PAT，勾 write:packages）。
+      # fork 仓库的 GITHUB_TOKEN 拿不到 packages:write 时，push 会以
+      # `denied: permission_denied: write_package` 失败；配了 secret 就绕开。
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # 镜像要构建 3 分半，push 权限不对的话最后一刻才炸，太浪费。
+      # 这里先探一次写权限：申请 pull,push token → 开一个 blob upload 会话 → 立刻取消。
+      # 不产生任何镜像内容。GHCR 的 token 是不透明串（不是带 access 声明的 JWT），
+      # 所以只能实打实探一次，不能靠解 scope。
+      # 只在「确凿被拒」（token DENIED / upload 401、403）时提前失败；
+      # 其余情况（网络抖动、404 等未知响应）一律告警放行，绝不误伤能成功的构建。
+      - name: Preflight GHCR push permission
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_PASS: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          USING_PAT: ${{ secrets.GHCR_TOKEN != '' }}
+        run: |
+          # 凭据画像。失败时要一并写进 ::error:: 注解——Actions 日志要 admin 权限
+          # 才看得到，注解却是公开可读的，排查时只能靠它。
+          # 只打类型和 scope，绝不打 token 本身。
+          if [ "$USING_PAT" = "true" ]; then src="secrets.GHCR_TOKEN"; else src="GITHUB_TOKEN(回落)"; fi
+          case "$GHCR_PASS" in
+            ghp_*)        kind="classic PAT" ;;
+            github_pat_*) kind="fine-grained PAT（GHCR 不支持，必须用 classic）" ;;
+            ghs_*)        kind="Actions GITHUB_TOKEN" ;;
+            *)            kind="未知格式" ;;
+          esac
+          scopes=$(curl -sS -o /dev/null -D - -H "Authorization: Bearer $GHCR_PASS" \
+            https://api.github.com/user 2>/dev/null \
+            | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: *//p' | tr -d '\r')
+          profile="来源=$src 类型=$kind scopes=[${scopes:-无}] 用户=$GHCR_USER"
+          echo "凭据画像：$profile"
+
+          fail() {
+            echo "::error::$1（$profile）"
+            echo "对照排查："
+            echo "  · 类型不是 classic PAT → 重新生成 classic token（Tokens (classic)）"
+            echo "  · scopes 里没有 write:packages → token 漏勾了这个 scope"
+            echo "  · 来源=GITHUB_TOKEN(回落) → secret 没被读到，检查名字是否恰好为 GHCR_TOKEN、"
+            echo "    且加在仓库 Secrets 而非 Variables / Environment secrets"
+            exit 1
+          }
+
+          resp=$(curl -sS -u "$GHCR_USER:$GHCR_PASS" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${IMAGE_NAME}:pull,push") \
+            || { echo "::warning::预检请求失败，跳过检查"; exit 0; }
+
+          case "$resp" in
+            *DENIED*|*denied*) fail "GHCR 拒绝发放 ${IMAGE_NAME} 的 push token：$resp" ;;
+          esac
+          tok=$(printf '%s' "$resp" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          [ -n "$tok" ] || { echo "::warning::未拿到 token，跳过检查：$resp"; exit 0; }
+
+          # 开一个上传会话再取消：202 = 确实能写，401/403 = 确实不能写。
+          hdr=$(mktemp)
+          code=$(curl -sS -o /dev/null -D "$hdr" -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $tok" \
+            "https://ghcr.io/v2/${IMAGE_NAME}/blobs/uploads/") \
+            || { echo "::warning::上传探测请求失败，跳过检查"; exit 0; }
+
+          case "$code" in
+            202)
+              loc=$(sed -n 's/^[Ll]ocation: *//p' "$hdr" | tr -d '\r')
+              case "$loc" in
+                https://*) curl -sS -o /dev/null -X DELETE -H "Authorization: Bearer $tok" "$loc" || true ;;
+                /*)        curl -sS -o /dev/null -X DELETE -H "Authorization: Bearer $tok" "https://ghcr.io$loc" || true ;;
+              esac
+              echo "OK：对 ${IMAGE_NAME} 有 push 权限，继续构建"
+              ;;
+            401|403) fail "凭据对 ${IMAGE_NAME} 没有写权限（上传会话 HTTP $code），构建会白跑。" ;;
+            *)       echo "::warning::上传探测返回 HTTP $code，无法判定，继续构建" ;;
+          esac
 
       - name: Derive tags
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -57,7 +128,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile

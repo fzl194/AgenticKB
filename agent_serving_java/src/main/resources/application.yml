@@ -3,17 +3,23 @@ server:
 
 spring:
   # 不再 import .env：serving 的库走 main_control 的 /api/v1/serving-config（per-domain，
-  # 由 DomainPoolManager 路由）。下面这个默认 DataSource 仅给非路由的全局表（operator_paradigm*）
-  # 用，取值与 main_control_service/config/system/database.yaml 的 default(kb_db) 一致。
+  # 由 DomainPoolManager 路由）。非路由的全局表（operator_paradigm*）走默认 DataSource，
+  # 它的地址同样来自 main_control —— GET /api/v1/system/database 的 default 块，也就是
+  # main_control_service/config/system/database.yaml，与 mining 读的是同一份真相源。
+  #
+  # ⚠️ 下面三项只是 main_control 不可达时的兜底，出厂留空，不要填死地址。
+  # 曾经这里硬编码着 jdbc:postgresql://<host>:5432/kb_db，而 jar 烤在镜像里、没有 bind-mount，
+  # 于是改宿主机 YAML 对这个池完全无效，serving 会一声不响地继续连旧库。留空后：
+  # main_control 拉不到且没配兜底 → 启动直接失败并报 default_datasource_unresolved。
+  # 本地开发 / IntelliJ 用 SPRING_DATASOURCE_URL 等环境变量补，测试用 application-test-pg.yml。
+  #
+  # 池大小由 main_control 的 pool_min/pool_max 决定（代码兜底 2/10、超时 5s）。这里不再写
+  # hikari: 段——写了会覆盖 database.yaml，又是一处「改了不生效」。要临时压测再按 profile 加。
   datasource:
-    url: jdbc:postgresql://121.89.90.178:5432/kb_db
-    username: kb_user
-    password: nis123qwe
+    url: ${SPRING_DATASOURCE_URL:}
+    username: ${SPRING_DATASOURCE_USERNAME:}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: org.postgresql.Driver
-    hikari:
-      minimum-idle: 2
-      maximum-pool-size: 10
-      connection-timeout: 5000
 
 mybatis:
   mapper-locations: classpath:mapper/*.xml
@@ -29,11 +35,19 @@ serving:
   # 并可经 POST /api/v1/admin/reload-config 热重载。
   main-control:
     base-url: ${SERVING_MAIN_CONTROL_BASEURL:http://localhost:8910}
+    # 默认数据源的地址是否也向 main_control 要（GET /api/v1/system/database 的 default 块）。
+    # 生产必须 true——那份文件是 DB 地址的唯一真相源。只有「本进程必须自带库、不能被本机
+    # main_control 影响」的场合才关，比如集成测试（见 application-test-pg.yml）。
+    default-database-enabled: ${SERVING_MAIN_CONTROL_DEFAULT_DATABASE:true}
   # 本地文件兜底：仅当 main_control 不可达时使用（IntelliJ / 测试）。
   # 指向 main_control 所拥有的同一份文件 —— main_control_service/config 是唯一真相源。
   scenario-packs-dir: ${SCENARIO_PACKS_DIR:../main_control_service/config/scenario_packs}
   domain-registry-path: ${DOMAIN_REGISTRY_PATH:../main_control_service/config/domain_registry.yaml}
   # 需要覆盖时用环境变量 SERVING_DEFAULT_DOMAIN（Spring 宽松绑定，无需写占位符）。
   default-domain: cloud_core_network
+  # KB 上传文件的根目录，用于 GET /api/v1/documents/{id}/raw 直接回原件。
+  # 必须与 main_control_service/config/system/mining.yaml 的 upload.root 指向同一目录
+  # （容器内 cwd=/app，那边写的 ./uploads 即此处的 /app/uploads）。
+  upload-root: ${SERVING_UPLOAD_ROOT:/app/uploads}
   llm:
     base-url: ${LLM_SERVICE_URL:http://localhost:8900}

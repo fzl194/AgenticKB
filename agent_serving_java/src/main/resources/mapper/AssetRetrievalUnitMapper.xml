@@ -28,6 +28,39 @@
         <result column="target_ref_json"      property="targetRefJson"/>
     </resultMap>
 
+    <resultMap id="unitFullMap"
+               type="com.coremasterkb.serving.mapper.result.FtsResultRow">
+        <result column="id"                   property="id"/>
+        <result column="document_snapshot_id" property="documentSnapshotId"/>
+        <result column="text"                 property="text"/>
+        <result column="title"                property="title"/>
+        <result column="unit_type"            property="unitType"/>
+        <result column="target_type"          property="targetType"/>
+        <result column="source_refs_json"     property="sourceRefsJson"/>
+        <result column="target_ref_json"      property="targetRefJson"/>
+    </resultMap>
+
+    <!-- Scope filter is unconditional here — see fetchDetailsByIdsInScope's Javadoc. -->
+    <select id="fetchDetailsByIdsInScope" resultMap="unitFullMap">
+        SELECT ru.id,
+               ru.document_snapshot_id,
+               ru.text,
+               ru.title,
+               ru.unit_type,
+               ru.target_type,
+               ru.source_refs_json,
+               ru.target_ref_json
+        FROM asset_retrieval_units ru
+        WHERE ru.id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        AND ru.document_snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+    </select>
+
     <!--
         PostgreSQL full-text search using websearch_to_tsquery.
         ftsQuery format: "token1 OR token2 OR token3"

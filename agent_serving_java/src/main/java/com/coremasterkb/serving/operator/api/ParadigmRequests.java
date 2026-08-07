@@ -9,8 +9,15 @@ final class ParadigmRequests {
     private ParadigmRequests() {}
 
     static RunArgs toRunArgs(JsonNode body) {
+        return toRunArgs(body, null);
+    }
+
+    /** @param username the {@code X-KB-User} header value, or null when the caller sent none */
+    static RunArgs toRunArgs(JsonNode body, String username) {
+        String caller = (username != null && !username.isBlank()) ? username.trim() : null;
         return new RunArgs(text(body, "query"), text(body, "domain"), text(body, "channel"),
-                body != null && body.hasNonNull("debug") && body.get("debug").asBoolean());
+                body != null && body.hasNonNull("debug") && body.get("debug").asBoolean(),
+                caller);
     }
 
     static String text(JsonNode body, String field) {

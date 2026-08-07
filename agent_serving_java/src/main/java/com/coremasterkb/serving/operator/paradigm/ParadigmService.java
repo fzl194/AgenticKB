@@ -78,6 +78,20 @@ public class ParadigmService {
         return paradigmMapper.selectPublished();
     }
 
+    /**
+     * The paradigm a domain-only caller (MCP) should use, or null when the domain has none.
+     *
+     * <p>"No binding" is a normal state, not an error — callers fall back to {@code /api/v1/search}.
+     * Returning null rather than throwing is what lets that stay distinguishable from a genuine
+     * failure at the HTTP layer.</p>
+     */
+    public ParadigmEntity resolveDefaultForDomain(String domain) {
+        if (domain == null || domain.isBlank()) {
+            return null;
+        }
+        return paradigmMapper.selectDefaultByDomain(domain.trim());
+    }
+
     /** Replace the editable draft graph. */
     public ParadigmEntity updateDraft(String id, String graphJson) {
         getOrThrow(id);
@@ -139,6 +153,29 @@ public class ParadigmService {
         return getOrThrow(id);
     }
 
+    /**
+     * Write a paradigm's domain binding. Clears the domain's previous default first when claiming
+     * the default slot — the reverse order violates {@code uq_paradigm_domain_default} (23505).
+     *
+     * <p><b>Callers must have cleared {@code DomainContext} before invoking this.</b> The
+     * transaction manager sits on the {@code @Primary} routing DataSource, so it binds a connection
+     * based on whatever domain the thread carried when the transaction opened — with a domain set,
+     * these control-DB writes would land in that domain's database instead. In production every
+     * domain currently points at the same physical {@code kb_db}, so the mistake would not raise an
+     * error, it would silently write to the wrong logical store. All validation that needs a domain
+     * connection therefore happens in {@link ParadigmBindingService} <em>before</em> this call.</p>
+     */
+    @Transactional
+    public ParadigmEntity applyBinding(String id, String domain, boolean isDefault) {
+        getOrThrow(id);
+        if (isDefault && domain != null) {
+            paradigmMapper.clearDefaultForDomain(domain);
+        }
+        paradigmMapper.updateBinding(id, domain, isDefault);
+        log.info("[paradigm] bound {} → domain={} default={}", id, domain, isDefault);
+        return getOrThrow(id);
+    }
+
     /** Archive a paradigm (status → archived); its versions and current_version are kept intact. */
     public ParadigmEntity archive(String id) {
         ParadigmEntity p = getOrThrow(id);
@@ -169,6 +206,15 @@ public class ParadigmService {
      * otherwise the paradigm's {@code current_version}. Throws if unpublished or version missing.
      */
     public JsonNode resolveExecutableGraph(String id, Integer version) {
+        return parse(resolveExecutableVersion(id, version).getGraphJson());
+    }
+
+    /**
+     * As {@link #resolveExecutableGraph} but returns the whole version row, so a caller that also
+     * needs the <em>effective</em> version number (e.g. to attribute a query log when the request
+     * said "current") gets it from this same read instead of querying again.
+     */
+    public ParadigmVersionEntity resolveExecutableVersion(String id, Integer version) {
         ParadigmEntity p = getOrThrow(id);
         int v = (version != null) ? version : p.getCurrentVersion();
         if (v <= 0) {
@@ -178,7 +224,7 @@ public class ParadigmService {
         if (ve == null) {
             throw new ParadigmNotFoundException("paradigm " + id + " has no version " + v);
         }
-        return parse(ve.getGraphJson());
+        return ve;
     }
 
     /** Compile-validate a graph (no execution), returning the structured error list. */

@@ -274,4 +274,25 @@ export const PARADIGM_TEMPLATES: ParadigmTemplate[] = [
       output: { nodeId: 'asm', slot: 'contextPack' },
     },
   },
+  {
+    key: 'lite-assemble',
+    label: '⑫ 极简生产链（无查询理解）',
+    description: 'query_embed → dense_vector → assemble。终点是 assemble 所以照样能绑定到域给 MCP 用，但不接 query_understanding，省掉一次 LLM 往返；同时关掉图扩展。代价：ContextPack 的 query 块没有意图/实体/关键词，条目本身不受影响。',
+    graph: {
+      schemaVersion: '1.0',
+      nodes: [
+        { nodeId: 'qe', operatorType: 'query_embed', ui: { x: 40, y: 50 } },
+        { nodeId: 'scope', operatorType: 'scope_resolve', ui: { x: 40, y: 190 } },
+        { nodeId: 'dv', operatorType: 'dense_vector', params: { textKind: 'both', topK: 20 }, ui: { x: 320, y: 110 } },
+        { nodeId: 'asm', operatorType: 'assemble', params: { maxItems: 10, maxExpanded: 0, relationExpansion: false }, ui: { x: 600, y: 110 } },
+      ],
+      edges: [
+        { fromNode: 'qe', fromSlot: 'queryEmbedding', toNode: 'dv', toSlot: 'queryEmbedding' },
+        { fromNode: 'scope', fromSlot: 'scope', toNode: 'dv', toSlot: 'scope' },
+        { fromNode: 'dv', fromSlot: 'candidates', toNode: 'asm', toSlot: 'candidates' },
+        { fromNode: 'scope', fromSlot: 'scope', toNode: 'asm', toSlot: 'scope' },
+      ],
+      output: { nodeId: 'asm', slot: 'contextPack' },
+    },
+  },
 ]

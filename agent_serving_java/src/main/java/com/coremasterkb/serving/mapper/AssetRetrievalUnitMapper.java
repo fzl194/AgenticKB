@@ -14,6 +14,20 @@ public interface AssetRetrievalUnitMapper {
      */
     List<FtsResultRow> fetchDetailsByIds(@Param("ids") List<String> ids);
 
+    /**
+     * Same as {@link #fetchDetailsByIds} but confined to a snapshot scope, and returning the
+     * columns the full-text drill-down needs (title / unit_type / document_snapshot_id).
+     *
+     * <p>{@link #fetchDetailsByIds} has no scope filter at all: it is called during hydration,
+     * where the ids already came out of a scope-filtered retrieval. Exposing that method on an
+     * endpoint would let any caller read any unit in any knowledge base by naming its id, so the
+     * drill-down uses this one instead. The unfiltered method is left alone rather than tightened
+     * — changing its signature would ripple through the retrieval path for no benefit.</p>
+     */
+    List<FtsResultRow> fetchDetailsByIdsInScope(
+            @Param("ids") List<String> ids,
+            @Param("snapshotIds") List<String> snapshotIds);
+
     // ----- Level 1: tsvector full-text search -----
 
     List<FtsResultRow> searchByFts(

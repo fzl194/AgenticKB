@@ -87,6 +87,33 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("kb_not_found -> 404 (same answer for forbidden and nonexistent)")
+    void kbNotFound() {
+        ResponseEntity<Map<String, Object>> resp =
+                handler.handleIllegalArgument(new IllegalArgumentException("kb_not_found"));
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(resp.getBody()).containsEntry("error", "kb_not_found");
+    }
+
+    @Test
+    @DisplayName("no_active_kb_build -> 404")
+    void noActiveKbBuild() {
+        ResponseEntity<Map<String, Object>> resp =
+                handler.handleIllegalArgument(new IllegalArgumentException("no_active_kb_build"));
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(resp.getBody()).containsEntry("error", "no_active_kb_build");
+    }
+
+    @Test
+    @DisplayName("kb_ids_required -> 400")
+    void kbIdsRequired() {
+        ResponseEntity<Map<String, Object>> resp =
+                handler.handleIllegalArgument(new IllegalArgumentException("kb_ids_required"));
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(resp.getBody()).containsEntry("error", "kb_ids_required");
+    }
+
+    @Test
     @DisplayName("unknown IllegalStateException -> 500 internal_error")
     void unknownIllegalState() {
         ResponseEntity<Map<String, Object>> resp =

@@ -827,6 +827,8 @@ async def test_upload_config_exposes_submission_engine(monkeypatch):
     result = await uploads.get_upload_config()
 
     assert result["mining_run_submission_engine"] == "workflow"
+    assert ".xls" in result["accepted_extensions"]
+    assert ".xlsx" in result["accepted_extensions"]
 
 
 @pytest.mark.asyncio

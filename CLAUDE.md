@@ -485,6 +485,7 @@ docker compose exec app supervisorctl restart mining
 | `docs/mining-workflow-rollout-runbook.md` | ✅ **准确**，挖掘 workflow 灰度/回滚的权威规程，与源码对得上（16 算子、控制库/域库边界、冻结 manifest、`MINING_RUN_SUBMISSION_ENGINE`） |
 | `docs/mcp-paradigm-routing-design.md` | ✅ 质量高，MCP↔范式域绑定的设计依据（数据模型、回落语义、响应归一）。**一处已被后续改动超越**：它写「保持单工具 `search_knowledge`」，现在是 2 个 tool（下钻工具是后加的） |
 | `docs/segment-fulltext-retrieval-design.md` | ✅ 质量高，原文下钻的设计依据；§0 那六条现状事实（`selectWithMeta` 空 scope 退化成不过滤、snapshot 1:N）本身就值得单读 |
+| `docs/原文下钻接口调用指南.md` | ✅ 手工调试 `/segments/fulltext` + `/documents/{id}/raw` 的 curl/Postman 操作手册（参数、错误码全表、`kbIds` 重复参数坑、Windows 上 `curl` 是 `Invoke-WebRequest` 别名）。与上一份是「怎么调」vs「为什么这么设计」的关系 |
 | `agent_serving_java/docs/ontology-retrieval-explained.md` | ✅ **准确**，与源码逐行对得上 |
 | `agent_serving_java/docs/检索范式使用说明.md` | ✅ 质量高。小偏差：算子实际 19 个（漏列 `entity_graph`） |
 | `agent_serving_java/docs/TODO-known-issues.md` | ✅ serving 侧「已确认未修复」问题台账（当前：语义缓存污染）。修前先看 |

@@ -52,6 +52,24 @@ def _secret_valid(v: Any) -> bool:
     return isinstance(v, str) and bool(v) and not v.startswith(_PLACEHOLDER_PREFIX)
 
 
+def _is_open_config_read(method: str, path: str) -> bool:
+    """配置中心「读」接口：mining/serving/llm 启动时拉自己的配置（无用户 token），
+    品牌域信息等也启动期读。维持开放（与加鉴权前一致）——鉴权只管后端访问/改配置/管理。
+
+    注意：含 /raw 的 YAML 读会暴露 llm_api_key 等；依赖网络层（IP 白名单/防火墙）做边界，
+    与本特性之前的状态相同（本特性新增的是 proxy/写/管理的鉴权，net 安全性提升）。
+    """
+    if method != "GET":
+        return False
+    if path == "/api/v1/system" or path.startswith("/api/v1/system/"):
+        return True
+    if path == "/api/v1/serving-config":
+        return True
+    if path.startswith("/api/v1/domains"):
+        return True
+    return False
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, *, config_path: Path) -> None:
         super().__init__(app)
@@ -111,7 +129,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # 即使 enabled=False / SKIP_PATHS 也设置，保证 login(SKIP_PATH) 能拿到 secret 调 mining verify。
         request.app.state.internal_verify_secret = self.internal_verify_secret
 
-        if not self.enabled or request.method == "OPTIONS" or request.url.path in _SKIP_PATHS:
+        if (not self.enabled
+                or request.method == "OPTIONS"
+                or request.url.path in _SKIP_PATHS
+                or _is_open_config_read(request.method, request.url.path)):
             return await call_next(request)
 
         auth = request.headers.get("authorization", "")

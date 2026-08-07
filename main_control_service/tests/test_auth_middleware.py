@@ -46,6 +46,10 @@ def _mw_app(tmp_path: Path, auth_text: str = _AUTH_YAML) -> FastAPI:
     def put_cfg():
         return {"ok": 1}
 
+    @app.get("/api/v1/system/cfg/raw")
+    def get_cfg():
+        return {"ok": 1}
+
     app.add_middleware(AuthMiddleware, config_path=auth_path)
     return app
 
@@ -89,6 +93,12 @@ def test_admin_only_path_admin_ok(tmp_path):
         assert r.status_code == 200
 
 
+def test_config_read_open_for_service_pull(tmp_path):
+    """mining/serving 启动时拉配置（无用户 token）—— GET /api/v1/system/* 必须开放。"""
+    with TestClient(_mw_app(tmp_path)) as c:
+        assert c.get("/api/v1/system/cfg/raw").status_code == 200
+
+
 def test_disabled_middleware_passthrough(tmp_path):
     # enabled:false 必须在构造前写入，否则中间件已按 enabled:true 加载
     with TestClient(_mw_app(tmp_path, auth_text=(
@@ -111,21 +121,19 @@ def test_missing_auth_file_disables_auth(tmp_path):
 
 
 def test_reload_via_endpoint(tmp_path):
-    """POST /api/v1/admin/reload-auth 重新读盘并生效（用真实 create_app + /api/v1/system 探测）。"""
+    """POST /api/v1/admin/reload-auth 重新读盘，返回值反映新状态。"""
     from main_control_service.main import create_app
     _write_auth(tmp_path)  # enabled:true
     app = create_app(config_dir=tmp_path)
     with TestClient(app) as c:
         admin = {"Authorization": f"Bearer {_token('admin')}"}
-        # enabled=true：无 token 的 GET /api/v1/system → 401
-        assert c.get("/api/v1/system").status_code == 401
+        # 初始 enabled=true
+        assert c.post("/api/v1/admin/reload-auth", headers=admin).json()["enabled"] is True
         # 改文件为 disabled
         _write_auth(tmp_path, "enabled: false\njwt_secret: s2\ntoken_ttl_seconds: 60\ninternal_verify_secret: ivs2\n")
-        r = c.post("/api/v1/admin/reload-auth", headers=admin)  # admin token（当前 secret test-secret）通过
+        r = c.post("/api/v1/admin/reload-auth", headers=admin)
         assert r.status_code == 200, r.text
         assert r.json()["enabled"] is False
-        # 现在 disabled：无 token 放行
-        assert c.get("/api/v1/system").status_code == 200
 
 
 def test_placeholder_secrets_force_disabled(tmp_path):

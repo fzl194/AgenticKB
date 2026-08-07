@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import psycopg
+import pytest
 
 
 def _connect(db_config):
@@ -59,3 +60,32 @@ def test_knowledge_bases_soft_delete_columns(db_config, _ensure_schema):
             )
             names = {r[0] for r in cur.fetchall()}
             assert names == {"status", "deleted_at"}
+
+
+def test_visibility_check_is_private_public(db_config, _ensure_schema):
+    """007 收口:visibility 命名 CHECK 存在且仅允许 private/public;shared 插入被拒。"""
+    with _connect(db_config) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM pg_constraint
+                   WHERE conrelid = 'knowledge_bases'::regclass
+                     AND contype = 'c'
+                     AND conname = 'knowledge_bases_visibility_check'"""
+            )
+            assert cur.fetchone() is not None
+            # 准备 owner 满足 FK
+            cur.execute(
+                """INSERT INTO kb_users (id, username, created_at)
+                   VALUES ('u-vis-test', 'u-vis-test', '2026-01-01T00:00:00+00:00')
+                   ON CONFLICT (username) DO NOTHING"""
+            )
+            cur.execute("DELETE FROM knowledge_bases WHERE name = '__vis_test__'")
+            # shared 应被新 CHECK 拒绝
+            with pytest.raises(psycopg.errors.CheckViolation):
+                cur.execute(
+                    """INSERT INTO knowledge_bases
+                       (id, domain, name, owner_id, visibility, status, created_at, updated_at)
+                       VALUES ('kb-vis-test', 'cloud_core_network', '__vis_test__',
+                               'u-vis-test', 'shared', 'active',
+                               '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"""
+                )

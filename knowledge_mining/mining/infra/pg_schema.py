@@ -32,6 +32,8 @@ _KB_USERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "001_kb_users.sql"
 # Phase 2 鉴权：ALTER kb_users 加 password_hash + site_role。必须紧跟 001（ALTER 依赖基表已建）。
 _KB_USERS_AUTH_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "006_kb_users_auth.sql"
 _KB_BASES_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "002_knowledge_bases.sql"
+# 收口 visibility 为 private/public(ALTER knowledge_bases 的 CHECK,必须紧跟 002 之后)。
+_KB_VISIBILITY_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "007_kb_visibility_narrow.sql"
 _KB_MEMBERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "003_kb_members.sql"
 _KB_FOLDERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "004_kb_folders.sql"
 _KB_ISOLATION_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "004_kb_isolation.sql"
@@ -96,6 +98,7 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _KB_USERS_DDL,
         _KB_USERS_AUTH_DDL,  # Phase 2 鉴权列（ALTER kb_users，紧跟 001）
         _KB_BASES_DDL,
+        _KB_VISIBILITY_DDL,  # 收口 visibility CHECK(private/public),紧跟 002
         _KB_MEMBERS_DDL,
         _KB_FOLDERS_DDL,
         _KB_ISOLATION_DDL,

@@ -464,6 +464,34 @@ class KbDB:
                 [kb_id, user_id],
             )
 
+    async def list_member_candidates(
+        self, *, kb_id: str, q: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """可加入该 KB 的候选用户:排除 owner 自己 + 已是 kb_members 的用户。
+
+        仅返回 id/username/display_name 最小集 —— 不暴露 site_role/status/has_password
+        等敏感字段(区别于 admin-only 的 list_users)。供成员面板的用户选择器使用。
+        可选 q 做 username 前缀过滤(防用户规模膨胀;前端默认不传)。
+        """
+        params: list[Any] = [kb_id, kb_id]
+        where_extra = ""
+        if q:
+            where_extra = " AND u.username ILIKE %s"
+            params.append(f"{q}%")
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""SELECT u.id, u.username, u.display_name FROM kb_users u
+                    WHERE u.status = 'active'
+                      AND u.id <> (SELECT owner_id FROM knowledge_bases WHERE id = %s)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM kb_members m
+                          WHERE m.kb_id = %s AND m.user_id = u.id
+                      ){where_extra}
+                    ORDER BY u.username""",
+                params,
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
     # ------------------------------------------------------------- visibility
 
     async def is_visible(self, *, kb_id: str, user_id: str) -> bool:

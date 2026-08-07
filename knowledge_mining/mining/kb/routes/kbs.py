@@ -13,7 +13,7 @@ from knowledge_mining.mining.kb.auth import current_user
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.deps import get_kb_db, get_kb_service
 from knowledge_mining.mining.kb.services.kb_service import (
-    Duplicate, Forbidden, InvalidDomain, KbService, NotFound,
+    Duplicate, Forbidden, InvalidDomain, InvalidVisibility, KbService, NotFound,
 )
 
 router = APIRouter(prefix="/api/kb", tags=["kb"])
@@ -51,6 +51,8 @@ def _map_error(exc: Exception) -> HTTPException:
         return HTTPException(409, str(exc))
     if isinstance(exc, InvalidDomain):
         return HTTPException(400, f"invalid domain: {exc}")
+    if isinstance(exc, InvalidVisibility):
+        return HTTPException(400, f"invalid visibility: {exc}")
     return HTTPException(500, str(exc))
 
 
@@ -67,7 +69,7 @@ async def create_kb(
             domain=body.domain, name=body.name, owner_id=user["id"],
             visibility=body.visibility, description=body.description,
         )
-    except (Duplicate, InvalidDomain) as exc:
+    except (Duplicate, InvalidDomain, InvalidVisibility) as exc:
         raise _map_error(exc) from None
 
 
@@ -106,7 +108,7 @@ async def update_kb(
     fields = body.model_dump(exclude_unset=True)
     try:
         return await svc.update_kb(kb_id=kb_id, actor_id=user["id"], fields=fields)
-    except (NotFound, Forbidden, InvalidDomain) as exc:
+    except (NotFound, Forbidden, InvalidDomain, InvalidVisibility) as exc:
         raise _map_error(exc) from None
 
 
@@ -147,7 +149,7 @@ async def add_member(
         return await svc.add_member(
             kb_id=kb_id, actor_id=user["id"], username=body.username, role=body.role,
         )
-    except (NotFound, Forbidden) as exc:
+    except (NotFound, Forbidden, InvalidVisibility) as exc:
         raise _map_error(exc) from None
 
 
@@ -161,6 +163,26 @@ async def list_members(
         return await svc.list_members(kb_id=kb_id, user_id=user["id"])
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
+
+
+@router.get("/{kb_id}/members/candidates")
+async def list_member_candidates(
+    kb_id: str,
+    q: str | None = Query(default=None, description="可选:username 前缀过滤"),
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+):
+    """可加入该 KB 的候选用户(成员面板选择器用)。
+
+    需对该 KB 的写权限(管理成员 = 写动作):看不到 → 404(不泄露存在性),
+    看得到但不能写 → 403。返回 id/username/display_name 最小集,不含敏感字段。
+    admin 经 can_write 内的 EXISTS 短路放行。
+    """
+    if not await kbdb.is_visible(kb_id=kb_id, user_id=user["id"]):
+        raise HTTPException(404, f"KB {kb_id} not found")
+    if not await kbdb.can_write(kb_id=kb_id, user_id=user["id"]):
+        raise HTTPException(403, f"write access required for KB {kb_id}")
+    return await kbdb.list_member_candidates(kb_id=kb_id, q=q)
 
 
 @router.delete("/{kb_id}/members/{user_id}")

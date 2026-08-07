@@ -32,18 +32,18 @@ async def test_list_visible_owner_member_public(async_pool):
     alice = await db.upsert_user_by_username("alice")
     bob = await db.upsert_user_by_username("bob")
     carol = await db.upsert_user_by_username("carol")
-    # alice 的 private，bob 的 public，carol 的 shared（加 alice 为 member）
+    # alice 的 private，bob 的 public，carol 的 private（加 alice 为 member；visibility 已收口为 private/public）
     priv = await db.create_kb(domain="cloud_core_network", name="priv", owner_id=alice["id"], visibility="private")
     pub = await db.create_kb(domain="cloud_core_network", name="pub", owner_id=bob["id"], visibility="public")
-    shared = await db.create_kb(domain="cloud_core_network", name="shared", owner_id=carol["id"], visibility="shared")
+    shared = await db.create_kb(domain="cloud_core_network", name="shared", owner_id=carol["id"], visibility="private")
     await db.add_member(kb_id=shared["id"], user_id=alice["id"], role="viewer")
 
     visible_to_alice = {k["name"] for k in await db.list_visible(user_id=alice["id"], domain="cloud_core_network")}
-    # alice 看得到：自己的 private + bob 的 public + carol 的 shared（被加为 member）
+    # alice 看得到：自己的 private + bob 的 public + carol 的 private（被加为 member）
     assert visible_to_alice == {"priv", "pub", "shared"}
 
     visible_to_bob = {k["name"] for k in await db.list_visible(user_id=bob["id"], domain="cloud_core_network")}
-    # bob 看得到：自己的 public + 别人的 public（无 private、无 shared 未入成员）
+    # bob 看得到：自己的 public + 别人的 public（看不到 alice/carol 的 private 未入成员）
     assert visible_to_bob == {"pub"}
 
 
@@ -88,11 +88,11 @@ async def test_private_invisible_via_is_visible(async_pool):
     assert await db.can_write(kb_id=kb["id"], user_id=bob["id"]) is False
 
 
-async def test_shared_editor_can_write(async_pool):
+async def test_private_editor_can_write(async_pool):
     db = KbDB(async_pool)
     alice = await db.upsert_user_by_username("alice")
     bob = await db.upsert_user_by_username("bob")
-    kb = await db.create_kb(domain="cloud_core_network", name="sh", owner_id=alice["id"], visibility="shared")
+    kb = await db.create_kb(domain="cloud_core_network", name="sh", owner_id=alice["id"], visibility="private")
     await db.add_member(kb_id=kb["id"], user_id=bob["id"], role="editor")
     assert await db.can_write(kb_id=kb["id"], user_id=bob["id"]) is True
     # 降级为 viewer → 不能写
@@ -120,9 +120,9 @@ async def test_update_kb(async_pool):
     db = KbDB(async_pool)
     owner = await db.upsert_user_by_username("alice")
     kb = await db.create_kb(domain="cloud_core_network", name="K", owner_id=owner["id"])
-    # dict 驱动：name/visibility 更新
-    updated = await db.update_kb(kb["id"], fields={"name": "K2", "visibility": "shared"})
-    assert updated["name"] == "K2" and updated["visibility"] == "shared"
+    # dict 驱动：name/visibility 更新(visibility 已收口为 private/public)
+    updated = await db.update_kb(kb["id"], fields={"name": "K2", "visibility": "public"})
+    assert updated["name"] == "K2" and updated["visibility"] == "public"
 
     # mining_workflow_id 设值
     updated = await db.update_kb(kb["id"], fields={"mining_workflow_id": "wf-x"})

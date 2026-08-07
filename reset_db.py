@@ -131,6 +131,8 @@ SCHEMA_FILES = [
     # Phase 2 鉴权列（ALTER kb_users 加 password_hash + site_role，必须在 001 之后）
     REPO_ROOT / "databases" / "kb" / "schemas" / "006_kb_users_auth.sql",
     REPO_ROOT / "databases" / "kb" / "schemas" / "002_knowledge_bases.sql",
+    # visibility 收口(private/public,砍 shared;ALTER knowledge_bases CHECK,必须紧跟 002)
+    REPO_ROOT / "databases" / "kb" / "schemas" / "007_kb_visibility_narrow.sql",
     REPO_ROOT / "databases" / "kb" / "schemas" / "003_kb_members.sql",
     REPO_ROOT / "databases" / "kb" / "schemas" / "004_kb_folders.sql",
     # asset_documents 的 KB 列 + 文件元信息（需 knowledge_bases + asset_documents）

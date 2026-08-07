@@ -153,11 +153,14 @@ async def test_non_member_upload_to_private_kb_rejected(async_pool, upload_root)
 
 
 async def test_viewer_upload_forbidden_403(async_pool, upload_root):
-    """C3 回归：viewer 能读不能写 → 上传 403。"""
+    """C3 回归：viewer 能读不能写 → 上传 403。
+
+    用 private 库(public 库下 viewer 成员已被新语义拒绝——public 全员可读,viewer 冗余)。
+    """
     async with await _client(async_pool) as c:
         h_a, h_b = kb_headers("alice"), kb_headers("bob")
         kb_id = (await c.post(
-            "/api/kb", json={"domain": DOMAIN, "name": "pub-up", "visibility": "public"}, headers=h_a,
+            "/api/kb", json={"domain": DOMAIN, "name": "priv-view", "visibility": "private"}, headers=h_a,
         )).json()["id"]
         await c.get(f"/api/kb?domain={DOMAIN}", headers=h_b)  # 让 bob upsert 进 kb_users
         r = await c.post(

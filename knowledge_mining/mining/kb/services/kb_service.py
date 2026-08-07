@@ -40,6 +40,10 @@ class InvalidDomain(KbError):
     pass
 
 
+class InvalidVisibility(KbError):
+    pass
+
+
 # ----------------------------------------------------------------- service
 
 class KbService:
@@ -54,6 +58,7 @@ class KbService:
         metadata: dict | None = None,
     ) -> dict[str, Any]:
         _validate_domain(domain)
+        _validate_visibility(visibility)
         try:
             return await self._db.create_kb(
                 domain=domain, name=name, owner_id=owner_id,
@@ -77,6 +82,8 @@ class KbService:
         self, *, kb_id: str, actor_id: str, fields: dict[str, Any],
     ) -> dict[str, Any]:
         await self._assert_write(kb_id, actor_id)
+        if "visibility" in fields:
+            _validate_visibility(fields["visibility"])
         updated = await self._db.update_kb(kb_id, fields=fields)
         if updated is None:
             raise NotFound(kb_id)
@@ -95,7 +102,18 @@ class KbService:
         self, *, kb_id: str, actor_id: str, username: str, role: str = "viewer",
     ) -> dict[str, Any]:
         await self._assert_write(kb_id, actor_id)
-        member = await self._db.upsert_user_by_username(username)
+        # 目标用户必须已存在(admin 创建,或已登录过被 current_user 建过行)。
+        # 不再 upsert —— 防止 owner 随手输陌生用户名而自动注册垃圾账号、抢占用户名、
+        # 绕过 admin 准入控制。
+        member = await self._db.get_user_by_username(username)
+        if member is None:
+            raise NotFound(f"user {username!r} not found")
+        # public 库全员可读,viewer 成员冗余(对 public 库只有 editor 成员还有写权限意义)。
+        kb = await self._db.get_kb(kb_id)
+        if kb and kb.get("visibility") == "public" and role == "viewer":
+            raise InvalidVisibility(
+                "public 库无需添加只读成员(全员可读);如需协作请加编辑者"
+            )
         return await self._db.add_member(kb_id=kb_id, user_id=member["id"], role=role)
 
     async def list_members(self, *, kb_id: str, user_id: str) -> list[dict[str, Any]]:
@@ -129,3 +147,12 @@ def _validate_domain(domain: str) -> None:
         resolve_domain(domain.strip())
     except Exception as exc:
         raise InvalidDomain(domain) from exc
+
+
+_VALID_VISIBILITY = {"private", "public"}
+
+
+def _validate_visibility(visibility: str | None) -> None:
+    """visibility 只允许 private / public(shared 已砍)。None 或其它值 → 400。"""
+    if visibility not in _VALID_VISIBILITY:
+        raise InvalidVisibility(visibility if visibility is not None else "null")

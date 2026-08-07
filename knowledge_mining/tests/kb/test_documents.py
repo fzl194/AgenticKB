@@ -134,3 +134,58 @@ async def test_path_traversal_rejected(async_pool, upload_root):
             headers=h,
         )
         assert r.status_code == 400
+
+
+async def test_non_member_upload_to_private_kb_rejected(async_pool, upload_root):
+    """C3 IDOR 回归：非成员向他人 private KB 上传 → 404（不可见，不泄露存在性）。
+
+    修复前 upload/upload_zip 入口无 _assert_write，任何 member 猜到 kb_id 即可塞文件。
+    """
+    async with await _client(async_pool) as c:
+        h_a, h_b = kb_headers("alice"), kb_headers("bob")
+        kb_id = (await c.post(
+            "/api/kb", json={"domain": DOMAIN, "name": "priv-up", "visibility": "private"}, headers=h_a,
+        )).json()["id"]
+        r = await c.post(
+            f"/api/kb/{kb_id}/documents", files={"file": ("x.txt", b"x")}, headers=h_b,
+        )
+        assert r.status_code == 404, r.text
+
+
+async def test_viewer_upload_forbidden_403(async_pool, upload_root):
+    """C3 回归：viewer 能读不能写 → 上传 403。"""
+    async with await _client(async_pool) as c:
+        h_a, h_b = kb_headers("alice"), kb_headers("bob")
+        kb_id = (await c.post(
+            "/api/kb", json={"domain": DOMAIN, "name": "pub-up", "visibility": "public"}, headers=h_a,
+        )).json()["id"]
+        await c.get(f"/api/kb?domain={DOMAIN}", headers=h_b)  # 让 bob upsert 进 kb_users
+        r = await c.post(
+            f"/api/kb/{kb_id}/members", json={"username": "bob", "role": "viewer"}, headers=h_a,
+        )
+        assert r.status_code == 201, r.text
+        r = await c.post(
+            f"/api/kb/{kb_id}/documents", files={"file": ("x.txt", b"x")}, headers=h_b,
+        )
+        assert r.status_code == 403, r.text
+
+
+async def test_editor_and_owner_can_upload_201(async_pool, upload_root):
+    """C3 回归：editor 能写 → 201；owner 自然也 201。"""
+    async with await _client(async_pool) as c:
+        h_a, h_b = kb_headers("alice"), kb_headers("bob")
+        kb_id = (await c.post(
+            "/api/kb", json={"domain": DOMAIN, "name": "edit-up", "visibility": "public"}, headers=h_a,
+        )).json()["id"]
+        await c.get(f"/api/kb?domain={DOMAIN}", headers=h_b)
+        await c.post(
+            f"/api/kb/{kb_id}/members", json={"username": "bob", "role": "editor"}, headers=h_a,
+        )
+        r = await c.post(
+            f"/api/kb/{kb_id}/documents", files={"file": ("bob.txt", b"b")}, headers=h_b,
+        )
+        assert r.status_code == 201, r.text
+        r = await c.post(
+            f"/api/kb/{kb_id}/documents", files={"file": ("alice.txt", b"a")}, headers=h_a,
+        )
+        assert r.status_code == 201, r.text

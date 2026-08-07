@@ -3,13 +3,12 @@ import axios from 'axios'
 
 const storage = vi.hoisted(() => ({
   loadToken: vi.fn<() => string | null>(() => null),
-  clearToken: vi.fn(),
 }))
 
 vi.mock('@/api/tokenStorage', () => ({
   loadToken: storage.loadToken,
   saveToken: vi.fn(),
-  clearToken: storage.clearToken,
+  clearToken: vi.fn(),
 }))
 
 import { installAuthInterceptors } from '../proxyClient'
@@ -20,7 +19,7 @@ function makeClient(adapter: (config: unknown) => Promise<unknown>) {
   return client
 }
 
-describe('installAuthInterceptors', () => {
+describe('installAuthInterceptors (request)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     storage.loadToken.mockReturnValue(null)
@@ -52,29 +51,16 @@ describe('installAuthInterceptors', () => {
     expect(headers.Authorization).toBeUndefined()
   })
 
-  it('on 401 clears token', async () => {
+  it('does NOT auto-logout on 401 (代理 401 是下游问题，不核会话)', async () => {
     storage.loadToken.mockReturnValue('abc')
     const client = makeClient(async (config) => {
-      return Promise.reject({
-        response: { status: 401, data: { detail: 'unauthenticated' } },
-        config,
-      })
+      return Promise.reject({ response: { status: 401, data: {} }, config })
     })
-    await expect(client.get('/secret')).rejects.toBeTruthy()
-    // 安全关键行为：401 必清 token（登出）。重定向是 UX 副作用，不在此断言。
-    expect(storage.clearToken).toHaveBeenCalled()
+    // 只是 reject，不抛导航/清 token 副作用
+    await expect(client.get('/secret')).rejects.toMatchObject({ response: { status: 401 } })
   })
 
-  it('on non-401 error does not clear token', async () => {
-    const client = makeClient(async (config) => {
-      return Promise.reject({ response: { status: 500, data: {} }, config })
-    })
-    await expect(client.get('/x')).rejects.toBeTruthy()
-    expect(storage.clearToken).not.toHaveBeenCalled()
-  })
-
-  it('skips installation on a mock client without interceptors', () => {
-    // 部分 axios mock 没有 interceptors —— 不应抛
+  it('skips installation on a mock client without request interceptors', () => {
     const mockClient = { get: vi.fn() } as unknown as Parameters<typeof installAuthInterceptors>[0]
     expect(() => installAuthInterceptors(mockClient)).not.toThrow()
   })

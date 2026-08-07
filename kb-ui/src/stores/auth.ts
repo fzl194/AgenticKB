@@ -33,9 +33,11 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const api = useAuthApi()
       user.value = await api.getMe()
-    } catch {
-      // token 失效或网络错误 —— 退出登录
-      logout()
+    } catch (e) {
+      // 仅当 /me 明确返回 401（token 真无效/过期）才登出；网络抖动等保留 token 下次重试。
+      if ((e as { response?: { status?: number } })?.response?.status === 401) {
+        logout()
+      }
     }
   }
 

@@ -1,18 +1,17 @@
 import axios, { type AxiosInstance } from 'axios'
 import { useDomainStore } from '@/stores/domain'
-import { loadToken, clearToken } from './tokenStorage'
+import { loadToken } from './tokenStorage'
 
 /**
  * Phase 2：真实登录。前端不再写死 X-KB-User（改由网关从 JWT 注入）。
- * 每个 axios 客户端装两个拦截器：
- *   - 请求拦截：从 tokenStorage 读 token，加 Authorization: Bearer。
- *   - 响应拦截：401 → 清 token + 跳 /login（token 过期/失效统一兜底）。
- * 用 tokenStorage 叶模块而非 auth store，是为了打断 store ↔ api ↔ proxyClient 的循环依赖。
+ * 请求拦截：从 tokenStorage 读 token，加 Authorization: Bearer。
+ *
+ * 注意：**不在响应拦截里自动登出**。代理请求的 401 可能是下游 mining 的 infra/业务
+ * 问题（如 X-Internal-Auth 失配），不该把整个会话核掉。会话有效性由 stores/auth.fetchMe
+ * （启动期，/me 返回 401 才 logout）+ 路由守卫把关。
  */
 export function installAuthInterceptors(client: AxiosInstance): void {
-  // 防御：测试里部分 axios.create() mock 不带 interceptors（只测 API 形状），
-  // 生产环境真实 axios 总有 interceptors，照常安装。
-  if (!client?.interceptors?.request?.use || !client?.interceptors?.response?.use) {
+  if (!client?.interceptors?.request?.use) {
     return
   }
   client.interceptors.request.use((config) => {
@@ -22,19 +21,6 @@ export function installAuthInterceptors(client: AxiosInstance): void {
     }
     return config
   })
-  client.interceptors.response.use(
-    (r) => r,
-    (error) => {
-      if (error?.response?.status === 401 && typeof window !== 'undefined') {
-        clearToken()
-        const path = window.location.pathname
-        if (!path.startsWith('/login')) {
-          window.location.href = `/login?redirect=${encodeURIComponent(path)}`
-        }
-      }
-      return Promise.reject(error)
-    },
-  )
 }
 
 /**

@@ -1,20 +1,23 @@
 import axios from 'axios'
-import { createProxyClient, extractOne } from './proxyClient'
+import { createProxyClient, extractOne, installAuthInterceptors } from './proxyClient'
 import type { AuthUser, LoginResponse, SiteRole } from '@/types/auth'
 
 export { loadToken, saveToken, clearToken } from './tokenStorage'
 
+// main_control 直连端点（login/me）—— 必须装拦截器，否则 getMe 不带 token → 401 → fetchMe 登出。
+const http = axios.create({ baseURL: '/api/control-plane' })
+installAuthInterceptors(http)
 const mining = createProxyClient('mining', { includeDomainQuery: false })
 
 export function useAuthApi() {
   return {
     /** login/me 是 main_control 直连端点（不经 domain 代理）。 */
     async login(username: string, password: string): Promise<LoginResponse> {
-      const { data } = await axios.post('/api/control-plane/api/v1/auth/login', { username, password })
+      const { data } = await http.post('/api/v1/auth/login', { username, password })
       return data as LoginResponse
     },
     async getMe(): Promise<AuthUser> {
-      const { data } = await axios.get('/api/control-plane/api/v1/auth/me')
+      const { data } = await http.get('/api/v1/auth/me')
       return data as AuthUser
     },
     /** 用户管理走 mining 代理（/api/kb/users）。 */

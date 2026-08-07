@@ -63,13 +63,22 @@ describe('auth store', () => {
     expect(s.user?.username).toBe('bob')
   })
 
-  it('fetchMe logs out on failure', async () => {
-    api.getMe.mockRejectedValue(new Error('401'))
+  it('fetchMe logs out only on 401 (token invalid)', async () => {
+    api.getMe.mockRejectedValue({ response: { status: 401 } })
     const s = useAuthStore()
     s.token = 't'
     await s.fetchMe()
     expect(s.isAuthenticated).toBe(false)
     expect(storage.clearToken).toHaveBeenCalled()
+  })
+
+  it('fetchMe keeps token on non-401 error (network blip)', async () => {
+    api.getMe.mockRejectedValue({ response: { status: 500 } })
+    const s = useAuthStore()
+    s.token = 't'
+    await s.fetchMe()
+    expect(s.token).toBe('t') // 保留 token
+    expect(storage.clearToken).not.toHaveBeenCalled()
   })
 
   it('fetchMe no-op without token', async () => {

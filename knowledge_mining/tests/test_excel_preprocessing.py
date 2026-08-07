@@ -98,3 +98,28 @@ def test_markdown_escapes_table_delimiters_backslashes_and_newlines(tmp_path):
 
     assert "A\\|B" in result.markdown
     assert "路径\\\\节点<br>下一行" in result.markdown
+
+
+def test_ingest_xlsx_routes_markdown_and_preserves_source_metadata(tmp_path):
+    path = tmp_path / "inventory.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["name", "status"])
+    ws.append(["AMF", "active"])
+    wb.save(path)
+
+    from knowledge_mining.mining.ingestion import get_mime_type, ingest_directory
+
+    docs, summary = ingest_directory(tmp_path)
+
+    assert len(docs) == 1
+    assert docs[0].file_type == "markdown"
+    assert docs[0].source_uri == str(path)
+    assert docs[0].metadata_json["source_format"] == "xlsx"
+    assert docs[0].metadata_json["preprocess_status"] == "success"
+    assert docs[0].metadata_json["excel_summary"]["table_region_count"] == 1
+    assert (
+        get_mime_type("xlsx")
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert summary["preprocessed_excels"] == 1

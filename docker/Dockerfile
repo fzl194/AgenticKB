@@ -39,7 +39,7 @@ RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.li
 # ── 运行时系统依赖 ──
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libpq-dev supervisor nginx \
-    openjdk-21-jre-headless p7zip-full \
+    openjdk-21-jre-headless p7zip-full libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -61,6 +61,8 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "psycopg[binary,pool]>=3.1" \
     "pdfminer.six>=20231228" \
     "python-docx>=1.1" \
+    "openpyxl>=3.1,<4" \
+    "xlrd>=2.0,<3" \
     "jieba>=0.42" \
     "fastmcp>=2.0"
 

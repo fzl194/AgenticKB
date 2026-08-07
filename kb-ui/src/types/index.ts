@@ -138,6 +138,21 @@ export interface MiningRunStage {
   run_document_id?: string | null
 }
 
+export interface PreprocessWarning {
+  code: string
+  message: string
+  sheet_name?: string | null
+  cell_range?: string | null
+}
+
+export interface ExcelPreprocessSummary {
+  sheet_count?: number
+  parsed_sheet_count?: number
+  skipped_empty_sheet_count?: number
+  table_region_count?: number
+  nonempty_cell_count?: number
+}
+
 export interface MiningRunDocument {
   id?: string
   document_id: string
@@ -150,6 +165,11 @@ export interface MiningRunDocument {
   current_stage?: string | null
   duration_ms?: number | null
   file_size?: number | null
+  preprocess_status?: 'success' | 'partial' | 'failed' | null
+  error_code?: string | null
+  error_detail?: string | null
+  warnings?: PreprocessWarning[]
+  excel_summary?: ExcelPreprocessSummary | null
   /**
    * 跳过原因码：unchanged | restored | preprocess_failed | parser_failed
    * | unsupported_type | empty_file | no_segments | parse_no_tree

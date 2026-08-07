@@ -4,7 +4,7 @@
  */
 import type { KbDocStatus, KbMemberRole, KbMyRole, KbVisibility } from '@/types/kb'
 
-// ── 可见性（private/shared 已合并为「私有」，只 public 单独成「公开」）──
+// ── 可见性（visibility 已收口为 private / public 两档）──
 export function visibilityLabel(v: KbVisibility): string {
   return v === 'public' ? '公开' : '私有'
 }

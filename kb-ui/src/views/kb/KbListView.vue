@@ -228,7 +228,6 @@ watch(() => domainStore.currentDomain, load)
   background: var(--kb-accent);
 }
 .kb-card__icon--private { background: var(--kb-danger); }
-.kb-card__icon--shared { background: var(--kb-warning); }
 .kb-card__icon--public { background: var(--kb-success); }
 
 .kb-card__head { flex: 1; min-width: 0; }

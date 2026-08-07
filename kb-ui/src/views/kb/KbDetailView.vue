@@ -57,7 +57,7 @@
         />
       </el-tab-pane>
       <el-tab-pane label="成员" name="members">
-        <KbMembersPanel :kb-id="kbId" :can-write="canWrite" />
+        <KbMembersPanel :kb-id="kbId" :can-write="canWrite" :visibility="kb?.visibility ?? 'private'" />
       </el-tab-pane>
       <el-tab-pane label="挖掘" name="mining">
         <KbMiningPanel

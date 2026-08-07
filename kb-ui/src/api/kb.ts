@@ -8,7 +8,7 @@
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
-  KbRunRecord, KbSummary, KbUpdateBody, DocumentKnowledge,
+  KbRunRecord, KbSummary, KbUpdateBody, KbUserCandidate, DocumentKnowledge,
 } from '@/types/kb'
 
 export function useKbApi() {
@@ -53,6 +53,12 @@ export function useKbApi() {
 
     async removeMember(kbId: string, userId: string): Promise<void> {
       await client.delete(`/api/kb/${kbId}/members/${userId}`)
+    },
+
+    /** 可加入该 KB 的候选用户(成员面板选择器用;排除 owner 与已成员,最小字段集)。 */
+    async listMemberCandidates(kbId: string): Promise<KbUserCandidate[]> {
+      const { data } = await client.get(`/api/kb/${kbId}/members/candidates`)
+      return extractItems<KbUserCandidate>(data)
     },
 
     // ── 文件夹（G2/G3）──

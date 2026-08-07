@@ -1,22 +1,34 @@
 <template>
   <div class="kb-members">
     <div v-if="canWrite" class="kb-members__add">
-      <el-input
-        v-model="newUsername"
-        placeholder="用户名（登录名 / X-KB-User）"
+      <el-select
+        v-model="selectedUsername"
+        filterable
+        placeholder="选择用户（登录名）"
         size="small"
-        class="kb-members__username"
-        @keyup.enter="addOne"
-      />
+        class="kb-members__user-select"
+        :loading="loadingCandidates"
+        no-data-text="无可添加的用户"
+      >
+        <el-option
+          v-for="u in candidates"
+          :key="u.id"
+          :value="u.username"
+          :label="u.display_name ? `${u.display_name}（${u.username}）` : u.username"
+        />
+      </el-select>
       <el-select v-model="newRole" size="small" class="kb-members__role">
+        <el-option v-if="visibility !== 'public'" label="只读" value="viewer" />
         <el-option label="编辑者" value="editor" />
-        <el-option label="只读" value="viewer" />
       </el-select>
       <el-button type="primary" size="small" :loading="adding" @click="addOne">
         添加成员
       </el-button>
     </div>
     <p v-else class="kb-members__hint">仅拥有者或编辑者可管理成员。</p>
+    <p v-if="canWrite && visibility === 'public'" class="kb-members__hint">
+      公开库全员可读,无需添加只读成员;此处仅可授予「编辑者」写权限。
+    </p>
 
     <div class="kb-members__table-wrap">
       <el-table
@@ -57,24 +69,31 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { roleLabel, roleTagType } from '@/views/kb/kbMeta'
-import type { KbMember, KbMemberRole } from '@/types/kb'
+import type { KbMember, KbMemberRole, KbUserCandidate, KbVisibility } from '@/types/kb'
 
-const props = defineProps<{ kbId: string; canWrite: boolean }>()
+const props = defineProps<{ kbId: string; canWrite: boolean; visibility: KbVisibility }>()
 const kbApi = useKbApi()
 
 const members = ref<KbMember[]>([])
+const candidates = ref<KbUserCandidate[]>([])
 const loading = ref(false)
+const loadingCandidates = ref(false)
 const adding = ref(false)
-const newUsername = ref('')
-const newRole = ref<KbMemberRole>('viewer')
+const selectedUsername = ref('')
+const newRole = ref<KbMemberRole>(props.visibility === 'public' ? 'editor' : 'viewer')
 
-async function load() {
+// public 库下 viewer 选项被隐藏;切到 public 时若当前停在 viewer,归正为 editor。
+watch(() => props.visibility, (v) => {
+  if (v === 'public' && newRole.value === 'viewer') newRole.value = 'editor'
+})
+
+async function loadMembers(): Promise<void> {
   loading.value = true
   try {
     members.value = await kbApi.listMembers(props.kbId)
@@ -86,18 +105,31 @@ async function load() {
   }
 }
 
-async function addOne() {
-  const username = newUsername.value.trim()
+async function loadCandidates(): Promise<void> {
+  loadingCandidates.value = true
+  try {
+    candidates.value = await kbApi.listMemberCandidates(props.kbId)
+  } catch (e) {
+    // 候选拉取失败(如无写权限)静默:选择器显示空,不阻塞成员列表。
+    candidates.value = []
+    void e
+  } finally {
+    loadingCandidates.value = false
+  }
+}
+
+async function addOne(): Promise<void> {
+  const username = selectedUsername.value
   if (!username) {
-    ElMessage.warning('请输入用户名')
+    ElMessage.warning('请选择用户')
     return
   }
   adding.value = true
   try {
     await kbApi.addMember(props.kbId, { username, role: newRole.value })
     ElMessage.success(`已添加 ${username}`)
-    newUsername.value = ''
-    await load()
+    selectedUsername.value = ''
+    await Promise.all([loadMembers(), loadCandidates()])
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
   } finally {
@@ -105,7 +137,7 @@ async function addOne() {
   }
 }
 
-async function removeOne(row: KbMember) {
+async function removeOne(row: KbMember): Promise<void> {
   try {
     await ElMessageBox.confirm(
       `确定将 ${row.username} 移出该知识库？`,
@@ -118,7 +150,7 @@ async function removeOne(row: KbMember) {
   try {
     await kbApi.removeMember(props.kbId, row.user_id)
     ElMessage.success(`已移除 ${row.username}`)
-    await load()
+    await Promise.all([loadMembers(), loadCandidates()])
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
   }
@@ -129,7 +161,10 @@ function formatTime(t: string): string {
   return new Date(t).toLocaleString('zh-CN')
 }
 
-onMounted(load)
+onMounted(() => {
+  loadMembers()
+  if (props.canWrite) loadCandidates()
+})
 </script>
 
 <style scoped>
@@ -145,8 +180,9 @@ onMounted(load)
   align-items: center;
 }
 
-.kb-members__username {
-  max-width: 280px;
+.kb-members__user-select {
+  flex: 1;
+  max-width: 320px;
 }
 
 .kb-members__role {

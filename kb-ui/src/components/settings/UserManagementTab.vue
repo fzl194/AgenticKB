@@ -9,8 +9,9 @@
       <el-table-column prop="display_name" label="显示名" />
       <el-table-column prop="site_role" label="角色" width="90" />
       <el-table-column prop="status" label="状态" width="90" />
-      <el-table-column label="操作" width="240">
+      <el-table-column label="操作" width="280">
         <template #default="{ row }">
+          <el-button size="small" link @click="openEdit(row)">编辑</el-button>
           <el-button size="small" link @click="resetPw(row)">重置密码</el-button>
           <el-button
             v-if="!isSelf(row)"
@@ -52,6 +53,22 @@
         <el-button type="primary" @click="confirmCreate">创建</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="editVisible" title="编辑用户" width="420">
+      <el-form label-width="80">
+        <el-form-item label="用户名">
+          <el-input :model-value="editForm.username" disabled />
+          <div class="um__hint">登录名不可改(身份键,用于登录与权限)。</div>
+        </el-form-item>
+        <el-form-item label="显示名">
+          <el-input v-model="editForm.display_name" placeholder="留空则不显示" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmEdit">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -81,6 +98,31 @@ const createVisible = ref(false)
 const form = ref<{ username: string; display_name: string; password: string; site_role: SiteRole }>({
   username: '', display_name: '', password: '', site_role: 'member',
 })
+
+const editVisible = ref(false)
+const editForm = ref<{ id: string; username: string; display_name: string }>({
+  id: '', username: '', display_name: '',
+})
+
+function openEdit(row: UserRow): void {
+  editForm.value = {
+    id: row.id,
+    username: row.username,
+    display_name: row.display_name ?? '',
+  }
+  editVisible.value = true
+}
+
+async function confirmEdit(): Promise<void> {
+  try {
+    await api.updateUser(editForm.value.id, { display_name: editForm.value.display_name })
+    editVisible.value = false
+    await load()
+    ElMessage.success('已更新')
+  } catch (e) {
+    ElMessage.error((await apiErrorDetail(e)) || '更新失败')
+  }
+}
 
 async function load(): Promise<void> {
   try {

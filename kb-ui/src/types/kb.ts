@@ -8,7 +8,7 @@
  * - KbDocument 来自 documents 各端点（字段按端点部分返回，故多数可选）
  */
 
-export type KbVisibility = 'private' | 'shared' | 'public'
+export type KbVisibility = 'private' | 'public'
 export type KbStatus = 'active' | 'deleted'
 export type KbMemberRole = 'viewer' | 'editor'
 /** 当前用户在该 KB 的有效访问级别（列表页展示用）。admin = site admin 全通。 */
@@ -57,6 +57,13 @@ export interface KbMember {
   user_id: string
   role: KbMemberRole
   added_at: string
+  username: string
+  display_name: string | null
+}
+
+/** 候选用户(可加入 KB 的用户,排除 owner 与已成员;GET /api/kb/{kbId}/members/candidates)。 */
+export interface KbUserCandidate {
+  id: string
   username: string
   display_name: string | null
 }

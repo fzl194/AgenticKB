@@ -15,11 +15,11 @@ export function visibilityTagType(v: KbVisibility): 'warning' | 'success' {
 
 // ── 我的角色（列表 my_role / 成员表 role 都用）──
 export function roleLabel(r: KbMyRole | KbMemberRole): string {
-  return { owner: '拥有者', editor: '编辑者', viewer: '只读' }[r]
+  return ({ owner: '拥有者', editor: '编辑者', viewer: '只读', admin: '管理员' } as Record<string, string>)[r]
 }
 
-export function roleTagType(r: KbMyRole | KbMemberRole): 'primary' | 'success' | 'info' {
-  return ({ owner: 'primary', editor: 'success', viewer: 'info' } as const)[r]
+export function roleTagType(r: KbMyRole | KbMemberRole): 'primary' | 'success' | 'info' | 'danger' {
+  return ({ owner: 'primary', editor: 'success', viewer: 'info', admin: 'danger' } as Record<string, 'primary' | 'success' | 'info' | 'danger'>)[r]
 }
 
 // ── 文档派生状态 ──

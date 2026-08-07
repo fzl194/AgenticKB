@@ -46,8 +46,8 @@
         </span>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item command="password">修改密码</el-dropdown-item>
-            <el-dropdown-item command="logout" divided>登出</el-dropdown-item>
+            <el-dropdown-item v-if="auth.siteRole === 'admin'" command="password">修改密码</el-dropdown-item>
+            <el-dropdown-item command="logout" :divided="auth.siteRole === 'admin'">登出</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>

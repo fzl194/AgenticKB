@@ -11,8 +11,8 @@
 export type KbVisibility = 'private' | 'shared' | 'public'
 export type KbStatus = 'active' | 'deleted'
 export type KbMemberRole = 'viewer' | 'editor'
-/** 当前用户在该 KB 的有效访问级别（列表页展示用）。 */
-export type KbMyRole = 'owner' | 'editor' | 'viewer'
+/** 当前用户在该 KB 的有效访问级别（列表页展示用）。admin = site admin 全通。 */
+export type KbMyRole = 'owner' | 'editor' | 'viewer' | 'admin'
 /** 文档派生状态（后端 derive_document_status 实时计算，不存列）。 */
 export type KbDocStatus =
   | 'uploaded'

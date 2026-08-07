@@ -114,8 +114,11 @@ class UserService:
     async def change_own_password(self, *, user_id: str, old: str, new: str) -> None:
         _validate_password(new)
         user = await self._db.get_user(user_id)
-        if user is None or not user.get("password_hash"):
+        if user is None:
             raise UserNotFound(user_id)
+        if not user.get("password_hash"):
+            # 工号 member 无密码，不能「改密码」→ 400（不是 404）
+            raise UserError("账号未设置密码")
         if not verify_password(old, user["password_hash"]):
             raise WrongPassword("old password mismatch")
         await self._db.set_password_hash(user_id, hash_password(new))
@@ -159,7 +162,9 @@ class UserService:
             if not verify_password(password or "", user["password_hash"]):
                 return None
             return user
-        # 工号 member（无密码）→ SSO 口子
+        # 工号 member（无密码）→ 恒定耗时（与上面 admin 路径对齐，防时序侧信道区分 member/admin）
+        verify_password(password or "", _DUMMY_HASH)
+        # SSO 口子
         if not await self.verify_intranet_auth(username):
             return None
         return user

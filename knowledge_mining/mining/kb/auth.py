@@ -27,7 +27,11 @@ async def current_user(request: Request) -> dict[str, Any]:
     if request.headers.get("X-Internal-Auth", "") != secret:
         raise HTTPException(401, "unauthenticated")
     db = KbDB(request.app.state.pg_pool)
-    return await db.upsert_user_by_username(username)
+    user = await db.upsert_user_by_username(username)
+    # disabled 账号即使持有有效 JWT（12h 内）也立即失效 —— 禁用要即时生效。
+    if user.get("status") == "disabled":
+        raise HTTPException(401, "account disabled")
+    return user
 
 
 async def require_admin(request: Request) -> dict[str, Any]:

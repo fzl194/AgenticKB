@@ -37,12 +37,14 @@
       <el-form label-width="80">
         <el-form-item label="用户名"><el-input v-model="form.username" /></el-form-item>
         <el-form-item label="显示名"><el-input v-model="form.display_name" /></el-form-item>
-        <el-form-item label="密码"><el-input v-model="form.password" type="password" /></el-form-item>
         <el-form-item label="角色">
           <el-select v-model="form.site_role">
-            <el-option label="管理员" value="admin" />
-            <el-option label="用户" value="member" />
+            <el-option label="用户（工号，无密码）" value="member" />
+            <el-option label="管理员（需密码）" value="admin" />
           </el-select>
+        </el-form-item>
+        <el-form-item v-if="form.site_role === 'admin'" label="密码">
+          <el-input v-model="form.password" type="password" placeholder="≥8 位" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -94,20 +96,20 @@ function openCreate(): void {
 }
 
 async function createUser(body: {
-  username: string; password: string; site_role: SiteRole; display_name?: string
+  username: string; password?: string; site_role: SiteRole; display_name?: string
 }): Promise<void> {
   await api.createUser(body)
 }
 
 async function confirmCreate(): Promise<void> {
-  if (form.value.password.length < 8) {
-    ElMessage.warning('密码至少 8 位')
+  if (form.value.site_role === 'admin' && form.value.password.length < 8) {
+    ElMessage.warning('管理员密码至少 8 位')
     return
   }
   try {
     await createUser({
       username: form.value.username,
-      password: form.value.password,
+      password: form.value.site_role === 'admin' ? form.value.password : undefined,
       site_role: form.value.site_role,
       display_name: form.value.display_name || undefined,
     })
@@ -143,12 +145,28 @@ async function toggleStatus(row: UserRow): Promise<void> {
 }
 
 async function toggleRole(row: UserRow): Promise<void> {
-  const next: SiteRole = row.site_role === 'admin' ? 'member' : 'admin'
-  try {
-    await api.updateUser(row.id, { site_role: next })
-    await load()
-  } catch (e) {
-    ElMessage.error((await apiErrorDetail(e)) || '操作失败')
+  if (row.site_role === 'member') {
+    // 升 admin：后端要求先设密码 → 先 prompt 密码，reset 后再提升
+    try {
+      const { value } = await ElMessageBox.prompt('设为管理员需先设置密码（≥8 位）', `提升 ${row.username}`, {
+        inputType: 'password',
+        inputValidator: (v: string) => (v && v.length >= 8) || '至少 8 位',
+      })
+      await api.resetPassword(row.id, value)
+      await api.updateUser(row.id, { site_role: 'admin' })
+      await load()
+      ElMessage.success('已设为管理员')
+    } catch (e) {
+      if (e !== 'cancel' && e !== 'close') ElMessage.error((await apiErrorDetail(e)) || '操作失败')
+    }
+  } else {
+    // 降 admin → member
+    try {
+      await api.updateUser(row.id, { site_role: 'member' })
+      await load()
+    } catch (e) {
+      ElMessage.error((await apiErrorDetail(e)) || '操作失败')
+    }
   }
 }
 

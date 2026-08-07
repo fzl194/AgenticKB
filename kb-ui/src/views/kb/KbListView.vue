@@ -108,7 +108,7 @@ const showCreate = ref(false)
 const miningId = ref<string | null>(null)
 
 function canWrite(kb: KbSummary): boolean {
-  return kb.my_role === 'owner' || kb.my_role === 'editor'
+  return kb.my_role === 'owner' || kb.my_role === 'editor' || kb.my_role === 'admin'
 }
 
 async function load() {

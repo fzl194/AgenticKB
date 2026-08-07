@@ -1,5 +1,11 @@
 # 用户权限管理（Phase 2 真实登录）— 设计规格
 
+> **⚠️ 已被后续重构取代（部分）**：本文描述 Phase 2「用户名+密码」登录。
+> 2026-08-07 的重构把登录模型改为「工号(无密码,白名单) + admin(密码) + SSO 口子」，
+> 并砍掉 private/shared 区分、admin 全通 KB。当前实现以 `2026-08-07-auth-intranet-login-design.md` 为准；
+> 本文的 JWT 网关 / X-Internal-Auth / 路由守卫 / 中间件部分仍有效。
+
+
 - **日期**：2026-08-06
 - **分支**：`feat/user-permissions`
 - **状态**：设计中（spec 审阅第 2 轮 → 待用户复核 → 转 writing-plans）

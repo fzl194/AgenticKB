@@ -32,7 +32,7 @@ export function useAuthApi() {
       return Array.isArray(data) ? data : (data?.items ?? [])
     },
     async createUser(body: {
-      username: string; password: string; site_role: SiteRole; display_name?: string
+      username: string; password?: string; site_role: SiteRole; display_name?: string
     }): Promise<AuthUser> {
       const { data } = await mining.post('/api/kb/users', body)
       return extractOne<AuthUser>(data)

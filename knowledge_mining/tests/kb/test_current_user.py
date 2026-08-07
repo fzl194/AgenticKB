@@ -88,3 +88,19 @@ async def test_secret_not_initialized_401(async_pool, monkeypatch):
     async with await _client(async_pool) as c:
         r = await c.get("/who", headers={"X-KB-User": "alice", "X-Internal-Auth": "ivs-test"})
         assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_disabled_user_rejected_even_with_valid_headers(async_pool):
+    """禁用账号即使 X-KB-User + X-Internal-Auth 都对也 401（禁用要即时生效，不等 JWT 过期）。"""
+    from knowledge_mining.mining.kb.db import KbDB
+    db = KbDB(async_pool)
+    a1 = await db.create_user(username="root", password_hash="h", site_role="admin")
+    a2 = await db.create_user(username="a2", password_hash="h", site_role="admin")
+    # a2 禁用 a1
+    from knowledge_mining.mining.kb.services.user_service import UserService
+    await UserService(db).update_user(user_id=a1["id"], actor_id=a2["id"], status="disabled")
+    async with await _client(async_pool) as c:
+        # a1 现在是 disabled —— 即使头都对，current_user 应 401
+        r = await c.get("/who", headers={"X-KB-User": "root", "X-Internal-Auth": "ivs-test"})
+        assert r.status_code == 401

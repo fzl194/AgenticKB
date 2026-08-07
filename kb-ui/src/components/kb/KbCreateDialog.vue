@@ -17,13 +17,9 @@
           show-word-limit
         />
       </el-form-item>
-      <el-form-item label="可见性">
-        <el-radio-group v-model="form.visibility">
-          <el-radio value="private">私有</el-radio>
-          <el-radio value="shared">共享</el-radio>
-          <el-radio value="public">公开</el-radio>
-        </el-radio-group>
-        <div class="kb-create__hint">{{ visibilityHint(form.visibility) }}</div>
+      <el-form-item label="公开读">
+        <el-switch v-model="isPublic" active-text="公开（全员可读）" inactive-text="私有（仅成员）" />
+        <div class="kb-create__hint">{{ isPublic ? '任何人可读；写仍需 owner/成员。' : '仅 owner 与成员可见可读。' }}</div>
       </el-form-item>
       <el-form-item label="描述">
         <el-input
@@ -44,7 +40,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
@@ -65,6 +61,12 @@ const form = reactive<{ name: string; visibility: KbVisibility; description: str
   description: '',
 })
 
+/** 「公开」开关：on=public，off=private（shared 已并入 private）。 */
+const isPublic = computed<boolean>({
+  get: () => form.visibility === 'public',
+  set: (v: boolean) => { form.visibility = v ? 'public' : 'private' },
+})
+
 // 每次打开重置表单
 watch(
   () => props.modelValue,
@@ -76,14 +78,6 @@ watch(
     }
   },
 )
-
-function visibilityHint(v: KbVisibility): string {
-  switch (v) {
-    case 'private': return '仅你自己可见'
-    case 'shared': return '被加入成员的人可见（可编辑/只读）'
-    case 'public': return '当前域内所有人可见'
-  }
-}
 
 function close() {
   emit('update:modelValue', false)

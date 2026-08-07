@@ -107,6 +107,23 @@ async def verify_credentials(
     }}
 
 
+@router.post("/admin/reload-auth-config")
+async def reload_auth_config(request: Request) -> dict[str, Any]:
+    """内部端点：强制重拉控制面 auth.yaml 刷本地缓存。
+
+    main_control 的 reload-auth 在更新网关侧 auth.yaml 后扇出调用本端点。否则网关
+    注入新 internal_verify_secret、mining 仍验旧值 → 全部代理 401（mining 的 auth
+    缓存启动期拉取，原本无 reload 通路）。
+    """
+    _require_internal(request)
+    from knowledge_mining.mining.infra import control_plane
+    control_plane.fetch_auth_config(force=True)
+    return {
+        "ok": True,
+        "internal_verify_secret_present": bool(control_plane.get_internal_verify_secret()),
+    }
+
+
 # ---------------------------------------------------------------- user CRUD (admin)
 
 @router.get("/users")

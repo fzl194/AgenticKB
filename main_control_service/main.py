@@ -394,11 +394,47 @@ def create_app(
         return {"error": "IpWhitelistMiddleware not found in middleware stack"}
 
     @app.post("/api/v1/admin/reload-auth")
-    def reload_auth(request: Request) -> dict:
+    async def reload_auth(request: Request) -> dict:
         mw = _find_auth_mw(request)
-        if mw:
-            return mw.reload()
-        return {"error": "AuthMiddleware not found in middleware stack"}
+        result = mw.reload() if mw else {"error": "AuthMiddleware not found in middleware stack"}
+        # 扇出到 mining：让其强制重拉 auth.yaml 刷 internal_verify_secret 缓存。
+        # 否则网关换新 secret、mining 仍验旧值 → 全部代理 401（mining 缓存启动期拉取、原本无 reload）。
+        internal_secret = getattr(request.app.state, "internal_verify_secret", "")
+        client = get_proxy_client()
+        mining_hits: list[dict] = []
+        if not internal_secret:
+            mining_hits.append({"ok": False, "error": "internal_verify_secret not set on gateway"})
+        else:
+            seen: set[str] = set()
+            for entry in service.list_domains():
+                if not entry.get("enabled", True):
+                    continue
+                did = entry.get("domain_id")
+                if not did:
+                    continue
+                try:
+                    svcs = service.get_domain_services(did)
+                except Exception:  # noqa: BLE001
+                    continue
+                url = svcs.get("mining_url")
+                if not url:
+                    continue
+                base = str(url).rstrip("/")
+                if base in seen:
+                    continue
+                seen.add(base)
+                try:
+                    resp = await client.post(
+                        f"{base}/api/kb/admin/reload-auth-config",
+                        headers={"X-Internal-Auth": internal_secret},
+                        timeout=10.0,
+                    )
+                    mining_hits.append({
+                        "url": base, "ok": resp.status_code < 400, "status": resp.status_code,
+                    })
+                except Exception as exc:  # noqa: BLE001 — best-effort fan-out
+                    mining_hits.append({"url": base, "ok": False, "error": str(exc)})
+        return {**result, "mining": mining_hits}
 
     # ------------------------------------------------------------------
     # Admin — fan out config hot-reload to agent_serving instances

@@ -193,6 +193,7 @@ import {
   type MiningVueFlowEdge,
   type MiningVueFlowNode,
 } from '@/utils/miningWorkflowGraph'
+import { copyToClipboard } from '@/utils/clipboard'
 import type {
   MiningOperatorDef,
   MiningWorkflow,
@@ -625,12 +626,8 @@ async function restoreVersion(version: number) {
 }
 
 async function copyLocalJson() {
-  try {
-    await navigator.clipboard.writeText(localJson.value)
-    ElMessage.success('本地 JSON 已复制')
-  } catch {
-    ElMessage.warning('复制失败，请从下方 JSON 手动复制')
-  }
+  if (await copyToClipboard(localJson.value)) ElMessage.success('本地 JSON 已复制')
+  else ElMessage.warning('复制失败，请从下方 JSON 手动复制')
 }
 
 async function reloadRemote() {

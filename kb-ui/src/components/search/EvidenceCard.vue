@@ -28,13 +28,27 @@
         <span class="evidence-card__tag">{{ item.kind }}</span>
         <span class="evidence-card__tag" v-if="item.semanticRole">{{ item.semanticRole }}</span>
         <span class="evidence-card__tag" v-if="item.blockType">{{ item.blockType }}</span>
+        <!--
+          上面这段 text 是后端按上下文预算压缩过的（命中项硬截断、其余抽取式摘要），
+          所以「查看原文」不是可有可无的装饰，而是拿到完整内容的唯一入口。
+          truncated 只用来加强提示，不作为显示条件——摘要式压缩不会留下 ... 痕迹。
+        -->
+        <el-button
+          link
+          type="primary"
+          size="small"
+          class="evidence-card__fulltext"
+          @click.stop="emit('viewFullText', item)"
+        >
+          {{ truncated ? '查看完整原文' : '查看原文' }}
+        </el-button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { SearchContextItem } from '@/types'
 
 const props = defineProps<{
@@ -42,7 +56,12 @@ const props = defineProps<{
   idx: number
 }>()
 
+const emit = defineEmits<{ viewFullText: [SearchContextItem] }>()
+
 const expanded = ref(props.idx < 3)
+
+/** 硬截断留下的省略号。抽取式摘要不留痕迹，所以这只是加强提示，不是判据。 */
+const truncated = computed(() => props.item.text?.trimEnd().endsWith('...') ?? false)
 
 const roleLabel = computed(() => {
   const map: Record<string, string> = {
@@ -172,5 +191,12 @@ const roleLabel = computed(() => {
   background: var(--kb-border-light);
   color: var(--kb-text-secondary);
   font-weight: 500;
+}
+
+.evidence-card__fulltext {
+  margin-left: auto;
+  font-size: 11px;
+  height: auto;
+  padding: 0;
 }
 </style>

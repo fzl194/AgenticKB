@@ -260,7 +260,53 @@ export interface SearchSourceRef {
   documentKey: string
   title: string
   relativePath?: string
+  /** 所属知识库；legacy 文档（走 /api/runs 进来的）不属于任何 KB，为 null。 */
+  kbId?: string | null
   metadata?: Record<string, unknown>
+}
+
+// ── 原文下钻（POST /api/v1/segments/fulltext）──
+//
+// 检索返回的 text 是按上下文预算压缩过的：命中项硬截断、其余抽取式摘要。要拿存储
+// 的原文必须再查一次，这组类型就是那次查询的形状。
+
+export interface FullTextRef {
+  /** 取自条目的 kind：命中项 retrieval_unit，上下文/支撑项 raw_segment。 */
+  type: 'retrieval_unit' | 'raw_segment'
+  id: string
+}
+
+export interface FullTextSegment {
+  id: string
+  role: 'target' | 'before' | 'after'
+  segmentIndex: number | null
+  text: string
+  blockType: string | null
+  semanticRole: string | null
+  sectionPath: string[]
+  sectionTitle: string | null
+  tokenCount: number | null
+  documentSnapshotId: string | null
+  documentId: string | null
+  documentKey: string | null
+  documentName: string | null
+  kbId: string | null
+  /** 该文档是否还有可下载的原件。legacy 文档从来没有过原件。 */
+  hasRawFile: boolean
+}
+
+export interface FullTextItem {
+  ref: FullTextRef
+  found: boolean
+  /** 仅 found=false 时有值。不存在、越权、被移出当前 build 共用 out_of_scope。 */
+  reason?: string | null
+  unit?: { id: string; unitType: string | null; title: string | null; text: string } | null
+  segments: FullTextSegment[]
+}
+
+export interface FullTextResult {
+  scope: { releaseId: string | null; buildId: string | null; snapshotCount: number }
+  items: FullTextItem[]
 }
 
 export interface SearchEvidenceGroup {
@@ -287,9 +333,19 @@ export interface SearchDebug {
     fusion_method: string
     rerank_method: string
   }
-  scope?: {
+  /**
+   * 后端的 debug 键名是 domain_context（SearchService.domainContextToMap）。
+   * release_id 在按知识库收窄时不是真实 release id，而是合成的 "kb:a,b" —— 它同时
+   * 是语义缓存的分区键，所以每种知识库组合各占一个缓存桶。
+   */
+  domain_context?: {
+    domain: string
+    channel: string
+    database?: string
     release_id: string
+    build_id: string | null
     snapshot_count: number
+    kb_ids?: string[]
   }
   trace?: {
     request_id: string

@@ -205,4 +205,108 @@ class MainControlClientTest {
                     eq(HttpMethod.GET), isNull(), any(ParameterizedTypeReference.class));
         }
     }
+
+    /**
+     * Contract test for {@code GET /api/v1/system/database} — the parsed form of
+     * {@code system/database.yaml}, emitted by {@code YamlConfigService.get_system_config()}
+     * (a verbatim YAML→JSON passthrough, so the keys here are the file's keys).
+     *
+     * <p>This block backs the default DataSource. It is the pool that used to be hardcoded in
+     * application.yml, so a silent key mismatch here is a regression to "editing the YAML on the
+     * host changes nothing" — the compiler cannot catch it, this test can.</p>
+     */
+    @Nested
+    @DisplayName("system/database payload")
+    class DefaultDatabase {
+
+        /** Mirrors main_control_service/config/system/database.yaml. Credentials are dummies. */
+        private Map<String, Object> databaseYamlBody() {
+            Map<String, Object> def = new HashMap<>();
+            def.put("host", "db.example.internal");
+            def.put("port", 5432);
+            def.put("dbname", "kb_db");
+            def.put("user", "kb_user");
+            def.put("password", "dummy");
+            def.put("sslmode", "disable");
+            def.put("gssencmode", "disable");
+            def.put("pool_min", 2);
+            def.put("pool_max", 10);
+
+            Map<String, Object> body = new HashMap<>();
+            body.put("driver", "postgresql");   // top-level sibling of default:, ignored by serving
+            body.put("default", def);
+            return body;
+        }
+
+        @Test
+        @DisplayName("the default block builds a usable jdbc: URL with pool sizing")
+        void parsesDefaultBlock() {
+            stubBody(databaseYamlBody());
+            var db = new MainControlClient(restTemplate, "http://localhost:8910").fetchDefaultDatabase();
+
+            assertThat(db.isUsable()).isTrue();
+            assertThat(db.resolvedJdbcUrl())
+                    .isEqualTo("jdbc:postgresql://db.example.internal:5432/kb_db"
+                            + "?sslmode=disable&gssencmode=disable");
+            assertThat(db.user()).isEqualTo("kb_user");
+            assertThat(db.password()).isEqualTo("dummy");
+            assertThat(db.poolMin()).isEqualTo(2);
+            assertThat(db.poolMax()).isEqualTo(10);
+        }
+
+        @Test
+        @DisplayName("hits /api/v1/system/database, not the serving-config endpoint")
+        @SuppressWarnings("unchecked")
+        void usesSystemDatabaseEndpoint() {
+            stubBody(databaseYamlBody());
+            new MainControlClient(restTemplate, "http://localhost:8910/").fetchDefaultDatabase();
+
+            verify(restTemplate).exchange(eq("http://localhost:8910/api/v1/system/database"),
+                    eq(HttpMethod.GET), isNull(), any(ParameterizedTypeReference.class));
+        }
+
+        @Test
+        @DisplayName("a missing default block throws so the caller can fall back")
+        void missingDefaultBlockThrows() {
+            stubBody(Map.of("driver", "postgresql"));
+            assertThatThrownBy(() -> new MainControlClient(restTemplate, "http://localhost:8910")
+                    .fetchDefaultDatabase())
+                    .isInstanceOf(MainControlClient.ConfigFetchException.class)
+                    .hasMessageContaining("no usable 'default' block");
+        }
+
+        @Test
+        @DisplayName("a half-filled default block is rejected rather than half-applied")
+        void unusableDefaultBlockThrows() {
+            // user/password only — no host, no dbname: cannot build a URL
+            stubBody(Map.of("default", Map.of("user", "kb_user", "password", "dummy")));
+            assertThatThrownBy(() -> new MainControlClient(restTemplate, "http://localhost:8910")
+                    .fetchDefaultDatabase())
+                    .isInstanceOf(MainControlClient.ConfigFetchException.class)
+                    .hasMessageContaining("no usable 'default' block");
+        }
+
+        @Test
+        @DisplayName("transport error is wrapped as ConfigFetchException")
+        @SuppressWarnings("unchecked")
+        void transportErrorWrapped() {
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), isNull(),
+                    any(ParameterizedTypeReference.class)))
+                    .thenThrow(new RuntimeException("connection refused"));
+
+            assertThatThrownBy(() -> new MainControlClient(restTemplate, "http://localhost:8910")
+                    .fetchDefaultDatabase())
+                    .isInstanceOf(MainControlClient.ConfigFetchException.class)
+                    .hasMessageContaining("connection refused");
+        }
+
+        @Test
+        @DisplayName("unconfigured base-url throws without any HTTP call")
+        void unconfiguredThrows() {
+            var client = new MainControlClient(restTemplate, "");
+            assertThatThrownBy(client::fetchDefaultDatabase)
+                    .isInstanceOf(MainControlClient.ConfigFetchException.class);
+            verifyNoInteractions(restTemplate);
+        }
+    }
 }

@@ -12,9 +12,16 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Reads the per-domain serving config from main_control over HTTP
- * ({@code GET /api/v1/serving-config}). Serving does not read config files directly —
- * the local files are only a fallback, see {@code ConfigReloadService}.
+ * Reads serving's config from main_control over HTTP. Serving does not read config files
+ * directly — the local files are only a fallback, see {@code ConfigReloadService}.
+ *
+ * <p>Two endpoints, two audiences:</p>
+ * <ul>
+ *   <li>{@code GET /api/v1/serving-config} — the per-domain snapshot (inline {@code database}
+ *       blocks + the scenario pack's {@code serving} section), reloadable at runtime.</li>
+ *   <li>{@code GET /api/v1/system/database} — the global {@code default} block of
+ *       {@code system/database.yaml}, read once at startup to build the default DataSource.</li>
+ * </ul>
  */
 public class MainControlClient {
 
@@ -57,6 +64,48 @@ public class MainControlClient {
             throw e;
         } catch (Exception e) {
             throw new ConfigFetchException("fetch from main_control failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Fetch the global default database — the {@code default} block of
+     * {@code main_control_service/config/system/database.yaml}, served as parsed JSON by
+     * {@code GET /api/v1/system/database}. This is the same file mining reads (via the
+     * {@code /raw} YAML variant), so both lines resolve the DB address from one source.
+     *
+     * <p>Backs {@code defaultDataSource}: the non-routed global tables ({@code operator_paradigm*})
+     * plus any domain without an inline {@code database} block. Deliberately NOT folded into the
+     * {@code /serving-config} snapshot — that snapshot is hot-reloadable, whereas a Hikari pool's
+     * JDBC URL is immutable once built, so changing the default DB requires a serving restart.</p>
+     *
+     * @throws ConfigFetchException on transport failure, or when the file has no usable
+     *                             {@code default} block (caller decides fallback)
+     */
+    public DatabaseConfig fetchDefaultDatabase() {
+        if (!isConfigured()) {
+            throw new ConfigFetchException("main_control base-url not configured");
+        }
+        try {
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
+                    baseUrl + "/api/v1/system/database",
+                    HttpMethod.GET,
+                    null,
+                    MAP_TYPE);
+            Map<String, Object> body = response.getBody();
+            if (body == null) {
+                throw new ConfigFetchException("empty body from main_control");
+            }
+            DatabaseConfig db = parseDatabase(body.get("default"));
+            if (db == null || !db.isUsable()) {
+                throw new ConfigFetchException(
+                        "system/database.yaml has no usable 'default' block (need host+dbname or jdbc_url)");
+            }
+            return db;
+        } catch (ConfigFetchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ConfigFetchException(
+                    "fetch default database from main_control failed: " + e.getMessage(), e);
         }
     }
 

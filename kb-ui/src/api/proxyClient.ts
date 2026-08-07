@@ -3,8 +3,14 @@ import { useDomainStore } from '@/stores/domain'
 import { loadToken } from './tokenStorage'
 
 /**
- * Phase 2：真实登录。前端不再写死 X-KB-User（改由网关从 JWT 注入）。
+ * Phase 2：真实登录。前端不再写死 X-KB-User——改由网关 main_control_service/proxy.py
+ * 从 JWT 派生，对所有代理请求（mining 与 serving）统一注入。
+ *
  * 请求拦截：从 tokenStorage 读 token，加 Authorization: Bearer。
+ *
+ * 两个对 X-KB-User 的消费方（均由网关注入，前端无需关心）：
+ * - mining 的 /api/kb*：mining/kb/auth.current_user 解析为 kb_users.id（会 upsert）。
+ * - serving：KbAccessService 用它裁剪请求里的 kbIds 可见性（只读，不 upsert）。
  *
  * 注意：**不在响应拦截里自动登出**。代理请求的 401 可能是下游 mining 的 infra/业务
  * 问题（如 X-Internal-Auth 失配），不该把整个会话核掉。会话有效性由 stores/auth.fetchMe

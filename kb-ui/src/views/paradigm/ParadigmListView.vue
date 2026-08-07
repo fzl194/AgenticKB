@@ -30,10 +30,52 @@
       <el-table-column label="当前版本" width="100">
         <template #default="{ row }">{{ row.currentVersion > 0 ? `v${row.currentVersion}` : '—' }}</template>
       </el-table-column>
+      <el-table-column label="绑定域" width="200">
+        <template #default="{ row }">
+          <template v-if="row.boundDomain">
+            <el-tag size="small" type="primary">{{ row.boundDomain }}</el-tag>
+            <el-tag v-if="row.isDefault" size="small" type="success" effect="dark" class="pd-list__default-tag">
+              自动匹配
+            </el-tag>
+            <span v-else class="pd-list__hint-inline">仅绑定，未自动匹配</span>
+          </template>
+          <span v-else class="pd-list__muted">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="Agent 可见" width="150">
+        <template #default="{ row }">
+          <el-tag
+            v-if="visibilityDisplay[row.id]?.state === 'visible'"
+            size="small" type="success"
+          >可见</el-tag>
+          <el-tooltip
+            v-else-if="visibilityDisplay[row.id]?.state === 'hidden'"
+            placement="top"
+            :content="reasonText(visibilityDisplay[row.id].reason, visibilityDisplay[row.id].details)"
+          >
+            <el-tag size="small" :type="visibilityDisplay[row.id].tagType">不可见</el-tag>
+          </el-tooltip>
+          <span v-else class="pd-list__muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="updatedAt" label="更新时间" width="180" />
-      <el-table-column label="操作" width="160" fixed="right">
+      <el-table-column label="操作" width="250" fixed="right">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="edit(row.id)">编辑</el-button>
+          <el-tooltip
+            :disabled="isBindable(row)"
+            content="需先发布版本才能绑定到知识域"
+            placement="top"
+          >
+            <span>
+              <el-button
+                size="small" text type="primary"
+                :disabled="!isBindable(row)"
+                @click="openBind(row)"
+              >{{ row.boundDomain ? '改绑' : '绑定' }}</el-button>
+            </span>
+          </el-tooltip>
+          <el-button v-if="row.boundDomain" size="small" text type="warning" @click="doUnbind(row)">解绑</el-button>
           <el-button v-if="row.status !== 'archived'" size="small" text type="info" @click="doArchive(row)">归档</el-button>
           <el-button v-else size="small" text type="danger" @click="doDelete(row)">删除</el-button>
         </template>
@@ -43,13 +85,56 @@
       </template>
     </el-table>
 
+    <el-dialog v-model="bindVisible" title="绑定到知识域" width="500">
+      <el-form label-width="92px">
+        <el-form-item label="范式">
+          <span class="pd-list__bind-name">{{ bindTarget?.name }}</span>
+          <span class="pd-list__muted">（v{{ bindTarget?.currentVersion }}）</span>
+        </el-form-item>
+        <el-form-item label="知识域">
+          <el-select v-model="bindForm.domain" placeholder="选择知识域" style="width: 100%">
+            <el-option v-for="d in domainOptions" :key="d" :label="d" :value="d" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="自动匹配">
+          <el-switch v-model="bindForm.isDefault" />
+          <div class="pd-list__field-hint">
+            开启后，MCP 与其他只给 domain 的调用方检索该域时自动使用本范式。
+            一个域同时只能有一个自动匹配范式，开启会替换掉原有的那个。
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <el-alert
+        v-if="draftNotServable"
+        type="warning" :closable="false" show-icon
+        title="当前草稿的终点不是 assemble"
+        description="绑定校验的是已发布版本，不是草稿。若已发布版本同样以 collect 结尾，绑定会被拒绝——collect 输出的是供评测用的裸候选，不适合直接作为检索结果返回。"
+        class="pd-list__bind-alert"
+      />
+
+      <template #footer>
+        <el-button @click="bindVisible = false">取消</el-button>
+        <el-button type="primary" :loading="binding" @click="doBind">确定绑定</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="createVisible" title="新建范式" width="460">
       <el-form label-width="72px">
         <el-form-item label="名称">
           <el-input v-model="form.name" placeholder="唯一名称，如 emb-only-baseline" />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" :rows="2" />
+          <el-input
+            v-model="form.description"
+            type="textarea"
+            :rows="3"
+            placeholder="例：查 ODN 拓扑、端口占用与光路走向；不适合查参数表格"
+          />
+          <div class="pd-list__field-hint">
+            <strong>这段是给 AI 看的</strong>：说清什么问题该用这个范式。Agent 就是靠它决定选不选，
+            写成给人看的介绍会让它选不准。建议一两句话、200 字以内。
+          </div>
         </el-form-item>
         <el-form-item label="模板">
           <el-select v-model="form.template" style="width: 100%">
@@ -73,6 +158,7 @@ import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useOperatorApi } from '@/api/operator'
+import { useDomainStore } from '@/stores/domain'
 import type { ParadigmView } from '@/types/operator'
 import { PARADIGM_TEMPLATES } from './templates'
 
@@ -104,7 +190,77 @@ async function load() {
   } finally {
     loading.value = false
   }
+  loadVisibility()
 }
+
+// ---- Agent 可见性 ----
+
+/** paradigm id → visibility. Absent = not looked up (yet, or the catalog is unreachable). */
+const visibility = ref<Record<string, { visible: boolean; reason?: string; details?: string[] }>>({})
+
+/**
+ * Answers the question the binding dialog cannot: "I published it — can an agent use it?"
+ *
+ * Fetched separately from the list rather than folded into it, so a catalog outage degrades this
+ * one column to "—" instead of taking the whole page down with it. Not domain-filtered: the list
+ * itself is global, and a paradigm bound to another domain should still show why it is hidden.
+ */
+async function loadVisibility() {
+  try {
+    const catalog = await api.getMcpCatalog()
+    const next: Record<string, { visible: boolean; reason?: string; details?: string[] }> = {}
+    for (const e of catalog.paradigms) next[e.id] = { visible: true }
+    for (const h of catalog.hidden) {
+      next[h.id] = {
+        visible: false,
+        reason: h.reason,
+        details: h.undisclosedCount > 0
+          ? [...h.details, `另有 ${h.undisclosedCount} 个不可见的知识库`]
+          : h.details,
+      }
+    }
+    visibility.value = next
+  } catch (e) {
+    // Deliberately silent: the column falls back to "—". A toast on every list load would be
+    // noise about a feature the operator may not even be using.
+    console.warn('Failed to load the MCP catalog; agent visibility unavailable:', e)
+    visibility.value = {}
+  }
+}
+
+/**
+ * Per-row display state, derived once for every row so the template never has to null-check.
+ *
+ * `unknown` covers two different situations that look the same to an operator and need no
+ * distinction: the paradigm is unpublished (never in the catalog, and that is expected), or the
+ * catalog could not be fetched.
+ */
+const visibilityDisplay = computed(() => {
+  const out: Record<
+    string,
+    { state: 'unknown' | 'visible' | 'hidden'; reason?: string; details?: string[]; tagType: string }
+  > = {}
+  for (const p of paradigms.value) {
+    const known = p.status === 'active' && p.currentVersion >= 1
+      ? visibility.value[p.id]
+      : undefined
+    if (!known) {
+      out[p.id] = { state: 'unknown', tagType: 'info' }
+    } else if (known.visible) {
+      out[p.id] = { state: 'visible', tagType: 'success' }
+    } else {
+      out[p.id] = {
+        state: 'hidden',
+        reason: known.reason,
+        details: known.details,
+        // A collect terminus is a deliberate choice (evaluation paradigms are meant to be
+        // unservable), so it is grey. The rest are configuration to fix, so they are amber.
+        tagType: known.reason === 'not_servable' ? 'info' : 'warning',
+      }
+    }
+  }
+  return out
+})
 
 function openCreate() {
   form.value = { name: '', description: '', template: 'blank' }
@@ -166,12 +322,134 @@ function statusLabel(s: string): string {
   return ({ draft: '草稿', active: '已发布', archived: '已归档' } as Record<string, string>)[s] ?? s
 }
 
+// ---- domain binding (MCP auto-matching) ----
+
+const domainStore = useDomainStore()
+const domainOptions = computed(() => domainStore.enabledDomains.map(d => d.domain_id))
+
+const bindVisible = ref(false)
+const binding = ref(false)
+const bindTarget = ref<ParadigmView | null>(null)
+const bindForm = ref({ domain: '', isDefault: true })
+
+/** Binding validates the published version, so an unpublished paradigm has nothing to bind. */
+function isBindable(row: ParadigmView): boolean {
+  return row.status === 'active' && row.currentVersion >= 1
+}
+
+/**
+ * A hint, not a gate. The backend validates the *published* graph while all the list has is the
+ * draft; the two can differ, so this warns without blocking and lets the real check decide.
+ */
+const draftNotServable = computed(() => {
+  const slot = bindTarget.value?.draftGraph?.output?.slot
+  return !!slot && slot !== 'contextPack'
+})
+
+function openBind(row: ParadigmView) {
+  bindTarget.value = row
+  bindForm.value = {
+    domain: row.boundDomain || domainStore.currentDomain || domainOptions.value[0] || '',
+    isDefault: row.boundDomain ? row.isDefault : true,
+  }
+  bindVisible.value = true
+}
+
+async function doBind() {
+  const target = bindTarget.value
+  if (!target) return
+  if (!bindForm.value.domain) { ElMessage.warning('请选择知识域'); return }
+
+  const prev = paradigms.value.find(
+    p => p.boundDomain === bindForm.value.domain && p.isDefault && p.id !== target.id)
+  if (bindForm.value.isDefault && prev) {
+    try {
+      await ElMessageBox.confirm(
+        `知识域「${bindForm.value.domain}」当前由「${prev.name}」自动匹配，绑定后将改为「${target.name}」。`,
+        '替换自动匹配范式', { type: 'warning' })
+    } catch { return }
+  }
+
+  binding.value = true
+  try {
+    await api.bindParadigm(target.id, bindForm.value.domain, bindForm.value.isDefault)
+    ElMessage.success(bindForm.value.isDefault
+      ? `已绑定，${bindForm.value.domain} 的检索将自动使用该范式`
+      : '已绑定（未设为自动匹配）')
+    bindVisible.value = false
+    await load()
+  } catch (e) {
+    ElMessage.error(bindErrMsg(e))
+  } finally {
+    binding.value = false
+  }
+}
+
+async function doUnbind(row: ParadigmView) {
+  try {
+    await ElMessageBox.confirm(
+      row.isDefault
+        ? `解绑「${row.name}」？知识域「${row.boundDomain}」将回落到默认检索管线。`
+        : `解绑「${row.name}」？它仍可按 id 调用，只是不再参与自动匹配。`,
+      '解绑', { type: 'warning' })
+  } catch { return }
+  try {
+    await api.unbindParadigm(row.id)
+    ElMessage.success('已解绑')
+    await load()
+  } catch (e) {
+    ElMessage.error('解绑失败：' + errMsg(e))
+  }
+}
+
+/**
+ * Why a paradigm is unusable, in words.
+ *
+ * Shared by the binding dialog and the "Agent 可见" column on purpose: the two surfaces report the
+ * same underlying conditions (a `collect` terminus, non-public knowledge bases), and wording them
+ * differently would read as two unrelated problems. Binding prefixes "绑定失败"; the column shows
+ * the bare reason.
+ */
+function reasonText(code: string | undefined, details: string[] = []): string {
+  const detail = details.length ? `：${details.join('、')}` : ''
+  switch (code) {
+    case 'unknown_domain':
+      return '知识域不存在或已停用'
+    case 'paradigm_not_published':
+    case 'version_missing':
+      return '范式尚未发布，请先发布一个版本'
+    case 'paradigm_not_servable':
+    case 'not_servable':
+      return '已发布版本的终点不是 assemble。只有产出 ContextPack 的范式能给 Agent 用'
+    case 'paradigm_requires_identity':
+    case 'kb_not_anonymously_readable':
+      return `范式引用了非公开知识库${detail}。MCP 匿名调用读不到它们，请改为公开或从图中移除`
+    case 'unbound_kb_scope':
+      return '范式引用了知识库但未绑定知识域，无法核验可见性。绑定一个知识域即可'
+    case 'domain_unavailable':
+      return '该知识域的数据库当前连不上，无法核验可见性——这是部署问题，不是范式问题'
+    default:
+      return ''
+  }
+}
+
+/** Binding rejections carry a stable code; a raw code is useless to whoever is configuring this. */
+function bindErrMsg(e: unknown): string {
+  const data = (e as { response?: { data?: { error?: string; message?: string; details?: string[] } } })
+    ?.response?.data
+  const known = reasonText(data?.error, data?.details ?? [])
+  return known ? '绑定失败：' + known : '绑定失败：' + errMsg(e)
+}
+
 function errMsg(e: unknown): string {
   const anyE = e as { response?: { data?: { message?: string; error?: string } }; message?: string }
   return anyE?.response?.data?.message || anyE?.response?.data?.error || anyE?.message || '未知错误'
 }
 
-onMounted(load)
+onMounted(async () => {
+  await domainStore.fetchDomains()
+  await load()
+})
 </script>
 
 <style scoped>
@@ -182,4 +460,10 @@ onMounted(load)
 .pd-list__link { color: var(--kb-accent, #3b82f6); cursor: pointer; font-weight: 600; }
 .pd-list__table { margin-top: 4px; }
 .pd-list__tpl-desc { font-size: 12px; color: var(--kb-text-tertiary); line-height: 1.6; margin: -6px 0 4px; padding: 8px 10px; background: var(--kb-bg-subtle, #f8fafc); border-radius: 6px; }
+.pd-list__muted { color: var(--kb-text-tertiary); }
+.pd-list__default-tag { margin-left: 6px; }
+.pd-list__hint-inline { margin-left: 6px; font-size: 12px; color: var(--kb-text-tertiary); }
+.pd-list__bind-name { font-weight: 600; }
+.pd-list__field-hint { font-size: 12px; color: var(--kb-text-tertiary); line-height: 1.6; margin-top: 4px; }
+.pd-list__bind-alert { margin-top: 4px; }
 </style>

@@ -12,11 +12,15 @@
         <result column="status"           property="status"/>
         <result column="created_at"       property="createdAt"/>
         <result column="updated_at"       property="updatedAt"/>
+        <result column="bound_domain"     property="boundDomain"/>
+        <result column="is_default"       property="isDefault"/>
+        <result column="bound_at"         property="boundAt"/>
     </resultMap>
 
     <sql id="cols">
         id, name, description, draft_graph_json, current_version, status,
-        created_at::text AS created_at, updated_at::text AS updated_at
+        created_at::text AS created_at, updated_at::text AS updated_at,
+        bound_domain, is_default, bound_at::text AS bound_at
     </sql>
 
     <insert id="insert">
@@ -43,6 +47,19 @@
         ORDER BY name
     </select>
 
+    <!--
+      Auto-match lookup: the domain's live default. The predicate is exactly the one in
+      uq_paradigm_domain_default, so that partial unique index both serves this query and
+      guarantees it can never return more than one row.
+    -->
+    <select id="selectDefaultByDomain" resultMap="paradigmMap">
+        SELECT <include refid="cols"/> FROM operator_paradigm
+        WHERE bound_domain = #{domain}
+          AND is_default
+          AND status = 'active'
+          AND current_version &gt;= 1
+    </select>
+
     <update id="updateDraft">
         UPDATE operator_paradigm
         SET draft_graph_json = #{draftGraphJson,jdbcType=VARCHAR}::jsonb,
@@ -53,6 +70,32 @@
     <update id="updatePublish">
         UPDATE operator_paradigm
         SET current_version = #{version}, status = #{status}, updated_at = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <!--
+      Domain binding. clearDefaultForDomain MUST run before updateBinding sets a new default,
+      inside ONE transaction: uq_paradigm_domain_default is a partial unique index, so
+      set-then-clear raises 23505. (Same ordering as the mining side's activate_release().)
+    -->
+    <update id="clearDefaultForDomain">
+        UPDATE operator_paradigm
+        SET is_default = FALSE, updated_at = NOW()
+        WHERE bound_domain = #{domain} AND is_default
+    </update>
+
+    <!--
+      The CAST is load-bearing, not decoration: PostgreSQL cannot infer a bare parameter's type
+      inside `CASE WHEN ? IS NULL`, and fails the statement with 42P18 (IndeterminateDatatype).
+      jdbcType alone leaves that up to driver behaviour; the explicit cast settles it.
+    -->
+    <update id="updateBinding">
+        UPDATE operator_paradigm
+        SET bound_domain = #{domain,jdbcType=VARCHAR},
+            is_default   = #{isDefault},
+            bound_at     = CASE WHEN CAST(#{domain,jdbcType=VARCHAR} AS VARCHAR) IS NULL
+                                THEN NULL ELSE NOW() END,
+            updated_at   = NOW()
         WHERE id = #{id}
     </update>
 

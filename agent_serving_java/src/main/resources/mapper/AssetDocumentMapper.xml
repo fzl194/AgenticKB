@@ -10,11 +10,13 @@
         <result column="relative_path" property="relativePath"/>
         <result column="title"         property="title"/>
         <result column="scope_json"    property="scopeJson"/>
+        <result column="kb_id"         property="kbId"/>
     </resultMap>
 
     <select id="selectDocumentSources" resultMap="docSourceResult">
         SELECT d.id,
                d.document_key,
+               d.kb_id,
                dsl.relative_path,
                ds.title,
                ds.scope_json
@@ -31,6 +33,35 @@
             #{sid}
         </foreach>
         </if>
+    </select>
+
+    <resultMap id="docFileResult"
+               type="com.coremasterkb.serving.mapper.result.DocumentFileRow">
+        <result column="id"            property="id"/>
+        <result column="kb_id"         property="kbId"/>
+        <result column="storage_path"  property="storagePath"/>
+        <result column="document_name" property="documentName"/>
+        <result column="document_key"  property="documentKey"/>
+    </resultMap>
+
+    <!-- DISTINCT: a document links to one row per snapshot in scope; we want the document once. -->
+    <select id="selectFileLocations" resultMap="docFileResult">
+        SELECT DISTINCT
+               d.id,
+               d.kb_id,
+               d.storage_path,
+               d.document_name,
+               d.document_key
+        FROM asset_documents d
+        JOIN asset_document_snapshot_links dsl ON d.id = dsl.document_id
+        WHERE d.id IN
+        <foreach collection="documentIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        AND dsl.document_snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
     </select>
 
 </mapper>

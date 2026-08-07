@@ -10,6 +10,7 @@ import com.coremasterkb.serving.operator.registry.OperatorRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.util.List;
 
@@ -113,6 +114,43 @@ class ParadigmServiceTest {
         ParadigmEntity p = entity("pd-4", VALID_GRAPH, 0);
         when(paradigmMapper.selectById("pd-4")).thenReturn(p);
         assertThrows(ParadigmNotFoundException.class, () -> service.resolveExecutableGraph("pd-4", null));
+    }
+
+    /**
+     * uq_paradigm_domain_default is a PARTIAL unique index, so claiming a domain's default slot
+     * while the previous holder still has is_default=true raises 23505. The clear must therefore
+     * come first — this is the "A is default → make B default" case that a single-paradigm test
+     * would never catch.
+     */
+    @Test
+    void claimingDefaultClearsThePreviousHolderFirst() {
+        when(paradigmMapper.selectById("pd-b")).thenReturn(entity("pd-b", VALID_GRAPH, 1));
+
+        service.applyBinding("pd-b", "odn", true);
+
+        InOrder order = inOrder(paradigmMapper);
+        order.verify(paradigmMapper).clearDefaultForDomain("odn");
+        order.verify(paradigmMapper).updateBinding("pd-b", "odn", true);
+    }
+
+    @Test
+    void bindingWithoutDefaultLeavesTheExistingDefaultAlone() {
+        when(paradigmMapper.selectById("pd-c")).thenReturn(entity("pd-c", VALID_GRAPH, 1));
+
+        service.applyBinding("pd-c", "odn", false);
+
+        verify(paradigmMapper, never()).clearDefaultForDomain(anyString());
+        verify(paradigmMapper).updateBinding("pd-c", "odn", false);
+    }
+
+    @Test
+    void unbindingNeverTouchesTheDomainDefault() {
+        when(paradigmMapper.selectById("pd-d")).thenReturn(entity("pd-d", VALID_GRAPH, 1));
+
+        service.applyBinding("pd-d", null, false);
+
+        verify(paradigmMapper, never()).clearDefaultForDomain(anyString());
+        verify(paradigmMapper).updateBinding("pd-d", null, false);
     }
 
     @Test

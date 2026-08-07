@@ -1,5 +1,8 @@
 package com.coremasterkb.serving.operator.api;
 
+import com.coremasterkb.serving.operator.paradigm.ParadigmBindingException;
+import com.coremasterkb.serving.operator.paradigm.ParadigmBindingService;
+import com.coremasterkb.serving.operator.paradigm.ParadigmCatalogService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmEntity;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmVersionEntity;
@@ -21,11 +24,18 @@ import java.util.Map;
 public class ParadigmController {
 
     private final ParadigmService paradigmService;
+    private final ParadigmBindingService bindingService;
+    private final ParadigmCatalogService catalogService;
     private final ParadigmExecutionService executionService;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public ParadigmController(ParadigmService paradigmService, ParadigmExecutionService executionService) {
+    public ParadigmController(ParadigmService paradigmService,
+                              ParadigmBindingService bindingService,
+                              ParadigmCatalogService catalogService,
+                              ParadigmExecutionService executionService) {
         this.paradigmService = paradigmService;
+        this.bindingService = bindingService;
+        this.catalogService = catalogService;
         this.executionService = executionService;
     }
 
@@ -59,6 +69,59 @@ public class ParadigmController {
         return Map.of("paradigms", views);
     }
 
+    /**
+     * Auto-match lookup for domain-only callers (MCP): which paradigm should this domain use?
+     *
+     * <p>Returns 200 in both cases — {@code {"bound":true,...}} or {@code {"bound":false}}. An
+     * unbound domain is a normal state, not an error; if it 404'd, a caller could not tell it apart
+     * from a network failure or a wrong URL, and would have to treat "fall back to the legacy
+     * pipeline" and "the service is broken" identically.</p>
+     *
+     * <p>Mapped above {@code /{id}} deliberately: a literal segment outranks a path variable in
+     * Spring's pattern comparator, so this never gets swallowed as {@code id="resolve"}. Pinned by
+     * {@code ParadigmResolveWebMvcTest}.</p>
+     */
+    @GetMapping("/resolve")
+    public Map<String, Object> resolve(@RequestParam String domain) {
+        ParadigmEntity e = paradigmService.resolveDefaultForDomain(domain);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("domain", domain);
+        m.put("bound", e != null);
+        if (e != null) {
+            m.put("paradigmId", e.getId());
+            m.put("name", e.getName());
+            m.put("description", e.getDescription());
+            m.put("version", e.getCurrentVersion());
+            m.put("url", "/api/v1/paradigm/" + e.getId() + "/search");
+        }
+        return m;
+    }
+
+    /**
+     * Which published paradigms an anonymous MCP caller can actually use, and why the rest cannot.
+     *
+     * <p>Mapped above {@code /{id}} for the same reason as {@code /resolve}, and pinned by the same
+     * kind of test.</p>
+     *
+     * <p>{@code hidden} is returned only to an identified caller. It names knowledge bases that an
+     * anonymous one could not read, and {@code KbAccessService} deliberately does not reveal whether
+     * a knowledge base exists — serving has no auth of its own, so the header is the only thing
+     * separating "the operator debugging their paradigm" from "anyone who can reach the port". MCP
+     * sends no header and never reads {@code hidden} anyway.</p>
+     */
+    @GetMapping("/mcp-catalog")
+    public Map<String, Object> mcpCatalog(
+            @RequestParam(required = false) String domain,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+        ParadigmCatalogService.Catalog catalog = catalogService.build(domain, kbUser);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("paradigms", catalog.paradigms());
+        if (kbUser != null && !kbUser.isBlank()) {
+            m.put("hidden", catalog.hidden());
+        }
+        return m;
+    }
+
     @GetMapping("/{id}")
     public Map<String, Object> get(@PathVariable String id) {
         return paradigmView(paradigmService.getOrThrow(id));
@@ -84,11 +147,52 @@ public class ParadigmController {
         return versionView(paradigmService.getVersionOrThrow(id, version));
     }
 
-    /** Publish: compile-validate the draft, snapshot it as a new immutable version, activate it. */
+    /**
+     * Publish: compile-validate the draft, snapshot it as a new immutable version, activate it.
+     *
+     * <p>Body may carry {@code {domain, setDefault}} to bind in the same call ("publish and it is
+     * live for MCP"). The binding is applied <em>after</em> the publish commits and is not part of
+     * its transaction — binding validation reads the domain DB while publishing writes the control
+     * DB, and one transaction cannot span both (see {@link ParadigmBindingService}). So a rejected
+     * binding leaves the paradigm published-but-unbound, reported as {@code bindingError}; retry
+     * with {@code PUT /{id}/binding} once fixed.</p>
+     */
     @PostMapping("/{id}/publish")
     public Map<String, Object> publish(@PathVariable String id, @RequestBody(required = false) JsonNode body) {
         String createdBy = ParadigmRequests.text(body, "createdBy");
-        return versionView(paradigmService.publish(id, createdBy));
+        Map<String, Object> view = new LinkedHashMap<>(versionView(paradigmService.publish(id, createdBy)));
+
+        String domain = ParadigmRequests.text(body, "domain");
+        if (domain != null) {
+            boolean setDefault = body != null && body.hasNonNull("setDefault")
+                    && body.get("setDefault").asBoolean();
+            try {
+                view.put("binding", bindingView(bindingService.bind(id, domain, setDefault)));
+            } catch (ParadigmBindingException e) {
+                Map<String, Object> err = new LinkedHashMap<>();
+                err.put("error", e.code());
+                err.put("message", e.getMessage());
+                if (!e.details().isEmpty()) err.put("details", e.details());
+                view.put("bindingError", err);
+            }
+        }
+        return view;
+    }
+
+    // ---- domain binding ------------------------------------------------------------------
+
+    /** Bind a published paradigm to a domain. Body: {@code {domain, isDefault?}}. */
+    @PutMapping("/{id}/binding")
+    public Map<String, Object> bind(@PathVariable String id, @RequestBody JsonNode body) {
+        boolean isDefault = body != null && body.hasNonNull("isDefault")
+                && body.get("isDefault").asBoolean();
+        return paradigmView(bindingService.bind(id, ParadigmRequests.text(body, "domain"), isDefault));
+    }
+
+    /** Remove a paradigm's domain binding. It stays callable by id, just unmatched. */
+    @DeleteMapping("/{id}/binding")
+    public Map<String, Object> unbind(@PathVariable String id) {
+        return paradigmView(bindingService.unbind(id));
     }
 
     @PostMapping("/{id}/rollback")
@@ -111,14 +215,22 @@ public class ParadigmController {
 
     // ---- execution -----------------------------------------------------------------------
 
-    /** Execute a published version (or current_version if unspecified). Body: run args. */
+    /**
+     * Execute a published version (or current_version if unspecified). Body: run args.
+     *
+     * <p>Resolves the version row rather than just the graph so the query log can be attributed to
+     * the <em>effective</em> version even when the caller said "current" — from the same read.</p>
+     */
     @PostMapping("/{id}/search")
     public Map<String, Object> search(
             @PathVariable String id,
             @RequestParam(required = false) Integer version,
-            @RequestBody JsonNode body) {
-        JsonNode graph = paradigmService.resolveExecutableGraph(id, version);
-        return executionService.run(graph, ParadigmRequests.toRunArgs(body));
+            @RequestBody JsonNode body,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+        ParadigmVersionEntity ve = paradigmService.resolveExecutableVersion(id, version);
+        JsonNode graph = parseOrNull(ve.getGraphJson());
+        return executionService.run(
+                graph, ParadigmRequests.toRunArgs(body, kbUser).withParadigm(id, ve.getVersion()));
     }
 
     /** Compile-validate the draft (no execution). */
@@ -132,11 +244,20 @@ public class ParadigmController {
         return result;
     }
 
-    /** Execute the draft without persisting results (preview while editing). Body: run args. */
+    /**
+     * Execute the draft without persisting results (preview while editing). Body: run args.
+     *
+     * <p>Attributed with the paradigm id but a null version — the draft is by definition not any
+     * published version, and recording the current one would misattribute editor traffic to it.</p>
+     */
     @PostMapping("/{id}/dryrun")
-    public Map<String, Object> dryRun(@PathVariable String id, @RequestBody JsonNode body) {
+    public Map<String, Object> dryRun(
+            @PathVariable String id,
+            @RequestBody JsonNode body,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
         JsonNode draft = paradigmService.resolveDraftGraph(id);
-        return executionService.run(draft, ParadigmRequests.toRunArgs(body));
+        return executionService.run(
+                draft, ParadigmRequests.toRunArgs(body, kbUser).withParadigm(id, null));
     }
 
     // ---- views ---------------------------------------------------------------------------
@@ -149,6 +270,8 @@ public class ParadigmController {
         m.put("description", e.getDescription());
         m.put("version", e.getCurrentVersion());
         m.put("url", "/api/v1/paradigm/" + e.getId() + "/search");
+        m.put("boundDomain", e.getBoundDomain());
+        m.put("isDefault", e.getIsDefault());
         return m;
     }
 
@@ -162,6 +285,16 @@ public class ParadigmController {
         m.put("draftGraph", parseOrNull(e.getDraftGraphJson()));
         m.put("createdAt", e.getCreatedAt());
         m.put("updatedAt", e.getUpdatedAt());
+        m.putAll(bindingView(e));
+        return m;
+    }
+
+    /** The binding triple, shared by paradigmView and the publish-with-binding response. */
+    private Map<String, Object> bindingView(ParadigmEntity e) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("boundDomain", e.getBoundDomain());
+        m.put("isDefault", e.getIsDefault());
+        m.put("boundAt", e.getBoundAt());
         return m;
     }
 

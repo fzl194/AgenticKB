@@ -126,6 +126,118 @@ class ContextAssemblerTest {
     }
 
     @Nested
+    @DisplayName("seed provenance")
+    class SeedProvenance {
+
+        private static SegmentWithMetaRow segRow(String id, String documentId) {
+            var row = new SegmentWithMetaRow();
+            row.setId(id);
+            row.setDocumentId(documentId);
+            row.setDocumentSnapshotId("snap1");
+            row.setRawText("段落原文");
+            return row;
+        }
+
+        private static RetrievalCandidate candidateOn(String... segmentIds) {
+            String ids = String.join("\",\"", segmentIds);
+            return new RetrievalCandidate("u1", 0.85, "bm25",
+                    Map.of("text", "命中内容",
+                            "source_refs_json", "{\"raw_segment_ids\":[\"" + ids + "\"]}"),
+                    null);
+        }
+
+        private static RetrievalRoutePlan noExpansionPlan() {
+            return new RetrievalRoutePlan(null, null, null, null,
+                    new AssemblyConfig(false, false, 10, 10, 2, List.of()), null);
+        }
+
+        private static QueryUnderstanding understanding() {
+            return new QueryUnderstanding("SMF配置", "concept_lookup", null, null, null, null,
+                    EvidenceNeed.empty(), null, "rule", null);
+        }
+
+        @Test
+        @DisplayName("the seed that actually matched carries its document id")
+        void seedCarriesSourceId() {
+            var scope = new ActiveScope("rel", "build", List.of("snap1"), Map.of());
+
+            when(repo.resolveSegmentsByIds(any(), any()))
+                    .thenReturn(List.of(segRow("seg-1", "doc-7")));
+            when(repo.getRelationsForSegments(any(), any(), any())).thenReturn(List.of());
+            when(repo.getDocumentSources(any(), any())).thenReturn(List.of());
+
+            var pack = assembler.assemble("SMF配置", understanding(), scope,
+                    List.of(candidateOn("seg-1")), noExpansionPlan());
+
+            var seed = pack.items().stream()
+                    .filter(i -> "seed".equals(i.role())).findFirst().orElseThrow();
+            assertThat(seed.sourceId()).isEqualTo("doc-7");
+        }
+
+        @Test
+        @DisplayName("a seed spanning two documents stays unattributed rather than picking one")
+        void ambiguousSeedIsNotGuessed() {
+            var scope = new ActiveScope("rel", "build", List.of("snap1"), Map.of());
+
+            // Content-deduplicated snapshots make this real: one segment, two owning documents.
+            when(repo.resolveSegmentsByIds(any(), any()))
+                    .thenReturn(List.of(segRow("seg-1", "doc-7"), segRow("seg-1", "doc-8")));
+            when(repo.getRelationsForSegments(any(), any(), any())).thenReturn(List.of());
+            when(repo.getDocumentSources(any(), any())).thenReturn(List.of());
+
+            var pack = assembler.assemble("SMF配置", understanding(), scope,
+                    List.of(candidateOn("seg-1")), noExpansionPlan());
+
+            var seed = pack.items().stream()
+                    .filter(i -> "seed".equals(i.role())).findFirst().orElseThrow();
+            assertThat(seed.sourceId()).isNull();
+        }
+
+        @Test
+        @DisplayName("sources carry kbId so a caller can tell which knowledge base answered")
+        void sourcesCarryKbId() {
+            var scope = new ActiveScope("rel", "build", List.of("snap1"), Map.of());
+
+            var doc = new com.coremasterkb.serving.mapper.result.DocumentSourceRow();
+            doc.setId("doc-7");
+            doc.setDocumentKey("doc:/spec.pdf");
+            doc.setKbId("kb-a");
+
+            when(repo.resolveSegmentsByIds(any(), any()))
+                    .thenReturn(List.of(segRow("seg-1", "doc-7")));
+            when(repo.getRelationsForSegments(any(), any(), any())).thenReturn(List.of());
+            when(repo.getDocumentSources(any(), any())).thenReturn(List.of(doc));
+
+            var pack = assembler.assemble("SMF配置", understanding(), scope,
+                    List.of(candidateOn("seg-1")), noExpansionPlan());
+
+            assertThat(pack.sources()).hasSize(1);
+            assertThat(pack.sources().get(0).kbId()).isEqualTo("kb-a");
+        }
+
+        @Test
+        @DisplayName("a legacy document belongs to no KB and reports kbId null")
+        void legacyDocumentHasNullKbId() {
+            var scope = new ActiveScope("rel", "build", List.of("snap1"), Map.of());
+
+            var doc = new com.coremasterkb.serving.mapper.result.DocumentSourceRow();
+            doc.setId("doc-legacy");
+            doc.setDocumentKey("doc:/legacy.md");
+            // kb_id stays null: ingested via /api/runs, never uploaded into a knowledge base.
+
+            when(repo.resolveSegmentsByIds(any(), any()))
+                    .thenReturn(List.of(segRow("seg-1", "doc-legacy")));
+            when(repo.getRelationsForSegments(any(), any(), any())).thenReturn(List.of());
+            when(repo.getDocumentSources(any(), any())).thenReturn(List.of(doc));
+
+            var pack = assembler.assemble("SMF配置", understanding(), scope,
+                    List.of(candidateOn("seg-1")), noExpansionPlan());
+
+            assertThat(pack.sources().get(0).kbId()).isNull();
+        }
+    }
+
+    @Nested
     @DisplayName("item deduplication")
     class ItemDeduplication {
 

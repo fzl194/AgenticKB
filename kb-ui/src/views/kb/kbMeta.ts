@@ -4,13 +4,13 @@
  */
 import type { KbDocStatus, KbMemberRole, KbMyRole, KbVisibility } from '@/types/kb'
 
-// ── 可见性 ──
+// ── 可见性（private/shared 已合并为「私有」，只 public 单独成「公开」）──
 export function visibilityLabel(v: KbVisibility): string {
-  return { private: '私有', shared: '共享', public: '公开' }[v]
+  return v === 'public' ? '公开' : '私有'
 }
 
-export function visibilityTagType(v: KbVisibility): 'danger' | 'warning' | 'success' {
-  return ({ private: 'danger', shared: 'warning', public: 'success' } as const)[v]
+export function visibilityTagType(v: KbVisibility): 'warning' | 'success' {
+  return v === 'public' ? 'success' : 'warning'
 }
 
 // ── 我的角色（列表 my_role / 成员表 role 都用）──

@@ -21,7 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
     return ready.value
   }
 
-  async function login(username: string, password: string): Promise<void> {
+  async function login(username: string, password?: string): Promise<void> {
     const api = useAuthApi()
     const res = await api.login(username, password)
     token.value = res.token

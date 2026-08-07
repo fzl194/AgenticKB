@@ -11,10 +11,16 @@ const mining = createProxyClient('mining', { includeDomainQuery: false })
 
 export function useAuthApi() {
   return {
-    /** login/me 是 main_control 直连端点（不经 domain 代理）。 */
-    async login(username: string, password: string): Promise<LoginResponse> {
-      const { data } = await http.post('/api/v1/auth/login', { username, password })
+    /** login/identify/me 是 main_control 直连端点（不经 domain 代理）。 */
+    async login(username: string, password?: string): Promise<LoginResponse> {
+      const body: Record<string, string> = { username }
+      if (password) body.password = password
+      const { data } = await http.post('/api/v1/auth/login', body)
       return data as LoginResponse
+    },
+    async identify(username: string): Promise<{ mode: 'password' | 'member' | 'not_found'; display_name?: string | null }> {
+      const { data } = await http.post('/api/v1/auth/identify', { username })
+      return data
     },
     async getMe(): Promise<AuthUser> {
       const { data } = await http.get('/api/v1/auth/me')

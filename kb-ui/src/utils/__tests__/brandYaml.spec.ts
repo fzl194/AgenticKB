@@ -56,7 +56,7 @@ describe('buildUiYaml', () => {
     const rebuilt = buildUiYaml(parseUiYaml(original))
     const doc = yamlLoad(rebuilt) as Record<string, unknown>
     const site = doc.site as Record<string, string>
-    expect(site).toEqual({ title: 'A', name: 'N', badge: 'B', logo_text: 'L', icon: '' })
+    expect(site).toEqual({ title: 'A', name: 'N', badge: 'B', logo_text: 'L', icon: '', admin_contact: '' })
     expect(doc.mining_api_base).toBe('http://x')
     expect(doc.llm_api_base).toBe('http://y')
   })

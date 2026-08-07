@@ -10,4 +10,6 @@ export interface BrandConfig {
   logoText: string
   /** data URI 或 http(s) URL；空 → 回落 /favicon.svg + logoText */
   icon: string
+  /** 管理员联系方式（工号/姓名等），登录失败「联系管理员」提示用。空则不显示。 */
+  adminContact: string
 }

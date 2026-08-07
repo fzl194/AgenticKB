@@ -13,18 +13,16 @@ import { useAuthStore } from './stores/auth'
 const app = createApp(App)
 const pinia = createPinia()
 app.use(pinia)
+
+// 关键顺序：bootstrap（恢复 token + 起 fetchMe，置 auth.ready）必须在 app.use(router) 之前。
+// vue-router 的初始导航在 app.use(router) 时立即触发，路由守卫靠 await auth.ready 等 fetchMe 完成。
+const brand = useBrandStore(pinia)
+const auth = useAuthStore(pinia)
+auth.bootstrap()
 app.use(router)
 app.use(ElementPlus)
 
-// 启动期注入品牌 + 恢复登录态。token 存在时 fetchMe 取 profile，使首屏侧边栏按角色渲染。
-const brand = useBrandStore(pinia)
-const auth = useAuthStore(pinia)
-auth.restore() // 从 localStorage 恢复 token（不触发网络）
-
-Promise.allSettled([
-  brand.fetchBrand(),
-  auth.token ? auth.fetchMe() : Promise.resolve(),
-]).finally(() => {
+Promise.allSettled([brand.fetchBrand(), auth.ready]).finally(() => {
   brand.applyBrand()
   app.mount('#app')
 })

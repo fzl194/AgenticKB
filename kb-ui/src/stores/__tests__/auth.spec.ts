@@ -87,11 +87,21 @@ describe('auth store', () => {
     expect(api.getMe).not.toHaveBeenCalled()
   })
 
-  it('restore loads token from storage', () => {
+  it('bootstrap restores token and fetches profile when token present', async () => {
     storage.loadToken.mockReturnValue('persisted')
+    api.getMe.mockResolvedValue({ username: 'admin', display_name: 'A', site_role: 'admin' })
     const s = useAuthStore()
-    s.restore()
+    await s.bootstrap()
     expect(s.token).toBe('persisted')
+    expect(s.user?.username).toBe('admin')
+  })
+
+  it('bootstrap without token does not call getMe', async () => {
+    storage.loadToken.mockReturnValue(null)
+    const s = useAuthStore()
+    await s.bootstrap()
+    expect(s.token).toBe(null)
+    expect(api.getMe).not.toHaveBeenCalled()
   })
 
   it('siteRole defaults to member when no user', () => {

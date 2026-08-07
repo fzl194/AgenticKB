@@ -153,6 +153,9 @@ const ADMIN_ROUTES = new Set([
 let domainsInitialized = false
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
+  // 等 auth 启动完成（restore + fetchMe）。初始导航在 app.use(router) 时触发，早于 fetchMe，
+  // 不等的话 user 还没拿到 → isAuthenticated 假 → 误判未登录跳 /login（刷新即登出的根因）。
+  await auth.ready
   // 未登录且非 public → 登录页（带 redirect 回来）
   if (!to.meta.public && !auth.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }

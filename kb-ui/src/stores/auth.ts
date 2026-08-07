@@ -9,9 +9,16 @@ export const useAuthStore = defineStore('auth', () => {
   const siteRole = computed<SiteRole>(() => user.value?.site_role ?? 'member')
   const isAuthenticated = computed(() => !!token.value && !!user.value)
 
-  /** 从 localStorage 恢复 token（启动期调用，不触发 fetchMe）。 */
-  function restore(): void {
+  // 首屏路由守卫 await 这个 promise：vue-router 的初始导航在 app.use(router) 时就触发，
+  // 早于 fetchMe 完成；守卫必须等 fetchMe 拿到 user 才能正确判断 isAuthenticated。
+  const ready = ref<Promise<void>>(Promise.resolve())
+
+  /** 启动期：恢复 token +（若有 token）拉 profile。必须在 app.use(router) 之前调用，
+   * 让初始导航的守卫 await ready。返回该 promise。 */
+  function bootstrap(): Promise<void> {
     token.value = loadToken()
+    ready.value = token.value ? fetchMe() : Promise.resolve()
+    return ready.value
   }
 
   async function login(username: string, password: string): Promise<void> {
@@ -41,5 +48,5 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { token, user, siteRole, isAuthenticated, restore, login, logout, fetchMe }
+  return { token, user, siteRole, isAuthenticated, ready, bootstrap, login, logout, fetchMe }
 })

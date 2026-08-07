@@ -717,6 +717,10 @@ def _classify_parse_skip(ctx: DocumentContext) -> tuple[str, str | None]:
         return "parse_no_tree", None
 
     meta = raw.metadata_json if isinstance(raw.metadata_json, dict) else {}
+    if meta.get("preprocess_status") == "failed":
+        return "preprocess_failed", str(
+            meta.get("preprocess_error") or "preprocessing failed"
+        )
     pre_err = meta.get("preprocess_error")
     if pre_err:
         return "preprocess_failed", str(pre_err)
@@ -933,8 +937,17 @@ def db_write_stage(ctx: DocumentContext, cfg: PipelineConfig) -> DocumentContext
                 pass
         return ctx
     if ctx.tree is None:
+        reason, detail = _classify_parse_skip(ctx)
+        if reason == "preprocess_failed":
+            error = detail or reason
+            if tracker and rd_id:
+                tracker.fail_document(rd_id, error)
+                try:
+                    cfg.runtime_db.commit()
+                except Exception:
+                    pass
+            return ctx.with_updates(error=error)
         if tracker and rd_id:
-            reason, detail = _classify_parse_skip(ctx)
             tracker.skip_document(rd_id, reason=reason, detail=detail)
             try:
                 cfg.runtime_db.commit()

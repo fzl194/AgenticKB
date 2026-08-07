@@ -172,6 +172,20 @@ def ingest_directory(
                     content = ""  # docx parsed from file, like native .docx
                     summary["parsed_documents"] += 1
                     metadata_json["source_format"] = "doc"
+                except PreprocessingError as exc:
+                    logger.warning(
+                        "doc->docx conversion failed for %s [%s]: %s; "
+                        "registering without content",
+                        file_path,
+                        exc.code,
+                        exc.safe_message,
+                    )
+                    content = ""
+                    summary["unparsed_documents"] += 1
+                    metadata_json.update({
+                        "source_format": "doc",
+                        **exc.as_metadata(),
+                    })
                 except Exception as e:
                     logger.warning(
                         "doc->docx conversion failed for %s: %s; registering without content",

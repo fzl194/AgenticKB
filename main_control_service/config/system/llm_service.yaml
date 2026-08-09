@@ -51,6 +51,24 @@ provider:
       timeout: 60
       bypass_proxy: false
       headers: {}
+    glm-v4-9b:
+      provider_type: "anthropic"
+      model: "glm-v4-9"
+      base_url: "https://open.bigmodel.cn/api/anthropic/v1/messages"
+      api_key: "bec7cc02fc88529bee532a07070f4e80.PbObZYZROyxvmtfq"
+      api_version: "2023-06-01"
+      timeout: 60
+      bypass_proxy: false
+      headers: {}
+    # Vision (VLM): OpenAI-compatible multimodal messages with image_url parts.
+    # Call /api/v1/execute with model="glm-4.5v" without changing active_model.
+    glm-4.5v:
+      model: "glm-4.5v"
+      base_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+      api_key: "bec7cc02fc88529bee532a07070f4e80.PbObZYZROyxvmtfq"
+      timeout: 120
+      bypass_proxy: false
+      headers: {}
 embedding:
   base_url: "https://open.bigmodel.cn/api/paas/v4/embeddings"
   api_key: "bec7cc02fc88529bee532a07070f4e80.PbObZYZROyxvmtfq"

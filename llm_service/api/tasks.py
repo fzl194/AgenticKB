@@ -25,6 +25,7 @@ async def submit_task(body: TaskSubmitRequest, request: Request):
         metadata=body.metadata,
         max_attempts=body.max_attempts,
         priority=body.priority,
+        model=body.model,
     )
     task = await svc.get_task(task_id)
     return {
@@ -107,6 +108,7 @@ async def execute_task(body: TaskSubmitRequest, request: Request):
         metadata=body.metadata,
         max_attempts=body.max_attempts,
         priority=body.priority,
+        model=body.model,
     )
     return {"success": True, "data": result}
 

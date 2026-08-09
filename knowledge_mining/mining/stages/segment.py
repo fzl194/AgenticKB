@@ -63,13 +63,23 @@ class DefaultSegmenter:
 
 _SCHEMA_BLOCK_TYPES = {
     "paragraph", "table", "list", "code", "blockquote",
-    "html_table", "raw_html", "unknown",
+    "html_table", "raw_html", "image", "unknown",
 }
 
 # Merge thresholds — module-level named constants for discoverability
 _MERGE_MAX_TOKENS = 512
 _SPLIT_MAX_TOKENS = 512
 _TABLE_MIN_INDEPENDENT_TOKENS = 300
+
+# Emitted as their own segment (not grouped with surrounding paragraphs).
+_INDEPENDENT_BLOCK_TYPES = frozenset({
+    "table", "html_table", "code", "list", "blockquote", "image",
+})
+
+# Never absorb orphans into / merge across these (image joins table/code).
+_NON_MERGEABLE_BLOCK_TYPES = frozenset({
+    "table", "html_table", "code", "image",
+})
 
 
 @dataclass(frozen=True)
@@ -85,6 +95,7 @@ class SegmentPolicyOverride:
 
 # Block type priority for merged segments (higher = dominant)
 _BLOCK_TYPE_PRIORITY: dict[str, int] = {
+    "image": 5,
     "table": 4, "html_table": 4,
     "list": 3,
     "code": 2,
@@ -214,7 +225,7 @@ def _walk_sections(
             # Heading blocks are metadata carried by section_title/section_path.
             # Skip them here — their text is already in the section hierarchy.
             continue
-        elif block.block_type in ("table", "html_table", "code", "list", "blockquote"):
+        elif block.block_type in _INDEPENDENT_BLOCK_TYPES:
             if current_group:
                 segments.append(
                     _make_segment(
@@ -288,12 +299,12 @@ def _merge_small_segments(
             and not (seg.block_type in ("table", "html_table") and seg_tc > _TABLE_MIN_INDEPENDENT_TOKENS)
         )
 
-        # Try merge: short current segment into previous (paragraph/list only, never merge tables/code backward)
+        # Try merge: short current segment into previous (never merge tables/code/image)
         backward_merge = (
             seg_tc < min_tokens
-            and seg.block_type not in ("table", "html_table", "code")
+            and seg.block_type not in _NON_MERGEABLE_BLOCK_TYPES
             and (prev_tc + seg_tc) <= max_tokens
-            and prev.block_type not in ("table", "html_table", "code")
+            and prev.block_type not in _NON_MERGEABLE_BLOCK_TYPES
         )
 
         if intro_merge or backward_merge:
@@ -363,7 +374,7 @@ def _absorb_orphan_segments(
     for idx, seg in enumerate(segments):
         tc = seg.token_count if seg.token_count is not None else 0
         if (tc < min_tokens
-                and seg.block_type not in ("table", "html_table", "code")):
+                and seg.block_type not in _NON_MERGEABLE_BLOCK_TYPES):
             orphan_indices.append(idx)
 
     if not orphan_indices:
@@ -403,8 +414,8 @@ def _absorb_orphan_segments(
             # Check merge feasibility
             if candidate_tc + orphan_tc > max_tokens:
                 continue
-            # Never merge into table/code blocks
-            if candidate.block_type in ("table", "html_table", "code"):
+            # Never merge into table/code/image blocks
+            if candidate.block_type in _NON_MERGEABLE_BLOCK_TYPES:
                 continue
 
             # Merge orphan into candidate
@@ -511,7 +522,7 @@ def _merge_lead_in_segments(
             pending_path = _path_titles(pending.section_path)
             seg_path = _path_titles(seg.section_path)
             can_merge = (
-                seg.block_type not in ("table", "html_table", "code")
+                seg.block_type not in _NON_MERGEABLE_BLOCK_TYPES
                 and (p_tc + s_tc) <= max_tokens
                 and pending_path != seg_path
                 and _is_lineage(pending_path, seg_path)
@@ -721,10 +732,31 @@ def _make_segment(
         primary_block = blocks[0] if blocks else None
     block_type = _schema_block_type(primary_block.block_type if primary_block else "unknown")
 
-    raw_text = _clean_segment_text("\n\n".join(b.text for b in blocks))
+    # Image blocks: keep caption text as-is (may be empty before VLM). Do not run
+    # markdown image-ref stripping that would erase intentional captions later.
+    if block_type == "image":
+        raw_text = "\n\n".join(b.text for b in blocks).strip()
+    else:
+        raw_text = _clean_segment_text("\n\n".join(b.text for b in blocks))
     norm_text = raw_text.lower().strip()
 
     structure_json = _extract_structure_info(blocks)
+
+    # Empty image captions still need stable distinct hashes (based on image bytes).
+    if block_type == "image" and not raw_text:
+        seed = (
+            structure_json.get("image_sha256")
+            or structure_json.get("image_path")
+            or f"{document_key}:{block_index}"
+        )
+        hash_src = f"image:{seed}"
+        ch = content_hash(hash_src)
+        nh = normalized_hash(hash_src)
+        tc = 0
+    else:
+        ch = content_hash(raw_text)
+        nh = normalized_hash(raw_text)
+        tc = token_count(raw_text)
 
     line_start = None
     line_end = None
@@ -751,9 +783,9 @@ def _make_segment(
         section_title=section.title,
         raw_text=raw_text,
         normalized_text=norm_text,
-        content_hash=content_hash(raw_text),
-        normalized_hash=normalized_hash(raw_text),
-        token_count=token_count(raw_text),
+        content_hash=ch,
+        normalized_hash=nh,
+        token_count=tc,
         structure_json=structure_json,
         source_offsets_json=source_offsets,
         entity_refs_json=[],
@@ -792,6 +824,11 @@ def _extract_structure_info(blocks: list[ContentBlock]) -> dict:
                 info["item_count"] = len(items)
         elif block.block_type == "paragraph":
             info["paragraph_count"] = info.get("paragraph_count", 0) + 1
+        elif block.block_type == "image":
+            if block.structure:
+                info.update(block.structure)
+            else:
+                info.setdefault("kind", "pdf_image")
     return info
 
 

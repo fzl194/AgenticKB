@@ -35,7 +35,17 @@ class ParserStage:
         parser = create_parser(raw.file_type, **self._kwargs)
         if parser is None:
             return context
-        tree = parser.parse(raw.content, raw.file_name, {"file_path": raw.file_path})
+        parse_ctx: dict[str, Any] = {"file_path": raw.file_path}
+        if context.get("image_dir"):
+            parse_ctx["image_dir"] = context["image_dir"]
+        elif context.get("run_id") and getattr(raw, "file_type", None) == "pdf":
+            from knowledge_mining.mining.infra.run_workdir import resolve_run_image_dir
+
+            doc_key = getattr(raw, "relative_path", None) or raw.file_name
+            parse_ctx["image_dir"] = str(
+                resolve_run_image_dir(str(context["run_id"]), str(doc_key))
+            )
+        tree = parser.parse(raw.content, raw.file_name, parse_ctx)
         context["tree"] = tree
         return context
 
@@ -119,8 +129,11 @@ class PdfParser:
             logger.warning("PdfParser: no file_path in context for %s", file_name)
             self.last_error = "no file_path in parse context"
             return None
+        image_dir = (context or {}).get("image_dir")
         try:
-            return parse_pdf_to_section_tree(file_path, doc_title=file_name)
+            return parse_pdf_to_section_tree(
+                file_path, doc_title=file_name, image_dir=image_dir,
+            )
         except Exception as e:
             logger.warning("PdfParser failed for %s: %s", file_path, e)
             self.last_error = f"{type(e).__name__}: {e}"

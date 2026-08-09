@@ -47,6 +47,7 @@ VALID_BLOCK_TYPES = frozenset({
     "blockquote",
     "html_table",
     "raw_html",
+    "image",
     "unknown",
 })
 
@@ -195,7 +196,7 @@ class RawFileData:
 class ContentBlock:
     """A parsed content block from the structure parser."""
 
-    block_type: str  # heading, paragraph, list, table, html_table, code, blockquote, raw_html, unknown
+    block_type: str  # heading, paragraph, list, table, html_table, code, blockquote, raw_html, image, unknown
     text: str
     language: str | None = None
     level: int | None = None  # heading level

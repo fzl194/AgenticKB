@@ -152,6 +152,7 @@ SCHEMA_FILES = [
     REPO_ROOT / "databases" / "asset_core" / "schemas" / "006_asset_build_kb.sql",
     # mining_runs 的 kb_id
     REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "007_mining_run_kb.sql",
+    REPO_ROOT / "databases" / "asset_core" / "schemas" / "007_asset_block_type_image.sql",
     # ontology（Domain DDL 中必须最后——FK 指向 asset_* / mining_runs）
     REPO_ROOT / "databases" / "ontology" / "schemas" / "001_ontology_concept_postgresql.sql",
     # ── control（全局 Workflow 定义，主库最后）──

@@ -53,6 +53,8 @@ class LLMService:
         self._provider_name = getattr(provider, 'provider_name', 'unknown')
         # For multi-model: use provider.default_model (resolved at construction)
         self._default_model = getattr(provider, 'default_model', config.get("provider", {}).get("model", ""))
+        # Cache of alternate chat providers keyed by provider.models entry name.
+        self._chat_providers: dict[str, ProviderProtocol] = {}
 
     # ------------------------------------------------------------------
     # Template resolution
@@ -135,13 +137,56 @@ class LLMService:
         injected = False
         for msg in msgs:
             if msg.get("role") == "system" and not injected:
-                new_msgs.append({**msg, "content": msg["content"] + schema_instruction})
+                content = msg.get("content")
+                if isinstance(content, list):
+                    new_content = list(content) + [
+                        {"type": "text", "text": schema_instruction}
+                    ]
+                else:
+                    new_content = str(content or "") + schema_instruction
+                new_msgs.append({**msg, "content": new_content})
                 injected = True
             else:
                 new_msgs.append(msg)
         if not injected:
             new_msgs.insert(0, {"role": "system", "content": schema_instruction.strip()})
         result["messages"] = new_msgs
+
+    def _get_chat_provider(self, model: str | None = None) -> ProviderProtocol:
+        """Return the default provider, or a cached alternate from provider.models."""
+        if not model:
+            return self._provider
+        # Exact match on default model id / active key
+        active_key = self._config.get("provider", {}).get("active_model")
+        if model in (self._default_model, active_key):
+            return self._provider
+
+        from llm_service.config import resolve_model_config
+        from llm_service.providers.factory import build_chat_provider
+
+        models = (self._config.get("provider") or {}).get("models") or {}
+        cache_key = model
+        if cache_key not in models:
+            for key, entry in models.items():
+                if isinstance(entry, dict) and entry.get("model") == model:
+                    cache_key = key
+                    break
+
+        if cache_key in self._chat_providers:
+            return self._chat_providers[cache_key]
+
+        resolved = resolve_model_config(self._config, model_key=model)
+        provider, _ = build_chat_provider(resolved)
+        self._chat_providers[cache_key] = provider
+        return provider
+
+    def _resolve_request_model(self, model: str | None) -> tuple[str, str]:
+        """Return (provider_name, model_id) for persistence / routing."""
+        provider = self._get_chat_provider(model)
+        return (
+            getattr(provider, "provider_name", self._provider_name),
+            getattr(provider, "default_model", model or self._default_model),
+        )
 
     # ------------------------------------------------------------------
     # Shared chat execution (used by both Worker and sync /execute)
@@ -155,6 +200,8 @@ class LLMService:
         params: dict,
         expected_type: str,
         schema: dict | None,
+        *,
+        model: str | None = None,
     ) -> ParseResult:
         """Execute a single chat attempt: call provider -> parse -> write result.
 
@@ -187,7 +234,8 @@ class LLMService:
                     response_format["schema"] = schema
             else:
                 response_format = None
-            resp = await self._provider.complete(
+            provider = self._get_chat_provider(model)
+            resp = await provider.complete(
                 messages=messages, params=params,
                 response_format=response_format,
             )
@@ -345,6 +393,7 @@ class LLMService:
         metadata: dict | None = None,
         max_attempts: int = 3,
         priority: int = 100,
+        model: str | None = None,
     ) -> str:
         # Template expansion
         resolved = await self._resolve_template(
@@ -353,6 +402,7 @@ class LLMService:
         actual_messages = resolved["messages"] or [{"role": "user", "content": json.dumps(input or {})}]
         actual_expected_type = resolved["expected_output_type"] or "json_object"
         actual_schema = resolved["output_schema"]
+        provider_name, model_id = self._resolve_request_model(model)
 
         return await self._submit_with_idempotency(
             idempotency_key=idempotency_key,
@@ -361,7 +411,7 @@ class LLMService:
             knowledge_domain=knowledge_domain,
             pipeline_stage=pipeline_stage,
             request_params=(
-                self._provider_name, self._default_model, template_key,
+                provider_name, model_id, template_key,
                 json.dumps(actual_messages or []),
                 json.dumps(input or {}),
                 json.dumps(params or {}),
@@ -468,11 +518,15 @@ class LLMService:
         max_attempts: int = 3,
         priority: int = 100,
         timeout: int | None = None,
+        model: str | None = None,
     ) -> dict:
         """Sync execute: resolve template → call LLM → return immediately.
 
         DB writes are deferred to PersistWriter (in-memory queue → background batch DB writes).
         This is a relay service — the caller sees zero DB overhead.
+
+        ``model`` selects an entry under ``provider.models`` (or its API model
+        id) so vision calls can target a VLM without changing ``active_model``.
         """
         # ---- Phase 1: Resolve template (cached → 0 DB after warm-up) ----
         resolved = await self._resolve_template(
@@ -495,7 +549,10 @@ class LLMService:
             response_format = None
 
         try:
-            resp = await self._provider.complete(
+            provider = self._get_chat_provider(model)
+            provider_name = getattr(provider, "provider_name", self._provider_name)
+            model_id = getattr(provider, "default_model", model or self._default_model)
+            resp = await provider.complete(
                 messages=actual_messages, params=params or {},
                 response_format=response_format,
             )
@@ -538,8 +595,8 @@ class LLMService:
                 pipeline_stage=pipeline_stage,
                 idempotency_key=idempotency_key,
                 template_key=template_key,
-                provider_name=self._provider_name,
-                model=self._default_model,
+                provider_name=provider_name,
+                model=model_id,
                 messages_json=json.dumps(actual_messages),
                 input_json=json.dumps(input or {}),
                 params_json=json.dumps(params or {}),

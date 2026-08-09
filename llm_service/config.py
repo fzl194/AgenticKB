@@ -111,6 +111,40 @@ def dig_optional(data: dict, *keys: str, default: Any = None) -> Any:
     return node
 
 
+def resolve_model_config(cfg: dict, model_key: str | None = None) -> dict:
+    """Resolve provider config for ``model_key`` (or active_model when None).
+
+    ``model_key`` may be a key under ``provider.models`` (e.g. ``glm-4.5v``)
+    or the underlying ``model`` field value (e.g. ``glm-4.5v`` API id).
+    """
+    provider_cfg = cfg.get("provider", {})
+    models = provider_cfg.get("models") or {}
+    active = model_key or provider_cfg.get("active_model")
+
+    if not models or not active:
+        return dict(provider_cfg)
+
+    resolved_key = active
+    if resolved_key not in models:
+        for key, entry in models.items():
+            if isinstance(entry, dict) and entry.get("model") == active:
+                resolved_key = key
+                break
+        else:
+            if model_key is not None:
+                raise ValueError(
+                    f"Unknown chat model {model_key!r}. "
+                    f"Known keys: {sorted(models)}"
+                )
+            logger.warning(
+                "active_model '%s' not found in provider.models, using base config",
+                active,
+            )
+            return dict(provider_cfg)
+
+    return _deep_merge(provider_cfg, models[resolved_key])
+
+
 def resolve_active_model_config(cfg: dict) -> dict:
     """Resolve the effective provider config considering multi-model setup.
 
@@ -118,21 +152,7 @@ def resolve_active_model_config(cfg: dict) -> dict:
     merge the active model's overrides into the base provider config.
     Otherwise return the provider config as-is (single-model mode).
     """
-    provider_cfg = cfg.get("provider", {})
-    models = provider_cfg.get("models")
-    active = provider_cfg.get("active_model")
-
-    if not models or not active:
-        # Single-model mode — provider.model is the only model
-        return dict(provider_cfg)
-
-    model_cfg = models.get(active)
-    if not model_cfg:
-        logger.warning("active_model '%s' not found in provider.models, using base config", active)
-        return dict(provider_cfg)
-
-    # Deep-merge: model_cfg overrides base provider_cfg (nested dicts preserved)
-    return _deep_merge(provider_cfg, model_cfg)
+    return resolve_model_config(cfg, model_key=None)
 
 
 def _validate_required(data: dict) -> None:

@@ -317,6 +317,17 @@ def publish_release(
                 f"cannot publish under domain {domain!r}"
             )
 
+        # KB-scoped builds must never enter the domain-level active release：active release
+        # 是域级「一域至多一个」，发布 KB build 会 retire 掉同域其它 KB 的 release。
+        # KB 知识走 KB 作用域检索（直接从 build 读），不经过这里。护栏原本只在
+        # kb/routes/mining.py 入口一行 metadata.publish=false，无测试锁；此处下推到
+        # 发布边界强制，任何调用方都无法绕过。
+        if build.get("kb_id"):
+            raise ValueError(
+                f"Build {build_id} is KB-scoped (kb_id={build['kb_id']!r}); "
+                "KB builds must not be published to the domain-level active release."
+            )
+
         prev_release = asset_db.get_active_release(domain, channel)
         prev_release_id = prev_release["id"] if prev_release else None
 

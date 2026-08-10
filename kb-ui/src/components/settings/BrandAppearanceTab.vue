@@ -35,6 +35,9 @@
             </div>
             <div class="brand-tab__hint">支持 PNG/SVG 等；文件以 base64 内嵌进 ui.yaml（约 1.3 倍体积）。</div>
           </el-form-item>
+          <el-form-item label="管理员联系方式（登录失败「联系管理员」提示用）">
+            <el-input v-model="form.adminContact" placeholder="如：张三 / 工号 12345 / 内线 8888（留空则不显示）" />
+          </el-form-item>
         </el-form>
 
         <div class="brand-tab__actions">
@@ -86,6 +89,7 @@ interface SiteForm {
   badge: string
   logoText: string
   icon: string
+  adminContact: string
 }
 
 const DEFAULTS: SiteForm = {
@@ -94,6 +98,7 @@ const DEFAULTS: SiteForm = {
   badge: 'Knowledge Base',
   logoText: 'KB',
   icon: '',
+  adminContact: '',
 }
 
 const form = reactive<SiteForm>({ ...DEFAULTS })
@@ -118,6 +123,7 @@ function setFormFromSite(site: Partial<BrandConfig>): void {
   form.badge = site.badge ?? DEFAULTS.badge
   form.logoText = site.logoText ?? DEFAULTS.logoText
   form.icon = site.icon ?? DEFAULTS.icon
+  form.adminContact = site.adminContact ?? DEFAULTS.adminContact
   original.value = { ...form }
 }
 
@@ -146,6 +152,7 @@ async function save(): Promise<void> {
         badge: form.badge,
         logoText: form.logoText,
         icon: form.icon,
+        adminContact: form.adminContact,
       },
     })
     await api.updateSystemConfigRaw('ui', text)

@@ -3,6 +3,7 @@ import { shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('vue-router', () => ({ useRoute: () => ({ path: '/mining/workflows' }) }))
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ siteRole: 'admin' }) }))
 
 import Sidebar from '../Sidebar.vue'
 

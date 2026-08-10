@@ -11,6 +11,7 @@ export const DEFAULT_BRAND: BrandConfig = {
   badge: 'Knowledge Base',
   logoText: 'KB',
   icon: '',
+  adminContact: '',
 }
 
 const FAVICON_SELECTOR = 'link[rel="icon"]'
@@ -34,6 +35,7 @@ export const useBrandStore = defineStore('brand', () => {
   const badge = ref(DEFAULT_BRAND.badge)
   const logoText = ref(DEFAULT_BRAND.logoText)
   const icon = ref(DEFAULT_BRAND.icon)
+  const adminContact = ref(DEFAULT_BRAND.adminContact)
   const loaded = ref(false)
 
   function applyValues(partial: Partial<BrandConfig>): void {
@@ -42,6 +44,7 @@ export const useBrandStore = defineStore('brand', () => {
     if (partial.badge !== undefined) badge.value = partial.badge
     if (partial.logoText !== undefined) logoText.value = partial.logoText
     if (partial.icon !== undefined) icon.value = partial.icon
+    if (partial.adminContact !== undefined) adminContact.value = partial.adminContact
   }
 
   /** 拉取 site 品牌配置。失败静默兜底默认，绝不抛——启动期不能因品牌拉取失败而崩。 */
@@ -70,5 +73,5 @@ export const useBrandStore = defineStore('brand', () => {
     link.href = href
   }
 
-  return { title, name, badge, logoText, icon, loaded, fetchBrand, applyBrand, applyValues }
+  return { title, name, badge, logoText, icon, adminContact, loaded, fetchBrand, applyBrand, applyValues }
 })

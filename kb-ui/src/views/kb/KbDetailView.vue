@@ -110,7 +110,7 @@ const miningPanelRef = ref<InstanceType<typeof KbMiningPanel> | null>(null)
 const miningWorkflowId = ref<string | null>(null)
 
 const canWrite = computed(
-  () => kb.value?.my_role === 'owner' || kb.value?.my_role === 'editor',
+  () => kb.value?.my_role === 'owner' || kb.value?.my_role === 'editor' || kb.value?.my_role === 'admin',
 )
 
 async function reload() {

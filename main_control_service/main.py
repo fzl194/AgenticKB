@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from main_control_service.auth import AuthMiddleware
 from main_control_service.config import MainControlSettings
 from main_control_service.ip_whitelist import IpWhitelistMiddleware
 from main_control_service.proxy import (
@@ -17,6 +18,56 @@ from main_control_service.proxy import (
     proxy_request,
 )
 from main_control_service.service import YamlConfigService
+
+
+def _find_auth_mw(request: Request) -> AuthMiddleware | None:
+    """在中间件栈中找 AuthMiddleware 实例（模块级，供 login/me/reload-auth 与测试复用）。"""
+    layer = getattr(request.app, "middleware_stack", None) or request.app
+    while hasattr(layer, "app"):
+        if isinstance(layer, AuthMiddleware):
+            return layer
+        layer = layer.app
+    return None
+
+
+async def verify_user_via_mining(
+    verify_url: str, internal_secret: str, username: str, password: str,
+) -> dict | None:
+    """POST mining /api/kb/auth/verify（带 X-Internal-Auth）。成功返 {ok,user}，失败/异常返 None。"""
+    if not internal_secret:
+        return None
+    try:
+        resp = await get_proxy_client().post(
+            f"{verify_url}/api/kb/auth/verify",
+            json={"username": username, "password": password},
+            headers={"X-Internal-Auth": internal_secret},
+            timeout=10.0,
+        )
+    except Exception:  # noqa: BLE001 — best-effort
+        return None
+    if resp.status_code == 200:
+        return resp.json()
+    return None
+
+
+async def identify_via_mining(
+    verify_url: str, internal_secret: str, username: str,
+) -> dict | None:
+    """POST mining /api/kb/auth/identify（带 X-Internal-Auth）。返回 {mode,...} 或 None。"""
+    if not internal_secret:
+        return None
+    try:
+        resp = await get_proxy_client().post(
+            f"{verify_url}/api/kb/auth/identify",
+            json={"username": username},
+            headers={"X-Internal-Auth": internal_secret},
+            timeout=10.0,
+        )
+    except Exception:  # noqa: BLE001 — best-effort
+        return None
+    if resp.status_code == 200:
+        return resp.json()
+    return None
 
 
 def create_app(
@@ -47,17 +98,18 @@ def create_app(
         lifespan=lifespan,
     )
 
-    # IP whitelist middleware — runs before all other middleware
-    # Starlette processes middleware in reverse registration order,
-    # so register it LAST to make it run FIRST (outermost layer).
-    app.add_middleware(IpWhitelistMiddleware, config_path=ip_whitelist_path)
+    auth_yaml_path = effective_config_dir / "system" / "auth.yaml"
 
+    # 注册顺序 → Starlette 反序执行 → 执行序：IpWhitelist(最外) → CORS → Auth(最内)。
+    # CORS 必须在 Auth 之外，否则浏览器 preflight OPTIONS 会被 Auth 当无 token → 401。
+    app.add_middleware(AuthMiddleware, config_path=auth_yaml_path)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(IpWhitelistMiddleware, config_path=ip_whitelist_path)
 
     # ------------------------------------------------------------------
     # Health
@@ -66,6 +118,91 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "mode": "yaml_crud"}
+
+    # ------------------------------------------------------------------
+    # Auth — login / me（SKIP_PATHS 免 token）/ reload-auth（admin-only）
+    # ------------------------------------------------------------------
+
+    @app.post("/api/v1/auth/login")
+    async def login(request: Request) -> Response:
+        body = await request.json()
+        username = str(body.get("username") or "").strip()
+        password = body.get("password")  # 可空：工号 member 无密码
+        if not username:
+            return JSONResponse(status_code=400, content={"detail": "username required"})
+        # auth 是全局的 —— 取任一启用域的 mining_url 即可（验密码与域无关）。
+        mining_url: str | None = None
+        for entry in service.list_domains():
+            if not entry.get("enabled", True):
+                continue
+            did = entry.get("domain_id")
+            if not did:
+                continue
+            try:
+                svcs = service.get_domain_services(did)
+            except Exception:  # noqa: BLE001
+                continue
+            if svcs.get("mining_url"):
+                mining_url = str(svcs["mining_url"]).rstrip("/")
+                break
+        if not mining_url:
+            return JSONResponse(status_code=503, content={"detail": "mining backend unavailable"})
+        result = await verify_user_via_mining(
+            mining_url, request.app.state.internal_verify_secret, username, password,
+        )
+        if not result or not result.get("ok"):
+            return JSONResponse(status_code=401, content={"detail": "invalid credentials"})
+        u = result["user"]
+        auth_mw = _find_auth_mw(request)
+        secret = auth_mw.jwt_secret if auth_mw else ""
+        ttl = auth_mw.token_ttl_seconds if auth_mw else 43200
+        from main_control_service.jwt_util import encode as jwt_encode
+        token = jwt_encode(
+            {"sub": u["username"], "role": u["site_role"], "name": u.get("display_name") or u["username"]},
+            secret, ttl=int(ttl),
+        )
+        return JSONResponse(content={"token": token, "user": u})
+
+    @app.post("/api/v1/auth/identify")
+    async def identify(request: Request) -> Response:
+        """登录第一步：按用户名判定模式（password/member/not_found）。透传 mining。"""
+        body = await request.json()
+        username = str(body.get("username") or "").strip()
+        if not username:
+            return JSONResponse(status_code=400, content={"detail": "username required"})
+        mining_url: str | None = None
+        for entry in service.list_domains():
+            if not entry.get("enabled", True):
+                continue
+            did = entry.get("domain_id")
+            if not did:
+                continue
+            try:
+                svcs = service.get_domain_services(did)
+            except Exception:  # noqa: BLE001
+                continue
+            if svcs.get("mining_url"):
+                mining_url = str(svcs["mining_url"]).rstrip("/")
+                break
+        if not mining_url:
+            return JSONResponse(status_code=503, content={"detail": "mining backend unavailable"})
+        result = await identify_via_mining(
+            mining_url, request.app.state.internal_verify_secret, username,
+        )
+        if result is None:
+            return JSONResponse(status_code=502, content={"detail": "mining identify unavailable"})
+        return JSONResponse(content=result)
+
+    @app.get("/api/v1/auth/me")
+    def me(request: Request) -> Response:
+        u = getattr(request.state, "user", None)
+        if not u:
+            return JSONResponse(status_code=401, content={"detail": "unauthenticated"})
+        return JSONResponse(content={
+            "username": u.get("username"),
+            "site_role": u.get("role"),
+            "display_name": u.get("name"),
+        })
 
     # ------------------------------------------------------------------
     # System config — YAML text passthrough
@@ -255,6 +392,49 @@ def create_app(
         if mw:
             return mw.reload()  # reload() returns current state
         return {"error": "IpWhitelistMiddleware not found in middleware stack"}
+
+    @app.post("/api/v1/admin/reload-auth")
+    async def reload_auth(request: Request) -> dict:
+        mw = _find_auth_mw(request)
+        result = mw.reload() if mw else {"error": "AuthMiddleware not found in middleware stack"}
+        # 扇出到 mining：让其强制重拉 auth.yaml 刷 internal_verify_secret 缓存。
+        # 否则网关换新 secret、mining 仍验旧值 → 全部代理 401（mining 缓存启动期拉取、原本无 reload）。
+        internal_secret = getattr(request.app.state, "internal_verify_secret", "")
+        client = get_proxy_client()
+        mining_hits: list[dict] = []
+        if not internal_secret:
+            mining_hits.append({"ok": False, "error": "internal_verify_secret not set on gateway"})
+        else:
+            seen: set[str] = set()
+            for entry in service.list_domains():
+                if not entry.get("enabled", True):
+                    continue
+                did = entry.get("domain_id")
+                if not did:
+                    continue
+                try:
+                    svcs = service.get_domain_services(did)
+                except Exception:  # noqa: BLE001
+                    continue
+                url = svcs.get("mining_url")
+                if not url:
+                    continue
+                base = str(url).rstrip("/")
+                if base in seen:
+                    continue
+                seen.add(base)
+                try:
+                    resp = await client.post(
+                        f"{base}/api/kb/admin/reload-auth-config",
+                        headers={"X-Internal-Auth": internal_secret},
+                        timeout=10.0,
+                    )
+                    mining_hits.append({
+                        "url": base, "ok": resp.status_code < 400, "status": resp.status_code,
+                    })
+                except Exception as exc:  # noqa: BLE001 — best-effort fan-out
+                    mining_hits.append({"url": base, "ok": False, "error": str(exc)})
+        return {**result, "mining": mining_hits}
 
     # ------------------------------------------------------------------
     # Admin — fan out config hot-reload to agent_serving instances

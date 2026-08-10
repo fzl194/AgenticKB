@@ -16,6 +16,7 @@ export function normalizeSite(raw: unknown): Partial<BrandConfig> {
   if (typeof s.badge === 'string') out.badge = s.badge
   if (typeof s.logo_text === 'string') out.logoText = s.logo_text
   if (typeof s.icon === 'string') out.icon = s.icon
+  if (typeof s.admin_contact === 'string') out.adminContact = s.admin_contact
   return out
 }
 
@@ -46,6 +47,7 @@ export function buildUiYaml(parts: UiYamlParts): string {
     badge: parts.site.badge ?? '',
     logo_text: parts.site.logoText ?? '',
     icon: parts.site.icon ?? '',
+    admin_contact: parts.site.adminContact ?? '',
   }
   return yamlDump({ ...parts.rest, site }, { lineWidth: -1 })
 }

@@ -344,22 +344,29 @@ class AssetCoreDB(_DB):
         """Legacy 身份 upsert（仅 /api/runs 走，KB 路径不调）。
 
         G1 后 (domain, document_key) 唯一约束已让位于 (kb_id, document_key)，不能再
-        用 ON CONFLICT(domain, document_key)。改为先查后插：legacy 文档 kb_id 为 NULL，
-        同域同 key 历史上只有一行，查得则更新，否则插入。
+        用 ON CONFLICT(domain, document_key)。改为先查后插。
+        H7：查同 (domain, document_key) 的任意已有行——优先 KB 拥有的（kb_id 非空），
+        其次 legacy（kb_id NULL）。命中 KB 行则复用其 id 但不改元数据（KB 是真相源，
+        legacy 不覆盖）；命中 legacy 行才更新；都没有才插 kb_id NULL 新行。避免为同一
+        物理文件新建 NULL 分叉行（(kb_id, document_key) 唯一约束能容许多 NULL）。
         """
         existing = self._fetchone(
-            "SELECT id FROM asset_documents WHERE domain = %s AND document_key = %s AND kb_id IS NULL",
+            """SELECT id, kb_id FROM asset_documents
+               WHERE domain = %s AND document_key = %s
+               ORDER BY kb_id NULLS LAST
+               LIMIT 1""",
             (domain, document_key),
         )
         if existing:
-            self._execute(
-                """UPDATE asset_documents
-                   SET document_name = COALESCE(%s, document_name),
-                       document_type = COALESCE(%s, document_type),
-                       metadata_json = %s
-                   WHERE id = %s""",
-                (document_name, document_type, _json_dumps(metadata_json), existing["id"]),
-            )
+            if existing["kb_id"] is None:
+                self._execute(
+                    """UPDATE asset_documents
+                       SET document_name = COALESCE(%s, document_name),
+                           document_type = COALESCE(%s, document_type),
+                           metadata_json = %s
+                       WHERE id = %s""",
+                    (document_name, document_type, _json_dumps(metadata_json), existing["id"]),
+                )
             return existing["id"]
         now = _utcnow()
         self._execute(

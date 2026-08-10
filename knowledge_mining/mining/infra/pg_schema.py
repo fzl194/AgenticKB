@@ -29,6 +29,8 @@ _ONTOLOGY_DDL = _REPO_ROOT / "databases" / "ontology" / "schemas" / "001_ontolog
 # 004_kb_isolation 引用 knowledge_bases（FK），必须在 kb 三表之后；且引用 asset_documents，
 # 必须在 002_asset_core 之后。运行时按序：asset_core → kb 三表 → kb_isolation → runtime → ... → ontology。
 _KB_USERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "001_kb_users.sql"
+# Phase 2 鉴权：ALTER kb_users 加 password_hash + site_role。必须紧跟 001（ALTER 依赖基表已建）。
+_KB_USERS_AUTH_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "006_kb_users_auth.sql"
 _KB_BASES_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "002_knowledge_bases.sql"
 _KB_MEMBERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "003_kb_members.sql"
 _KB_FOLDERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "004_kb_folders.sql"
@@ -92,6 +94,7 @@ def domain_schema_paths() -> tuple[Path, ...]:
         # KB management — kb 三表 + folders（FK→knowledge_bases）+ asset_documents ALTER。
         # kb_isolation 引用 knowledge_bases 与 asset_documents，必须在这两者之后。
         _KB_USERS_DDL,
+        _KB_USERS_AUTH_DDL,  # Phase 2 鉴权列（ALTER kb_users，紧跟 001）
         _KB_BASES_DDL,
         _KB_MEMBERS_DDL,
         _KB_FOLDERS_DDL,

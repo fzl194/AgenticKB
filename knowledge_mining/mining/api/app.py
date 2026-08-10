@@ -36,6 +36,7 @@ from knowledge_mining.mining.kb.routes.kbs import router as kb_router
 from knowledge_mining.mining.kb.routes.documents import router as kb_documents_router
 from knowledge_mining.mining.kb.routes.mining import router as kb_mining_router
 from knowledge_mining.mining.kb.routes.folders import router as kb_folders_router
+from knowledge_mining.mining.kb.routes.auth import router as kb_auth_router
 from knowledge_mining.mining.workflow.repositories.global_workflow_repository import (
     GlobalWorkflowRepository,
 )
@@ -79,6 +80,16 @@ async def lifespan(app: FastAPI):
     await pool.open()
     app.state.pg_pool = pool
     app.state.db_config = cfg
+
+    # Phase 2：拉 auth.yaml 并幂等播种首 admin（best-effort，控制面不可达不阻断启动）。
+    from knowledge_mining.mining.infra.control_plane import fetch_auth_config
+    from knowledge_mining.mining.kb.bootstrap import seed_initial_admin
+    try:
+        _auth_cfg = fetch_auth_config(force=True)
+        _admin_pw = (_auth_cfg.get("bootstrap") or {}).get("admin_password") or ""
+        await seed_initial_admin(pool, admin_password=_admin_pw)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("auth bootstrap skipped: %s", exc)
 
     workflow_repo = GlobalWorkflowRepository(pool)
     app.state.workflow_service = WorkflowService(workflow_repo)
@@ -145,6 +156,9 @@ def create_app() -> FastAPI:
     app.include_router(uploads_router)
     app.include_router(ontology_router)
     app.include_router(document_lifecycle_router)
+    # kb_auth_router 必须在 kb_router 之前注册：其静态路由 /api/kb/users、/api/kb/auth/verify
+    # 否则会被 kb_router 的动态 /api/kb/{kb_id} 抢先匹配（GET /api/kb/users 被当成 kb_id="users" → 404）。
+    app.include_router(kb_auth_router)
     app.include_router(kb_router)
     app.include_router(kb_documents_router)
     app.include_router(kb_mining_router)

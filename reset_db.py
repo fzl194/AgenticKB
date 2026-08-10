@@ -128,6 +128,8 @@ SCHEMA_FILES = [
     REPO_ROOT / "databases" / "asset_core" / "schemas" / "002_asset_core_postgresql.sql",   # 扩展 + asset 基表
     # KB 四表
     REPO_ROOT / "databases" / "kb" / "schemas" / "001_kb_users.sql",
+    # Phase 2 鉴权列（ALTER kb_users 加 password_hash + site_role，必须在 001 之后）
+    REPO_ROOT / "databases" / "kb" / "schemas" / "006_kb_users_auth.sql",
     REPO_ROOT / "databases" / "kb" / "schemas" / "002_knowledge_bases.sql",
     REPO_ROOT / "databases" / "kb" / "schemas" / "003_kb_members.sql",
     REPO_ROOT / "databases" / "kb" / "schemas" / "004_kb_folders.sql",

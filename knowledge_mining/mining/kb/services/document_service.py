@@ -48,6 +48,7 @@ class DocumentService:
         kb = await self._db.get_kb(kb_id)
         if kb is None:
             raise NotFound(kb_id)
+        await self._svc._assert_write(kb_id, owner_id)  # IDOR 防护：写权限校验（admin/owner/editor）
         storage_path = build_storage_path(self._upload_root, kb_id, directory_path, filename)
         storage_path.parent.mkdir(parents=True, exist_ok=True)
         storage_path.write_bytes(content)
@@ -68,6 +69,7 @@ class DocumentService:
         kb = await self._db.get_kb(kb_id)
         if kb is None:
             raise NotFound(kb_id)
+        await self._svc._assert_write(kb_id, owner_id)  # IDOR 防护：写权限校验（admin/owner/editor）
         base = (self._upload_root / kb_id).resolve()
         base.mkdir(parents=True, exist_ok=True)
         zip_path = base / filename

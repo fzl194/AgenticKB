@@ -21,12 +21,15 @@ SERVICE_MAP: dict[str, str] = {
     "eval": "eval_url",
 }
 
-# Headers stripped before forwarding to backend (hop-by-hop + sensitive)
+# Headers stripped before forwarding to backend (hop-by-hop + sensitive).
+# X-KB-* / X-Internal-Auth 是网关派生的身份凭证，只由 _build_forward_headers 注入 ——
+# 客户端自带的同名头必须剥掉，防伪造（纵深防御）。
 _STRIP_REQUEST_HEADERS = frozenset({
     "host", "content-length", "connection", "keep-alive",
     "transfer-encoding", "upgrade", "proxy-connection",
     "proxy-authenticate", "proxy-authorization",
     "cookie", "authorization",
+    "x-kb-user", "x-kb-role", "x-internal-auth",
 })
 
 # Cloud metadata endpoint — the only blocked network.
@@ -104,7 +107,7 @@ def _resolve_target_url(domain_services: dict, service: str) -> str:
 
 
 def _build_forward_headers(request: Request) -> dict[str, str]:
-    """Strip hop-by-hop and sensitive headers, add proxy context."""
+    """Strip hop-by-hop/sensitive, add proxy context + gateway-injected identity."""
     headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in _STRIP_REQUEST_HEADERS
@@ -114,6 +117,17 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
     client_ip = request.client.host if request.client else "unknown"
     headers["X-Forwarded-For"] = f"{existing_xff}, {client_ip}" if existing_xff else client_ip
     headers["X-Forwarded-Proto"] = request.url.scheme
+
+    # Phase 2：AuthMiddleware 已把身份挂 request.state.user；反代把派生头注入给 mining。
+    # X-KB-User/X-KB-Role/X-Internal-Auth 都不在 _STRIP_REQUEST_HEADERS，会被转发；
+    # 浏览器自带的 Authorization 仍被剥。mining 的 current_user 校验 X-Internal-Auth。
+    user = getattr(request.state, "user", None)
+    if user:
+        headers["X-KB-User"] = str(user.get("username", ""))
+        headers["X-KB-Role"] = str(user.get("role", ""))
+        ivs = getattr(request.app.state, "internal_verify_secret", "") or ""
+        if ivs:
+            headers["X-Internal-Auth"] = ivs
     return headers
 
 

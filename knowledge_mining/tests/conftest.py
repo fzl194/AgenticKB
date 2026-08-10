@@ -57,8 +57,34 @@ def _prefill_control_plane_caches_from_env() -> None:
         },
     })
 
+    # Phase 2：预填 auth 缓存的内部校验凭证，使 current_user 在测试里接受 kb_headers()。
+    from knowledge_mining.mining.infra.control_plane import set_auth_config
+    set_auth_config({
+        "internal_verify_secret": os.environ.get("KB_TEST_INTERNAL_AUTH", "test-ivs"),
+    })
+
 
 _prefill_control_plane_caches_from_env()
+
+
+def kb_headers(username: str = "tester") -> dict[str, str]:
+    """测试用 KB 请求头：X-KB-User + X-Internal-Auth（secret 与 prefill 一致）。
+
+    current_user 现在双校验，既有路由测试的 headers 都改用本 helper。
+    """
+    return {
+        "X-KB-User": username,
+        "X-Internal-Auth": os.environ.get("KB_TEST_INTERNAL_AUTH", "test-ivs"),
+    }
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_config():
+    """每个测试前恢复 auth 缓存的 session 默认值，防 test_current_user /
+    test_control_plane_auth 等改写后污染其它模块（current_user 读不到 secret 就 401）。"""
+    from knowledge_mining.mining.infra.control_plane import set_auth_config
+    set_auth_config({"internal_verify_secret": os.environ.get("KB_TEST_INTERNAL_AUTH", "test-ivs")})
+    yield
 
 
 def _assert_disposable_database(db_config) -> None:

@@ -6,12 +6,18 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ path: '/' }),
 }))
 
+const auth = vi.hoisted(() => ({ siteRole: 'admin' }))
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => auth,
+}))
+
 import Sidebar from '../Sidebar.vue'
 import { useBrandStore } from '@/stores/brand'
 
 describe('Sidebar navigation', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    auth.siteRole = 'admin'
   })
 
   it('keeps admin/exploration pages and hides removed asset/graph entries', () => {
@@ -26,6 +32,17 @@ describe('Sidebar navigation', () => {
     // KB 中心化后砍掉的顶层入口（设计 §5.1）
     expect(wrapper.text()).not.toContain('知识资产')
     expect(wrapper.text()).not.toContain('知识图谱')
+  })
+
+  it('member only sees 概览/知识库/检索测试', () => {
+    auth.siteRole = 'member'
+    const wrapper = shallowMount(Sidebar)
+    expect(wrapper.text()).toContain('概览')
+    expect(wrapper.text()).toContain('知识库')
+    expect(wrapper.text()).toContain('检索测试')
+    expect(wrapper.text()).not.toContain('检索范式')
+    expect(wrapper.text()).not.toContain('挖掘范式')
+    expect(wrapper.text()).not.toContain('系统设置')
   })
 })
 

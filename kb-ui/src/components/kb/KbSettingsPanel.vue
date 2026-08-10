@@ -5,12 +5,13 @@
         <el-form-item label="名称">
           <el-input v-model="form.name" :disabled="!canWrite" maxlength="80" show-word-limit />
         </el-form-item>
-        <el-form-item label="可见性">
-          <el-radio-group v-model="form.visibility" :disabled="!canWrite">
-            <el-radio value="private">私有</el-radio>
-            <el-radio value="shared">共享</el-radio>
-            <el-radio value="public">公开</el-radio>
-          </el-radio-group>
+        <el-form-item label="公开读">
+          <el-switch
+            v-model="isPublic"
+            :disabled="!canWrite"
+            active-text="公开（全员可读）"
+            inactive-text="私有（仅成员）"
+          />
         </el-form-item>
         <el-form-item label="描述">
           <el-input
@@ -45,7 +46,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
@@ -62,6 +63,12 @@ const form = reactive<{ name: string; visibility: KbVisibility; description: str
   name: '',
   visibility: 'private',
   description: '',
+})
+
+/** 「公开」开关：on=public，off=private（shared 已并入 private）。 */
+const isPublic = computed<boolean>({
+  get: () => form.visibility === 'public',
+  set: (v: boolean) => { form.visibility = v ? 'public' : 'private' },
 })
 
 function reset() {

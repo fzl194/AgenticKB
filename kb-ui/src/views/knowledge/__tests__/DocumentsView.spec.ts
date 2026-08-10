@@ -26,6 +26,7 @@ vi.mock('@/utils/download', () => downloads)
 vi.mock('@/api/proxyClient', () => ({
   apiErrorDetail: async (error: unknown) =>
     (error as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? '请求失败',
+  installAuthInterceptors: vi.fn(),
 }))
 vi.mock('element-plus', () => ({
   ElMessageBox: { confirm: ui.confirm },

@@ -4,22 +4,22 @@
  */
 import type { KbDocStatus, KbMemberRole, KbMyRole, KbVisibility } from '@/types/kb'
 
-// ── 可见性 ──
+// ── 可见性（private/shared 已合并为「私有」，只 public 单独成「公开」）──
 export function visibilityLabel(v: KbVisibility): string {
-  return { private: '私有', shared: '共享', public: '公开' }[v]
+  return v === 'public' ? '公开' : '私有'
 }
 
-export function visibilityTagType(v: KbVisibility): 'danger' | 'warning' | 'success' {
-  return ({ private: 'danger', shared: 'warning', public: 'success' } as const)[v]
+export function visibilityTagType(v: KbVisibility): 'warning' | 'success' {
+  return v === 'public' ? 'success' : 'warning'
 }
 
 // ── 我的角色（列表 my_role / 成员表 role 都用）──
 export function roleLabel(r: KbMyRole | KbMemberRole): string {
-  return { owner: '拥有者', editor: '编辑者', viewer: '只读' }[r]
+  return ({ owner: '拥有者', editor: '编辑者', viewer: '只读', admin: '管理员' } as Record<string, string>)[r]
 }
 
-export function roleTagType(r: KbMyRole | KbMemberRole): 'primary' | 'success' | 'info' {
-  return ({ owner: 'primary', editor: 'success', viewer: 'info' } as const)[r]
+export function roleTagType(r: KbMyRole | KbMemberRole): 'primary' | 'success' | 'info' | 'danger' {
+  return ({ owner: 'primary', editor: 'success', viewer: 'info', admin: 'danger' } as Record<string, 'primary' | 'success' | 'info' | 'danger'>)[r]
 }
 
 // ── 文档派生状态 ──

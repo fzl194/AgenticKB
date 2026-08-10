@@ -209,6 +209,14 @@ async def preflight_run(body: RunPreflightRequest, request: Request) -> dict[str
 @router.post("", response_model=RunResponse, status_code=202)
 async def create_run(body: CreateRunRequest, request: Request) -> dict:
     """Submit a mining run (async, returns immediately)."""
+    # legacy 域级挖掘入口：逐步废弃，推荐走 KB 中心化挖掘（POST /api/kb/{kb_id}/mine）。
+    # 域级挖掘写 asset_documents.kb_id=NULL、默认 publish=true 进域级 active release，
+    # 与 KB 作用域知识分属两套模型。详见 docs/融合-KB中心化挖掘-设计规格.md。
+    logger.warning(
+        "Legacy domain mining (/api/runs) is deprecated; prefer KB-centric mining "
+        "(POST /api/kb/{kb_id}/mine). domain=%s",
+        getattr(body, "domain", None),
+    )
     cfg = MiningConfig()
     resolved_domain = require_domain(body.domain)
     engine = cfg.mining_run_submission_engine

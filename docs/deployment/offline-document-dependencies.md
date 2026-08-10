@@ -1,25 +1,54 @@
 # Word 与 Excel 离线部署依赖
 
-知识挖掘支持 `.doc`、`.docx`、`.xls` 和 `.xlsx`。`.doc` 转换使用本机 LibreOffice；Excel 读取使用 Python 包 `openpyxl` 和 `xlrd`。运行时不会下载依赖，也不会调用任何云端文档转换服务。
+知识挖掘支持 `.doc`、`.docx`、`.xls` 和 `.xlsx`。`.doc` 转换使用容器内的 LibreOffice Writer；Excel 读取使用容器内的 Python 包 `openpyxl` 和 `xlrd`。运行时不会下载依赖，也不会调用云端文档转换服务。
 
-## 推荐方式：交付完整 Docker 镜像
+## 团队协作与制品分发
 
-在与生产环境架构一致、可联网的 Linux 构建机上执行：
+GitHub 只保存 Dockerfile、构建脚本、部署脚本和校验规则，不保存 LibreOffice 安装包或完整 Docker 镜像。
+
+联网构建机生成以下两个文件，并将它们成对放入公司共享盘或内网制品库：
+
+- `cmkb-2026.08.10.tar.zst`
+- `cmkb-2026.08.10.tar.zst.sha256`
+
+离线服务器部署前必须通过 SHA-256 校验。生产 `.env` 不进入 GitHub，也不写入 Docker 镜像，由部署主机挂载。
+
+## 联网构建机
+
+构建机需要 Docker、Docker Compose、Git 和 `zstd`，不需要在宿主机安装 LibreOffice、`openpyxl` 或 `xlrd`。这些依赖由 Dockerfile 安装并在镜像内验证。
 
 ```bash
-bash deploy-build.sh
+CMKB_VERSION=2026.08.10 bash deploy-build.sh
 ```
 
-生成的 `cmkb.tar` 已包含 LibreOffice Writer、`openpyxl` 和 `xlrd`。复制到离线服务器后执行：
+构建脚本会完成以下工作：
+
+1. 构建一体化 Docker 镜像。
+2. 在容器内验证 LibreOffice、`openpyxl` 和 `xlrd`。
+3. 导出并压缩版本化镜像。
+4. 生成对应的 SHA-256 校验文件。
+
+## 离线服务器
+
+离线服务器需要 Docker、Docker Compose、`zstd`，以及成对传入的镜像归档和校验文件。
 
 ```bash
-docker load -i cmkb.tar
+IMAGE_ARCHIVE=./cmkb-2026.08.10.tar.zst \
+IMAGE_NAME=coremasterkb-app:2026.08.10 \
 bash deploy-server.sh
+```
+
+部署脚本会先验证 SHA-256，再加载镜像，并在替换现有容器前验证镜像内的文档解析依赖。任一步失败都会停止部署。
+
+如果归档同时包含 `coremasterkb-app:latest` 标签，也可以省略 `IMAGE_NAME`：
+
+```bash
+IMAGE_ARCHIVE=./cmkb-2026.08.10.tar.zst bash deploy-server.sh
 ```
 
 ## 非 Docker Python 服务
 
-在可联网、Python 版本及 CPU 架构与生产一致的机器上准备 wheelhouse：
+只有不使用项目 Docker 镜像时，才需要准备 Python wheelhouse：
 
 ```bash
 python -m pip download --only-binary=:all: \
@@ -36,17 +65,17 @@ python -m pip install --no-index --find-links wheelhouse \
 
 `xlwt` 只用于测试生成旧版 `.xls` 样本，不应安装到生产运行环境。
 
-## LibreOffice 离线安装
-
-不使用项目导出的 Docker 镜像时，需要提前下载与目标 Linux 发行版、版本和 CPU 架构匹配的 LibreOffice DEB/RPM 包及其全部依赖。推荐使用发行版官方离线仓库或在同版本联网机器上生成依赖包集合，不要把其他发行版的包直接混装。服务只需要 Writer/无界面转换能力，不依赖桌面会话。
-
 ## 上线检查
 
+Docker 构建和部署脚本都会执行等效检查。如需人工复查，可在运行中的容器执行：
+
 ```bash
-python -c "import openpyxl, xlrd; print(openpyxl.__version__, xlrd.__version__)"
-command -v soffice || command -v libreoffice
+docker compose exec -T app sh -ec '
+  libreoffice --headless --version
+  python -c "import openpyxl, xlrd; print(openpyxl.__version__, xlrd.__version__)"
+'
 ```
 
-若第二条命令没有输出，`.doc` 会以 `doc_converter_unavailable` 失败，并通过运行文档 API 暴露诊断；`.docx`、`.xls` 和 `.xlsx` 不受影响。
+如果 LibreOffice 不可用，`.doc` 会以 `doc_converter_unavailable` 失败；`.docx`、`.xls` 和 `.xlsx` 不依赖 LibreOffice。
 
 当前不处理 Excel 图表、图片和宏，也不支持密码保护文件。密码保护或损坏文件会产生稳定的预处理错误码，不会触发运行时联网安装或外部转换。

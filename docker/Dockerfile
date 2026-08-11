@@ -39,8 +39,13 @@ RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.li
 # ── 运行时系统依赖 ──
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libpq-dev supervisor nginx \
-    openjdk-21-jre-headless p7zip-full \
+    openjdk-21-jre-headless p7zip-full libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
+
+# 构建期验证：旧版 .doc 转换依赖必须存在且可以无界面启动
+RUN command -v libreoffice >/dev/null \
+    && libreoffice --headless --version \
+    || (echo "错误：未找到 LibreOffice，无法解析 .doc 文件" >&2; exit 1)
 
 WORKDIR /app
 
@@ -61,8 +66,14 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "psycopg[binary,pool]>=3.1" \
     "pdfminer.six>=20231228" \
     "python-docx>=1.1" \
+    "openpyxl>=3.1,<4" \
+    "xlrd>=2.0,<3" \
     "jieba>=0.42" \
     "fastmcp>=2.0"
+
+# 构建期验证：Excel 解析依赖必须可以导入
+RUN python -c "import openpyxl, xlrd; print(f'Excel 解析依赖验证通过：openpyxl={openpyxl.__version__}，xlrd={xlrd.__version__}')" \
+    || (echo "错误：openpyxl 或 xlrd 未正确安装，无法解析 Excel 文件" >&2; exit 1)
 
 # ── 从构建阶段复制产物 ──
 COPY --from=build-java /build/target/*.jar /app/agent_serving.jar
@@ -77,7 +88,8 @@ COPY mcp_server/ ./mcp_server/
 # ── 共享配置与数据 ──
 # 域配置（domain_registry.yaml + scenario_packs/）不在这里 COPY：
 # 它们随 main_control_service/ 一起进镜像，是 Python 与 Java 共用的唯一真相源。
-COPY .env .env.example ./
+# 镜像只携带配置模板；生产 .env 由部署主机挂载
+COPY .env.example ./
 COPY reset_db.py ./
 COPY databases/ ./databases/
 

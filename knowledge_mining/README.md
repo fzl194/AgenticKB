@@ -1,5 +1,15 @@
 # Knowledge Mining — 架构文档
 
+## 支持的知识库输入文件
+
+- Word：`.doc`、`.docx`。旧版 `.doc` 通过本机 LibreOffice（Windows 开发环境可回退到 Word COM）转换为 `.docx` 后进入结构化解析。
+- Excel：`.xls`、`.xlsx`。工作簿会确定性转换为 Markdown 中间态，再复用现有 Markdown 解析、分段和入库流程。
+- 其他现有格式：Markdown、文本、HTML、PDF、ZIP、CHM、HDX。
+
+Excel 会保留工作表顺序、隐藏状态、合并单元格上下文和可用的公式缓存值，并按工作表/表格区域生成 Markdown。公式没有已保存结果时会产生可定位到工作表和单元格的告警。当前忽略图表、图片和宏，不支持密码保护文件。
+
+预处理结果使用 `success`、`partial`、`failed` 状态；错误码、错误详情、告警与 Excel 摘要通过运行文档列表/详情 API 返回。失败诊断写入现有 `metadata_json`，不需要数据库结构变更。离线安装说明见 [Word 与 Excel 离线部署依赖](../docs/deployment/offline-document-dependencies.md)。
+
 ## 挖掘 Workflow 算子化（v3）
 
 当前实现同时保留 `legacy` Pipeline 和新的 Workflow Runtime。Workflow 定义、草稿、不可变发布版本存放在全局 Control 数据库；Run、冻结 Manifest、节点事件、审核状态、资产、Build 和 Release 仍存放在所选 Domain 数据库。Workflow 本身不区分 Domain，运行时绑定、审核和资产严格区分 Domain。

@@ -173,7 +173,7 @@ class RawFileData:
     file_path: str
     relative_path: str
     file_name: str
-    file_type: str  # markdown, html, pdf, doc, docx, txt, other
+    file_type: str  # markdown, html, pdf, doc, docx, xls, xlsx, txt, other
     content: str
     raw_content_hash: str
     normalized_content_hash: str

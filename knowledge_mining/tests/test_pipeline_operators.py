@@ -1088,6 +1088,44 @@ class TestDbWriteStageSkip:
         assert result.error is None
         tracker.skip_document.assert_called_once()
 
+    def test_preprocess_failure_is_failed_not_skipped(self):
+        from unittest.mock import MagicMock
+        from knowledge_mining.mining.contracts.models import RawFileData
+        from knowledge_mining.mining.pipeline import (
+            db_write_stage,
+            DocumentContext,
+            PipelineConfig,
+        )
+
+        tracker = MagicMock()
+        cfg = PipelineConfig(
+            domain="test-domain", tracker=tracker, runtime_db=MagicMock()
+        )
+        raw = RawFileData(
+            file_path="bad.xlsx",
+            relative_path="bad.xlsx",
+            file_name="bad.xlsx",
+            file_type="markdown",
+            content="",
+            raw_content_hash="raw",
+            normalized_content_hash="raw",
+            metadata_json={
+                "preprocess_status": "failed",
+                "preprocess_error_code": "excel_corrupt_file",
+                "preprocess_error": "Unable to read Excel workbook: bad.xlsx",
+            },
+        )
+
+        result = db_write_stage(
+            DocumentContext(raw_file=raw, run_document_id="rd1"), cfg
+        )
+
+        tracker.fail_document.assert_called_once_with(
+            "rd1", "Unable to read Excel workbook: bad.xlsx"
+        )
+        tracker.skip_document.assert_not_called()
+        assert result.error == "Unable to read Excel workbook: bad.xlsx"
+
 
 # ===================================================================
 # Wave 1-3: DB embedding write test

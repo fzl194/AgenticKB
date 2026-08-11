@@ -32,6 +32,26 @@ _run_locks: dict[str, threading.Lock] = {}
 _run_locks_guard = threading.Lock()
 
 
+def _expand_preprocess_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    legacy_error = meta.get("preprocess_error")
+    status = meta.get("preprocess_status")
+    if status is None and legacy_error:
+        status = "failed"
+    warnings = meta.get("preprocess_warnings") or []
+    if not isinstance(warnings, list):
+        warnings = []
+    summary = meta.get("excel_summary")
+    if not isinstance(summary, dict):
+        summary = None
+    return {
+        "preprocess_status": status,
+        "error_code": meta.get("preprocess_error_code"),
+        "error_detail": legacy_error,
+        "warnings": warnings,
+        "excel_summary": summary,
+    }
+
+
 def _domain_run_lock(domain: str) -> threading.Lock:
     """Return (creating on first use) the mining mutex for one domain."""
     with _run_locks_guard:
@@ -653,6 +673,7 @@ async def get_run_documents(
                 meta = {}
             doc["file_size"] = meta.get("file_size")
             doc["skip_reason"] = meta.get("skip_reason")
+            doc.update(_expand_preprocess_metadata(meta))
             documents.append(doc)
 
     return {
@@ -802,6 +823,7 @@ async def get_run_document(
             meta.get("skip_reason_detail") or meta.get("preprocess_error")
         )
         result["file_size"] = meta.get("file_size")
+        result.update(_expand_preprocess_metadata(meta))
         # Compute document_name
         dk = result.get("document_key", "")
         result["document_name"] = dk.replace("doc:/", "", 1) if dk.startswith("doc:/") else dk

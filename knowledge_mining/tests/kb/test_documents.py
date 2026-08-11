@@ -6,6 +6,7 @@ import os
 import zipfile
 
 import pytest
+from openpyxl import Workbook
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -88,6 +89,48 @@ async def test_upload_zip_extracts_with_directory(async_pool, upload_root):
         assert {d["document_name"] for d in docs} == {"x.txt", "y.txt"}
         assert {d["directory_path"] for d in docs} == {"dir1"}
         assert all(d["document_key"].startswith("doc:/dir1/") for d in docs)
+
+
+async def test_upload_zip_with_nested_xlsx_is_discoverable(async_pool, upload_root):
+    xlsx = io.BytesIO()
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(["name", "status"])
+    worksheet.append(["AMF", "active"])
+    workbook.save(xlsx)
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("nested/inventory.xlsx", xlsx.getvalue())
+
+    async with await _client(async_pool) as client:
+        headers = {"X-KB-User": "alice"}
+        kb_id = (
+            await client.post(
+                "/api/kb",
+                json={"domain": DOMAIN, "name": "KB Excel ZIP"},
+                headers=headers,
+            )
+        ).json()["id"]
+        response = await client.post(
+            f"/api/kb/{kb_id}/documents",
+            files={"file": ("excel.zip", archive.getvalue())},
+            headers=headers,
+        )
+
+    assert response.status_code == 201, response.text
+    documents = response.json()["documents"]
+    assert [document["document_name"] for document in documents] == [
+        "inventory.xlsx"
+    ]
+    assert documents[0]["document_key"] == "doc:/nested/inventory.xlsx"
+
+    from knowledge_mining.mining.ingestion import ingest_directory
+
+    ingested, _ = ingest_directory(upload_root / kb_id)
+    assert [document.relative_path for document in ingested] == [
+        "nested/inventory.xlsx"
+    ]
 
 
 async def test_other_user_cannot_access_private_kb_docs(async_pool, upload_root):

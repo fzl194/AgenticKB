@@ -68,3 +68,28 @@ async def test_list_and_detail_expose_engine_and_frozen_workflow_summary(monkeyp
         assert item["workflow"]["id"] == "workflow-a"
         assert item["workflow"]["version"] == 4
         assert item["workflow"]["graph_hash"] == "graph-hash"
+
+
+def test_expand_preprocess_metadata_is_backward_compatible():
+    result = runs._expand_preprocess_metadata({
+        "preprocess_status": "partial",
+        "preprocess_error_code": None,
+        "preprocess_warnings": [{
+            "code": "excel_formula_cache_missing",
+            "message": "公式没有已保存的计算结果",
+            "sheet_name": "汇总",
+            "cell_range": "F18",
+        }],
+        "excel_summary": {"sheet_count": 2, "table_region_count": 3},
+    })
+
+    assert result["preprocess_status"] == "partial"
+    assert result["error_code"] is None
+    assert result["warnings"][0]["sheet_name"] == "汇总"
+    assert result["excel_summary"]["table_region_count"] == 3
+
+    legacy = runs._expand_preprocess_metadata({
+        "preprocess_error": "legacy failure"
+    })
+    assert legacy["preprocess_status"] == "failed"
+    assert legacy["error_detail"] == "legacy failure"

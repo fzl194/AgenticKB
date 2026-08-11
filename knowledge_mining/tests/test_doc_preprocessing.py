@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from knowledge_mining.mining.ingestion import doc_preprocessing as dp
+from knowledge_mining.mining.ingestion.errors import PreprocessingError
 
 
 # ===================================================================
@@ -77,6 +78,39 @@ def test_doc_to_docx_no_backend_raises_clear_error(tmp_path: Path, monkeypatch) 
     assert ".docx" in msg  # actionable hint
 
 
+def test_doc_to_docx_missing_converter_has_stable_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    src = tmp_path / "legacy.doc"
+    src.write_bytes(b"legacy")
+    monkeypatch.setattr(dp, "_find_soffice", lambda: None)
+    monkeypatch.setattr(dp, "_word_com_available", lambda: False)
+
+    with pytest.raises(PreprocessingError) as caught:
+        dp.doc_to_docx(src)
+
+    assert caught.value.code == "doc_converter_unavailable"
+
+
+def test_doc_to_docx_converter_failure_has_stable_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    src = tmp_path / "broken.doc"
+    src.write_bytes(b"legacy")
+    monkeypatch.setattr(dp, "_find_soffice", lambda: "/fake/soffice")
+    monkeypatch.setattr(
+        dp,
+        "_convert_with_soffice",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("private details")),
+    )
+
+    with pytest.raises(PreprocessingError) as caught:
+        dp.doc_to_docx(src)
+
+    assert caught.value.code == "doc_conversion_failed"
+    assert "private details" not in caught.value.safe_message
+
+
 # ===================================================================
 # Parser routing: .doc must not reach python-docx
 # ===================================================================
@@ -130,7 +164,9 @@ def test_ingest_doc_conversion_failure_registers_without_content(
     (tmp_path / "broken.doc").write_bytes(b"\xd0\xcf\x11\xe0")
 
     def boom(p):
-        raise RuntimeError("No .doc converter available")
+        raise PreprocessingError(
+            "doc_converter_unavailable", "No .doc converter available"
+        )
 
     monkeypatch.setattr(ingestion, "doc_to_docx", boom)
 
@@ -140,6 +176,8 @@ def test_ingest_doc_conversion_failure_registers_without_content(
     doc = docs[0]
     assert doc.content == ""
     assert doc.metadata_json.get("source_format") == "doc"
+    assert doc.metadata_json["preprocess_status"] == "failed"
+    assert doc.metadata_json["preprocess_error_code"] == "doc_converter_unavailable"
     assert "preprocess_error" in doc.metadata_json
     assert summary["unparsed_documents"] == 1
 

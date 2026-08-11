@@ -7,6 +7,11 @@ __pycache__
 node_modules
 *.log
 *.tar.gz
+# 离线镜像是构建产物，不能再次进入 Docker 构建上下文
+cmkb*.tar
+cmkb*.tar.zst
+*.zst
+*.sha256
 logs/
 
 # 不需要打包的目录

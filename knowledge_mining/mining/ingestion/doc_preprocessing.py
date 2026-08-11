@@ -12,7 +12,8 @@ tool, fall back, else clear error):
      backend baked into the Docker image, so it is the production path.
   2. Microsoft Word via COM automation (``win32com``) -- Windows only, used as
      a dev convenience when LibreOffice is unavailable but Word is installed.
-  3. Neither available -> RuntimeError with an actionable message.
+  3. Neither available -> a stable ``PreprocessingError`` with an actionable
+     message.
 
 The converted .docx is written into a process-lifetime staging directory
 (removed at interpreter exit). It must outlive ingestion because the parse
@@ -30,6 +31,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from knowledge_mining.mining.ingestion.errors import PreprocessingError
 
 # Common LibreOffice install locations checked when soffice is not on PATH.
 _SOFFICE_CANDIDATES = (
@@ -141,9 +144,8 @@ def doc_to_docx(src: Path) -> Path:
 
     Backend chain: LibreOffice (cross-platform) -> MS Word COM (Windows). The
     converted .docx lives in a process-lifetime staging dir so the parse stage
-    can re-open it. Raises FileNotFoundError if ``src`` is missing; RuntimeError
-    if no backend is available. Callers in the ingestion loop catch and log
-    failures.
+    can re-open it. Raises FileNotFoundError if ``src`` is missing and a typed
+    ``PreprocessingError`` for converter availability or conversion failures.
     """
     src = Path(src)
     if not src.is_file():
@@ -153,13 +155,25 @@ def doc_to_docx(src: Path) -> Path:
 
     soffice = _find_soffice()
     if soffice is not None:
-        return _convert_with_soffice(src, soffice, out_dir)
+        try:
+            return _convert_with_soffice(src, soffice, out_dir)
+        except Exception as exc:
+            raise PreprocessingError(
+                "doc_conversion_failed",
+                f"Failed to convert legacy Word document: {src.name}",
+            ) from exc
 
     if _word_com_available():
-        return _convert_with_word_com(src, out_dir)
+        try:
+            return _convert_with_word_com(src, out_dir)
+        except Exception as exc:
+            raise PreprocessingError(
+                "doc_conversion_failed",
+                f"Failed to convert legacy Word document: {src.name}",
+            ) from exc
 
-    raise RuntimeError(
-        f"No .doc converter available for {src.name}. Install LibreOffice "
-        f"(soffice on PATH) or, on Windows, Microsoft Word + pywin32; "
-        f"alternatively re-save the file as .docx."
+    raise PreprocessingError(
+        "doc_converter_unavailable",
+        f"No .doc converter available for {src.name}; install LibreOffice "
+        "or save the document as .docx",
     )

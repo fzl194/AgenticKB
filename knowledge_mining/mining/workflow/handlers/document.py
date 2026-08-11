@@ -91,14 +91,13 @@ def parse_segment_handler(
 ) -> OperatorResult:
     options = ParseSegmentOptions.model_validate(dict(params))
     try:
-        parsed = parse_stage(state.context, _pipeline_config(runtime))
+        cfg = _pipeline_config(runtime)
+        parsed = parse_stage(state.context, cfg, options=options)
         if parsed.tree is None:
             return OperatorResult(
                 state.with_context(parsed), frozenset(), OperatorStatus.SKIPPED
             )
-        segmented = segment_stage(
-            parsed, _pipeline_config(runtime), options=options
-        )
+        segmented = segment_stage(parsed, cfg, options=options)
         if not segmented.segments:
             return OperatorResult(
                 state.with_context(segmented), frozenset(), OperatorStatus.SKIPPED

@@ -233,7 +233,7 @@ class LlmClient:
 
     def execute(
         self,
-        template_key: str,
+        template_key: str | None = None,
         input: dict[str, Any] | None = None,
         caller_domain: str | None = None,
         pipeline_stage: str = "retrieval_units",
@@ -241,25 +241,45 @@ class LlmClient:
         *,
         caller_service: str = CALLER_SERVICE,
         knowledge_domain: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        params: dict[str, Any] | None = None,
     ) -> dict | None:
-        """Sync execute via POST /api/v1/execute. Returns full response or None."""
+        """Sync execute via POST /api/v1/execute. Returns full response or None.
+
+        Either ``template_key`` (+ optional ``input``) or caller ``messages``
+        must be provided. ``model`` selects a provider.models entry (e.g. vision).
+        """
         payload: dict[str, Any] = {
             "caller_service": caller_service,
             "knowledge_domain": knowledge_domain or UNKNOWN_DOMAIN,
             "pipeline_stage": pipeline_stage,
-            "template_key": template_key,
         }
         # Backward compat: if legacy caller_domain passed, add to payload
         if caller_domain is not None:
             payload["caller_domain"] = caller_domain
+        if template_key is not None:
+            payload["template_key"] = template_key
         if input is not None:
             payload["input"] = input
+        if messages is not None:
+            payload["messages"] = messages
+        if model is not None:
+            payload["model"] = model
+        if params is not None:
+            payload["params"] = params
         if expected_output_type is not None:
             payload["expected_output_type"] = expected_output_type
 
         try:
             client = self._get_client()
-            resp = client.post(f"{self._base_url}/api/v1/execute", json=payload)
+            # Vision captions can exceed the default 60s client timeout.
+            req_timeout = 180.0 if model else self._timeout
+            resp = client.post(
+                f"{self._base_url}/api/v1/execute",
+                json=payload,
+                timeout=req_timeout,
+            )
             resp.raise_for_status()
             return resp.json()
         except Exception as e:

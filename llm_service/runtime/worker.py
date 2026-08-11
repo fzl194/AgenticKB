@@ -168,6 +168,7 @@ class Worker:
             await self._svc.execute_chat_attempt(
                 task_id, request_id, messages, params,
                 expected_type, schema,
+                model=req.get("model"),
             )
         except Exception as e:
             # execute_chat_attempt no longer re-raises — it handles _mgr.fail() internally.

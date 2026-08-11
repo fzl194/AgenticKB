@@ -20,6 +20,9 @@ class TaskSubmitRequest(BaseModel):
     input: dict[str, Any] | None = None
     messages: list[dict[str, Any]] | None = None
     params: dict[str, Any] | None = None
+    # Optional override: key under provider.models (e.g. "glm-4.5v") or API model id.
+    # Used for vision / alternate chat models without changing active_model.
+    model: str | None = Field(default=None, min_length=1, max_length=128)
     expected_output_type: str | None = Field(
         default=None, pattern=r"^(json_object|json_array|text)$"
     )

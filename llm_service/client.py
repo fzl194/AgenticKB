@@ -78,6 +78,23 @@ class LLMClient:
             ],
             expected_output_type="json_array",
         )
+
+    ### Vision (multimodal messages + model override)
+
+        from llm_service.providers.multimodal import build_vision_user_message
+        result = await client.execute(
+            caller_service="mining",
+            knowledge_domain="generic",
+            pipeline_stage="image_caption",
+            model="glm-4.5v",
+            expected_output_type="text",
+            messages=[
+                build_vision_user_message(
+                    "Write a short caption.",
+                    image_path="/tmp/fig.png",
+                ),
+            ],
+        )
     """
 
     def __init__(
@@ -117,6 +134,7 @@ class LLMClient:
         output_schema: dict | None = None,
         idempotency_key: str | None = None,
         metadata: dict | None = None,
+        model: str | None = None,
         max_attempts: int = 3,
         priority: int = 100,
     ) -> dict[str, Any]:
@@ -140,6 +158,7 @@ class LLMClient:
             ("output_schema", output_schema),
             ("idempotency_key", idempotency_key),
             ("metadata", metadata),
+            ("model", model),
         ]:
             if v is not None:
                 payload[k] = v

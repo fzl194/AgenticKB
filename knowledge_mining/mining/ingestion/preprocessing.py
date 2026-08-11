@@ -622,7 +622,12 @@ def convert_chm_extracted(
             missing += 1
             continue
         try:
-            md = convert_topic(topic_path, depth, image_path_prefix)
+            # Prefer per-topic absolute base so relative <img src> resolve after
+            # topics from nested folders are concatenated into one markdown.
+            prefix = image_path_prefix
+            if not prefix:
+                prefix = topic_path.parent.resolve().as_posix() + "/"
+            md = convert_topic(topic_path, depth, prefix)
         except Exception as e:
             print(f"  [warn] topic conversion failed: {local}: {e}", file=sys.stderr)
             continue
@@ -656,7 +661,10 @@ def convert_hdx_extracted(
     converted = 0
     for p in htmls:
         try:
-            md = convert_topic(p, depth=1, image_path_prefix=image_path_prefix)
+            prefix = image_path_prefix
+            if not prefix:
+                prefix = p.parent.resolve().as_posix() + "/"
+            md = convert_topic(p, depth=1, image_path_prefix=prefix)
         except Exception as e:
             print(f"  [warn] topic conversion failed: {p.name}: {e}", file=sys.stderr)
             continue
@@ -691,7 +699,13 @@ def convert_extracted(
 # ---------------------------------------------------------------------------
 
 def html_to_markdown(html_path: Path, doc_title: str | None = None) -> str:
-    """Convert a standalone HTML file to markdown using the shared renderer."""
+    """Convert a standalone HTML file to markdown using the shared renderer.
+
+    Relative image paths are rewritten to absolute paths under the HTML's
+    parent directory so MarkdownParser can materialize them later.
+    """
+    from knowledge_mining.mining.infra.image_assets import absolutize_markdown_image_paths
+
     text = read_text(html_path)
     tree = build_tree(text)
     body = _find_body(tree)
@@ -700,7 +714,8 @@ def html_to_markdown(html_path: Path, doc_title: str | None = None) -> str:
     md = md.replace("****", "")
     md = md.strip()
     title = doc_title or html_path.stem
-    return f"# {title}\n\n{md}\n"
+    md = f"# {title}\n\n{md}\n"
+    return absolutize_markdown_image_paths(md, html_path.parent)
 
 
 def archive_to_markdown(
@@ -712,10 +727,16 @@ def archive_to_markdown(
 ) -> str:
     """Extract `.chm`/`.hdx` and return the converted markdown as a string.
 
+    Images referenced by topics are copied into a persistent staging directory
+    (under the system temp) and rewritten to absolute paths **before** the
+    extract tree is cleaned up, so later parse/VLM still see the files.
+
     If `work_dir` is None, a fresh temp dir is created and (by default) removed
     after conversion. If you pass `work_dir`, set `cleanup=False` to keep the
     extracted contents around for caching/debugging.
     """
+    from knowledge_mining.mining.infra.image_assets import stage_markdown_images
+
     if not src.is_file():
         raise FileNotFoundError(src)
     ext = src.suffix.lower()
@@ -728,7 +749,14 @@ def archive_to_markdown(
 
     try:
         extract_archive(src, work_dir)
+        # Empty prefix → convert_* uses per-topic absolute parent paths.
         md, _stats = convert_extracted(work_dir, doc_title=doc_title or src.stem)
+        stage_dir = (
+            Path(tempfile.gettempdir())
+            / "mining_archive_images"
+            / f"{src.stem}_{abs(hash(str(src.resolve()))) % (10**10)}"
+        )
+        md = stage_markdown_images(md, stage_dir)
         return md
     finally:
         if own_workdir and cleanup:

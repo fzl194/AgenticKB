@@ -39,6 +39,24 @@ from knowledge_mining.mining.workflow.operators.options import (
 logger = logging.getLogger(__name__)
 
 
+def _parse_context(raw: RawFileData, cfg: "PipelineConfig") -> dict[str, Any]:
+    """Build parser context: file path + run-scoped image dump dir when needed."""
+    ctx: dict[str, Any] = {"file_path": raw.file_path}
+    meta = raw.metadata_json if isinstance(raw.metadata_json, dict) else {}
+    if meta.get("source_format"):
+        ctx["source_format"] = meta["source_format"]
+    if meta.get("fetch_remote_images") or getattr(cfg, "fetch_remote_images", False):
+        ctx["fetch_remote_images"] = True
+    if cfg.run_id:
+        from knowledge_mining.mining.infra.image_assets import IMAGE_CAPABLE_FILE_TYPES
+        from knowledge_mining.mining.infra.run_workdir import resolve_run_image_dir
+
+        if raw.file_type in IMAGE_CAPABLE_FILE_TYPES:
+            doc_key = raw.relative_path or raw.file_name or "doc"
+            ctx["image_dir"] = str(resolve_run_image_dir(cfg.run_id, doc_key))
+    return ctx
+
+
 # ---------------------------------------------------------------------------
 # Per-document context (immutable between stages)
 # ---------------------------------------------------------------------------
@@ -118,13 +136,16 @@ class PipelineConfig:
     embedding_generator: Any | None = None  # EmbeddingGenerator Protocol
     discourse_relation_builder: Any | None = None  # DiscourseRelationBuilder
     contextualizer: Any | None = None  # Contextualizer Protocol
+    image_captioner: Any | None = None  # ImageCaptioner (VLM captions for images)
     domain_profile: Any | None = None  # DomainProfile
+    fetch_remote_images: bool = False  # Allow http(s) image download at parse
 
     # DB handles for db_write_stage (set by run.py)
     asset_db: Any | None = None
     runtime_db: Any | None = None
     tracker: Any | None = None
     batch_id: str | None = None
+    run_id: str | None = None
     workflow_binding: dict[str, Any] | None = None
 
 
@@ -168,13 +189,15 @@ class MiningPipeline:
         parser = cfg.parser_factory(raw.file_type) if cfg.parser_factory else None
         if parser is None:
             return ctx
-        tree = parser.parse(raw.content, raw.file_name, {"file_path": raw.file_path})
+        tree = parser.parse(
+            raw.content, raw.file_name, _parse_context(raw, cfg),
+        )
         ctx = ctx.with_updates(tree=tree)
 
         if tree is None:
             return ctx
 
-        # Stage 2: Segment
+        # Stage 2: Segment (optional VLM image captions happen inside)
         if stage_callback:
             stage_callback("segment", ctx)
         seg = cfg.segmenter
@@ -183,8 +206,9 @@ class MiningPipeline:
         profile = ctx.profile
         if profile is None:
             return ctx
+        tree = _caption_tree_for_segment(tree, cfg)
         segments = seg.segment(tree, profile)
-        ctx = ctx.with_updates(segments=tuple(segments))
+        ctx = ctx.with_updates(tree=tree, segments=tuple(segments))
 
         # Stage 3: Enrich
         if stage_callback:
@@ -394,7 +418,12 @@ class StreamingPipeline:
 # Stage functions for StreamingPipeline (closures bind PipelineConfig)
 # ---------------------------------------------------------------------------
 
-def parse_stage(ctx: DocumentContext, cfg: PipelineConfig) -> DocumentContext:
+def parse_stage(
+    ctx: DocumentContext,
+    cfg: PipelineConfig,
+    *,
+    options: ParseSegmentOptions | None = None,
+) -> DocumentContext:
     """Stage 1: Parse raw file into SectionNode tree."""
     raw = ctx.raw_file
     if raw is None:
@@ -402,11 +431,48 @@ def parse_stage(ctx: DocumentContext, cfg: PipelineConfig) -> DocumentContext:
     parser = cfg.parser_factory(raw.file_type) if cfg.parser_factory else None
     if parser is None:
         return ctx
-    tree = parser.parse(raw.content, raw.file_name, {"file_path": raw.file_path})
+    parse_ctx = _parse_context(raw, cfg)
+    if options is not None and options.fetch_remote_images:
+        parse_ctx["fetch_remote_images"] = True
+    tree = parser.parse(raw.content, raw.file_name, parse_ctx)
     if tree is None:
         # 解析器软失败：把它记下的原因带出来（PdfParser / DocxParser 才有）。
         return ctx.with_updates(parse_error=getattr(parser, "last_error", None))
     return ctx.with_updates(tree=tree)
+
+
+def _caption_tree_for_segment(
+    tree: SectionNode,
+    cfg: PipelineConfig,
+    *,
+    options: ParseSegmentOptions | None = None,
+) -> SectionNode:
+    """Optional VLM captions for image blocks; runs inside segment_stage."""
+    captioner = cfg.image_captioner
+    if captioner is None:
+        return tree
+
+    enabled = getattr(captioner, "enabled", True)
+    model = getattr(captioner, "model", "glm-4.5v")
+    max_images = getattr(captioner, "max_images", 20)
+    if options is not None:
+        enabled = options.enable_image_caption
+        model = options.image_caption_model or model
+        max_images = options.max_images_per_doc
+    if not enabled:
+        return tree
+
+    prev = (captioner.enabled, captioner.model, captioner.max_images)
+    captioner.enabled = True
+    captioner.model = model
+    captioner.max_images = max_images
+    try:
+        return captioner.caption_tree(tree)
+    except Exception as exc:
+        logger.warning("image caption during segment failed: %s", exc)
+        return tree
+    finally:
+        captioner.enabled, captioner.model, captioner.max_images = prev
 
 
 def segment_stage(
@@ -415,7 +481,11 @@ def segment_stage(
     *,
     options: ParseSegmentOptions | None = None,
 ) -> DocumentContext:
-    """Stage 2: Segment tree into raw segments + assign stable seg UUIDs.
+    """Stage 2: optional image captions + segment tree + assign stable seg UUIDs.
+
+    Image VLM captioning is part of this stage (not a separate pipeline stage):
+    empty image blocks get text filled before the segmenter runs so hashes /
+    raw_text see the caption.
 
     seg_ids are computed here (not in a separate stage) because the work is
     trivial in-memory work and the DB CHECK constraint on stage_events does
@@ -425,6 +495,20 @@ def segment_stage(
     if seg is None or ctx.tree is None or ctx.profile is None:
         return ctx
     from knowledge_mining.mining.stages.segment import SegmentPolicyOverride
+
+    tree = _caption_tree_for_segment(ctx.tree, cfg, options=options)
+    try:
+        from knowledge_mining.mining.infra.image_assets import summarize_image_blocks
+
+        img_stats = summarize_image_blocks(tree)
+        if img_stats.get("images"):
+            logger.info(
+                "segment image stats doc=%s %s",
+                getattr(ctx.profile, "document_key", None),
+                img_stats,
+            )
+    except Exception:
+        pass
 
     profile_policy = getattr(cfg.domain_profile, "retrieval_policy", None)
     if options is None:
@@ -460,16 +544,19 @@ def segment_stage(
             merge_lead_into_child=options.merge_lead_into_child,
         )
     segments = seg.segment(
-        ctx.tree,
+        tree,
         ctx.profile,
         domain_profile=cfg.domain_profile,
         policy_override=policy_override,
     )
+    updates: dict[str, Any] = {"segments": tuple(segments)}
+    if tree is not ctx.tree:
+        updates["tree"] = tree
     if not segments:
-        return ctx.with_updates(segments=tuple(segments))
+        return ctx.with_updates(**updates)
     from knowledge_mining.mining.stages.relations import build_seg_ids
     return ctx.with_updates(
-        segments=tuple(segments),
+        **updates,
         seg_ids=build_seg_ids(list(segments)),
     )
 

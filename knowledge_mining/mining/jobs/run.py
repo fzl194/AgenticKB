@@ -658,11 +658,13 @@ class _WorkflowJobServices:
             ),
             discourse_relation_builder=llm.get("discourse_relation_builder"),
             contextualizer=llm.get("contextualizer"),
+            image_captioner=llm.get("image_captioner"),
             domain_profile=profile,
             asset_db=asset_db,
             runtime_db=runtime_db,
             tracker=tracker,
             batch_id=None,
+            run_id=run_id,
             workflow_binding={
                 "workflow_id": manifest.get("workflowId"),
                 "workflow_version": manifest.get("workflowVersion"),
@@ -1562,6 +1564,23 @@ def _init_llm(
         except (ImportError, Exception):
             pass
 
+    # PDF image captions via VLM (default off; workflow toggles via ParseSegmentOptions)
+    try:
+        import os
+
+        from knowledge_mining.mining.stages.image_caption import ImageCaptioner
+
+        legacy_on = os.environ.get("MINING_ENABLE_IMAGE_CAPTION", "").strip().lower() in (
+            "1", "true", "yes",
+        )
+        result["image_captioner"] = ImageCaptioner(
+            base_url=llm_base_url,
+            knowledge_domain=knowledge_domain,
+            enabled=legacy_on,
+        )
+    except (ImportError, Exception):
+        pass
+
     return result
 
 
@@ -1746,11 +1765,13 @@ def _run_pipeline(
         embedding_generator=embedding_generator,
         discourse_relation_builder=llm.get("discourse_relation_builder"),
         contextualizer=llm.get("contextualizer"),
+        image_captioner=llm.get("image_captioner"),
         domain_profile=profile,
         asset_db=asset_db,
         runtime_db=runtime_db,
         tracker=tracker,
         batch_id=batch_id,
+        run_id=run_id,
     )
 
     committed_count = 0

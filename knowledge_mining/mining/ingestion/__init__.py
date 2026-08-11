@@ -165,13 +165,34 @@ def ingest_directory(
                 # Legacy binary .doc — python-docx cannot read it ("Package not
                 # found"). Convert to .docx (LibreOffice/Word backend) so it
                 # flows through the structural DocxParser instead of being
-                # flattened to plain text.
+                # flattened to plain text. Image fidelity depends on the
+                # converter; we only observe post-conversion embedded count.
                 try:
                     parse_path = doc_to_docx(file_path)
                     file_type = "docx"  # converted, will use DocxParser
                     content = ""  # docx parsed from file, like native .docx
                     summary["parsed_documents"] += 1
                     metadata_json["source_format"] = "doc"
+                    try:
+                        from knowledge_mining.mining.infra.docx_parser import (
+                            count_embedded_images,
+                        )
+
+                        n_img = count_embedded_images(str(parse_path))
+                        metadata_json["converted_image_count"] = n_img
+                        if n_img == 0:
+                            metadata_json["image_conversion_warning"] = (
+                                "no_embedded_images_after_doc_conversion"
+                            )
+                            logger.warning(
+                                "doc->docx produced 0 embedded images for %s "
+                                "(converter may have dropped figures)",
+                                file_path,
+                            )
+                    except Exception as img_exc:
+                        metadata_json["image_conversion_warning"] = (
+                            f"image_count_failed:{type(img_exc).__name__}"
+                        )
                 except PreprocessingError as exc:
                     logger.warning(
                         "doc->docx conversion failed for %s [%s]: %s; "

@@ -53,17 +53,29 @@ class AnthropicProvider:
     def _convert_messages(self, messages: list[dict]) -> tuple[str | None, list[dict]]:
         """Convert OpenAI-style messages to Anthropic format.
 
-        Returns (system_prompt, anthropic_messages).
+        Supports multimodal user content (``image_url`` parts → Anthropic
+        ``image`` blocks). Returns (system_prompt, anthropic_messages).
         """
+        from llm_service.providers.multimodal import (
+            content_as_plain_text,
+            openai_content_to_anthropic,
+        )
+
         system = None
         converted: list[dict] = []
         for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content", "")
             if role == "system":
-                system = content
+                # Anthropic system is a plain string (or text blocks via API
+                # variants); flatten multimodal system content to text.
+                text = content_as_plain_text(content)
+                system = text if system is None else f"{system}\n{text}"
             elif role in ("user", "assistant"):
-                converted.append({"role": role, "content": content})
+                converted.append({
+                    "role": role,
+                    "content": openai_content_to_anthropic(content),
+                })
         return system, converted
 
     @staticmethod

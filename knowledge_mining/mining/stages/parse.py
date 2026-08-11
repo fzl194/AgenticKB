@@ -35,7 +35,27 @@ class ParserStage:
         parser = create_parser(raw.file_type, **self._kwargs)
         if parser is None:
             return context
-        tree = parser.parse(raw.content, raw.file_name, {"file_path": raw.file_path})
+        parse_ctx: dict[str, Any] = {"file_path": raw.file_path}
+        meta = getattr(raw, "metadata_json", None) or {}
+        if isinstance(meta, dict) and meta.get("source_format"):
+            parse_ctx["source_format"] = meta["source_format"]
+        if context.get("fetch_remote_images") or (
+            isinstance(meta, dict) and meta.get("fetch_remote_images")
+        ):
+            parse_ctx["fetch_remote_images"] = True
+        if context.get("image_dir"):
+            parse_ctx["image_dir"] = context["image_dir"]
+        elif context.get("run_id"):
+            from knowledge_mining.mining.infra.image_assets import IMAGE_CAPABLE_FILE_TYPES
+            from knowledge_mining.mining.infra.run_workdir import resolve_run_image_dir
+
+            file_type = getattr(raw, "file_type", None)
+            if file_type in IMAGE_CAPABLE_FILE_TYPES:
+                doc_key = getattr(raw, "relative_path", None) or raw.file_name
+                parse_ctx["image_dir"] = str(
+                    resolve_run_image_dir(str(context["run_id"]), str(doc_key))
+                )
+        tree = parser.parse(raw.content, raw.file_name, parse_ctx)
         context["tree"] = tree
         return context
 
@@ -55,7 +75,14 @@ class MarkdownParser:
     ) -> SectionNode | None:
         if not content.strip():
             return None
-        return _parse_md_structure(content)
+        ctx = dict(context or {})
+        # HTML/CHM ingest may set source_format so image kind reflects origin.
+        source_format = ctx.get("source_format")
+        if source_format == "html" and "image_kind" not in ctx:
+            ctx["image_kind"] = "html_image"
+        elif source_format in ("chm", "hdx") and "image_kind" not in ctx:
+            ctx["image_kind"] = "html_image"
+        return _parse_md_structure(content, context=ctx)
 
 
 class PlainTextParser:
@@ -119,8 +146,11 @@ class PdfParser:
             logger.warning("PdfParser: no file_path in context for %s", file_name)
             self.last_error = "no file_path in parse context"
             return None
+        image_dir = (context or {}).get("image_dir")
         try:
-            return parse_pdf_to_section_tree(file_path, doc_title=file_name)
+            return parse_pdf_to_section_tree(
+                file_path, doc_title=file_name, image_dir=image_dir,
+            )
         except Exception as e:
             logger.warning("PdfParser failed for %s: %s", file_path, e)
             self.last_error = f"{type(e).__name__}: {e}"
@@ -142,8 +172,11 @@ class DocxParser:
             logger.warning("DocxParser: no file_path in context for %s", file_name)
             self.last_error = "no file_path in parse context"
             return None
+        image_dir = (context or {}).get("image_dir")
         try:
-            return parse_docx_to_section_tree(file_path, doc_title=file_name)
+            return parse_docx_to_section_tree(
+                file_path, doc_title=file_name, image_dir=image_dir,
+            )
         except Exception as e:
             logger.warning("DocxParser failed for %s: %s", file_path, e)
             self.last_error = f"{type(e).__name__}: {e}"

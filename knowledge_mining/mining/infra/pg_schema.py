@@ -41,6 +41,7 @@ _KB_FILE_META_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "005_k
 # KB 中心化挖掘（P2'）：kb 范式绑定 + build/run 的 kb_id 归属列。
 _KB_MINING_BINDING_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "005_kb_mining_binding.sql"
 _ASSET_BUILD_KB_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "006_asset_build_kb.sql"
+_ASSET_BLOCK_TYPE_IMAGE_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "007_asset_block_type_image.sql"
 _MINING_RUN_KB_DDL = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "007_mining_run_kb.sql"
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
@@ -114,6 +115,7 @@ def domain_schema_paths() -> tuple[Path, ...]:
         # KB 中心化挖掘（P2'）：放最后，确保引用的基表（knowledge_bases / asset_builds / mining_runs）都已建。
         _KB_MINING_BINDING_DDL,
         _ASSET_BUILD_KB_DDL,
+        _ASSET_BLOCK_TYPE_IMAGE_DDL,
         _MINING_RUN_KB_DDL,
     )
 

@@ -5,11 +5,13 @@ Key design:
 - Table structure preserved in ContentBlock.structure as {columns, rows}
 - ContentBlock carries line_start/line_end from markdown-it token.map
 - html_table blocks extracted with columns/rows via html.parser
+- Markdown ``![]()`` images become block_type=image (when context provided)
 """
 from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 
 from markdown_it import MarkdownIt
@@ -18,6 +20,8 @@ from knowledge_mining.mining.contracts.models import ContentBlock, SectionNode
 
 
 _MD_LINK_RE = re.compile(r'\[([^\]]*)\]\([^)]*\)')
+# Alt + destination; optional title after the URL is ignored for resolution.
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
 
 def _clean_heading_text(text: str) -> str:
@@ -28,15 +32,27 @@ def _clean_heading_text(text: str) -> str:
     return _MD_LINK_RE.sub(r'\1', text).strip()
 
 
-def parse_structure(content: str) -> SectionNode:
-    """Parse Markdown content into a SectionNode tree."""
+def parse_structure(
+    content: str,
+    *,
+    context: dict[str, Any] | None = None,
+) -> SectionNode:
+    """Parse Markdown content into a SectionNode tree.
+
+    Optional ``context`` may include:
+      file_path, image_dir, image_kind, fetch_remote_images
+    """
     md = MarkdownIt().enable("table")
     tokens = md.parse(content)
-    blocks = _tokens_to_blocks(tokens)
+    blocks = _tokens_to_blocks(tokens, context=context)
     return _build_section_tree(blocks)
 
 
-def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
+def _tokens_to_blocks(
+    tokens: list,
+    *,
+    context: dict[str, Any] | None = None,
+) -> list[ContentBlock]:
     """Convert markdown-it tokens into ContentBlock list with structure and line info."""
     blocks: list[ContentBlock] = []
     i = 0
@@ -153,15 +169,121 @@ def _tokens_to_blocks(tokens: list) -> list[ContentBlock]:
             text = tok.content.strip()
             if text:
                 p_start, p_end = (pending_paragraph_map or (None, None))
-                blocks.append(ContentBlock(
-                    block_type="paragraph", text=text,
-                    line_start=p_start, line_end=p_end,
-                ))
+                blocks.extend(
+                    _split_inline_with_images(
+                        text,
+                        line_start=p_start,
+                        line_end=p_end,
+                        context=context,
+                    )
+                )
             pending_paragraph_map = None
 
         i += 1
 
     return blocks
+
+
+def _split_inline_with_images(
+    text: str,
+    *,
+    line_start: int | None,
+    line_end: int | None,
+    context: dict[str, Any] | None,
+) -> list[ContentBlock]:
+    """Split paragraph text on ``![]()`` into paragraph + image blocks."""
+    matches = list(_MD_IMAGE_RE.finditer(text))
+    if not matches:
+        return [
+            ContentBlock(
+                block_type="paragraph",
+                text=text,
+                line_start=line_start,
+                line_end=line_end,
+            )
+        ]
+
+    out: list[ContentBlock] = []
+    cursor = 0
+    img_idx = 0
+    for m in matches:
+        before = text[cursor:m.start()].strip()
+        if before:
+            out.append(
+                ContentBlock(
+                    block_type="paragraph",
+                    text=before,
+                    line_start=line_start,
+                    line_end=line_end,
+                )
+            )
+        out.append(
+            _make_md_image_block(
+                alt=m.group(1) or "",
+                src=m.group(2).strip().strip("<>"),
+                line_start=line_start,
+                line_end=line_end,
+                context=context,
+                index=img_idx,
+            )
+        )
+        img_idx += 1
+        cursor = m.end()
+    after = text[cursor:].strip()
+    if after:
+        out.append(
+            ContentBlock(
+                block_type="paragraph",
+                text=after,
+                line_start=line_start,
+                line_end=line_end,
+            )
+        )
+    return out
+
+
+def _make_md_image_block(
+    *,
+    alt: str,
+    src: str,
+    line_start: int | None,
+    line_end: int | None,
+    context: dict[str, Any] | None,
+    index: int,
+) -> ContentBlock:
+    from knowledge_mining.mining.infra.image_assets import resolve_local_image_src
+
+    ctx = context or {}
+    file_path = ctx.get("file_path")
+    base_dir = Path(file_path).parent if file_path else None
+    image_dir = ctx.get("image_dir")
+    kind = ctx.get("image_kind") or "md_image"
+    fetch_remote = bool(ctx.get("fetch_remote_images"))
+
+    resolved = resolve_local_image_src(
+        src,
+        base_dir=base_dir,
+        image_dir=image_dir,
+        stem=f"md_{index:02d}",
+        fetch_remote=fetch_remote,
+    )
+    structure: dict[str, Any] = {
+        "kind": kind,
+        "original_src": resolved.get("original_src") or src,
+    }
+    if alt.strip():
+        structure["native_caption"] = alt.strip()
+    for key in ("image_path", "image_sha256", "caption_source"):
+        if resolved.get(key):
+            structure[key] = resolved[key]
+
+    return ContentBlock(
+        block_type="image",
+        text="",
+        line_start=line_start,
+        line_end=line_end,
+        structure=structure,
+    )
 
 
 def _parse_table(tokens: list, start: int) -> ContentBlock:

@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS asset_raw_segments (
     section_path        TEXT NOT NULL DEFAULT '[]',
     section_title       TEXT,
     block_type          TEXT NOT NULL DEFAULT 'unknown' CHECK (
-        block_type IN ('paragraph', 'heading', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'unknown')
+        block_type IN ('paragraph', 'heading', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'image', 'unknown')
     ),
     semantic_role       TEXT NOT NULL DEFAULT 'unknown' CHECK (
         semantic_role IN (
@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS asset_retrieval_units (
     text                 TEXT NOT NULL,
     search_text          TEXT NOT NULL,
     block_type           TEXT NOT NULL DEFAULT 'unknown' CHECK (
-        block_type IN ('paragraph', 'heading', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'unknown')
+        block_type IN ('paragraph', 'heading', 'table', 'list', 'code', 'blockquote', 'html_table', 'raw_html', 'image', 'unknown')
     ),
     semantic_role        TEXT NOT NULL DEFAULT 'unknown' CHECK (
         semantic_role IN (

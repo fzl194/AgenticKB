@@ -104,7 +104,7 @@ async def test_upload_zip_with_nested_xlsx_is_discoverable(async_pool, upload_ro
         zf.writestr("nested/inventory.xlsx", xlsx.getvalue())
 
     async with await _client(async_pool) as client:
-        headers = {"X-KB-User": "alice"}
+        headers = kb_headers("alice")
         kb_id = (
             await client.post(
                 "/api/kb",

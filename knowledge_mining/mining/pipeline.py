@@ -40,13 +40,20 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_context(raw: RawFileData, cfg: "PipelineConfig") -> dict[str, Any]:
-    """Build parser context: file path + run-scoped image dump dir for PDFs."""
+    """Build parser context: file path + run-scoped image dump dir when needed."""
     ctx: dict[str, Any] = {"file_path": raw.file_path}
-    if raw.file_type == "pdf" and cfg.run_id:
+    meta = raw.metadata_json if isinstance(raw.metadata_json, dict) else {}
+    if meta.get("source_format"):
+        ctx["source_format"] = meta["source_format"]
+    if meta.get("fetch_remote_images") or getattr(cfg, "fetch_remote_images", False):
+        ctx["fetch_remote_images"] = True
+    if cfg.run_id:
+        from knowledge_mining.mining.infra.image_assets import IMAGE_CAPABLE_FILE_TYPES
         from knowledge_mining.mining.infra.run_workdir import resolve_run_image_dir
 
-        doc_key = raw.relative_path or raw.file_name or "doc"
-        ctx["image_dir"] = str(resolve_run_image_dir(cfg.run_id, doc_key))
+        if raw.file_type in IMAGE_CAPABLE_FILE_TYPES:
+            doc_key = raw.relative_path or raw.file_name or "doc"
+            ctx["image_dir"] = str(resolve_run_image_dir(cfg.run_id, doc_key))
     return ctx
 
 
@@ -129,8 +136,9 @@ class PipelineConfig:
     embedding_generator: Any | None = None  # EmbeddingGenerator Protocol
     discourse_relation_builder: Any | None = None  # DiscourseRelationBuilder
     contextualizer: Any | None = None  # Contextualizer Protocol
-    image_captioner: Any | None = None  # ImageCaptioner (VLM captions for PDF images)
+    image_captioner: Any | None = None  # ImageCaptioner (VLM captions for images)
     domain_profile: Any | None = None  # DomainProfile
+    fetch_remote_images: bool = False  # Allow http(s) image download at parse
 
     # DB handles for db_write_stage (set by run.py)
     asset_db: Any | None = None
@@ -410,7 +418,12 @@ class StreamingPipeline:
 # Stage functions for StreamingPipeline (closures bind PipelineConfig)
 # ---------------------------------------------------------------------------
 
-def parse_stage(ctx: DocumentContext, cfg: PipelineConfig) -> DocumentContext:
+def parse_stage(
+    ctx: DocumentContext,
+    cfg: PipelineConfig,
+    *,
+    options: ParseSegmentOptions | None = None,
+) -> DocumentContext:
     """Stage 1: Parse raw file into SectionNode tree."""
     raw = ctx.raw_file
     if raw is None:
@@ -418,9 +431,10 @@ def parse_stage(ctx: DocumentContext, cfg: PipelineConfig) -> DocumentContext:
     parser = cfg.parser_factory(raw.file_type) if cfg.parser_factory else None
     if parser is None:
         return ctx
-    tree = parser.parse(
-        raw.content, raw.file_name, _parse_context(raw, cfg),
-    )
+    parse_ctx = _parse_context(raw, cfg)
+    if options is not None and options.fetch_remote_images:
+        parse_ctx["fetch_remote_images"] = True
+    tree = parser.parse(raw.content, raw.file_name, parse_ctx)
     if tree is None:
         # 解析器软失败：把它记下的原因带出来（PdfParser / DocxParser 才有）。
         return ctx.with_updates(parse_error=getattr(parser, "last_error", None))
@@ -483,6 +497,18 @@ def segment_stage(
     from knowledge_mining.mining.stages.segment import SegmentPolicyOverride
 
     tree = _caption_tree_for_segment(ctx.tree, cfg, options=options)
+    try:
+        from knowledge_mining.mining.infra.image_assets import summarize_image_blocks
+
+        img_stats = summarize_image_blocks(tree)
+        if img_stats.get("images"):
+            logger.info(
+                "segment image stats doc=%s %s",
+                getattr(ctx.profile, "document_key", None),
+                img_stats,
+            )
+    except Exception:
+        pass
 
     profile_policy = getattr(cfg.domain_profile, "retrieval_policy", None)
     if options is None:

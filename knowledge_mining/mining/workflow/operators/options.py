@@ -53,7 +53,10 @@ class ParseSegmentOptions(OperatorOptions):
         False,
         alias="enableImageCaption",
         title="启用图片 VLM 图注",
-        description="在分段阶段对 PDF 抽出的图片调用视觉模型生成图注（费用较高）。",
+        description=(
+            "在分段阶段对抽出的图片（PDF/MD/HTML/DOCX 等）调用视觉模型生成图注"
+            "（费用较高）。"
+        ),
     )
     image_caption_model: str = Field(
         "glm-4.5v",
@@ -67,6 +70,15 @@ class ParseSegmentOptions(OperatorOptions):
         le=200,
         alias="maxImagesPerDoc",
         title="每文档最多图注数",
+    )
+    fetch_remote_images: bool = Field(
+        False,
+        alias="fetchRemoteImages",
+        title="下载远程图片",
+        description=(
+            "解析 Markdown/HTML 时下载 http(s) 图片到本地后再图注；"
+            "默认跳过远程图以免同步拉网。"
+        ),
     )
 
     @model_validator(mode="after")

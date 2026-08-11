@@ -92,7 +92,7 @@ def parse_segment_handler(
     options = ParseSegmentOptions.model_validate(dict(params))
     try:
         cfg = _pipeline_config(runtime)
-        parsed = parse_stage(state.context, cfg)
+        parsed = parse_stage(state.context, cfg, options=options)
         if parsed.tree is None:
             return OperatorResult(
                 state.with_context(parsed), frozenset(), OperatorStatus.SKIPPED

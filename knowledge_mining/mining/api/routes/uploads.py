@@ -25,8 +25,8 @@ _DOMAIN_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 _BATCH_PATTERN = re.compile(r"^[a-f0-9]{12}$")
 
 _ACCEPTED_EXTENSIONS = [
-    ".md", ".txt", ".pdf", ".html", ".htm", ".doc", ".docx", ".zip",
-    ".chm", ".hdx",
+    ".md", ".txt", ".pdf", ".html", ".htm", ".doc", ".docx", ".xls",
+    ".xlsx", ".zip", ".chm", ".hdx",
 ]
 
 

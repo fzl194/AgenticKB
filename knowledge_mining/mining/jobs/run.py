@@ -22,6 +22,44 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_PREPROCESS_METADATA_KEYS = (
+    "preprocess_status",
+    "preprocess_error_code",
+    "preprocess_error",
+    "preprocess_warnings",
+    "excel_summary",
+)
+
+
+def _copy_preprocess_metadata(
+    target: dict[str, Any], source: dict[str, Any] | None
+) -> None:
+    source = source or {}
+    for key in _PREPROCESS_METADATA_KEYS:
+        if key in source:
+            target[key] = source[key]
+
+
+def _log_preprocess_diagnostics(
+    *,
+    run_id: str,
+    run_document_id: str,
+    document_key: str,
+    metadata: dict[str, Any],
+) -> None:
+    if metadata.get("preprocess_status") not in {"partial", "failed"}:
+        return
+    logger.warning(
+        "document_preprocess status=%s code=%s run_id=%s "
+        "run_document_id=%s document_key=%s warning_count=%s",
+        metadata.get("preprocess_status"),
+        metadata.get("preprocess_error_code"),
+        run_id,
+        run_document_id,
+        document_key,
+        len(metadata.get("preprocess_warnings") or []),
+    )
+
 
 def decide_document_lifecycle_action(
     state: dict[str, Any] | None,
@@ -785,6 +823,13 @@ class _WorkflowJobServices:
                     existing = existing_rows.get(doc_key)
                     if existing is None:
                         run_document_id = uuid.uuid4().hex
+                        metadata = {
+                            "file_size": doc.file_size,
+                            "preflight_action": preflight_action,
+                            "lifecycle_action": preflight_action,
+                            "source_batch_id": batch_id,
+                        }
+                        _copy_preprocess_metadata(metadata, doc.metadata_json)
                         self.tracker.register_document(MiningRunDocumentData(
                             id=run_document_id,
                             run_id=self.run_id,
@@ -792,13 +837,14 @@ class _WorkflowJobServices:
                             raw_content_hash=doc.raw_content_hash,
                             normalized_content_hash=doc.normalized_content_hash,
                             action="SKIP",
-                            metadata_json={
-                                "file_size": doc.file_size,
-                                "preflight_action": preflight_action,
-                                "lifecycle_action": preflight_action,
-                                "source_batch_id": batch_id,
-                            },
+                            metadata_json=metadata,
                         ))
+                        _log_preprocess_diagnostics(
+                            run_id=self.run_id,
+                            run_document_id=run_document_id,
+                            document_key=doc_key,
+                            metadata=metadata,
+                        )
                         self.asset_db.insert_snapshot_link(
                             domain=self.profile.domain_id,
                             link_id=uuid.uuid4().hex,
@@ -849,6 +895,7 @@ class _WorkflowJobServices:
             if existing is None:
                 run_document_id = uuid.uuid4().hex
                 metadata = {"file_size": doc.file_size}
+                _copy_preprocess_metadata(metadata, doc.metadata_json)
                 if planned is not None:
                     metadata["preflight_action"] = planned.get("selected_action")
                 if lifecycle_action == "SKIP" and lifecycle:
@@ -871,6 +918,12 @@ class _WorkflowJobServices:
                     action=action,
                     metadata_json=metadata,
                 ))
+                _log_preprocess_diagnostics(
+                    run_id=self.run_id,
+                    run_document_id=run_document_id,
+                    document_key=doc_key,
+                    metadata=metadata,
+                )
                 if lifecycle_action == "SKIP" and lifecycle:
                     self.tracker.commit_document(
                         run_document_id,
@@ -1747,9 +1800,7 @@ def _run_pipeline(
         # 摄取期预处理失败（PDF 抽文本 / HTML→md / CHM 解包 / doc→docx）只被记进
         # RawFileData.metadata_json，而这类文档不会建快照 —— 不在这里带上，原因就
         # 只剩日志里有，库里查不到。
-        _pre_err = (doc.metadata_json or {}).get("preprocess_error")
-        if _pre_err:
-            run_document_metadata["preprocess_error"] = str(_pre_err)
+        _copy_preprocess_metadata(run_document_metadata, doc.metadata_json)
         if lifecycle_action == "SKIP":
             # Persist the published selection's provenance so resume can rebuild
             # the same decision after the in-memory list has been lost.
@@ -1773,6 +1824,12 @@ def _run_pipeline(
             action=action,
             metadata_json=run_document_metadata,
         ))
+        _log_preprocess_diagnostics(
+            run_id=run_id,
+            run_document_id=rd_id,
+            document_key=doc_key,
+            metadata=run_document_metadata,
+        )
         runtime_db.commit()
 
         if lifecycle_action == "SKIP" and lifecycle_state is not None:

@@ -19,6 +19,8 @@ from knowledge_mining.mining.ingestion.preprocessing import (
 )
 from knowledge_mining.mining.ingestion.pdf_preprocessing import pdf_to_text
 from knowledge_mining.mining.ingestion.doc_preprocessing import doc_to_docx
+from knowledge_mining.mining.ingestion.errors import PreprocessingError
+from knowledge_mining.mining.ingestion.excel_preprocessing import excel_to_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,8 @@ _EXTENSION_MAP: dict[str, str] = {
     ".pdf": "pdf",
     ".doc": "doc",
     ".docx": "docx",
+    ".xls": "xls",
+    ".xlsx": "xlsx",
     # Compiled-help archives — extracted + converted to markdown during ingest.
     ".chm": "markdown",
     ".hdx": "markdown",
@@ -40,6 +44,7 @@ PARSABLE_EXTENSIONS = {".md", ".markdown", ".txt"}
 PDF_EXTENSIONS = {".pdf"}
 HTML_EXTENSIONS = {".html", ".htm"}
 DOCX_EXTENSIONS = {".doc", ".docx"}
+EXCEL_EXTENSIONS = {".xls", ".xlsx"}
 PREPROCESS_EXTENSIONS = SUPPORTED_ARCHIVE_EXTS  # {".chm", ".hdx"}
 
 _SKIP_NAMES = {
@@ -55,6 +60,8 @@ _MIME_MAP: dict[str, str] = {
     "pdf": "application/pdf",
     "doc": "application/msword",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
 
@@ -73,6 +80,7 @@ def ingest_directory(
         "unparsed_documents": 0,
         "preprocessed_archives": 0,
         "preprocessed_pdfs": 0,
+        "preprocessed_excels": 0,
         "skipped_files": 0,
         "failed_files": 0,
     }
@@ -164,6 +172,20 @@ def ingest_directory(
                     content = ""  # docx parsed from file, like native .docx
                     summary["parsed_documents"] += 1
                     metadata_json["source_format"] = "doc"
+                except PreprocessingError as exc:
+                    logger.warning(
+                        "doc->docx conversion failed for %s [%s]: %s; "
+                        "registering without content",
+                        file_path,
+                        exc.code,
+                        exc.safe_message,
+                    )
+                    content = ""
+                    summary["unparsed_documents"] += 1
+                    metadata_json.update({
+                        "source_format": "doc",
+                        **exc.as_metadata(),
+                    })
                 except Exception as e:
                     logger.warning(
                         "doc->docx conversion failed for %s: %s; registering without content",
@@ -173,6 +195,35 @@ def ingest_directory(
                     summary["unparsed_documents"] += 1
                     metadata_json["source_format"] = "doc"
                     metadata_json["preprocess_error"] = f"{type(e).__name__}: {e}"
+            elif ext in EXCEL_EXTENSIONS:
+                try:
+                    excel = excel_to_markdown(file_path)
+                    content = excel.markdown
+                    file_type = "markdown"
+                    summary["parsed_documents"] += 1
+                    summary["preprocessed_excels"] += 1
+                    metadata_json.update({
+                        "source_format": excel.source_format,
+                        "preprocess_status": excel.status,
+                        "preprocess_warnings": [
+                            item.as_dict() for item in excel.warnings
+                        ],
+                        "excel_summary": excel.summary,
+                    })
+                except PreprocessingError as exc:
+                    logger.warning(
+                        "excel preprocessing failed for %s [%s]: %s; "
+                        "registering without content",
+                        file_path,
+                        exc.code,
+                        exc.safe_message,
+                    )
+                    content = ""
+                    summary["unparsed_documents"] += 1
+                    metadata_json.update({
+                        "source_format": ext.lstrip("."),
+                        **exc.as_metadata(),
+                    })
             elif ext in DOCX_EXTENSIONS:
                 # .docx — zip package; DocxParser reads file_path directly.
                 content = ""

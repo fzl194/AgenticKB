@@ -8,7 +8,8 @@
 
 set -Eeuo pipefail
 
-IMAGE_TAR="${IMAGE_TAR:-cmkb.tar}"
+IMAGE_ARCHIVE="${IMAGE_ARCHIVE:-}"
+CHECKSUM_FILE=""
 IMAGE_NAME="${IMAGE_NAME:-coremasterkb-app:latest}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cmkb}"
 APP_CONTAINER_NAME="${APP_CONTAINER_NAME:-cmkb}"
@@ -515,16 +516,33 @@ apply_config_only() {
 }
 
 deploy_from_image() {
-    # 当前目录有镜像归档就加载；没有则直接使用已存在的本地镜像
-    # （例如从 GHCR 拉取后 retag 成 $IMAGE_NAME 的场景）。
-    if [ -f "$IMAGE_TAR" ]; then
-        echo "=== 正在加载镜像：$IMAGE_TAR ==="
-        docker load -i "$IMAGE_TAR"
-    elif docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-        echo "=== 未找到 $IMAGE_TAR，使用已存在的本地镜像：$IMAGE_NAME ==="
-    else
-        die "既无镜像归档 $IMAGE_TAR，本地也没有镜像 $IMAGE_NAME。请先放置 tar，或 docker pull 后 retag 成 $IMAGE_NAME。"
+    # 默认选择当前目录中的版本化离线镜像；也允许显式指定 IMAGE_ARCHIVE。
+    if [ -z "$IMAGE_ARCHIVE" ]; then
+        IMAGE_ARCHIVE="$(find . -maxdepth 1 -type f -name 'cmkb-*.tar.zst' -print -quit)"
     fi
+
+    # 当前目录有镜像归档就先校验再加载；没有则使用已存在的本地镜像。
+    if [ -n "$IMAGE_ARCHIVE" ] && [ -f "$IMAGE_ARCHIVE" ]; then
+        command -v zstd >/dev/null || die "未安装 zstd，无法解压离线镜像"
+        CHECKSUM_FILE="${IMAGE_ARCHIVE}.sha256"
+        [ -f "$CHECKSUM_FILE" ] || die "缺少校验文件：$CHECKSUM_FILE"
+        echo "=== 校验离线镜像完整性 ==="
+        sha256sum -c "$CHECKSUM_FILE" || die "离线镜像校验失败，请重新传输"
+
+        echo "=== 加载离线镜像：$IMAGE_ARCHIVE ==="
+        zstd -dc "$IMAGE_ARCHIVE" | docker load
+    elif docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+        echo "=== 未找到离线镜像归档，使用已存在的本地镜像：$IMAGE_NAME ==="
+    else
+        die "既无 cmkb-*.tar.zst 离线镜像，本地也没有镜像 $IMAGE_NAME。"
+    fi
+
+    echo "=== 验证镜像内的文档解析依赖 ==="
+    docker run --rm "$IMAGE_NAME" sh -ec '
+      command -v libreoffice >/dev/null || { echo "错误：镜像内未安装 LibreOffice" >&2; exit 1; }
+      libreoffice --headless --version
+      python -c "import openpyxl, xlrd; print(f\"依赖验证通过：openpyxl={openpyxl.__version__}，xlrd={xlrd.__version__}\")"
+    ' || die "文档解析依赖验证失败，已停止部署"
 
     cleanup_tmp_container
     docker create --name "$TMP_CONTAINER_NAME" "$IMAGE_NAME" >/dev/null

@@ -21,6 +21,7 @@
           :auto-upload="true"
           :http-request="handleUpload"
           :disabled="uploading > 0"
+          accept=".md,.markdown,.txt,.html,.htm,.pdf,.doc,.docx,.xls,.xlsx,.zip,.chm,.hdx"
         >
           <el-button size="small" type="primary" :loading="uploading > 0">
             <el-icon class="el-icon--left"><UploadFilled /></el-icon>上传到当前文件夹
@@ -30,6 +31,9 @@
           <el-icon><Refresh /></el-icon>
         </el-button>
       </div>
+    </div>
+    <div v-if="canWrite" class="fm__formats">
+      支持 Markdown、文本、HTML、PDF、Word（.doc/.docx）、Excel（.xls/.xlsx）及 ZIP 等格式
     </div>
 
     <!-- 批量操作栏（多选文件后出现） -->
@@ -507,6 +511,7 @@ watch(() => props.active, (now, prev) => {
 .fm__crumb-root, .fm__crumb-seg { cursor: pointer; color: var(--kb-accent); }
 .fm__crumb-root:hover, .fm__crumb-seg:hover { text-decoration: underline; }
 .fm__actions { display: flex; gap: 8px; align-items: center; }
+.fm__formats { color: var(--kb-text-secondary); font-size: 12px; line-height: 1.5; }
 
 .fm__list {
   background: var(--kb-bg-card); border: 1px solid var(--kb-border-light);

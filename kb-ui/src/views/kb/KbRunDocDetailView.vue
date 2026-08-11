@@ -34,6 +34,14 @@
         {{ miningStore.currentDocument.error_message }}
       </div>
 
+      <PreprocessNotice
+        :status="miningStore.currentDocument.preprocess_status"
+        :error-code="miningStore.currentDocument.error_code"
+        :error-detail="miningStore.currentDocument.error_detail"
+        :warnings="miningStore.currentDocument.warnings"
+        :summary="miningStore.currentDocument.excel_summary"
+      />
+
       <!-- Skip Reason Banner -->
       <div
         v-if="skipReasonText"
@@ -209,6 +217,7 @@ import { ArrowLeft, WarningFilled, InfoFilled } from '@element-plus/icons-vue'
 import { useMiningStore } from '@/stores/mining'
 import { useMiningApi } from '@/api/mining'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import PreprocessNotice from '@/components/kb/PreprocessNotice.vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 

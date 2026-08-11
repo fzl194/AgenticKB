@@ -827,6 +827,50 @@ async def test_upload_config_exposes_submission_engine(monkeypatch):
     result = await uploads.get_upload_config()
 
     assert result["mining_run_submission_engine"] == "workflow"
+    assert ".xls" in result["accepted_extensions"]
+    assert ".xlsx" in result["accepted_extensions"]
+
+
+def test_preprocess_log_has_identifiers_but_not_cell_content(caplog):
+    from knowledge_mining.mining.jobs import run as run_job
+
+    run_job._log_preprocess_diagnostics(
+        run_id="run-1",
+        run_document_id="rd-1",
+        document_key="doc:/bad.xlsx",
+        metadata={
+            "preprocess_status": "failed",
+            "preprocess_error_code": "excel_corrupt_file",
+            "preprocess_warnings": [],
+            "sentinel_cell_content": "SECRET-CELL-VALUE",
+        },
+    )
+
+    text = caplog.text
+    assert "run-1" in text and "rd-1" in text
+    assert "excel_corrupt_file" in text
+    assert "SECRET-CELL-VALUE" not in text
+
+
+def test_copy_preprocess_metadata_keeps_only_public_diagnostics():
+    from knowledge_mining.mining.jobs import run as run_job
+
+    target = {"file_size": 10}
+    run_job._copy_preprocess_metadata(
+        target,
+        {
+            "preprocess_status": "partial",
+            "preprocess_error_code": None,
+            "preprocess_error": None,
+            "preprocess_warnings": [{"code": "excel_formula_cache_missing"}],
+            "excel_summary": {"sheet_count": 2},
+            "sentinel_cell_content": "SECRET-CELL-VALUE",
+        },
+    )
+
+    assert target["preprocess_status"] == "partial"
+    assert target["excel_summary"] == {"sheet_count": 2}
+    assert "sentinel_cell_content" not in target
 
 
 @pytest.mark.asyncio

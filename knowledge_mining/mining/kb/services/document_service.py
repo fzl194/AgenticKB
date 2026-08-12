@@ -15,6 +15,7 @@ from psycopg.errors import UniqueViolation
 from knowledge_mining.mining.infra.archive_extractor import extract_archive
 from knowledge_mining.mining.infra.upload_config import UploadConfig
 from knowledge_mining.mining.kb.db import KbDB
+from knowledge_mining.mining.kb.services.folder_service import FolderService
 from knowledge_mining.mining.kb.services.kb_service import Forbidden, KbService, NotFound
 from knowledge_mining.mining.kb.storage import build_document_key, build_storage_path
 
@@ -38,6 +39,7 @@ class DocumentService:
         self._svc = KbService(db)
         # 实例化时读 UploadConfig（OS env UPLOAD_ROOT 覆盖 .env）——测试可指向 tmp
         self._upload_root = Path(upload_root) if upload_root else UploadConfig().upload_root_path
+        self._folders = FolderService(db, self._upload_root)
 
     # ----------------------------------------------------- upload
 
@@ -78,6 +80,15 @@ class DocumentService:
         zip_path.unlink(missing_ok=True)
         if result.error:
             raise ValueError(f"archive extract failed: {result.error}")
+
+        # 先幂等建齐 zip 内子目录对应的 kb_folders（否则 UI 按 folder.path 过滤 → 列表空）
+        dir_paths = {
+            "/".join(Path(rel).parts[:-1])
+            for rel in result.extracted_files
+            if len(Path(rel).parts) > 1
+        }
+        for dp in sorted(dir_paths, key=lambda p: p.count("/")):
+            await self._folders.ensure_folder_path(kb_id=kb_id, path=dp, user_id=owner_id)
 
         docs: list[dict[str, Any]] = []
         for rel in result.extracted_files:

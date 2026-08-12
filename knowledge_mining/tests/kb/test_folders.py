@@ -35,6 +35,24 @@ async def test_create_top_level_and_nested(async_pool, tmp_path):
     assert {f["path"] for f in folders} == {"5G", "5G/AMF"}
 
 
+async def test_ensure_folder_path_idempotent(async_pool, tmp_path):
+    db = KbDB(async_pool)
+    svc = FolderService(db, upload_root=tmp_path)
+    owner_id, kb_id = await _make_kb(db, "kbEnsure")
+
+    leaf = await svc.ensure_folder_path(kb_id=kb_id, path="a/b/c", user_id=owner_id)
+    assert leaf is not None and leaf["path"] == "a/b/c"
+    folders = await svc.list_folders(kb_id=kb_id, user_id=owner_id)
+    assert {f["path"] for f in folders} == {"a", "a/b", "a/b/c"}
+    assert (tmp_path / kb_id / "a" / "b" / "c").is_dir()
+
+    again = await svc.ensure_folder_path(kb_id=kb_id, path="a/b/c", user_id=owner_id)
+    assert again["id"] == leaf["id"]
+    assert len(await svc.list_folders(kb_id=kb_id, user_id=owner_id)) == 3
+
+    assert await svc.ensure_folder_path(kb_id=kb_id, path="", user_id=owner_id) is None
+
+
 async def test_create_duplicate_name(async_pool, tmp_path):
     db = KbDB(async_pool)
     svc = FolderService(db, upload_root=tmp_path)

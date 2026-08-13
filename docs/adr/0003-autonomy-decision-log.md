@@ -137,4 +137,17 @@
 
 ---
 
-> 后续决策按 D-022… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
+## D-022 ｜ M1.2 Storage Repository + Upload Session 编排：六边形分层 + Protocol 化仓储
+- **决策**：M1.2 按六边形（hexagonal）分层落地上传会话编排，业务逻辑只依赖 Repository **Protocol** + 已就绪的 `ObjectStorePort`，不直接依赖 psycopg：
+  1. **Repository Protocol 落 `contracts/file_management.py`**（新文件，纯 stdlib）。定义 5 个 `@runtime_checkable Protocol`：`StorageObjectRepository` / `UploadSessionRepository` / `DocumentCurrentContentRepository` / `FileAuditRepository` / `QuotaRepository`；交换类型为 frozen dataclass（`StorageObjectRecord` / `UploadSessionRecord` / `DocumentCurrentContent` / `FileAuditEvent` / `QuotaRecord` / `CommitResult`）。错误：`DocumentRevisionConflict`（code=`document_revision_conflict`，409）、`UploadSessionExpired`（410）、`UploadIncomplete`（409），全部继承既有 `StorageError` 基类（`quota_exceeded` 复用 `storage.errors`）。
+  2. **编排服务落 `file_management/service.py::UploadSessionService`**，构造注入 `(object_store, sessions, storage_objects, documents, audits, quotas, config)`。四步法：`initiate`（幂等 by `(kb_id,actor,idempotency_key)`，配额 `reserve`）→ `stage_from_bytes`/`stage_chunked`（state UPLOADING→OBJECT_STAGED）→ `complete`（校验 size/sha256→注册/复用 StorageObject→建/更新 Document 当前内容→审计→配额 commit，幂等返回原 `CommitResult`）→ `abort`（配额 release、删 staging、state→ABORTED）。每次状态变更前 `state_machines.assert_transition("upload_session", old, new)`。
+  3. **In-memory fake 仓储落 `file_management/repositories_memory.py`**，完整实现 5 个 Protocol，dict 存储，支持乐观并发（Quota.version / Document.content_revision 校验）、dedup 探针、`list_expired`。**供测试用，使整套服务测试无需 PG 即可全绿**（解决环境无 PG 的硬约束）。
+  4. **PG 仓储落 `file_management/repositories_pg.py`**，学 `kb/db.py` 的 `AsyncConnectionPool` 风格（`async with self._pool.connection() as conn` + `await conn.execute(... RETURNING *)`），对齐 008 DDL 字段。乐观并发用 `WHERE ... = %s AND content_revision = %s RETURNING ...` / `WHERE ... version = %s RETURNING ...` 服务端强制；quota 的 limit 校验直接折进同一 UPDATE（`AND (reserved+used+delta) <= limit`）。**本环境不跑**（无 PG），但可导入、语法正确。
+  5. **DDL 增量**：008 SQLite + PG 各加 `ALTER TABLE asset_upload_sessions ADD COLUMN IF NOT EXISTS staging_bucket / committed_storage_object_id / committed_document_id`（M1.2 session 行需携带 commit 后指针以支持 §9.5 恢复与幂等重 complete；幂等、ADD COLUMN IF NOT EXISTS 与 D-018/D-019 增量风格一致）。
+- **依据**：SRS §4.1A（上传事务）、§4.3/§4.3A（文档当前内容 + 操作语义表）、§C01（错误码）、§9.0A/§9.5（Upload Session 状态机 + 恢复）；ADR-0003 D-001（frozen dataclass + Protocol）、D-006（guarded PG）、D-017（COALESCE version_id 归一）、D-020（Port location 寻址：业务 id 下沉到 Repository）、D-002（sha256 dedup O3：同域内 find_by_location 命中即复用，不重复 copy）。
+- **SRS 覆盖情况**：SRS §4.1A 上传事务的五步（initiate/stage/verify/register/promote→final）由 service 完整覆盖；§4.3A 文档当前内容的乐观并发（`content_revision` CAS）由 `set_current_content` 服务端 + fake 双实现；§C01 `document_revision_conflict`/`upload_incomplete`/`upload_session_expired`/`quota_exceeded` 错误码齐备。「业务编排逻辑不依赖 PG 可测」「Repository Protocol 化」「dedup 复用」SRS 未显式规定，本决策按六边形架构补全。
+- **影响**：`mining/contracts/file_management.py`（新）、`mining/file_management/{__init__,service,repositories_memory,repositories_pg}.py`（新包）、`tests/file_management/{__init__,test_upload_session_service,test_repositories_memory,test_repositories_pg}.py`（新）、`databases/asset_core/schemas/008_object_storage_foundation{,_postgresql}.sql`（3 列增量）。测试：service + memory 全绿（无 PG），PG smoke gated skip。M1.3（File Management Port 化）在 service 之上接 KB 写权限校验与 HTTP 层。
+
+---
+
+> 后续决策按 D-023… 追加。每个里程碑结束在对应交付报告中引用本日志条目。

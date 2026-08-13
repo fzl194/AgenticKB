@@ -91,6 +91,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_upload_sessions_idem
 CREATE INDEX IF NOT EXISTS idx_asset_upload_sessions_state
     ON asset_upload_sessions(state, expires_at);
 
+-- M1.2 增量：session 行携带 staging bucket 名与 commit 后的对象/文档指针，
+-- 使恢复（§9.5）与幂等重 complete 无需重算。SQLite ADD COLUMN IF NOT EXISTS
+-- 由测试加载器降级为存在性检查（见 test_storage_ddl._load_schema）。
+ALTER TABLE asset_upload_sessions ADD COLUMN IF NOT EXISTS staging_bucket             TEXT;
+ALTER TABLE asset_upload_sessions ADD COLUMN IF NOT EXISTS committed_storage_object_id TEXT;
+ALTER TABLE asset_upload_sessions ADD COLUMN IF NOT EXISTS committed_document_id       TEXT;
+
 
 -- -----------------------------------------------------------------------------
 -- C. 新表：asset_storage_object_refs（SRS §8.5）

@@ -90,6 +90,12 @@ CREATE INDEX IF NOT EXISTS idx_asset_upload_sessions_state
 
 COMMENT ON TABLE asset_upload_sessions IS 'SRS §8.5/§3.1B/§9.0A: 上传状态机；终态不可逆；幂等键保证客户端重试安全。';
 
+-- M1.2 增量：session 行携带 staging bucket 名与 commit 后的对象/文档指针，
+-- 使恢复（§9.5）与幂等重 complete 无需重算。ADD COLUMN IF NOT EXISTS 幂等。
+ALTER TABLE asset_upload_sessions ADD COLUMN IF NOT EXISTS staging_bucket             TEXT;
+ALTER TABLE asset_upload_sessions ADD COLUMN IF NOT EXISTS committed_storage_object_id TEXT;
+ALTER TABLE asset_upload_sessions ADD COLUMN IF NOT EXISTS committed_document_id       TEXT;
+
 
 -- -----------------------------------------------------------------------------
 -- C. 新表：asset_storage_object_refs（SRS §8.5）

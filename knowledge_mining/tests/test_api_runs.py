@@ -15,11 +15,12 @@ class Connection:
 
     async def execute(self, sql, params):
         normalized = " ".join(sql.split())
-        if "SELECT id, domain, status FROM mining_runs" in normalized:
+        if "SELECT id, domain, status, kb_id FROM mining_runs" in normalized:
             return Cursor(row={
                 "id": self.run["id"],
                 "domain": self.run["domain"],
                 "status": self.run["status"],
+                "kb_id": self.run.get("kb_id"),
             })
         if "COUNT(*) as c" in normalized:
             return Cursor(row={"c": 1})
@@ -60,7 +61,10 @@ async def test_list_and_detail_expose_engine_and_frozen_workflow_summary(monkeyp
     run = workflow_run()
     request = request_for(run)
 
-    listing = await runs.list_runs(request, domain="plant-a")
+    # 以 site admin 身份：list_runs 的可见集收窄对 admin 是短路的，故这条断言仍覆盖
+    # 「全域列表」的原有行为（非 admin 的收窄见 test_runs_access_guard.py）。
+    admin = {"id": "u-admin", "site_role": "admin"}
+    listing = await runs.list_runs(request, domain="plant-a", user=admin)
     detail = await runs.get_run(run["id"], request, domain="plant-a")
 
     for item in (listing["items"][0], detail):

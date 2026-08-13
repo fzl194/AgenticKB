@@ -165,15 +165,17 @@ async def test_derived_status_mined_for_committed_run_document(async_pool):
 
     started = "2026-01-01T00:00:00+00:00"
     async with async_pool.connection() as conn:
+        # kb_id 必须写：状态派生按 run 的归属收敛（D9），KB 挖掘真实路径上
+        # kb/routes/mining.py 也是插入后立刻 UPDATE 补这一列的。
         await conn.execute(
             """INSERT INTO mining_runs
-               (id, input_path, domain, channel, status, current_stage, started_at,
+               (id, kb_id, input_path, domain, channel, status, current_stage, started_at,
                 execution_engine, workflow_manifest_json, metadata_json,
                 total_documents, new_count, updated_count, skipped_count,
                 failed_count, committed_count)
-               VALUES (%s, %s, 'cloud_core_network', 'prod', 'completed', 'done', %s,
+               VALUES (%s, %s, %s, 'cloud_core_network', 'prod', 'completed', 'done', %s,
                        'workflow', '{}'::jsonb, '{}'::jsonb, 1, 1, 0, 0, 0, 1)""",
-            ("run-mine-1", f"/tmp/{kb['id']}", started),
+            ("run-mine-1", kb["id"], f"/tmp/{kb['id']}", started),
         )
         await conn.execute(
             """INSERT INTO mining_run_documents

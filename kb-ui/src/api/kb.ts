@@ -8,7 +8,7 @@
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
-  KbRunRecord, KbSummary, KbUpdateBody, KbUserCandidate, DocumentKnowledge,
+  KbOverview, KbRunRecord, KbSummary, KbUpdateBody, KbUserCandidate, DocumentKnowledge,
 } from '@/types/kb'
 
 export function useKbApi() {
@@ -19,6 +19,18 @@ export function useKbApi() {
     async listKbs(domain: string): Promise<KbSummary[]> {
       const { data } = await client.get('/api/kb', { params: { domain } })
       return extractItems<KbSummary>(data)
+    },
+
+    /**
+     * 概览页 / 检索范围一次取齐：可见知识库全集 + 每库状态摘要 + 跨库最近挖掘 +
+     * 该域有无 active release。
+     *
+     * 是聚合端点而不是几个小接口：一个授权点、一次往返、各区块数据同源同时刻。
+     * 检索页也用它——它需要 has_active_release 才能决定要不要给出「域级发布」这个范围。
+     */
+    async getOverview(domain: string): Promise<KbOverview> {
+      const { data } = await client.get('/api/kb/overview', { params: { domain } })
+      return extractOne<KbOverview>(data)
     },
 
     async createKb(body: KbCreateBody): Promise<KbDetail> {

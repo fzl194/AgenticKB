@@ -31,6 +31,9 @@
         <el-tab-pane label="代码同步" name="sync">
           <CodeSyncTab />
         </el-tab-pane>
+        <el-tab-pane label="系统状态" name="status">
+          <SystemStatusTab />
+        </el-tab-pane>
         <el-tab-pane label="服务日志" name="logs">
           <ServiceLogsTab />
         </el-tab-pane>
@@ -43,6 +46,7 @@
 import { ref } from 'vue'
 import { useControlPlaneStore } from '@/stores/controlPlane'
 import SystemConfigTab from '@/components/settings/SystemConfigTab.vue'
+import SystemStatusTab from '@/components/settings/SystemStatusTab.vue'
 import BrandAppearanceTab from '@/components/settings/BrandAppearanceTab.vue'
 import UserManagementTab from '@/components/settings/UserManagementTab.vue'
 import DomainManageTab from '@/components/settings/DomainManageTab.vue'

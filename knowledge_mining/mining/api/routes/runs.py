@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from knowledge_mining.mining.api.domain_scope import require_domain
 from knowledge_mining.mining.api.routes.uploads import resolve_upload_batch_path
+from knowledge_mining.mining.kb.auth import current_user, require_admin
+from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.infra.domain_pack import resolve_domain
 from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
@@ -24,7 +26,11 @@ from knowledge_mining.mining.workflow.service import WorkflowArchived, WorkflowN
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/runs", tags=["runs"])
+# 路由级 Depends(current_user)：这一族**没有匿名端点**。放在 router 上而不是逐个路由挂，
+# 是因为漏挂的代价不对称——新加一个路由忘了护栏 = 又开一个越权口，而多挂一次只是多一次
+# 已被 FastAPI 依赖缓存去重的解析。逐路由的细粒度授权（可见性 / 写权限 / admin）见下面
+# require_run_read / require_run_write / require_admin。
+router = APIRouter(prefix="/api/runs", tags=["runs"], dependencies=[Depends(current_user)])
 
 # Mutex to prevent concurrent mining runs —— 每个域一把，域之间互不阻塞。
 # 曾经是全局一把锁，任意一个域在挖掘就把其余域全部 409 掉。
@@ -166,7 +172,7 @@ async def _require_run_domain(pool, run_id: str, domain: str) -> dict:
     requested = require_domain(domain)
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT id, domain, status FROM mining_runs "
+            "SELECT id, domain, status, kb_id FROM mining_runs "
             "WHERE id = %s AND domain = %s",
             [run_id, requested],
         )
@@ -176,9 +182,64 @@ async def _require_run_domain(pool, run_id: str, domain: str) -> dict:
     return dict(row)
 
 
+# ── 身份护栏 ──
+#
+# 这一族端点历史上完全不校验身份：任何人只要有 runId 就能读别人私有知识库的段落/单元/
+# 关系，并 cancel/publish/resume 别人的挖掘。堵掉 list（不再发 id）只关闭了批量枚举，
+# 从分享链接或浏览记录拿到一个 id 的成本远低于猜 UUID，所以整族收口。
+#
+# 归属判定走 mining_runs.kb_id（007 提升为列）：
+#   kb_id 非空  → KB 挖掘产生的 run，按该 KB 的可见性/写权限判定
+#   kb_id 为空  → legacy 域级 run（/api/runs 直接发起的），无 KB 归属，仅 site admin 可见
+#
+# 不可见一律 404、与「不存在」同一响应——和 KB 层保持一致，不泄露 run 是否存在；
+# 可见但无写权限才 403（这时存在性已经不是秘密了）。
+
+async def _authorize_run(
+    request: Request, run_id: str, domain: str, *, user: dict[str, Any], write: bool,
+) -> dict:
+    pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
+    run = await _require_run_domain(pool, run_id, domain)
+    is_admin = user.get("site_role") == "admin"
+    kb_id = run.get("kb_id")
+
+    if not kb_id:
+        if not is_admin:
+            raise HTTPException(404, f"Run {run_id} not found")
+        return run
+
+    # KB 元数据在主库（pg_pool），run 在域库——沿用 KB 路由既有的取池方式。
+    kbdb = KbDB(request.app.state.pg_pool)
+    if not await kbdb.is_visible(kb_id=kb_id, user_id=user["id"]):
+        raise HTTPException(404, f"Run {run_id} not found")
+    if write and not await kbdb.can_write(kb_id=kb_id, user_id=user["id"]):
+        raise HTTPException(403, "forbidden")
+    return run
+
+
+async def require_run_read(
+    run_id: str,
+    request: Request,
+    domain: str = Query(..., min_length=1),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict:
+    """读类护栏：run 属于该域，且调用者对其所属 KB 可读。"""
+    return await _authorize_run(request, run_id, domain, user=user, write=False)
+
+
+async def require_run_write(
+    run_id: str,
+    request: Request,
+    domain: str = Query(..., min_length=1),
+    user: dict[str, Any] = Depends(current_user),
+) -> dict:
+    """写类护栏（cancel / publish / resume）：额外要求对该 KB 有写权限。"""
+    return await _authorize_run(request, run_id, domain, user=user, write=True)
+
+
 # ── Routes ──
 
-@router.post("/preflight")
+@router.post("/preflight", dependencies=[Depends(require_admin)])
 async def preflight_run(body: RunPreflightRequest, request: Request) -> dict[str, Any]:
     resolved_domain = require_domain(body.domain)
     domain_entry = resolve_domain(resolved_domain)
@@ -206,12 +267,14 @@ async def preflight_run(body: RunPreflightRequest, request: Request) -> dict[str
         binding=binding,
     )
 
-@router.post("", response_model=RunResponse, status_code=202)
+@router.post("", response_model=RunResponse, status_code=202,
+             dependencies=[Depends(require_admin)])
 async def create_run(body: CreateRunRequest, request: Request) -> dict:
     """Submit a mining run (async, returns immediately)."""
     # legacy 域级挖掘入口：逐步废弃，推荐走 KB 中心化挖掘（POST /api/kb/{kb_id}/mine）。
     # 域级挖掘写 asset_documents.kb_id=NULL、默认 publish=true 进域级 active release，
     # 与 KB 作用域知识分属两套模型。详见 docs/融合-KB中心化挖掘-设计规格.md。
+    # 也正因为影响面是整个域而非某个库，这个入口是 admin-only（见装饰器）。
     logger.warning(
         "Legacy domain mining (/api/runs) is deprecated; prefer KB-centric mining "
         "(POST /api/kb/{kb_id}/mine). domain=%s",
@@ -435,16 +498,32 @@ async def list_runs(
     status: str | None = None,
     limit: int = Query(20, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    user: dict[str, Any] = Depends(current_user),
 ) -> dict:
-    """List mining runs in one domain."""
+    """List mining runs in one domain (身份收敛：非 admin 只见可见 KB 的 run)。"""
     pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
+
+    # 非 admin 收窄到可见 KB 集合。legacy 域级 run（kb_id IS NULL）不属于任何库，
+    # 对非 admin 一律不可见——它的 input_path 会把 {upload_root}/{kb_id} 暴露出去。
+    kb_scope: list[str] | None = None
+    if user.get("site_role") != "admin":
+        kb_scope = await KbDB(request.app.state.pg_pool).list_visible_kb_ids(
+            user_id=user["id"], domain=require_domain(domain),
+        )
+        if not kb_scope:
+            # 一个可见库都没有 → 空页。这里必须早退：kb_id = ANY('{}') 虽然也返回空，
+            # 但空数组参数在 psycopg 里推断不出元素类型，会直接报错。
+            return {"total": 0, "limit": limit, "offset": offset, "items": []}
 
     async with pool.connection() as conn:
         conds: list[str] = ["domain = %s"]
-        params: list[str] = [require_domain(domain)]
+        params: list[Any] = [require_domain(domain)]
         if status:
             conds.append("status = %s")
             params.append(status)
+        if kb_scope is not None:
+            conds.append("kb_id = ANY(%s)")
+            params.append(kb_scope)
         where = f"WHERE {' AND '.join(conds)}" if conds else ""
 
         count_cur = await conn.execute(
@@ -478,7 +557,7 @@ async def list_runs(
     }
 
 
-@router.get("/{run_id}")
+@router.get("/{run_id}", dependencies=[Depends(require_run_read)])
 async def get_run(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get run details."""
     pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
@@ -529,7 +608,7 @@ _WORKFLOW_NODE_STATUS_MAP: dict[str, str] = {
 }
 
 
-@router.get("/{run_id}/stages")
+@router.get("/{run_id}/stages", dependencies=[Depends(require_run_read)])
 async def get_run_stages(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get stage timeline for a run.
 
@@ -579,7 +658,7 @@ async def get_run_stages(run_id: str, request: Request, domain: str = Query(...,
     return {"run_id": run_id, "stages": rows}
 
 
-@router.get("/{run_id}/documents")
+@router.get("/{run_id}/documents", dependencies=[Depends(require_run_read)])
 async def get_run_documents(
     run_id: str,
     request: Request,
@@ -685,7 +764,7 @@ async def get_run_documents(
     }
 
 
-@router.get("/{run_id}/progress")
+@router.get("/{run_id}/progress", dependencies=[Depends(require_run_read)])
 async def get_run_progress(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get run progress — aggregated from mining_run_documents + mining_run_stage_events."""
     pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
@@ -789,7 +868,7 @@ async def get_run_progress(run_id: str, request: Request, domain: str = Query(..
     }
 
 
-@router.get("/{run_id}/documents/{doc_id}")
+@router.get("/{run_id}/documents/{doc_id}", dependencies=[Depends(require_run_read)])
 async def get_run_document(
     run_id: str, doc_id: str, request: Request,
     domain: str = Query(..., min_length=1),
@@ -831,7 +910,7 @@ async def get_run_document(
     return result
 
 
-@router.get("/{run_id}/documents/{doc_id}/stages")
+@router.get("/{run_id}/documents/{doc_id}/stages", dependencies=[Depends(require_run_read)])
 async def get_run_document_stages(
     run_id: str, doc_id: str, request: Request,
     domain: str = Query(..., min_length=1),
@@ -862,7 +941,7 @@ async def get_run_document_stages(
     return {"run_id": run_id, "document_id": doc_id, "stages": [dict(r) for r in rows]}
 
 
-@router.get("/{run_id}/documents/{doc_id}/artifacts")
+@router.get("/{run_id}/documents/{doc_id}/artifacts", dependencies=[Depends(require_run_read)])
 async def get_run_document_artifacts(
     run_id: str, doc_id: str, request: Request,
     domain: str = Query(..., min_length=1),
@@ -918,7 +997,7 @@ async def get_run_document_artifacts(
     }
 
 
-@router.get("/{run_id}/documents/{doc_id}/segments")
+@router.get("/{run_id}/documents/{doc_id}/segments", dependencies=[Depends(require_run_read)])
 async def get_run_document_segments(
     run_id: str, doc_id: str, request: Request,
     domain: str = Query(..., min_length=1),
@@ -966,7 +1045,7 @@ async def get_run_document_segments(
     }
 
 
-@router.get("/{run_id}/documents/{doc_id}/units")
+@router.get("/{run_id}/documents/{doc_id}/units", dependencies=[Depends(require_run_read)])
 async def get_run_document_units(
     run_id: str, doc_id: str, request: Request,
     domain: str = Query(..., min_length=1),
@@ -1018,7 +1097,7 @@ async def get_run_document_units(
     }
 
 
-@router.get("/{run_id}/documents/{doc_id}/relations")
+@router.get("/{run_id}/documents/{doc_id}/relations", dependencies=[Depends(require_run_read)])
 async def get_run_document_relations(
     run_id: str, doc_id: str, request: Request,
     domain: str = Query(..., min_length=1),
@@ -1071,7 +1150,7 @@ async def get_run_document_relations(
     }
 
 
-@router.get("/{run_id}/artifacts")
+@router.get("/{run_id}/artifacts", dependencies=[Depends(require_run_read)])
 async def get_run_artifacts(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get run-level artifact aggregation."""
     pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
@@ -1127,7 +1206,8 @@ async def get_run_artifacts(run_id: str, request: Request, domain: str = Query(.
     }
 
 
-@router.post("/{run_id}/cancel", response_model=CancelRunResponse)
+@router.post("/{run_id}/cancel", response_model=CancelRunResponse,
+             dependencies=[Depends(require_run_write)])
 async def cancel_run(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Cancel a running run (best-effort)."""
     pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
@@ -1161,7 +1241,7 @@ class PublishRunRequest(BaseModel):
     domain: str | None = None
 
 
-@router.post("/{run_id}/publish")
+@router.post("/{run_id}/publish", dependencies=[Depends(require_run_write)])
 async def publish_run(
     run_id: str, request: Request,
     domain: str = Query(..., min_length=1),
@@ -1184,7 +1264,7 @@ async def publish_run(
         raise HTTPException(500, f"Publish failed: {e}")
 
 
-@router.get("/{run_id}/trace")
+@router.get("/{run_id}/trace", dependencies=[Depends(require_run_read)])
 async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """B7 挖掘过程透视：在常规 run 详情之上叠加本体/图谱视角的概览。
 
@@ -1344,7 +1424,7 @@ def _is_run_resumable(
     return status == "running" and subloop_stage == "done" and finished_at is None
 
 
-@router.post("/{run_id}/resume")
+@router.post("/{run_id}/resume", dependencies=[Depends(require_run_write)])
 async def resume_run(
     run_id: str, request: Request,
     domain: str = Query(..., min_length=1),

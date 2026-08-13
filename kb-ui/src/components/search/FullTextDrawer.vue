@@ -82,7 +82,6 @@ import { useServingApi } from '@/api/serving'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import type { FullTextResult, FullTextSegment } from '@/types'
-import type { KbSummary } from '@/types/kb'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 const props = defineProps<{
@@ -93,7 +92,8 @@ const props = defineProps<{
   /** 产生这批 id 的那次检索所用的范围，下载必须复现它，否则文档会落在 scope 之外。 */
   domain?: string
   kbIds?: string[]
-  kbs?: KbSummary[]
+  /** 只用来把 kb_id 显示成名字，故取最小形状——调用方传 KbSummary 或 KbOverviewItem 都行。 */
+  kbs?: Array<{ id: string; name: string }>
 }>()
 
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>()

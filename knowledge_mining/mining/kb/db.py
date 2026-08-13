@@ -47,14 +47,30 @@ _STATUS_CASE_SQL = """CASE
     ELSE 'uploaded'
 END"""
 
-_STATUS_JOIN_SQL = """
+
+# ⚠️ document_key 不是全局唯一的：build_document_key() 产的是 doc:/{相对路径}，**不含
+# kb_id**（全局唯一的是 storage_path）。只按 document_key 关联 mining_run_documents，
+# 两个 KB 各有一个根目录 spec.pdf 时状态会互相串味——A 库挖失败，B 库那篇也显示 failed。
+# 所以经 run 补上归属维度：
+#   mr.kb_id IS NOT DISTINCT FROM d.kb_id  ——「NULL = NULL」要成立：legacy 文档
+#       （kb_id 为 NULL）该由 legacy 域级 run 决定状态，普通 = 比较会把它判成 NULL 而漏掉
+#   mr.domain = d.domain                   —— 同一文件在两个域各挖一次时再隔一层
+_RUN_DOC_JOIN_SQL = """
 LEFT JOIN LATERAL (
     SELECT r.status AS rd_status
     FROM mining_run_documents r
+    JOIN mining_runs mr ON mr.id = r.run_id
     WHERE r.document_key = d.document_key
+      AND mr.domain = d.domain
+      AND mr.kb_id IS NOT DISTINCT FROM d.kb_id
     ORDER BY r.finished_at DESC NULLS LAST, r.started_at DESC NULLS LAST, r.id DESC
     LIMIT 1
-) rs ON TRUE
+) rs ON TRUE"""
+
+# published / withdrawn 两档要查 active release，是这段里最贵的部分（每文档两次
+# release⋈snapshot 的 EXISTS）。单独拆出来，好让只关心「挖没挖成」的调用方（概览页聚合）
+# 不必付这笔钱——它每个用户登录后都要跑一次，admin 还要跑全域文档。
+_RELEASE_JOIN_SQL = """
 LEFT JOIN LATERAL (
     SELECT EXISTS (
         SELECT 1 FROM asset_publish_releases rel
@@ -71,6 +87,9 @@ LEFT JOIN LATERAL (
           AND bs.document_id = d.id AND bs.selection_status = 'removed'
     ) AS removed
 ) rm ON TRUE"""
+
+# 完整派生（六态）= 归属收敛的 run 关联 + release 关联。列表/详情用它。
+_STATUS_JOIN_SQL = _RUN_DOC_JOIN_SQL + _RELEASE_JOIN_SQL
 
 
 class KbDB:
@@ -296,6 +315,125 @@ class KbDB:
                 {"uid": user_id, "dom": domain},
             )
             return [dict(r) for r in await cur.fetchall()]
+
+    async def list_visible_kb_ids(self, *, user_id: str, domain: str) -> list[str]:
+        """域内该用户可见的 KB id 集——list_visible 的轻量版。
+
+        可见性条件与 list_visible / is_visible 逐项一致（admin 全通 / owner / public /
+        任意成员），只是不带 my_role 与 document_count 那个 COUNT 子查询。给「按可见集
+        收窄」这类调用方用（/api/runs 护栏、概览页聚合），它们只要 id 边界。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT kb.id FROM knowledge_bases kb
+                   WHERE kb.domain = %(dom)s AND kb.status = 'active'
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %(uid)s AND u.site_role = 'admin')
+                          OR kb.owner_id = %(uid)s
+                          OR kb.visibility = 'public'
+                          OR EXISTS (SELECT 1 FROM kb_members m
+                                     WHERE m.kb_id = kb.id AND m.user_id = %(uid)s))""",
+                {"uid": user_id, "dom": domain},
+            )
+            return [r["id"] for r in await cur.fetchall()]
+
+    # ------------------------------------------------------------- 概览页聚合
+    # 首页（检索入口 + 我的知识库）一次取齐所需。分成几段独立查询而不是一条巨型 SQL：
+    # 每段的分组维度不同（文档 / run / release），硬拼会互相放大行数。
+
+    async def overview_status_counts(
+        self, *, kb_ids: list[str],
+    ) -> dict[str, dict[str, int]]:
+        """按 KB 统计文档总数 / 挖掘中 / 失败。
+
+        **只回首页真正渲染的三个数**。曾想过回六态齐全，但 published/withdrawn/uploaded/
+        mined 在页面上没有渲染位，而算它们要多挂两条 release⋈snapshot 的 EXISTS
+        （_RELEASE_JOIN_SQL）——这是登录落地页，不值得。所以这里只用 _RUN_DOC_JOIN_SQL。
+        """
+        if not kb_ids:
+            return {}
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""SELECT d.kb_id,
+                           COUNT(*) AS total,
+                           COUNT(*) FILTER (
+                               WHERE rs.rd_status IN ('pending', 'processing')
+                           ) AS mining,
+                           COUNT(*) FILTER (WHERE rs.rd_status = 'failed') AS failed
+                    FROM asset_documents d
+                    {_RUN_DOC_JOIN_SQL}
+                    WHERE d.kb_id = ANY(%s)
+                    GROUP BY d.kb_id""",
+                [kb_ids],
+            )
+            return {
+                r["kb_id"]: {
+                    "total": r["total"], "mining": r["mining"], "failed": r["failed"],
+                }
+                for r in await cur.fetchall()
+            }
+
+    async def overview_run_rollup(self, *, kb_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """按 KB 汇总 run：最近一次成功挖掘时间 + 最新一条待人审 run。
+
+        `last_mined_at` 只认 `completed`：这个字段在卡片上是「最近一次成功产出知识」，
+        把 failed/cancelled 算进去会让一个反复失败的库看起来很新鲜。
+        两项合成一次扫描——都是按 kb_id 分组的 mining_runs 聚合，没有理由查两遍。
+        """
+        if not kb_ids:
+            return {}
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT kb_id,
+                          MAX(finished_at) FILTER (WHERE status = 'completed')
+                              AS last_mined_at,
+                          (ARRAY_AGG(id ORDER BY started_at DESC)
+                              FILTER (WHERE status = 'awaiting_review'))[1]
+                              AS awaiting_review_run_id
+                   FROM mining_runs
+                   WHERE kb_id = ANY(%s)
+                   GROUP BY kb_id""",
+                [kb_ids],
+            )
+            return {r["kb_id"]: dict(r) for r in await cur.fetchall()}
+
+    async def overview_recent_runs(
+        self, *, kb_ids: list[str], limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """跨 KB 的最近挖掘记录。**kb_id 必须回传**——前端要用它拼 /kb/{kbId}/run/{runId}，
+        缺了就是概览页那条指向已删除路由的死链（D1）。"""
+        if not kb_ids:
+            return []
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT r.id, r.kb_id, kb.name AS kb_name, r.status,
+                          r.total_documents, r.new_count, r.updated_count,
+                          r.started_at, r.finished_at
+                   FROM mining_runs r
+                   JOIN knowledge_bases kb ON kb.id = r.kb_id
+                   WHERE r.kb_id = ANY(%s)
+                   ORDER BY r.started_at DESC
+                   LIMIT %s""",
+                [kb_ids, limit],
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def has_active_release(self, *, domain: str) -> bool:
+        """该域有无域级 active release —— 决定检索范围选择器是否呈现「域级发布」项。
+
+        KB 挖掘 publish=False 永不产 release，纯 KB 部署下恒为 False；此时把那个选项
+        摆出来只会让人选中后撞 no_active_release（D8）。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT EXISTS (
+                       SELECT 1 FROM asset_publish_releases
+                       WHERE domain = %s AND status = 'active'
+                   ) AS present""",
+                [domain],
+            )
+            row = await cur.fetchone()
+            return bool(row and row["present"])
 
     # 允许 PATCH 更新的列白名单。值可为 None → 显式清空（SET NULL）。
     _KB_UPDATABLE_COLUMNS = {"name", "description", "visibility", "mining_workflow_id"}

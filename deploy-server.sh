@@ -3,7 +3,7 @@
 # 用法：
 #   bash deploy-server.sh                 # 加载镜像，保留已有代码和配置
 #   bash deploy-server.sh --force         # 加载镜像并覆盖代码，保留宿主机配置
-#   bash deploy-server.sh --force-config  # 覆盖 .env 和主控服务配置
+#   bash deploy-server.sh --force-config  # 用镜像覆盖主控服务配置
 #   bash deploy-server.sh --apply-config  # 保留现有文件，重建容器并校验配置
 
 set -Eeuo pipefail
@@ -144,7 +144,6 @@ preflight_ports() {
 }
 
 require_host_config() {
-    [ -f .env ] || die "宿主机缺少文件：.env"
     [ -f main_control_service/config/system/database.yaml ] || \
         die "宿主机缺少文件：main_control_service/config/system/database.yaml"
     [ -f main_control_service/config/system/llm_service.yaml ] || \
@@ -342,7 +341,7 @@ preflight_postgresql() {
     if ! output="$(check_mining_postgresql 2>&1)"; then
         echo "$output" >&2
         deployment_diagnostics
-        die "Mining 的 PostgreSQL 连接验证失败。请检查 .env 中的 PG_*，以及每个已启用领域对应的 database_url_env。"
+        die "Mining 的 PostgreSQL 连接验证失败。请检查 main_control_service/config/system/database.yaml 的 default 块，以及 domain_registry.yaml 中各领域的内联 database: 块。"
     fi
     echo "$output"
 }
@@ -398,7 +397,6 @@ start_services_in_dependency_order() {
 
 verify_mounted_configs() {
     echo "=== 正在校验宿主机与容器内的配置文件 ==="
-    verify_mounted_file .env /app/.env
     verify_mounted_file main_control_service/config/system/database.yaml /app/main_control_service/config/system/database.yaml
     verify_mounted_file main_control_service/config/system/llm_service.yaml /app/main_control_service/config/system/llm_service.yaml
     verify_mounted_file main_control_service/config/domain_registry.yaml /app/main_control_service/config/domain_registry.yaml
@@ -449,13 +447,6 @@ remove_existing_app() {
 
     if [ "$(docker ps -a --filter "name=^/${APP_CONTAINER_NAME}$" --format '{{.Names}}')" = "$APP_CONTAINER_NAME" ]; then
         docker rm -f "$APP_CONTAINER_NAME"
-    fi
-}
-
-stop_named_app_if_running() {
-    if [ "$(docker ps --filter "name=^/${APP_CONTAINER_NAME}$" --format '{{.Names}}')" = "$APP_CONTAINER_NAME" ]; then
-        echo "=== 替换挂载配置前正在停止应用容器 ==="
-        docker stop "$APP_CONTAINER_NAME" >/dev/null
     fi
 }
 
@@ -547,21 +538,6 @@ deploy_from_image() {
     cleanup_tmp_container
     docker create --name "$TMP_CONTAINER_NAME" "$IMAGE_NAME" >/dev/null
     TMP_CONTAINER_ACTIVE=true
-
-    # 除非明确指定 --force-config，否则始终保留宿主机配置。
-    if [ "$FORCE_CONFIG" = true ]; then
-        stop_named_app_if_running
-        [ ! -d .env ] || rm -rf .env
-        echo "=== 正在使用镜像内容覆盖 .env ==="
-        docker cp "$TMP_CONTAINER_NAME:/app/.env" ./.env
-    elif [ ! -f .env ]; then
-        stop_named_app_if_running
-        [ ! -d .env ] || rm -rf .env
-        echo "=== 正在从镜像创建缺失的 .env ==="
-        docker cp "$TMP_CONTAINER_NAME:/app/.env" ./.env
-    else
-        echo "=== 正在保留宿主机现有 .env ==="
-    fi
 
     validate_compose_config
     preflight_ports

@@ -76,6 +76,7 @@ async def test_upload_zip_extracts_with_directory(async_pool, upload_root):
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("dir1/x.txt", "x contents")
         zf.writestr("dir1/y.txt", "y contents")
+        zf.writestr("dir1/sub/z.txt", "z contents")
     async with await _client(async_pool) as c:
         h = kb_headers("alice")
         kb_id = (await c.post("/api/kb", json={"domain": DOMAIN, "name": "KBz"}, headers=h)).json()["id"]
@@ -86,9 +87,23 @@ async def test_upload_zip_extracts_with_directory(async_pool, upload_root):
         )
         assert r.status_code == 201, r.text
         docs = r.json()["documents"]
-        assert {d["document_name"] for d in docs} == {"x.txt", "y.txt"}
-        assert {d["directory_path"] for d in docs} == {"dir1"}
+        assert {d["document_name"] for d in docs} == {"x.txt", "y.txt", "z.txt"}
+        assert {d["directory_path"] for d in docs} == {"dir1", "dir1/sub"}
         assert all(d["document_key"].startswith("doc:/dir1/") for d in docs)
+
+        # zip 子目录必须写入 kb_folders，否则文件管理器按 path 过滤会「上传成功但列表空」
+        from knowledge_mining.mining.kb.db import KbDB
+        folders = await KbDB(async_pool).list_folders(kb_id)
+        assert {f["path"] for f in folders} == {"dir1", "dir1/sub"}
+        parent = next(f for f in folders if f["path"] == "dir1")
+        child = next(f for f in folders if f["path"] == "dir1/sub")
+        assert child["parent_id"] == parent["id"] and parent["parent_id"] is None
+
+        # 根目录列表不应出现子目录内文件；进入 dir1 可见 x/y
+        root_docs = (await c.get(f"/api/kb/{kb_id}/documents", params={"directory": ""}, headers=h)).json()
+        assert root_docs == []
+        dir1_docs = (await c.get(f"/api/kb/{kb_id}/documents", params={"directory": "dir1"}, headers=h)).json()
+        assert {d["document_name"] for d in dir1_docs} == {"x.txt", "y.txt"}
 
 
 async def test_upload_zip_with_nested_xlsx_is_discoverable(async_pool, upload_root):

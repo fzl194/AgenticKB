@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppLayout: typeof import('./src/components/layout/AppLayout.vue')['default']
     BarChart: typeof import('./src/components/charts/BarChart.vue')['default']
+    BrandAppearanceTab: typeof import('./src/components/settings/BrandAppearanceTab.vue')['default']
     CodeSyncTab: typeof import('./src/components/settings/CodeSyncTab.vue')['default']
     DomainDetailTab: typeof import('./src/components/settings/DomainDetailTab.vue')['default']
     DomainManageTab: typeof import('./src/components/settings/DomainManageTab.vue')['default']
@@ -69,6 +70,7 @@ declare module 'vue' {
     PieChart: typeof import('./src/components/charts/PieChart.vue')['default']
     PipelineFlow: typeof import('./src/components/kb/PipelineFlow.vue')['default']
     PipelineTrace: typeof import('./src/components/search/PipelineTrace.vue')['default']
+    PreprocessNotice: typeof import('./src/components/kb/PreprocessNotice.vue')['default']
     ReloadConfigTab: typeof import('./src/components/settings/ReloadConfigTab.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
@@ -79,6 +81,7 @@ declare module 'vue' {
     StatsCard: typeof import('./src/components/common/StatsCard.vue')['default']
     StatusBadge: typeof import('./src/components/common/StatusBadge.vue')['default']
     SystemConfigTab: typeof import('./src/components/settings/SystemConfigTab.vue')['default']
+    UserManagementTab: typeof import('./src/components/settings/UserManagementTab.vue')['default']
     WorkflowOperatorNodeBase: typeof import('./src/components/workflow/WorkflowOperatorNodeBase.vue')['default']
     WorkflowValidationPanel: typeof import('./src/components/mining/workflow/WorkflowValidationPanel.vue')['default']
     WorkflowVersionPreview: typeof import('./src/components/mining/workflow/WorkflowVersionPreview.vue')['default']

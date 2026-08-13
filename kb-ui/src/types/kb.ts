@@ -202,3 +202,50 @@ export interface DocumentKnowledge {
   entity_mentions?: KbDocEntityMention[]
   relations?: KbDocRelation[]
 }
+
+// ── 概览页聚合（GET /api/kb/overview）──────────────────────────────────────
+
+/** 每库状态摘要。只有首页真正渲染的三个数，见设计文档 §5.1。 */
+export interface KbStatusCounts {
+  /** 文档总数（即卡片上的「N 篇」；后端不另发 document_count，两个数迟早会不一致）。 */
+  total: number
+  mining: number
+  failed: number
+}
+
+export interface KbOverviewItem {
+  id: string
+  name: string
+  my_role: KbMyRole
+  /** 由 my_role 推导。待处理区块只列有写权限的库。 */
+  can_write: boolean
+  status_counts: KbStatusCounts
+  /** 最近一次**成功**挖掘的完成时间；没成功过为 null。已按它排序（NULLS LAST）。 */
+  last_mined_at: string | null
+  /** 有值 = 该库有 run 卡在人工审核，待处理区块据此列一条。 */
+  awaiting_review_run_id: string | null
+}
+
+/** 最近挖掘记录（跨库）。kb_id 必带——前端要用它拼 /kb/{kbId}/run/{runId}。 */
+export interface KbOverviewRun {
+  id: string
+  kb_id: string
+  kb_name: string
+  status: string
+  total_documents: number | null
+  new_count: number | null
+  updated_count: number | null
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface KbOverview {
+  /**
+   * 该域有无域级 active release。
+   * 纯 KB 部署恒 false（KB 挖掘 publish=false，永不产 release）——此时检索范围选择器
+   * 不呈现「域级发布」项，否则用户选中后必撞 no_active_release（缺陷 D8）。
+   */
+  has_active_release: boolean
+  kbs: KbOverviewItem[]
+  recent_runs: KbOverviewRun[]
+}

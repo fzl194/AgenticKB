@@ -350,6 +350,95 @@ class TestJsonRoundTrip:
 
 
 # ---------------------------------------------------------------------------
+# 7b. WP0.5 fixture coverage (pdf_digital, docx, invalid_dangling)
+# ---------------------------------------------------------------------------
+class TestFixtures:
+    """Round-trip + validate coverage for the WP0.5 fixtures.
+
+    See ``fixtures/README.md`` for the SRS scenario each fixture maps to.
+    """
+
+    @pytest.mark.parametrize(
+        "fixture_name",
+        ["simple_markdown_ir.json", "table_ir.json", "pdf_digital_ir.json", "docx_ir.json"],
+    )
+    def test_well_formed_fixture_validates(self, fixture_name):
+        raw = json.loads((FIXTURES / fixture_name).read_text(encoding="utf-8"))
+        doc = ParsedDocument.from_dict(raw)
+        result = validate(doc)
+        assert result.valid, f"{fixture_name}: {result.issues}"
+
+    def test_pdf_digital_carries_expected_shape(self):
+        """SRS §A02: pages, heading tree, paragraph bbox, table, figure."""
+        raw = json.loads((FIXTURES / "pdf_digital_ir.json").read_text(encoding="utf-8"))
+        doc = ParsedDocument.from_dict(raw)
+        # 3 page containers.
+        assert len(doc.containers) == 3
+        assert all(c.container_type == "page" for c in doc.containers)
+        # Multi-level heading tree (title -> heading L1 -> heading L2).
+        headings = [e for e in doc.elements if e.element_type == "heading"]
+        levels = {h.style.get("level") for h in headings}
+        assert {1, 2}.issubset(levels)
+        # Paragraph carries a visual_region bbox.
+        para = next(e for e in doc.elements if e.element_type == "paragraph")
+        assert para.source_spans[0].visual_region is not None
+        assert para.source_spans[0].visual_region["kind"] == "bbox"
+        # One table asset + one figure asset.
+        kinds = {a["kind"] for a in doc.to_dict()["structured_assets"].values()}
+        assert {"table", "figure"} == kinds
+        # caption_of + contains + next_in_reading_order relations present.
+        rel_types = {r.relation_type for r in doc.relations}
+        assert {"caption_of", "contains", "next_in_reading_order", "parent_of"}.issubset(rel_types)
+
+    def test_docx_carries_expected_shape(self):
+        """SRS §A04 (merged cells + table footnote) + DOCX nested lists."""
+        raw = json.loads((FIXTURES / "docx_ir.json").read_text(encoding="utf-8"))
+        doc = ParsedDocument.from_dict(raw)
+        # Nested list / list_item (two levels).
+        lists = [e for e in doc.elements if e.element_type == "list"]
+        list_levels = {l.style.get("list_level") for l in lists}
+        assert {0, 1}.issubset(list_levels)
+        # Merged cell with row_span.
+        table = doc.structured_assets["tbl-asset-00001"]
+        assert isinstance(table, TableAsset)
+        merged = [c for c in table.cells if c.row_span > 1]
+        assert len(merged) == 1
+        assert merged[0].row_span == 2
+        # Header region spans 2 rows.
+        assert table.header_regions == ((0, 1),)
+        # Footnote element + footnote_of relation.
+        footnotes = [e for e in doc.elements if e.element_type == "footnote"]
+        assert len(footnotes) == 1
+        assert "footnote_of" in {r.relation_type for r in doc.relations}
+        # Table references the footnote element.
+        assert footnotes[0].element_id in table.footnote_element_ids
+
+    def test_invalid_dangling_fixture_rejected(self):
+        """SRS §4.7: dangling relation + illegal element_type => normalization failure."""
+        raw = json.loads(
+            (FIXTURES / "invalid_dangling_ir.json").read_text(encoding="utf-8")
+        )
+        doc = ParsedDocument.from_dict(raw)
+        result = validate(doc)
+        assert not result.valid, "dangling fixture must NOT validate"
+        codes = {i.code for i in result.issues if i.level == "error"}
+        # Illegal element_type caught by jsonschema enum check.
+        assert "invalid_element_type" in codes
+        # Dangling relation target caught by referential-integrity check.
+        assert "dangling_relation" in codes
+
+    def test_invalid_fixture_round_trip_is_stable(self):
+        """Even invalid IR must load + re-serialize without data loss."""
+        raw = json.loads(
+            (FIXTURES / "invalid_dangling_ir.json").read_text(encoding="utf-8")
+        )
+        doc = ParsedDocument.from_dict(raw)
+        dumped = doc.to_dict()
+        reloaded = ParsedDocument.from_dict(dumped)
+        assert dumped == reloaded.to_dict()
+
+
+# ---------------------------------------------------------------------------
 # 8. Validation result shape
 # ---------------------------------------------------------------------------
 

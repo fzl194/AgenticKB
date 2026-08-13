@@ -1,0 +1,315 @@
+{
+  "schema_version": "0.1.0",
+  "document_snapshot_id": "snap-docx-001",
+  "parse_run_id": "run-docx-001",
+  "source_identity": {
+    "source_raw_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "parser_fingerprint": "mammoth@1.6.0",
+    "parse_ir_schema_version": "0.1.0"
+  },
+  "containers": [
+    {
+      "container_id": "sect-00001",
+      "container_type": "section",
+      "order_index": 0,
+      "name": "主文档节",
+      "text_layer_kind": "text",
+      "language": "zh",
+      "coordinate_unit": "char"
+    }
+  ],
+  "elements": [
+    {
+      "element_id": "docx-e-00001",
+      "element_type": "title",
+      "order_index": 0,
+      "text": "季度运营报告",
+      "normalized_text": "季度运营报告",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00001",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:p[1]"},
+          "raw_text": "季度运营报告"
+        }
+      ],
+      "style": {"style_id": "Title"},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.99, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "docx-e-00002",
+      "element_type": "heading",
+      "order_index": 1,
+      "parent_id": "docx-e-00001",
+      "text": "一、关键指标",
+      "normalized_text": "一、关键指标",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00002",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:p[2]"}
+        }
+      ],
+      "style": {"level": 1, "style_id": "Heading1"},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.95, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "docx-e-00003",
+      "element_type": "list",
+      "order_index": 2,
+      "parent_id": "docx-e-00002",
+      "text": "重点指标清单",
+      "normalized_text": "重点指标清单",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00003",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:p[3]"}
+        }
+      ],
+      "style": {"list_level": 0},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.9, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "docx-e-00004",
+      "element_type": "list_item",
+      "order_index": 3,
+      "parent_id": "docx-e-00003",
+      "text": "月活用户 1.2 亿，环比增长 8%",
+      "normalized_text": "月活用户 1.2 亿，环比增长 8%",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00004",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:p[4]"}
+        }
+      ],
+      "style": {"list_level": 0, "list_index": 0},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.85, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "docx-e-00005",
+      "element_type": "list_item",
+      "order_index": 4,
+      "parent_id": "docx-e-00003",
+      "text": "收入构成",
+      "normalized_text": "收入构成",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00005",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:p[5]"}
+        }
+      ],
+      "style": {"list_level": 0, "list_index": 1},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.85, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "docx-e-00006",
+      "element_type": "list",
+      "order_index": 5,
+      "parent_id": "docx-e-00005",
+      "text": "收入细分",
+      "normalized_text": "收入细分",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00006",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:p[6]"}
+        }
+      ],
+      "style": {"list_level": 1},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.9, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "docx-e-00007",
+      "element_type": "list_item",
+      "order_index": 6,
+      "parent_id": "docx-e-00006",
+      "text": "广告收入 4.5 亿",
+      "normalized_text": "广告收入 4.5 亿",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00007",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:p[7]"}
+        }
+      ],
+      "style": {"list_level": 1, "list_index": 0},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.85, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "docx-e-00008",
+      "element_type": "list_item",
+      "order_index": 7,
+      "parent_id": "docx-e-00006",
+      "text": "订阅收入 2.1 亿",
+      "normalized_text": "订阅收入 2.1 亿",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00008",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:p[8]"}
+        }
+      ],
+      "style": {"list_level": 1, "list_index": 1},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.85, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "docx-e-00009",
+      "element_type": "table",
+      "order_index": 8,
+      "parent_id": "docx-e-00002",
+      "text": "季度收入表（含合并单元格）",
+      "normalized_text": "季度收入表（含合并单元格）",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00009",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:document/w:body/w:tbl[1]"}
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.97, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {"structured_asset_id": "tbl-asset-00001"}
+    },
+    {
+      "element_id": "docx-e-00010",
+      "element_type": "footnote",
+      "order_index": 9,
+      "text": "本表数据已审计。",
+      "normalized_text": "本表数据已审计。",
+      "page_span_ids": ["sect-00001"],
+      "source_spans": [
+        {
+          "span_id": "docx-s-00010",
+          "page_id": "sect-00001",
+          "source_locator": {"kind": "ooxml", "ref": "/w:footnotes/w:footnote[1]"},
+          "native_ref": {"kind": "ooxml_footnote", "footnote_id": "1"}
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.95, "reading_order": null, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    }
+  ],
+  "relations": [
+    {
+      "source_element_id": "docx-e-00001",
+      "target_element_id": "docx-e-00002",
+      "relation_type": "parent_of",
+      "confidence": 1.0,
+      "method": "ooxml_structure_rule",
+      "provenance": {}
+    },
+    {
+      "source_element_id": "docx-e-00002",
+      "target_element_id": "docx-e-00003",
+      "relation_type": "contains",
+      "confidence": 0.95,
+      "method": "ooxml_structure_rule",
+      "provenance": {}
+    },
+    {
+      "source_element_id": "docx-e-00003",
+      "target_element_id": "docx-e-00004",
+      "relation_type": "contains",
+      "confidence": 1.0,
+      "method": "list_rule",
+      "provenance": {}
+    },
+    {
+      "source_element_id": "docx-e-00003",
+      "target_element_id": "docx-e-00005",
+      "relation_type": "contains",
+      "confidence": 1.0,
+      "method": "list_rule",
+      "provenance": {}
+    },
+    {
+      "source_element_id": "docx-e-00005",
+      "target_element_id": "docx-e-00006",
+      "relation_type": "contains",
+      "confidence": 0.9,
+      "method": "list_rule",
+      "provenance": {"rule": "nested-list"}
+    },
+    {
+      "source_element_id": "docx-e-00004",
+      "target_element_id": "docx-e-00005",
+      "relation_type": "next_in_reading_order",
+      "confidence": 1.0,
+      "method": "list_order_rule",
+      "provenance": {}
+    },
+    {
+      "source_element_id": "docx-e-00010",
+      "target_element_id": "docx-e-00009",
+      "relation_type": "footnote_of",
+      "confidence": 0.95,
+      "method": "ooxml_footnote_rule",
+      "provenance": {"footnote_id": "1"}
+    }
+  ],
+  "binary_assets": {},
+  "structured_assets": {
+    "tbl-asset-00001": {
+      "kind": "table",
+      "table_id": "tbl-asset-00001",
+      "caption_element_id": null,
+      "page_span_ids": ["sect-00001"],
+      "rows": 3,
+      "columns": 3,
+      "cells": [
+        {"row_index": 0, "column_index": 0, "row_span": 2, "column_span": 1, "text": "业务线", "is_header": true, "source_span_id": "docx-s-00009"},
+        {"row_index": 0, "column_index": 1, "text": "Q3 收入（亿）", "is_header": true, "source_span_id": "docx-s-00009"},
+        {"row_index": 0, "column_index": 2, "text": "同比", "is_header": true, "source_span_id": "docx-s-00009"},
+        {"row_index": 1, "column_index": 1, "text": "4.5", "is_header": true, "source_span_id": "docx-s-00009"},
+        {"row_index": 1, "column_index": 2, "text": "+12%", "is_header": true, "source_span_id": "docx-s-00009"},
+        {"row_index": 2, "column_index": 0, "text": "广告", "is_header": false, "source_span_id": "docx-s-00009"},
+        {"row_index": 2, "column_index": 1, "text": "4.5", "is_header": false, "source_span_id": "docx-s-00009"},
+        {"row_index": 2, "column_index": 2, "text": "+12%", "is_header": false, "source_span_id": "docx-s-00009"}
+      ],
+      "header_regions": [[0, 1]],
+      "footnote_element_ids": ["docx-e-00010"],
+      "confidence": {"text": 1.0, "layout": null, "type": 0.95, "reading_order": null, "source": "native"}
+    }
+  },
+  "diagnostics": {
+    "schema_version": "0.1.0",
+    "parser_name": "mammoth",
+    "parser_version": "1.6.0",
+    "model_versions": {},
+    "warnings": ["merged cell at [0,0] spans 2 rows"],
+    "errors": [],
+    "backend_provenance": {"adapter": "mammoth-docx"}
+  },
+  "metadata": {"source_format": "docx"}
+}

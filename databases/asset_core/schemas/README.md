@@ -54,6 +54,12 @@ active release
 | 构建视图 | `asset_builds` | 一次完整知识构建 |
 | 构建清单 | `asset_build_document_snapshots` | build 中 document -> snapshot 的选择 |
 | 发布控制 | `asset_publish_releases` | 哪个 build 当前在某个 channel 上 active |
+| 对象存储 | `asset_storage_objects` | MinIO 对象定位、hash、size、state、retention（008，SRS §8.5/§3.1A） |
+| 上传会话 | `asset_upload_sessions` | 上传状态机与幂等键（008，SRS §8.5/§3.1B） |
+| 对象引用索引 | `asset_storage_object_refs` | GC/审计加速冗余引用（008，SRS §8.5） |
+| 文件审计 | `asset_file_audit_events` | append-only 文件管理审计流（008，SRS §8.5） |
+| 存储配额 | `asset_storage_quotas` | KB 级配额与乐观并发（008，SRS §8.5） |
+| 存储副作用 outbox | `asset_storage_operations` | promote/cleanup/GC/通知（008，SRS §8.5） |
 
 ## 设计原则
 
@@ -148,3 +154,23 @@ mining run 的来源回填旧数据：唯一 domain 保留实际值，多 domain
 迁移只自动解析本次新增 domain 列后仍为 `NULL` 的历史资产。`default` 同时也是合法
 运行时 domain，因此已存在的 `domain='default'` 会原样保留；无法判定来源的非标准
 部分迁移状态需要在升级前人工审计，不能仅凭字段值自动改写。
+
+## 迁移文件索引
+
+| 文件 | 作用 |
+|---|---|
+| `001_asset_core.sqlite.sql` | SQLite 新建库基线（asset_core v1.1） |
+| `001_asset_core.sql` | Generic SQL 基线（v1.1） |
+| `002_asset_core_postgresql.sql` | PostgreSQL 新建库基线 + v1 幂等升级（v1.1） |
+| `003_asset_core_domain_isolation.sql` | PostgreSQL：domain 隔离与存量数据回填（单事务） |
+| `004_asset_snapshot_workflow_binding.sql` | snapshot 绑定 workflow_id/version/graph_hash + partial uniques |
+| `004_kb_isolation.sql` | asset_documents 增 kb_id/storage_path/directory_path/owner_id + (kb_id,document_key) 唯一 |
+| `005_kb_file_meta.sql` | asset_documents 增 file_size/modified_at |
+| `006_asset_build_kb.sql` | asset_builds 增 kb_id |
+| `007_asset_block_type_image.sql` | raw_segments/retrieval_units 的 block_type 增 image |
+| `008_object_storage_foundation.sql` | SQLite：对象存储地基新表 + asset_documents/snapshots/links 扩展（SRS §8.3/§8.3A/§8.5） |
+| `008_object_storage_foundation_postgresql.sql` | PostgreSQL 版本（与 008 对齐；JSONB/TIMESTAMPTZ/DO 块守卫） |
+
+008 为 M0 增量（ADR-0003 D-004）：只加表/列、UNIQUE/CHECK，不加 FK 硬约束、不改任何读写。
+FK、真实切换、存量回填在 M1 进行（SRS §8.8 Phase 2-4）。nullable `object_version_id`
+的唯一性经表达式索引 `COALESCE(object_version_id,'')` 归一（SRS §8.5 末段）。

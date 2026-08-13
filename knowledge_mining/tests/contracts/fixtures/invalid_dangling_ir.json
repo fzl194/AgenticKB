@@ -1,0 +1,108 @@
+{
+  "schema_version": "0.1.0",
+  "document_snapshot_id": "snap-bad-001",
+  "parse_run_id": "run-bad-001",
+  "source_identity": {
+    "source_raw_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "parser_fingerprint": "buggy-parser@0.1.0",
+    "parse_ir_schema_version": "0.1.0"
+  },
+  "containers": [
+    {
+      "container_id": "bad-page-00001",
+      "container_type": "page",
+      "order_index": 0,
+      "page_number": 1
+    }
+  ],
+  "elements": [
+    {
+      "element_id": "bad-e-00001",
+      "element_type": "paragraph",
+      "order_index": 0,
+      "text": "正常段落",
+      "normalized_text": "正常段落",
+      "page_span_ids": ["bad-page-00001"],
+      "source_spans": [
+        {
+          "span_id": "bad-s-00001",
+          "page_id": "bad-page-00001",
+          "text_range": [0, 4]
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 0.9, "layout": null, "type": null, "reading_order": null, "source": "buggy"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "bad-e-00002",
+      "element_type": "totally_made_up_type",
+      "order_index": 1,
+      "text": "非法元素类型",
+      "normalized_text": "非法元素类型",
+      "page_span_ids": ["bad-page-00001"],
+      "source_spans": [
+        {
+          "span_id": "bad-s-00002",
+          "page_id": "bad-page-00001",
+          "text_range": [0, 6]
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 0.9, "layout": null, "type": null, "reading_order": null, "source": "buggy"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "bad-e-00003",
+      "element_type": "paragraph",
+      "order_index": 2,
+      "parent_id": "bad-e-00001",
+      "text": "指向不存在父节点的段落",
+      "normalized_text": "指向不存在父节点的段落",
+      "page_span_ids": ["bad-page-00001"],
+      "source_spans": [
+        {
+          "span_id": "bad-s-00003",
+          "page_id": "bad-page-00001",
+          "text_range": [0, 11]
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 0.9, "layout": null, "type": null, "reading_order": null, "source": "buggy"},
+      "parser_annotations": {},
+      "metadata": {}
+    }
+  ],
+  "relations": [
+    {
+      "source_element_id": "bad-e-00001",
+      "target_element_id": "ghost-element-999",
+      "relation_type": "next_in_reading_order",
+      "confidence": 1.0,
+      "method": "buggy_rule",
+      "provenance": {}
+    },
+    {
+      "source_element_id": "bad-e-00001",
+      "target_element_id": "bad-e-00003",
+      "relation_type": "parent_of",
+      "confidence": 1.0,
+      "method": "buggy_rule",
+      "provenance": {}
+    }
+  ],
+  "binary_assets": {},
+  "structured_assets": {},
+  "diagnostics": {
+    "schema_version": "0.1.0",
+    "parser_name": "buggy-parser",
+    "parser_version": "0.1.0",
+    "model_versions": {},
+    "warnings": [],
+    "errors": [],
+    "backend_provenance": {}
+  },
+  "metadata": {"source_format": "pdf"}
+}

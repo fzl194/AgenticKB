@@ -78,6 +78,39 @@
 - **依据**：SRS §C00「公共端口只暴露项目类型……MinIO SDK response、S3Error、bucket 命名和凭据不得越过 adapter 边界」；§3.1A「object key 使用系统生成的不可变、无业务语义 key」；§9.5「MinIO 不可用返回可重试 `storage_unavailable`；不能伪装成 document not found」。任务书对 `put_stream` 的 `ref_or_bucket_key` 参数自相矛盾，按 SRS §3.1A 化解。
 - **SRS 覆盖情况**：SRS §C00/§3.1A 显式要求；签名细节（generator vs awaitable、无 ReadStream 类、artifact_class 复用）SRS 未规定，本决策补充。
 
+## D-014 ｜ 状态机契约：复用 storage.enums 的状态集合，新实体集合定义在 state_machines.py
+- **决策**：`contracts/state_machines.py` 是所有实体状态机的单一事实源。Upload Session / Storage Object 的合法状态集合（`VALID_UPLOAD_SESSION_STATES` / `VALID_STORAGE_OBJECT_STATES`）从 `contracts/storage/enums.py` re-export（避免双定义漂移，与 D-013 第 4 条同一原则）；新增的 Document Content / Parse Run / Snapshot Commit 状态集合在本模块首次定义。`LEGAL_TRANSITIONS: dict[str, frozenset[tuple[str,str]]]` 与 `TERMINAL_STATES: dict[str, frozenset[str]]` 严格按 SRS §9.0A–§9.5 落地，全部用 `frozenset` 不可变容器（D-001 风格）。
+- **依据**：SRS §9 给出的是状态图文本，本决策把它固化为可被 WP0.4 DDL 的 `CHECK` 约束、WP1B 编排层、WP3 校验层共同引用的 Python 常量。复用 enums.py 避免「Upload Session 合法状态在两个文件里各写一份」的漂移风险。
+- **SRS 覆盖情况**：SRS §9 直接要求；状态集合的归属（re-export vs 新建）SRS 未规定，本决策按 D-013 既定原则补充。
+
+## D-015 ｜ Parse Run 「任意非终态 → CANCELLED」用显式枚举而非通配
+- **决策**：SRS §9.2 写「（任意）→ CANCELLED」，实现层把 `CANCELLED` 的入边**显式枚举**为来自 9 个非终态的边（QUEUED/INSPECTING/PLANNED/PARSING/NORMALIZING/RECONCILING/EVALUATING/REPAIRING/FALLING_BACK），**不**采用「除终态外全部允许」的通配语义。同理 Upload Session 的 ABORTED/EXPIRED 入边也逐条列出（来自 INITIATED/UPLOADING/OBJECT_STAGED/VERIFYING）。
+- **依据**：契约层要的是「可审计的封闭集合」——通配会让新增状态时 silently 拥有 CANCELLED 入边，违背「状态只前进」与「新增状态需人工评审」的意图（SRS §9.2「状态只前进；重试创建新的 attempt event」）。显式枚举后，新增 Parse Run 状态必须同时更新本表，触发 code review。
+- **SRS 覆盖情况**：SRS §9.2 说「任意」，本决策收紧为「显式任意」；语义等价但更安全。
+
+## D-016 ｜ Storage Object 的终态只认 DELETED，事故状态不是终态
+- **决策**：`TERMINAL_STATES["storage_object"] = {"DELETED"}`，而 `QUARANTINED / MISSING / CORRUPT` **不**算终态。即 `is_terminal("storage_object", "MISSING") == False`。
+- **依据**：SRS §9.0B 明确「`MISSING/CORRUPT` 是完整性事故状态，不等价于业务删除」——事故状态可能被运维恢复（从副本重建 MISSING、修复 CORRUPT、解除 QUARANTINED），因此它们在状态机里虽无显式出边（v0.1 不建模恢复路径），但语义上「不是终态」。`DELETED` 才是唯一不可逆终态。这一区分让 `is_terminal()` 的调用方（如 Snapshot Commit 的前置校验）不会把事故对象误判为「可安全忽略」。
+- **SRS 覆盖情况**：SRS §9.0B 隐含；本决策把「事故 ≠ 终态」显式化。
+
+## D-017 ｜ nullable `object_version_id` 唯一性：表达式索引 `COALESCE(object_version_id,'')`（WP0.4）
+- **决策**：`asset_storage_objects` 的位置唯一性用**表达式唯一索引** `UNIQUE INDEX uq_asset_storage_objects_location ON asset_storage_objects(provider, bucket, object_key, COALESCE(object_version_id, ''))`，**不**用列级 `UNIQUE(provider,bucket,object_key,object_version_id)`。PG 与 SQLite 双版本一致采用此写法（SQLite 表达式索引原生支持 `COALESCE`）。
+- **依据**：SRS §8.5 末段显式要求「物理唯一约束还必须规范化 nullable `object_version_id`，避免 PostgreSQL 的 NULL 语义放过重复 current objects」。PG 列级 `UNIQUE` 中多个 NULL 互不冲突，会让「同 provider/bucket/key + 两个 NULL version」（即两份 current object）并存；`COALESCE(NULL,'')` 把 NULL 归一为 `''`，使两份 current object 判重。`''` 不是合法 S3 version id（AWS/MinIO version id 为固定长度 hex），不会与真实 version 冲突。
+- **SRS 覆盖情况**：SRS §8.5 末段直接要求；具体归一值 `''` 是本决策补充。
+
+## D-018 ｜ 新列/新约束的「立即 vs M1 推迟」边界：UNIQUE/CHECK 立即，FK 推迟（WP0.4）
+- **决策**：008 迁移中——
+  - **立即生效**（M0 加）：所有新表/新列、所有 `UNIQUE`（含 partial / 表达式）、所有 `CHECK`（枚举值、`>= 0` 范围、乐观锁 `version >= 1`）。
+  - **M1 推迟**（注释标注 `M1 补 FK`）：所有指向 `asset_storage_objects.id` / `knowledge_bases.id` / `kb_folders.id` / `kb_users.id` 的外键。
+  - **partial unique 的幂等守卫**：`uq_asset_snapshot_fingerprint`（PG 版）用 DO 块「先查重复行再建索引」守卫，沿用 004 `asset_snapshot_workflow_binding.sql` 既有风格——`CREATE UNIQUE INDEX IF NOT EXISTS` 只查索引是否存在、不查数据是否干净，存量重复行会让建索引撞 `unique_violation` 而失败；有重复时跳过（系统仍可运行，应用层 upsert 仍去重），待清理后再强约束。
+- **依据**：D-004「M0 只加表/列、不改读写」；FK 在存量数据未回填时会拒绝（如 `asset_documents.storage_object_id` 现在全为 NULL，但指向的 storage object 尚未创建，硬 FK 会让 M1 回填事务处处受阻）。UNIQUE/CHECK 不依赖存量数据存在性，可安全立即加。partial unique 守卫风格与 004 一致，避免重复造轮子。
+- **SRS 覆盖情况**：SRS §8.5「owner 表须各自持有真实 FK」要求 FK 存在，但未规定里程碑；本决策把 FK 放 M1（与 SRS §8.8 Phase 2 回填对齐），M0 只准备结构。
+
+## D-019 ｜ SQLite 与 PG 的 `ADD COLUMN` 幂等性差异：DDL 写 PG 风格，SQLite 经测试加载器降级（WP0.4）
+- **决策**：008 两份 DDL **都**写 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`（PG 扩展语法，表达幂等意图、作为单一事实源）；SQLite 版本因 SQLite 不支持 `ADD COLUMN IF NOT EXISTS`（实测 `near "EXISTS": syntax error`），由**契约测试加载器**（`test_storage_ddl._load_schema`）在执行前用 `pg_schema._split_ddl` 拆句、按 `PRAGMA table_info` 检查列存在性、剥离 `IF NOT EXISTS` 后回放。这是**测试期兼容手段**，不污染 DDL 文件本身——生产 SQLite 库（开发期本地库）按 001 baseline 一次性建库、不在运行库上重跑增量；真实增量迁移只在 PG 上发生（`pg_schema.py` 执行链）。
+- **依据**：项目既有约定是「PG 迁移幂等（DO 块守卫）+ SQLite baseline 一次性建库」；`005_kb_file_meta.sql` 等存量迁移也用 `ADD COLUMN IF NOT EXISTS` 但实际只在 PG 执行。SQLite 文件存在的目的是契约测试 + 开发期 `:memory:` / 本地库基线，不在已迁移的 SQLite 库上重跑。把 SQLite 兼容逻辑放测试加载器而非 DDL，保持两份 DDL 文本对齐、可读、可 diff（D-003 双版本一致）。
+- **SRS 覆盖情况**：SRS 未规定 SQLite 兼容策略；本决策为测试可执行性的实现细节。
+
 ---
 
-> 后续决策按 D-014… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
+> 后续决策按 D-020… 追加。每个里程碑结束在对应交付报告中引用本日志条目。

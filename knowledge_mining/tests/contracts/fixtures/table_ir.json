@@ -1,0 +1,107 @@
+{
+  "schema_version": "0.1.0",
+  "document_snapshot_id": "snap-table-001",
+  "parse_run_id": "run-parse-002",
+  "source_identity": {
+    "source_raw_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "parser_fingerprint": "docling@2.0.0",
+    "parse_ir_schema_version": "0.1.0"
+  },
+  "containers": [
+    {
+      "container_id": "page-e-00001",
+      "container_type": "page",
+      "order_index": 0,
+      "page_number": 48,
+      "width": 595.0,
+      "height": 842.0,
+      "coordinate_unit": "pt",
+      "text_layer_kind": "text",
+      "language": "zh"
+    }
+  ],
+  "elements": [
+    {
+      "element_id": "tbl-e-00001",
+      "element_type": "table",
+      "order_index": 0,
+      "text": "告警码表",
+      "normalized_text": "告警码表",
+      "page_span_ids": ["page-e-00001"],
+      "source_spans": [
+        {
+          "span_id": "tbl-s-00001",
+          "page_id": "page-e-00001",
+          "visual_region": {"kind": "bbox", "x": 72.0, "y": 120.0, "w": 450.0, "h": 80.0}
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 0.98, "layout": 0.9, "type": 0.95, "reading_order": 0.97, "source": "docling"},
+      "parser_annotations": {},
+      "metadata": {"structured_asset_id": "tbl-asset-00001"}
+    },
+    {
+      "element_id": "cap-e-00001",
+      "element_type": "caption",
+      "order_index": 1,
+      "text": "表1 告警码与处理建议",
+      "normalized_text": "表1 告警码与处理建议",
+      "page_span_ids": ["page-e-00001"],
+      "source_spans": [
+        {
+          "span_id": "cap-s-00001",
+          "page_id": "page-e-00001",
+          "visual_region": {"kind": "bbox", "x": 72.0, "y": 100.0, "w": 300.0, "h": 18.0}
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 0.99, "layout": null, "type": 0.9, "reading_order": 1.0, "source": "docling"},
+      "parser_annotations": {},
+      "metadata": {}
+    }
+  ],
+  "relations": [
+    {
+      "source_element_id": "cap-e-00001",
+      "target_element_id": "tbl-e-00001",
+      "relation_type": "caption_of",
+      "confidence": 0.95,
+      "method": "layout_rule",
+      "provenance": {"rule": "caption-above-table"}
+    }
+  ],
+  "binary_assets": {},
+  "structured_assets": {
+    "tbl-asset-00001": {
+      "kind": "table",
+      "table_id": "tbl-asset-00001",
+      "caption_element_id": "cap-e-00001",
+      "page_span_ids": ["page-e-00001"],
+      "rows": 3,
+      "columns": 3,
+      "cells": [
+        {"row_index": 0, "column_index": 0, "row_span": 1, "column_span": 1, "text": "告警码", "is_header": true, "source_span_id": "tbl-s-00001"},
+        {"row_index": 0, "column_index": 1, "row_span": 1, "column_span": 1, "text": "原因", "is_header": true, "source_span_id": "tbl-s-00001"},
+        {"row_index": 0, "column_index": 2, "row_span": 1, "column_span": 1, "text": "处理建议", "is_header": true, "source_span_id": "tbl-s-00001"},
+        {"row_index": 1, "column_index": 0, "row_span": 1, "column_span": 1, "text": "ALM-001", "is_header": false, "source_span_id": "tbl-s-00001"},
+        {"row_index": 1, "column_index": 1, "row_span": 1, "column_span": 2, "text": "链路中断，合并单元格", "is_header": false, "source_span_id": "tbl-s-00001"},
+        {"row_index": 2, "column_index": 0, "row_span": 1, "column_span": 1, "text": "ALM-002", "is_header": false, "source_span_id": "tbl-s-00001"},
+        {"row_index": 2, "column_index": 1, "row_span": 1, "column_span": 1, "text": "电源故障", "is_header": false, "source_span_id": "tbl-s-00001"},
+        {"row_index": 2, "column_index": 2, "row_span": 1, "column_span": 1, "text": "更换电源模块", "is_header": false, "source_span_id": "tbl-s-00001"}
+      ],
+      "header_regions": [[0, 0]],
+      "footnote_element_ids": [],
+      "confidence": {"text": 0.97, "layout": 0.9, "type": 0.95, "reading_order": null, "source": "docling"}
+    }
+  },
+  "diagnostics": {
+    "schema_version": "0.1.0",
+    "parser_name": "docling",
+    "parser_version": "2.0.0",
+    "model_versions": {"layout": "docling-layout-v1"},
+    "warnings": ["2 cells merged"],
+    "errors": [],
+    "backend_provenance": {"adapter": "docling"}
+  },
+  "metadata": {"source_format": "pdf"}
+}

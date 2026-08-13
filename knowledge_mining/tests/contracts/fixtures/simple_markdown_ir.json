@@ -1,0 +1,115 @@
+{
+  "schema_version": "0.1.0",
+  "document_snapshot_id": "snap-md-001",
+  "parse_run_id": "run-parse-001",
+  "source_identity": {
+    "source_raw_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "parser_fingerprint": "legacy-md@1.0.0",
+    "parse_ir_schema_version": "0.1.0"
+  },
+  "containers": [
+    {
+      "container_id": "doc-e-00000",
+      "container_type": "dom_document",
+      "order_index": 0,
+      "name": "device-alert-handbook.md",
+      "text_layer_kind": "text",
+      "language": "zh",
+      "coordinate_unit": "char"
+    }
+  ],
+  "elements": [
+    {
+      "element_id": "doc-e-00001",
+      "element_type": "title",
+      "order_index": 0,
+      "text": "设备告警处理手册",
+      "normalized_text": "设备告警处理手册",
+      "page_span_ids": ["doc-e-00000"],
+      "source_spans": [
+        {
+          "span_id": "doc-s-00001",
+          "page_id": "doc-e-00000",
+          "text_range": [0, 9],
+          "source_locator": {"kind": "line_range", "line_start": 0, "line_end": 0}
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.99, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "doc-e-00002",
+      "element_type": "heading",
+      "parent_id": "doc-e-00001",
+      "order_index": 1,
+      "text": "概述",
+      "normalized_text": "概述",
+      "page_span_ids": ["doc-e-00000"],
+      "source_spans": [
+        {
+          "span_id": "doc-s-00002",
+          "page_id": "doc-e-00000",
+          "text_range": [0, 2],
+          "source_locator": {"kind": "line_range", "line_start": 2, "line_end": 2}
+        }
+      ],
+      "style": {"level": 1},
+      "confidence": {"text": 1.0, "layout": null, "type": 0.95, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    },
+    {
+      "element_id": "doc-e-00003",
+      "element_type": "paragraph",
+      "parent_id": "doc-e-00002",
+      "order_index": 2,
+      "text": "本手册描述告警处理流程。",
+      "normalized_text": "本手册描述告警处理流程。",
+      "page_span_ids": ["doc-e-00000"],
+      "source_spans": [
+        {
+          "span_id": "doc-s-00003",
+          "page_id": "doc-e-00000",
+          "text_range": [0, 12],
+          "source_locator": {"kind": "line_range", "line_start": 3, "line_end": 3}
+        }
+      ],
+      "style": {},
+      "confidence": {"text": 1.0, "layout": null, "type": null, "reading_order": 1.0, "source": "native"},
+      "parser_annotations": {},
+      "metadata": {}
+    }
+  ],
+  "relations": [
+    {
+      "source_element_id": "doc-e-00001",
+      "target_element_id": "doc-e-00002",
+      "relation_type": "parent_of",
+      "confidence": 1.0,
+      "method": "structure_rule",
+      "provenance": {"rule": "heading-tree"}
+    },
+    {
+      "source_element_id": "doc-e-00002",
+      "target_element_id": "doc-e-00003",
+      "relation_type": "next_in_reading_order",
+      "confidence": 1.0,
+      "method": "order_rule",
+      "provenance": {}
+    }
+  ],
+  "binary_assets": {},
+  "structured_assets": {},
+  "diagnostics": {
+    "schema_version": "0.1.0",
+    "parser_name": "legacy-markdown",
+    "parser_version": "1.0.0",
+    "model_versions": {},
+    "warnings": [],
+    "errors": [],
+    "backend_provenance": {"adapter": "legacy-md"}
+  },
+  "metadata": {"source_format": "markdown"}
+}

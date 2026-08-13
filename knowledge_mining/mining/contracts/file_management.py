@@ -176,6 +176,28 @@ class DocumentCurrentContent:
 
 
 @dataclass(frozen=True)
+class DocumentRow:
+    """Full row of ``asset_documents`` needed by the file-management service.
+
+    Carries the directory-display fields (``kb_id`` / ``folder_id`` /
+    ``document_name`` / ``deleted_at``) that the slim
+    :class:`DocumentCurrentContent` pointer intentionally omits. M1.3
+    ``FileManagementService`` reads/writes these for list / rename / move /
+    soft-delete / restore (SRS §4.3A operation semantics table). Read
+    permission enforcement stays in the API layer (``router``).
+    """
+
+    document_id: str
+    kb_id: str
+    folder_id: str | None
+    document_name: str | None
+    storage_object_id: str | None
+    source_raw_hash: str | None
+    content_revision: int
+    deleted_at: str | None = None
+
+
+@dataclass(frozen=True)
 class FileAuditEvent:
     """Append-only audit row in ``asset_file_audit_events`` (SRS §8.5).
 
@@ -360,6 +382,61 @@ class DocumentCurrentContentRepository(Protocol):
         """Flag that the current content is being re-parsed (lifecycle hint)."""
         ...
 
+    # -- M1.3 directory-management methods (list/rename/move/soft_delete/restore)
+    # These operate on the directory-display columns of ``asset_documents``
+    # and never touch the bytes (SRS §4.3A). Added by M1.3 ``FileManagementService``.
+
+    async def get_row(self, document_id: str) -> DocumentRow | None:
+        """Return the full directory row for ``document_id``, or None.
+
+        Unlike :meth:`get`, this returns the row even when the current-content
+        pointer is NULL (e.g. freshly soft-deleted-but-restorable state).
+        ``deleted_at`` is populated so the caller can distinguish soft-deleted
+        rows.
+        """
+        ...
+
+    async def list_in_kb(
+        self,
+        kb_id: str,
+        *,
+        folder_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> list[DocumentRow]:
+        """List documents in a KB, optionally filtered by folder.
+
+        Soft-deleted rows (``deleted_at IS NOT NULL``) are hidden unless
+        ``include_deleted=True`` (SRS §4.3A).
+        """
+        ...
+
+    async def rename(
+        self, document_id: str, new_name: str
+    ) -> DocumentRow:
+        """Update ``document_name`` only (SRS §4.3A rename — no object change)."""
+        ...
+
+    async def move(
+        self, document_id: str, target_folder_id: str | None
+    ) -> DocumentRow:
+        """Update ``folder_id`` only (SRS §4.3A move — no object change).
+
+        ``target_folder_id=None`` moves the document to the KB root.
+        """
+        ...
+
+    async def set_deleted(self, document_id: str) -> DocumentRow:
+        """Soft-delete: stamp ``deleted_at = now`` (SRS §4.3A).
+
+        Does NOT delete the storage object — still-referenced objects are only
+        physically reclaimed by M1 GC (SRS §8.6).
+        """
+        ...
+
+    async def clear_deleted(self, document_id: str) -> DocumentRow:
+        """Restore: clear ``deleted_at`` (SRS §4.3A restore)."""
+        ...
+
 
 @runtime_checkable
 class FileAuditRepository(Protocol):
@@ -450,6 +527,7 @@ __all__ = [
     "StorageObjectRecord",
     "UploadSessionRecord",
     "DocumentCurrentContent",
+    "DocumentRow",
     "FileAuditEvent",
     "QuotaRecord",
     "CommitResult",

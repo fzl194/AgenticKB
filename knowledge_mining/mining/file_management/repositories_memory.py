@@ -23,6 +23,7 @@ from typing import Any
 from knowledge_mining.mining.contracts.file_management import (
     DocumentCurrentContent,
     DocumentRevisionConflict,
+    DocumentRow,
     FileAuditEvent,
     QuotaExceeded,
     QuotaRecord,
@@ -241,6 +242,71 @@ class MemoryDocumentCurrentContentRepository:
         row = self._docs.get(document_id)
         if row is not None:
             row["outdated"] = True
+
+    # -- M1.3 directory-management methods (list/rename/move/soft_delete/restore)
+
+    @staticmethod
+    def _to_row(doc_id: str, row: dict[str, Any]) -> DocumentRow:
+        return DocumentRow(
+            document_id=doc_id,
+            kb_id=row["kb_id"],
+            folder_id=row.get("folder_id"),
+            document_name=row.get("document_name"),
+            storage_object_id=row.get("storage_object_id"),
+            source_raw_hash=row.get("source_raw_hash"),
+            content_revision=int(row.get("content_revision", 0)),
+            deleted_at=row.get("deleted_at"),
+        )
+
+    async def get_row(self, document_id: str) -> DocumentRow | None:
+        row = self._docs.get(document_id)
+        return self._to_row(document_id, row) if row is not None else None
+
+    async def list_in_kb(
+        self,
+        kb_id: str,
+        *,
+        folder_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> list[DocumentRow]:
+        out: list[DocumentRow] = []
+        for doc_id, row in self._docs.items():
+            if row.get("kb_id") != kb_id:
+                continue
+            if folder_id is not None and row.get("folder_id") != folder_id:
+                continue
+            if not include_deleted and row.get("deleted_at") is not None:
+                continue
+            out.append(self._to_row(doc_id, row))
+        return out
+
+    async def rename(self, document_id: str, new_name: str) -> DocumentRow:
+        row = self._require_row(document_id)
+        row["document_name"] = new_name
+        return self._to_row(document_id, row)
+
+    async def move(
+        self, document_id: str, target_folder_id: str | None
+    ) -> DocumentRow:
+        row = self._require_row(document_id)
+        row["folder_id"] = target_folder_id
+        return self._to_row(document_id, row)
+
+    async def set_deleted(self, document_id: str) -> DocumentRow:
+        row = self._require_row(document_id)
+        row["deleted_at"] = _utcnow()
+        return self._to_row(document_id, row)
+
+    async def clear_deleted(self, document_id: str) -> DocumentRow:
+        row = self._require_row(document_id)
+        row["deleted_at"] = None
+        return self._to_row(document_id, row)
+
+    def _require_row(self, document_id: str) -> dict[str, Any]:
+        row = self._docs.get(document_id)
+        if row is None:
+            raise KeyError(f"document not found: {document_id}")
+        return row
 
 
 class MemoryFileAuditRepository:

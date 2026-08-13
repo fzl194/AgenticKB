@@ -41,6 +41,7 @@ from psycopg.rows import dict_row
 from knowledge_mining.mining.contracts.file_management import (
     DocumentCurrentContent,
     DocumentRevisionConflict,
+    DocumentRow,
     FileAuditEvent,
     QuotaExceeded,
     QuotaRecord,
@@ -108,6 +109,20 @@ def _document_from_row(r: dict[str, Any]) -> DocumentCurrentContent:
         source_raw_hash=r["source_raw_hash"],
         content_revision=r["content_revision"],
         content_updated_at=_iso(r.get("content_updated_at")),
+    )
+
+
+def _document_row_from_row(r: dict[str, Any]) -> DocumentRow:
+    """Full ``asset_documents`` row -> :class:`DocumentRow` (M1.3)."""
+    return DocumentRow(
+        document_id=r["id"],
+        kb_id=r["kb_id"],
+        folder_id=r.get("folder_id"),
+        document_name=r.get("document_name"),
+        storage_object_id=r.get("storage_object_id"),
+        source_raw_hash=r.get("source_raw_hash"),
+        content_revision=int(r.get("content_revision") or 0),
+        deleted_at=_iso(r.get("deleted_at")) or None,
     )
 
 
@@ -410,6 +425,82 @@ class PgDocumentCurrentContentRepository:
     async def mark_outdated(self, document_id: str) -> None:
         # Lifecycle hint only; no dedicated column yet. No-op for v1.
         return
+
+    # -- M1.3 directory-management methods (list/rename/move/soft_delete/restore)
+
+    async def get_row(self, document_id: str) -> DocumentRow | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, kb_id, folder_id, document_name, storage_object_id,
+                          source_raw_hash, content_revision, deleted_at
+                   FROM asset_documents WHERE id = %s""",
+                [document_id],
+            )
+            row = await cur.fetchone()
+            return _document_row_from_row(dict(row)) if row else None
+
+    async def list_in_kb(
+        self,
+        kb_id: str,
+        *,
+        folder_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> list[DocumentRow]:
+        sql = (
+            "SELECT id, kb_id, folder_id, document_name, storage_object_id, "
+            "source_raw_hash, content_revision, deleted_at "
+            "FROM asset_documents WHERE kb_id = %s"
+        )
+        params: list[Any] = [kb_id]
+        if folder_id is not None:
+            sql += " AND folder_id IS NOT DISTINCT FROM %s"
+            params.append(folder_id)
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        sql += " ORDER BY document_name NULLS LAST, id"
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(sql, params)
+            return [_document_row_from_row(dict(r)) for r in await cur.fetchall()]
+
+    async def rename(self, document_id: str, new_name: str) -> DocumentRow:
+        return await self._update_row(
+            "UPDATE asset_documents SET document_name = %s WHERE id = %s",
+            [new_name, document_id],
+            document_id,
+        )
+
+    async def move(
+        self, document_id: str, target_folder_id: str | None
+    ) -> DocumentRow:
+        return await self._update_row(
+            "UPDATE asset_documents SET folder_id = %s WHERE id = %s",
+            [target_folder_id, document_id],
+            document_id,
+        )
+
+    async def set_deleted(self, document_id: str) -> DocumentRow:
+        return await self._update_row(
+            "UPDATE asset_documents SET deleted_at = %s WHERE id = %s",
+            [_utcnow(), document_id],
+            document_id,
+        )
+
+    async def clear_deleted(self, document_id: str) -> DocumentRow:
+        return await self._update_row(
+            "UPDATE asset_documents SET deleted_at = NULL WHERE id = %s",
+            [document_id],
+            document_id,
+        )
+
+    async def _update_row(
+        self, sql: str, params: list[Any], document_id: str
+    ) -> DocumentRow:
+        async with self._pool.connection() as conn:
+            await conn.execute(sql, params)
+        row = await self.get_row(document_id)
+        if row is None:
+            raise KeyError(f"document not found: {document_id}")
+        return row
 
 
 # ---------------------------------------------------------------------------

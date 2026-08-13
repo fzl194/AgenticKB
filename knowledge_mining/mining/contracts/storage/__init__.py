@@ -10,7 +10,8 @@ implements ``ObjectStorePort``; tests use an in-memory ``FakeObjectStore``
 References:
 - SRS §C00 (MinIO Object Storage Foundation)
 - SRS §3.1A (Storage Object), §3.1B (Upload Session), §9.0A/B (state machines)
-- ADR-0003 D-002 (dual adapter), D-006 (Fake for tests), D-007 (tradeoffs)
+- ADR-0003 D-002 (dual adapter), D-006 (Fake for tests), D-007 (tradeoffs),
+  D-020 (Port changed to ObjectLocation addressing, M1)
 """
 from __future__ import annotations
 
@@ -32,11 +33,9 @@ from knowledge_mining.mining.contracts.storage.errors import (
     StorageObjectMissing,
     StorageUnavailable,
 )
-from knowledge_mining.mining.contracts.storage.port import (
-    ObjectStorePort,
-    SourceArtifactReader,
-)
+from knowledge_mining.mining.contracts.storage.port import ObjectStorePort
 from knowledge_mining.mining.contracts.storage.types import (
+    ObjectLocation,
     ObjectRef,
     ObjectStat,
     PartETag,
@@ -49,8 +48,8 @@ from knowledge_mining.mining.contracts.storage.types import (
 __all__ = [
     # Port
     "ObjectStorePort",
-    "SourceArtifactReader",
     # Types
+    "ObjectLocation",
     "ObjectRef",
     "ObjectStat",
     "PartETag",

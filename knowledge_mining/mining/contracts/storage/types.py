@@ -1,15 +1,25 @@
-"""Frozen dataclasses for the Object Store contract (WP0.3).
+"""Frozen dataclasses for the Object Store contract (WP0.3, revised D-020 M1).
 
 All types are pure-stdlib frozen dataclasses, consistent with
 ``contracts/models.py``. They carry NO long-term credentials and NO MinIO SDK
-types (SRS §C00): ``ObjectRef`` / ``ObjectStat`` expose only the business
-identity and observability metadata an upstream layer needs.
+types (SRS §C00): ``ObjectLocation`` / ``ObjectStat`` expose only the addressing
+and observability metadata an upstream layer needs.
+
+Identity model (ADR-0003 D-020, supersedes D-013 #1):
+  - The Port addresses object bytes by ``ObjectLocation(bucket, object_key,
+    version_id?)`` — the native S3/MinIO addressing model. The project business
+    identity ``storage_object_id`` is owned by the Repository (M1.2 / WP1B) and
+    backed by the PG ``asset_storage_objects`` registry; the Port no longer
+    knows it.
+  - ``ObjectRef`` is retained for business-layer use (carries the business id)
+    but the Port does not use it for addressing.
 
 References:
-- SRS §3.1A (Storage Object minimum info)
+- SRS §3.1A (Storage Object minimum info, key strategy)
 - SRS §3.1B (Upload Session)
 - SRS §C00 (public port exposes only project types)
 - ADR-0003 D-001 (frozen dataclass + Protocol, no Pydantic)
+- ADR-0003 D-020 (Port changed to ObjectLocation addressing, M1)
 """
 from __future__ import annotations
 
@@ -17,19 +27,37 @@ from dataclasses import dataclass, field
 
 
 # ---------------------------------------------------------------------------
-# Object identity (SRS §3.1A)
+# Object location & identity (SRS §3.1A, D-020)
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ObjectLocation:
+    """Physical address of an object's bytes in the store (SRS §3.1A, D-020).
+
+    This is the native S3/MinIO addressing triple. It is the ONLY key the
+    ``ObjectStorePort`` byte operations accept. The business identity
+    ``storage_object_id`` lives one layer up (Repository -> PG registry) and is
+    NOT part of location.
+
+    ``version_id`` is the store's operational versioning (S3 object version),
+    NOT a document business revision. ``None`` means the current version.
+    """
+
+    bucket: str
+    object_key: str
+    version_id: str | None = None
 
 
 @dataclass(frozen=True)
 class ObjectRef:
     """Business-facing pointer to a single immutable object.
 
-    Carries only what an upstream layer needs to *name* the object — never the
-    long-term credentials needed to *read* it. ``object_key`` is the
-    system-generated immutable key with no business semantics (SRS §3.1A);
-    ``object_version_id`` is MinIO's operational versioning and is NOT exposed
-    to users as a document version.
+    Carries the project business identity (``storage_object_id``) plus the
+    physical ``ObjectLocation`` so upstream layers can name the object without
+    re-resolving through the Repository. Used by the business/parse layer; the
+    ``ObjectStorePort`` itself does NOT take this type — it takes
+    ``ObjectLocation`` directly (D-020).
     """
 
     storage_object_id: str
@@ -41,9 +69,15 @@ class ObjectRef:
 
 @dataclass(frozen=True)
 class ObjectStat:
-    """Stat response — object metadata, no bytes (SRS §3.1A)."""
+    """Stat response — object metadata, no bytes (SRS §3.1A).
 
-    storage_object_id: str
+    After D-020 the Port no longer carries ``storage_object_id``; callers that
+    need the business id already know it (they supplied the location). Stat is
+    keyed by the location that was probed.
+    """
+
+    bucket: str
+    object_key: str
     size: int
     sha256: str | None
     etag: str | None = None
@@ -76,14 +110,13 @@ class PutOptions:
 
 @dataclass(frozen=True)
 class PutResult:
-    """Result of a successful put/copy/multipart-complete.
+    """Result of a successful put/copy/multipart-complete (D-020).
 
     ``sha256`` is the authoritative content checksum computed server-side
-    (SRS §3.1A). ``storage_object_id`` is the new business identity assigned
-    by the adapter.
+    (SRS §3.1A). The business identity ``storage_object_id`` is intentionally
+    absent — it is assigned by the Repository (M1.2), not the store adapter.
     """
 
-    storage_object_id: str
     version_id: str | None
     etag: str | None
     sha256: str
@@ -97,17 +130,16 @@ class PutResult:
 
 @dataclass(frozen=True)
 class UploadTicket:
-    """Handle for a resumable multipart upload.
+    """Handle for a resumable multipart upload (D-020).
 
-    ``storage_object_id`` is empty until the upload completes and a Storage
-    Object is materialized. ``presigned_part_urls`` may be precomputed so
-    clients upload parts directly to the object store.
+    ``location`` is the target ``ObjectLocation`` the caller chose at
+    ``initiate_multipart`` time; the object is not yet materialized there until
+    ``complete_multipart`` succeeds. ``presigned_part_urls`` may be precomputed
+    so clients upload parts directly to the object store.
     """
 
     upload_id: str
-    storage_object_id: str
-    bucket: str
-    object_key: str
+    location: ObjectLocation
     parts_expected: int | None = None
     presigned_part_urls: tuple[str, ...] = ()
 
@@ -121,27 +153,27 @@ class PartETag:
 
 
 # ---------------------------------------------------------------------------
-# Presigned access (SRS §C00)
+# Presigned access (SRS §C00, D-020)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class PresignedAccess:
-    """A short-lived signed URL granting GET or PUT on a single object.
+    """A short-lived signed URL granting GET or PUT on a single object (D-020).
 
-    For ``presign_put`` the object does not exist yet, so
-    ``storage_object_id`` is empty; for ``presign_get`` it identifies the
-    existing object.
+    ``location`` is the object the URL targets — for ``presign_put`` the object
+    does not exist yet, but the caller has still chosen its
+    ``(bucket, object_key)``.
     """
 
     method: str  # GET | PUT  (see enums.VALID_PRESIGN_METHODS)
     url: str
     expires_in_seconds: int
-    storage_object_id: str
-    object_key: str
+    location: ObjectLocation
 
 
 __all__ = [
+    "ObjectLocation",
     "ObjectRef",
     "ObjectStat",
     "PartETag",

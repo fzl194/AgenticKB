@@ -111,6 +111,30 @@
 - **依据**：项目既有约定是「PG 迁移幂等（DO 块守卫）+ SQLite baseline 一次性建库」；`005_kb_file_meta.sql` 等存量迁移也用 `ADD COLUMN IF NOT EXISTS` 但实际只在 PG 执行。SQLite 文件存在的目的是契约测试 + 开发期 `:memory:` / 本地库基线，不在已迁移的 SQLite 库上重跑。把 SQLite 兼容逻辑放测试加载器而非 DDL，保持两份 DDL 文本对齐、可读、可 diff（D-003 双版本一致）。
 - **SRS 覆盖情况**：SRS 未规定 SQLite 兼容策略；本决策为测试可执行性的实现细节。
 
+## D-020 ｜ ObjectStorePort 改为 location 寻址（取代 D-013 第 1 条）— M1 落地时发现
+- **决策**：M1.1 实现 adapter 时发现，WP0.3 让 `ObjectStorePort` 以 `storage_object_id` 寻址（put/get/stat/delete）在 MinIO 上不可行——S3/MinIO 原生按 `(bucket, object_key, version_id)` 寻址，无法凭项目自有的 `storage_object_id` 反查对象，除非 adapter 自带注册表；而「注册表放在 adapter 内」对 MinIO 不可扩展（单 JSON 索引对象有并发读改写竞争）。故把 Port 的字节操作改为按 `ObjectLocation(bucket, object_key, version_id?)` 寻址：
+  - `put_stream(location, stream, options) -> PutResult`（caller——即 Repository——按 SRS §3.1A key 策略选 location）
+  - `get_stream / stat / delete / head_exists / copy / presign_get / presign_put / initiate_multipart(location,...)` 全部按 location
+  - `PutResult` 去掉 `storage_object_id`，保留 `sha256/size/etag/version_id`
+  - **业务身份 `storage_object_id`（PG `asset_storage_objects.id`）由 Repository（WP1B/M1.2）持有**，Port 不再认识它
+  - `SourceArtifactReader`（按 `storage_object_id` 寻址）从 ObjectStorePort 移出，改在 M1.2/WP1D 由「Repository 解析 id→location + ObjectStore 取字节」组合实现
+- **依据**：S3/MinIO 原生寻址模型；SRS §3.1A「object key 系统生成、无业务语义」（key 由 caller 选，符合）；SRS §8.5「asset_storage_objects 是对象引用清单」（即 PG 才是 id→location 注册表，不是 adapter）。D-013 第 1 条「adapter 生成 storage_object_id」被本条取代。
+- **SRS 覆盖情况**：SRS §C00 未规定 Port 寻址键；本决策按 S3 模型补全，使 MinIO adapter 无需自带注册表。
+- **影响**：需修订 WP0.3 的 `contracts/storage/port.py`、`types.py`、`test_object_store_port.py`（M1.1 一并完成），WP0.3 已提交的 16 个测试改写为 location 寻址。
+
+## D-021 ｜ M1.1 Object Store adapter 实现取舍（Fake + MinIO + factory）— 补 D-020 之外
+- **决策**：M1.1 落地两 adapter（`mining/infra/object_store/`），在 D-020（location 寻址）之外补以下取舍：
+  1. **FakeObjectStore 为文件系统后端、跨实例持久**（D-002 落地）。对象存 `{root}/{bucket}/{object_key}`、sidecar meta 存 `{...}.meta.json`（sha256/size/etag/mime/artifact_class/created_at）。put 写 `.tmp` 后 `os.replace` 原子化；expected_sha256 不符抛 `ChecksumMismatch` 且删 tmp。阻塞 IO 一律包 `asyncio.to_thread`（不引 aiofiles/aiohttp 新依赖）。跨实例持久让「实例 A 写、新建实例 B 同 root 能读到」可直接用文件系统单测验证，无需起服务。
+  2. **minio SDK 顶层不 import，仅方法内 lazy import**（D-006 落地）。环境未装 minio，`import minio` 会 ModuleNotFoundError；故 `MinioObjectStore.__init__` 与每个方法内部 `from minio import ...`，模块顶层零 minio 引用。构造时若 SDK 缺失抛带安装提示的 `ImportError`。
+  3. **MinIO put/get 用临时文件 materialize**（避免大对象占内存）。put：drain 到内存算 sha256→写 tmp 文件→`put_object(bucket,key,FileReader,length)`→返回 version_id/etag；get：`get_object` 响应体在 thread 里流式写到 tmp 文件，再分块 64KB yield 回。S3 异常经 `_map_s3_error` 归一（NoSuchKey/NoSuchBucket→`StorageObjectMissing`、AccessDenied/Forbidden→`StorageForbidden`、其余一律 `StorageUnavailable`，**绝不**伪装成 missing，SRS §9.5）。
+  4. **MinIO multipart 暂留 NotImplementedError seam**（put/get/stat/delete/head_exists/copy/presign_* 已可单测 + guarded smoke）。MultipartUploader 的 `upload_part/complete/abort` 在 M1 guarded smoke 阶段接通真实 SDK（`from minio.api import MultipartUploader`），契约已锁定「expected_sha256 不符必抛 `ChecksumMismatch` 且丢弃对象」。
+  5. **object_key 布局 `v1/{ab}/{cd}/{sha256}` 由 caller（Repository）选，不在 adapter 内**（SRS §3.1A「object key 系统生成、无业务语义」、§8.1）。`keys.build_object_key(artifact_class, sha256, prefix="v1")` 为纯函数、可单测，Repository（M1.2）调用它构造 `ObjectLocation`。
+  6. **凭据不进 repr/日志**：`ObjectStoreConfig.__repr__` 覆盖，access_key/secret_key 显示 `***set***`/`<empty>`；`storage.yaml` 的 minio 段为注释示范，标注「凭据由 Secret 管理，勿提交真实值」。
+  7. **factory 不暴露 `ObjectRef`**：`make_object_store(config) -> ObjectStorePort` 只认 `provider`（fake/minio）；`ObjectRef`（带业务 id）是业务层 DTO，Port/adapter 不用。
+- **依据**：D-020（location 寻址）、D-002（双 adapter）、D-006（guarded MinIO）；SRS §3.1A/§8.1（key 策略）、§9.5（错误归一不伪装 404）、§C00（SDK 类型不越界）；不引新依赖原则（asyncio.to_thread 替代 aiofiles）。
+- **SRS 覆盖情况**：SRS §C00 要求 adapter 隔离 SDK、§8.1 要求 key 布局、§9.5 要求错误语义；具体「tmp 文件 materialize」「multipart 留 NotImplementedError seam」「Fake 跨实例持久」SRS 未规定，本决策补充。
+- **影响**：`mining/infra/object_store/{__init__,config,keys,fake,minio,factory}.py` + `tests/infra/{test_fake,test_minio,test_factory}.py` + `system/storage.yaml` + `pyproject.toml`（加 `minio>=7.2`）。契约层（WP0.3）location 化修订在 D-020 影响 内完成。MinIO multipart 真连在 M1 guarded smoke 补（需真实 MinIO 实例）。
+
 ---
 
-> 后续决策按 D-020… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
+> 后续决策按 D-022… 追加。每个里程碑结束在对应交付报告中引用本日志条目。

@@ -1,4 +1,4 @@
-"""Pytest suite for the Object Store Port contract (WP0.3).
+"""Pytest suite for the Object Store Port contract (WP0.3, revised D-020 M1).
 
 References:
 - SRS §C00 (MinIO Object Storage Foundation)
@@ -6,31 +6,32 @@ References:
 - SRS §3.1A (Storage Object), §3.1B (Upload Session)
 - SRS §9.0A / §9.0B (state machines), §9.5 (recovery)
 - ADR-0003 D-002 (dual adapter: Fake + MinIO), D-006 (Fake for tests),
-  D-007 (signature tradeoffs for this Port)
+  D-007 (signature tradeoffs for this Port), D-020 (ObjectLocation addressing)
 
 The in-memory ``FakeObjectStore`` defined here exists ONLY to prove the
-``ObjectStorePort`` / ``SourceArtifactReader`` Protocols are implementable and
-usable. It is NOT a production adapter — the real ``MinioObjectStore`` lands in
-M1 (WP1A) and is excluded from these tests per D-006.
+``ObjectStorePort`` Protocol is implementable and usable with location-based
+addressing. It is NOT a production adapter — the real ``MinioObjectStore``
+(WP1A) lands in M1 and is excluded from these tests per D-006; a separate
+filesystem-backed ``FakeObjectStore`` lives in ``mining/infra/object_store/``
+and is covered by infra tests.
 """
 from __future__ import annotations
 
 import hashlib
 import secrets
 from collections.abc import AsyncIterator
-from pathlib import Path
 
 import pytest
 
 from knowledge_mining.mining.contracts.storage import (
     ChecksumMismatch,
+    ObjectLocation,
     ObjectStat,
     ObjectStorePort,
     PartETag,
     PresignedAccess,
     PutOptions,
     PutResult,
-    SourceArtifactReader,
     StorageObjectMissing,
     UploadTicket,
 )
@@ -48,22 +49,20 @@ from knowledge_mining.mining.contracts.storage.enums import (
 
 
 class FakeObjectStore:
-    """Minimal in-memory implementation of ``ObjectStorePort``.
+    """Minimal in-memory implementation of ``ObjectStorePort`` (D-020).
 
-    State is keyed by ``storage_object_id`` (the business identity). Multipart
-    sessions are held in a separate dict until completed. SHA-256 is computed
-    over the reassembled byte stream, matching how the Port contract computes
-    checksums server-side (SRS §3.1A).
+    State is keyed by ``ObjectLocation``. Multipart sessions are held in a
+    separate dict until completed. SHA-256 is computed over the reassembled
+    byte stream, matching how the Port contract computes checksums server-side
+    (SRS §3.1A).
     """
 
     provider = "fake"
 
     def __init__(self, bucket: str = "test-bucket") -> None:
         self._bucket = bucket
-        # storage_object_id -> dict(bucket, key, data, sha256, stat)
-        self._objects: dict[str, dict] = {}
-        # (bucket, object_key) -> storage_object_id  (for copy/dedup lookups)
-        self._by_key: dict[tuple[str, str], str] = {}
+        # (bucket, object_key) -> dict(data, sha256, size, mime, artifact_class, etag)
+        self._objects: dict[tuple[str, str], dict] = {}
         # upload_id -> multipart session
         self._uploads: dict[str, dict] = {}
 
@@ -73,12 +72,6 @@ class FakeObjectStore:
     def _sha256(data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
 
-    def _gen_id(self) -> str:
-        return "so_" + secrets.token_hex(12)
-
-    def _gen_key(self) -> str:
-        return "obj/" + secrets.token_hex(16)
-
     async def _astream(self, data: bytes) -> AsyncIterator[bytes]:
         # Yield in one chunk; the contract treats this as an opaque stream.
         yield data
@@ -87,6 +80,7 @@ class FakeObjectStore:
 
     async def put_stream(
         self,
+        location: ObjectLocation,
         stream: AsyncIterator[bytes],
         options: PutOptions,
     ) -> PutResult:
@@ -100,11 +94,7 @@ class FakeObjectStore:
                 expected=options.expected_sha256,
                 actual=sha,
             )
-        storage_object_id = self._gen_id()
-        key = self._gen_key()
-        self._objects[storage_object_id] = {
-            "bucket": self._bucket,
-            "key": key,
+        self._objects[(location.bucket, location.object_key)] = {
             "data": data,
             "sha256": sha,
             "size": len(data),
@@ -112,24 +102,23 @@ class FakeObjectStore:
             "artifact_class": options.artifact_class,
             "etag": sha[:32],
         }
-        self._by_key[(self._bucket, key)] = storage_object_id
         return PutResult(
-            storage_object_id=storage_object_id,
             version_id=None,
             etag=sha[:32],
             sha256=sha,
             size=len(data),
         )
 
-    async def get_stream(self, storage_object_id: str) -> AsyncIterator[bytes]:
-        obj = self._require(storage_object_id)
+    async def get_stream(self, location: ObjectLocation) -> AsyncIterator[bytes]:
+        obj = self._require(location)
         # async generator — return the bytes as a stream
         yield obj["data"]
 
-    async def stat(self, storage_object_id: str) -> ObjectStat:
-        obj = self._require(storage_object_id)
+    async def stat(self, location: ObjectLocation) -> ObjectStat:
+        obj = self._require(location)
         return ObjectStat(
-            storage_object_id=storage_object_id,
+            bucket=location.bucket,
+            object_key=location.object_key,
             size=obj["size"],
             sha256=obj["sha256"],
             etag=obj["etag"],
@@ -140,69 +129,67 @@ class FakeObjectStore:
             last_verified_at=None,
         )
 
-    async def delete(self, storage_object_id: str) -> None:
-        obj = self._objects.pop(storage_object_id, None)
-        if obj is not None:
-            self._by_key.pop((obj["bucket"], obj["key"]), None)
+    async def delete(self, location: ObjectLocation) -> None:
+        self._objects.pop((location.bucket, location.object_key), None)
 
-    async def head_exists(self, storage_object_id: str) -> bool:
-        return storage_object_id in self._objects
+    async def head_exists(self, location: ObjectLocation) -> bool:
+        return (location.bucket, location.object_key) in self._objects
 
     async def copy(
         self,
-        src_storage_object_id: str,
-        dst_options: PutOptions,
+        src: ObjectLocation,
+        dst: ObjectLocation,
+        options: PutOptions,
     ) -> PutResult:
-        src = self._require(src_storage_object_id)
+        src_obj = self._require(src)
         # Server-side copy: same bytes => same sha256.
-        return await self.put_stream(self._astream(src["data"]), dst_options)
+        return await self.put_stream(dst, self._astream(src_obj["data"]), options)
 
     async def presign_get(
         self,
-        storage_object_id: str,
+        location: ObjectLocation,
         expires_in_seconds: int = 900,
     ) -> PresignedAccess:
-        self._require(storage_object_id)
+        self._require(location)
         return PresignedAccess(
             method="GET",
-            url=f"fake://get/{storage_object_id}?expires={expires_in_seconds}",
+            url=(
+                f"fake://get/{location.bucket}/{location.object_key}"
+                f"?expires={expires_in_seconds}"
+            ),
             expires_in_seconds=expires_in_seconds,
-            storage_object_id=storage_object_id,
-            object_key=f"obj/{storage_object_id}",
+            location=location,
         )
 
     async def presign_put(
         self,
-        bucket: str,
-        object_key: str,
+        location: ObjectLocation,
         expires_in_seconds: int = 900,
     ) -> PresignedAccess:
         return PresignedAccess(
             method="PUT",
-            url=f"fake://put/{bucket}/{object_key}?expires={expires_in_seconds}",
+            url=(
+                f"fake://put/{location.bucket}/{location.object_key}"
+                f"?expires={expires_in_seconds}"
+            ),
             expires_in_seconds=expires_in_seconds,
-            storage_object_id="",  # not yet materialized
-            object_key=object_key,
+            location=location,
         )
 
     async def initiate_multipart(
         self,
-        bucket: str,
-        object_key: str,
+        location: ObjectLocation,
         options: PutOptions,
     ) -> UploadTicket:
         upload_id = "up_" + secrets.token_hex(12)
         self._uploads[upload_id] = {
-            "bucket": bucket,
-            "object_key": object_key,
+            "location": location,
             "options": options,
             "parts": {},  # part_number -> bytes
         }
         return UploadTicket(
             upload_id=upload_id,
-            storage_object_id="",  # assigned on complete
-            bucket=bucket,
-            object_key=object_key,
+            location=location,
             parts_expected=None,
             presigned_part_urls=(),
         )
@@ -230,8 +217,9 @@ class FakeObjectStore:
             for p in sorted(parts, key=lambda x: x.part_number)
         )
         options: PutOptions = session["options"]
+        location: ObjectLocation = session["location"]
         # Reuse put_stream to materialize the assembled object.
-        result = await self.put_stream(self._astream(ordered), options)
+        result = await self.put_stream(location, self._astream(ordered), options)
         if expected_sha256 is not None and expected_sha256 != result.sha256:
             raise ChecksumMismatch(
                 f"multipart expected {expected_sha256}, got {result.sha256}",
@@ -243,37 +231,6 @@ class FakeObjectStore:
     async def abort_multipart(self, upload_id: str) -> None:
         self._uploads.pop(upload_id, None)
 
-    # -- SourceArtifactReader ---------------------------------------------
-
-    async def open_stream(self, storage_object_id: str) -> AsyncIterator[bytes]:
-        obj = self._require(storage_object_id)
-        yield obj["data"]
-
-    async def materialize_temp(
-        self,
-        storage_object_id: str,
-        run_id: str,
-        *,
-        tmp_root: Path,
-    ) -> Path:
-        """Write the object to a run-scoped temp file and verify its hash.
-
-        ``tmp_root`` is injected for testability; a production implementation
-        derives the temp root from run configuration.
-        """
-        obj = self._require(storage_object_id)
-        path = tmp_root / run_id / f"{storage_object_id}.bin"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(obj["data"])
-        actual = self._sha256(obj["data"])
-        if actual != obj["sha256"]:
-            raise ChecksumMismatch(
-                f"materialized {storage_object_id} hash drifted",
-                expected=obj["sha256"],
-                actual=actual,
-            )
-        return path
-
     # -- internals ---------------------------------------------------------
 
     async def _drain(self, stream: AsyncIterator[bytes]) -> bytes:
@@ -282,10 +239,10 @@ class FakeObjectStore:
             chunks.append(chunk)
         return b"".join(chunks)
 
-    def _require(self, storage_object_id: str) -> dict:
-        obj = self._objects.get(storage_object_id)
+    def _require(self, location: ObjectLocation) -> dict:
+        obj = self._objects.get((location.bucket, location.object_key))
         if obj is None:
-            raise StorageObjectMissing(storage_object_id)
+            raise StorageObjectMissing(f"{location.bucket}/{location.object_key}")
         return obj
 
 
@@ -297,6 +254,10 @@ class FakeObjectStore:
 @pytest.fixture
 def store() -> FakeObjectStore:
     return FakeObjectStore()
+
+
+def _loc(key: str = "obj/" + secrets.token_hex(8), bucket: str = "test-bucket") -> ObjectLocation:
+    return ObjectLocation(bucket=bucket, object_key=key)
 
 
 async def _bytes(data: bytes) -> AsyncIterator[bytes]:
@@ -311,10 +272,6 @@ async def _bytes(data: bytes) -> AsyncIterator[bytes]:
 def test_fake_satisfies_object_store_port(store: FakeObjectStore) -> None:
     """The Fake must be recognized as an ObjectStorePort (structural typing)."""
     assert isinstance(store, ObjectStorePort)
-
-
-def test_fake_satisfies_source_artifact_reader(store: FakeObjectStore) -> None:
-    assert isinstance(store, SourceArtifactReader)
 
 
 def test_enum_constants_are_frozensets() -> None:
@@ -332,6 +289,14 @@ def test_enum_constants_are_frozensets() -> None:
     assert "COMMITTED" in VALID_UPLOAD_SESSION_STATES
 
 
+def test_object_location_is_frozen() -> None:
+    from dataclasses import FrozenInstanceError
+
+    loc = ObjectLocation(bucket="b", object_key="k", version_id=None)
+    with pytest.raises(FrozenInstanceError):
+        loc.bucket = "other"  # type: ignore[misc]
+
+
 # ---------------------------------------------------------------------------
 # Round-trip: put -> get -> stat -> head_exists -> delete
 # ---------------------------------------------------------------------------
@@ -340,38 +305,41 @@ def test_enum_constants_are_frozensets() -> None:
 @pytest.mark.asyncio
 async def test_put_get_roundtrip(store: FakeObjectStore) -> None:
     payload = b"hello object store" * 64
-    result = await store.put_stream(_bytes(payload), PutOptions(artifact_class="source"))
+    result = await store.put_stream(_loc(), _bytes(payload), PutOptions(artifact_class="source"))
 
     assert isinstance(result, PutResult)
     assert result.size == len(payload)
     assert result.sha256 == hashlib.sha256(payload).hexdigest()
-
-    collected = b"".join([c async for c in store.get_stream(result.storage_object_id)])
-    assert collected == payload
+    # D-020: PutResult no longer carries storage_object_id.
+    assert not hasattr(result, "storage_object_id")
 
 
 @pytest.mark.asyncio
 async def test_stat_reports_sha256_and_size(store: FakeObjectStore) -> None:
     payload = b"stat me"
-    result = await store.put_stream(_bytes(payload), PutOptions(mime="text/plain"))
+    location = _loc()
+    await store.put_stream(location, _bytes(payload), PutOptions(mime="text/plain"))
 
-    stat = await store.stat(result.storage_object_id)
+    stat = await store.stat(location)
     assert isinstance(stat, ObjectStat)
-    assert stat.sha256 == result.sha256
+    assert stat.sha256 == hashlib.sha256(payload).hexdigest()
     assert stat.size == len(payload)
     assert stat.mime == "text/plain"
     assert stat.artifact_class == "source"
+    assert stat.bucket == location.bucket
+    assert stat.object_key == location.object_key
 
 
 @pytest.mark.asyncio
 async def test_head_exists_and_delete(store: FakeObjectStore) -> None:
-    result = await store.put_stream(_bytes(b"x"), PutOptions())
+    location = _loc()
+    await store.put_stream(location, _bytes(b"x"), PutOptions())
 
-    assert await store.head_exists(result.storage_object_id) is True
-    await store.delete(result.storage_object_id)
-    assert await store.head_exists(result.storage_object_id) is False
+    assert await store.head_exists(location) is True
+    await store.delete(location)
+    assert await store.head_exists(location) is False
     with pytest.raises(StorageObjectMissing):
-        await store.stat(result.storage_object_id)
+        await store.stat(location)
 
 
 # ---------------------------------------------------------------------------
@@ -381,22 +349,24 @@ async def test_head_exists_and_delete(store: FakeObjectStore) -> None:
 
 @pytest.mark.asyncio
 async def test_presign_get_returns_url(store: FakeObjectStore) -> None:
-    result = await store.put_stream(_bytes(b"x"), PutOptions())
-    access = await store.presign_get(result.storage_object_id, expires_in_seconds=300)
+    location = _loc()
+    await store.put_stream(location, _bytes(b"x"), PutOptions())
+    access = await store.presign_get(location, expires_in_seconds=300)
 
     assert isinstance(access, PresignedAccess)
     assert access.method == "GET"
     assert access.url.startswith("fake://get/")
     assert access.expires_in_seconds == 300
-    assert access.storage_object_id == result.storage_object_id
+    assert access.location == location
 
 
 @pytest.mark.asyncio
 async def test_presign_put_for_unknown_object(store: FakeObjectStore) -> None:
-    access = await store.presign_put("bucket-a", "obj/key-1")
+    location = _loc(bucket="bucket-a", key="obj/key-1")
+    access = await store.presign_put(location)
     assert access.method == "PUT"
     assert "bucket-a" in access.url and "obj/key-1" in access.url
-    assert access.object_key == "obj/key-1"
+    assert access.location == location
 
 
 # ---------------------------------------------------------------------------
@@ -407,11 +377,11 @@ async def test_presign_put_for_unknown_object(store: FakeObjectStore) -> None:
 @pytest.mark.asyncio
 async def test_multipart_roundtrip(store: FakeObjectStore) -> None:
     big = bytes(range(256)) * 1024  # 256 KiB
-    ticket = await store.initiate_multipart(
-        "bucket-a", "obj/multipart-1", PutOptions(artifact_class="source"),
-    )
+    location = _loc(key="obj/multipart-1")
+    ticket = await store.initiate_multipart(location, PutOptions(artifact_class="source"))
     assert isinstance(ticket, UploadTicket)
     assert ticket.upload_id
+    assert ticket.location == location
 
     # Split into 3 parts.
     third = len(big) // 3
@@ -424,14 +394,15 @@ async def test_multipart_roundtrip(store: FakeObjectStore) -> None:
 
     result = await store.complete_multipart(ticket.upload_id, tuple(parts))
 
-    got = b"".join([c async for c in store.get_stream(result.storage_object_id)])
+    got = b"".join([c async for c in store.get_stream(location)])
     assert got == big
     assert result.sha256 == hashlib.sha256(big).hexdigest()
 
 
 @pytest.mark.asyncio
 async def test_abort_multipart_discards_session(store: FakeObjectStore) -> None:
-    ticket = await store.initiate_multipart("b", "k", PutOptions())
+    location = _loc(key="k")
+    ticket = await store.initiate_multipart(location, PutOptions())
     await store.upload_part(ticket.upload_id, 1, _bytes(b"chunk"))
     await store.abort_multipart(ticket.upload_id)
     # Aborted upload_id is no longer completable.
@@ -447,33 +418,13 @@ async def test_abort_multipart_discards_session(store: FakeObjectStore) -> None:
 @pytest.mark.asyncio
 async def test_copy_produces_same_sha256(store: FakeObjectStore) -> None:
     payload = b"copy me" * 100
-    src = await store.put_stream(_bytes(payload), PutOptions(artifact_class="source"))
-    dst = await store.copy(src.storage_object_id, PutOptions(artifact_class="backend_raw"))
+    src_loc = _loc()
+    dst_loc = _loc(key="obj/dst")
+    src = await store.put_stream(src_loc, _bytes(payload), PutOptions(artifact_class="source"))
+    dst = await store.copy(src_loc, dst_loc, PutOptions(artifact_class="backend_raw"))
 
-    assert dst.storage_object_id != src.storage_object_id
+    assert dst_loc != src_loc
     assert dst.sha256 == src.sha256  # same bytes => same hash
-
-
-# ---------------------------------------------------------------------------
-# SourceArtifactReader
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_materialize_temp_writes_and_verifies(
-    store: FakeObjectStore,
-    tmp_path: Path,
-) -> None:
-    payload = b"materialize payload"
-    result = await store.put_stream(_bytes(payload), PutOptions())
-
-    path = await store.materialize_temp(
-        result.storage_object_id, "run_123", tmp_root=tmp_path,
-    )
-    assert path.exists()
-    assert path.read_bytes() == payload
-    # Run-scoped layout.
-    assert "run_123" in str(path)
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +436,7 @@ async def test_materialize_temp_writes_and_verifies(
 async def test_checksum_mismatch_on_expected_sha256(store: FakeObjectStore) -> None:
     with pytest.raises(ChecksumMismatch) as exc_info:
         await store.put_stream(
+            _loc(),
             _bytes(b"real bytes"),
             PutOptions(expected_sha256="0" * 64),
         )
@@ -497,7 +449,7 @@ async def test_checksum_mismatch_on_expected_sha256(store: FakeObjectStore) -> N
 @pytest.mark.asyncio
 async def test_get_stream_missing_raises(store: FakeObjectStore) -> None:
     with pytest.raises(StorageObjectMissing):
-        await store.stat("so_does_not_exist")
+        await store.stat(_loc(key="obj/does_not_exist"))
 
 
 def test_error_subclasses_carry_stable_codes() -> None:
@@ -520,7 +472,6 @@ def test_dataclasses_are_frozen() -> None:
     from dataclasses import FrozenInstanceError
 
     result = PutResult(
-        storage_object_id="so_x",
         version_id=None,
         etag="e",
         sha256="a" * 64,

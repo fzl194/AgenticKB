@@ -12,6 +12,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from psycopg.errors import UniqueViolation
+
 from knowledge_mining.mining.infra.upload_config import UploadConfig
 from knowledge_mining.mining.kb.storage import build_document_key
 from knowledge_mining.mining.kb.db import KbDB
@@ -70,6 +72,41 @@ class FolderService:
             folder_id=uuid.uuid4().hex, kb_id=kb_id, parent_id=parent_id, name=name,
             path=path, created_by=user_id,
         )
+
+    async def ensure_folder_path(
+        self, *, kb_id: str, path: str, user_id: str,
+    ) -> dict[str, Any] | None:
+        """幂等确保 ``path``（如 ``5G/AMF``）整条祖先链在 kb_folders 存在。
+
+        已存在则复用；缺哪段建哪段。空 path / 根 → 返回 None（根不是文件夹行）。
+        调用方须已通过写权限校验（zip 解压等入口复用，避免重复 assert）。
+        """
+        parts = [p for p in (path or "").split("/") if p not in ("", ".")]
+        if not parts:
+            return None
+        parent_id: str | None = None
+        acc = ""
+        folder: dict[str, Any] | None = None
+        for raw in parts:
+            name = normalize_folder_name(raw)
+            acc = join_path(acc, name)
+            existing = await self._db.find_folder_by_path(kb_id=kb_id, path=acc)
+            if existing is not None:
+                folder = existing
+                parent_id = existing["id"]
+                continue
+            build_folder_dir(self._upload_root, kb_id, acc).mkdir(parents=True, exist_ok=True)
+            try:
+                folder = await self._db.insert_folder(
+                    folder_id=uuid.uuid4().hex, kb_id=kb_id, parent_id=parent_id,
+                    name=name, path=acc, created_by=user_id,
+                )
+            except UniqueViolation:
+                folder = await self._db.find_folder_by_path(kb_id=kb_id, path=acc)
+                if folder is None:
+                    raise
+            parent_id = folder["id"]
+        return folder
 
     async def delete_folder(self, *, folder_id: str, user_id: str) -> None:
         """仅删空文件夹（无子文件夹、无文档）。非空 → ValueError（路由映射 409）。"""

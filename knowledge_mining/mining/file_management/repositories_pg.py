@@ -360,6 +360,7 @@ class PgDocumentCurrentContentRepository:
         document_id: str,
         folder_id: str | None,
         owner_id: str | None,
+        domain: str | None = None,  # None → 从 knowledge_bases 解析（SRS §A12 KB 隔离）
         document_name: str | None,
         document_type: str | None,
         storage_object_id: str,
@@ -367,17 +368,33 @@ class PgDocumentCurrentContentRepository:
     ) -> DocumentCurrentContent:
         now = _utcnow()
         async with self._pool.connection() as conn:
+            if domain is None:
+                cur = await conn.execute(
+                    "SELECT domain FROM knowledge_bases WHERE id = %s AND status = 'active'",
+                    [kb_id],
+                )
+                kb_row = await cur.fetchone()
+                if kb_row is None:
+                    raise ValueError(
+                        f"knowledge base not found or deleted: {kb_id!r} — refusing to "
+                        "create document without its domain (SRS §A12, no ghost documents)"
+                    )
+                domain = kb_row["domain"]
+            # document_key：迁移期兼容别名（ADR-0002 §15.1 #8），由文件名派生。
+            document_key = f"doc:/{document_name or document_id}"
             cur = await conn.execute(
                 """INSERT INTO asset_documents
-                       (id, kb_id, folder_id, owner_id, document_name, document_type,
-                        storage_object_id, source_raw_hash, content_revision,
-                        content_updated_at, created_at)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s)
+                       (id, kb_id, domain, document_key, folder_id, owner_id,
+                        document_name, document_type, storage_object_id,
+                        source_raw_hash, content_revision, content_updated_at,
+                        created_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s)
                    RETURNING id, storage_object_id, source_raw_hash,
                              content_revision, content_updated_at""",
                 (
-                    document_id, kb_id, folder_id, owner_id, document_name,
-                    document_type, storage_object_id, source_raw_hash, now, now,
+                    document_id, kb_id, domain, document_key, folder_id, owner_id,
+                    document_name, document_type, storage_object_id,
+                    source_raw_hash, now, now,
                 ),
             )
             row = await cur.fetchone()

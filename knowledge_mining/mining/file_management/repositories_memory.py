@@ -179,6 +179,7 @@ class MemoryDocumentCurrentContentRepository:
         document_id: str,
         folder_id: str | None,
         owner_id: str | None,
+        domain: str | None = None,  # memory 无 knowledge_bases 表，默认 generic
         document_name: str | None,
         document_type: str | None,
         storage_object_id: str,
@@ -189,6 +190,8 @@ class MemoryDocumentCurrentContentRepository:
         now = _utcnow()
         self._docs[document_id] = {
             "kb_id": kb_id,
+            "domain": domain or "generic",
+            "document_key": f"doc:/{document_name or document_id}",
             "folder_id": folder_id,
             "owner_id": owner_id,
             "document_name": document_name,

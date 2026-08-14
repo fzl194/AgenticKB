@@ -349,6 +349,7 @@ class DocumentCurrentContentRepository(Protocol):
         document_id: str,
         folder_id: str | None,
         owner_id: str | None,
+        domain: str | None = None,
         document_name: str | None,
         document_type: str | None,
         storage_object_id: str,
@@ -358,6 +359,12 @@ class DocumentCurrentContentRepository(Protocol):
 
         The new row's ``content_revision`` is ``1`` (first content). Raises if
         a row with ``document_id`` already exists.
+
+        ``domain``: 文档所属隔离域（SRS §A12）。传 ``None`` 时由实现自行解析——
+        PG 实现查询 ``knowledge_bases``（KB 不存在/已删则拒绝，不产生幽灵文档）；
+        memory 实现默认 ``generic``。关系链：全局用户 → domain（管理员经
+        domain_registry.yaml 管理）→ 知识库（knowledge_bases.domain NOT NULL）→
+        文档（asset_documents.domain 冗余自 KB，作隔离键）。
         """
         ...
 

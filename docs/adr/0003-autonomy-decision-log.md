@@ -193,3 +193,14 @@
 ---
 
 > 后续决策按 D-026… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
+
+## D-026 ｜ 真实环境接通（MinIO 121.89.90.178:19000 + PG kb_db）
+- **决策与事实**：
+  1. `storage.yaml` 落真实凭据（与 database.yaml 同机制：主控 `/api/v1/system/storage/raw` 暴露，mining `control_plane.fetch_storage_config` 拉取，`ObjectStoreConfig.from_control_plane()` 消费，app lifespan best-effort 预填）。
+  2. `bucket_prefix` 必须是 **agentickb-dev-**：app 凭据策略锁定该前缀、bucket 已由运维预建（agentickb-dev-{source,staging,parse,binary}，恰为 SRS §8.1 四类）。
+  3. `_ensure_bucket` 改幂等：bucket_exists AccessDenied（最小权限 app 凭据无 ListBucket/CreateBucket）→ 视为运维已建、跳过；MakeBucket AlreadyOwned 忽略。
+  4. **sha256 完整性闭环**：put 时把 sha256+artifact_class 写入对象 user-metadata；`_meta_get` 必须先 `dict(raw)` 规整（minio 返回 `HTTPHeaderDict`，其 `__contains__` 与普通 dict 不一致，直接 `in` 检查会漏）；stat 现可取回 sha256（SRS §8.6/§9.5）。
+  5. `pg_schema.py` 迁移链接入 008（`_OBJECT_STORAGE_DDL`），mining 启动自动建对象存储表；已在真实 kb_db 执行验证（6 新表 + 3 表扩展列全部就位）。
+  6. psycopg async 在 Windows 需 `WindowsSelectorEventLoopPolicy`（ProactorEventLoop 不可用，同项目测试惯例）。
+- **真实环境验证结果**：MinIO put/get/stat/delete + ensure_buckets 幂等全通；PG 6 表落地全通；e2e 上传事务（initiate→stage→complete）中 quota/audit/session/storage_objects PG repos 全部工作。
+- **已知缺口（下一轮修）**：`PgDocumentCurrentContentRepository.create_document` 未填 `asset_documents.domain`（NOT NULL，SRS §A12）→ 真实 e2e 在最后一步 NotNullViolation。修复需同步 contracts Protocol（加 domain 参数或 PG 内查 knowledge_bases）+ memory repo + PG repo。

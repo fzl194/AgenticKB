@@ -115,3 +115,25 @@ class ObjectStoreConfig:
         if not isinstance(data, dict):
             raise ValueError(f"invalid storage config at {path}: expected a mapping")
         return cls.from_dict(data)
+
+    @classmethod
+    def from_control_plane(cls) -> ObjectStoreConfig:
+        """Build a config from the main_control_service control plane cache.
+
+        Mirrors ``MiningDbConfig()`` (no-arg → reads control plane): pulls the
+        cached ``storage.yaml`` and resolves its ``object_store`` section. The
+        control plane is populated at app startup by ``fetch_storage_config``
+        and may be force-refreshed at runtime.
+        """
+        # Lazy import to avoid an infra ↔ object_store config import cycle.
+        from knowledge_mining.mining.infra.control_plane import get_storage_config
+
+        data = get_storage_config() or {}
+        store = data.get("object_store")
+        if not isinstance(store, dict) or not store:
+            raise ValueError(
+                "Object store config from control plane is missing the "
+                "'object_store' section; check main_control_service/config/"
+                "system/storage.yaml and that main_control_service is reachable."
+            )
+        return cls.from_dict(store)

@@ -24,6 +24,7 @@ CONTROL_PLANE_BASE_URL = os.getenv("CONTROL_PLANE_BASE_URL", "http://localhost:8
 _service_config_cache: dict[str, Any] | None = None
 _database_config_cache: dict[str, Any] | None = None
 _auth_config_cache: dict[str, Any] | None = None
+_storage_config_cache: dict[str, Any] | None = None
 
 
 def _get_raw(service_name: str, *, timeout: float = 5.0) -> dict[str, Any]:
@@ -120,3 +121,25 @@ def get_internal_verify_secret() -> str | None:
     if not isinstance(val, str) or not val or val.startswith("change-me"):
         return None
     return val
+
+
+# ── storage.yaml（M1：对象存储配置，仿 database.yaml 机制）─────────────────────
+def fetch_storage_config(*, force: bool = False) -> dict[str, Any]:
+    """拉取并缓存对象存储配置（storage.yaml）。best-effort：控制面不可达抛异常由调用方兜底。"""
+    global _storage_config_cache
+    if _storage_config_cache is None or force:
+        _storage_config_cache = _get_raw("storage")
+    return _storage_config_cache
+
+
+def get_storage_config() -> dict[str, Any]:
+    """读缓存；缓存空则触发一次拉取。"""
+    if _storage_config_cache is None:
+        return fetch_storage_config()
+    return _storage_config_cache
+
+
+def set_storage_config(cfg: dict[str, Any] | None) -> None:
+    """预填对象存储配置缓存（启动 / 测试用）。传 None 清空缓存。"""
+    global _storage_config_cache
+    _storage_config_cache = cfg

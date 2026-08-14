@@ -144,16 +144,29 @@ class MinioObjectStore:
             from minio.error import S3Error  # type: ignore[import-not-found]
         except ImportError:  # pragma: no cover
             S3Error = Exception  # type: ignore[assignment, misc]
+        # bucket_exists may be denied for least-privilege app credentials whose
+        # policy is scoped to object actions only (SRS §8.9: buckets are
+        # operator-provisioned). Treat AccessDenied on HEAD as "assume exists"
+        # and let put/get surface any genuine problem.
         try:
-            if not self._client.bucket_exists(bucket):
-                self._client.make_bucket(bucket)
-            # Best-effort versioning enable (D-005). minio <7.1 lacks the helper.
-            try:
-                self._client.enable_versioning(bucket)
-            except Exception:  # noqa: BLE001 - versioning is best-effort
-                pass
+            exists = self._client.bucket_exists(bucket)
         except S3Error as exc:  # type: ignore[misc]
+            if _extract_code(exc) == "AccessDenied":
+                return
             raise _map_s3_error(exc) from exc
+        if not exists:
+            try:
+                self._client.make_bucket(bucket)
+            except S3Error as exc:  # type: ignore[misc]
+                if _extract_code(exc) in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+                    pass
+                else:
+                    raise _map_s3_error(exc) from exc
+        # Best-effort versioning enable (D-005). minio <7.1 lacks the helper.
+        try:
+            self._client.enable_versioning(bucket)
+        except Exception:  # noqa: BLE001 - versioning is best-effort
+            pass
 
     # -- put / get / stat / delete / exists --------------------------------
 
@@ -200,13 +213,18 @@ class MinioObjectStore:
         except ImportError:  # pragma: no cover
             S3Error = Exception  # type: ignore[assignment, misc]
         try:
+            # Persist sha256 + artifact_class as user metadata so stat() can
+            # recover them for integrity checks (SRS §8.6/§9.5) and routing.
+            md = dict(options.metadata) if options.metadata else {}
+            md.setdefault("sha256", sha)
+            md.setdefault("artifact_class", options.artifact_class)
             resp = self._client.put_object(
                 location.bucket,
                 location.object_key,
                 _FileReader(tmp_path),
                 length=size,
                 content_type=options.mime or "application/octet-stream",
-                metadata=dict(options.metadata) or None,
+                metadata=md or None,
             )
             version_id = getattr(resp, "version_id", None)
             etag = getattr(resp, "etag", None)
@@ -274,7 +292,7 @@ class MinioObjectStore:
             sha256=_meta_get(meta, "sha256"),
             etag=getattr(meta, "etag", None),
             mime=getattr(meta, "content_type", None),
-            artifact_class="source",
+            artifact_class=_meta_get(meta, "artifact_class") or "source",
             encryption=None,
             version_id=getattr(meta, "version_id", None),
             last_verified_at=None,
@@ -468,10 +486,25 @@ class _FileReader:
 
 
 def _meta_get(meta: Any, key: str) -> str | None:
-    user_meta = getattr(meta, "metadata", None) or {}
-    if isinstance(user_meta, dict) and key in user_meta:
-        value = user_meta[key]
-        return value if isinstance(value, str) else None
+    """Read a user-metadata field from a minio stat/head response.
+
+    minio returns headers as a ``HTTPHeaderDict`` whose ``__contains__``
+    differs from a plain dict — normalize to ``dict`` first. Also tolerates
+    keys stored with or without the ``x-amz-meta-`` prefix (S3 lower-cases
+    user metadata keys).
+    """
+    raw = getattr(meta, "metadata", None)
+    if not raw:
+        return None
+    try:
+        user_meta = dict(raw)
+    except (TypeError, ValueError):
+        return None
+    lowered = key.lower()
+    for candidate in (key, lowered, f"x-amz-meta-{lowered}"):
+        if candidate in user_meta:
+            value = user_meta[candidate]
+            return value if isinstance(value, str) else None
     return None
 
 

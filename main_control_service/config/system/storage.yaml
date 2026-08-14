@@ -1,32 +1,32 @@
-# Object Store configuration (M1.1, WP1A).
+# Object Store 配置（M1.1，WP1A）。
 #
-# Selects the ObjectStorePort adapter: "fake" (filesystem, tests/local dev) or
-# "minio" (production). Bucket names are formed as "{bucket_prefix}{artifact_class}"
-# per SRS §8.1 (e.g. agentickb-dev-source).
+# 主控通过 GET /api/v1/system/storage/raw 暴露本文件；mining 启动时经
+# control_plane.fetch_storage_config() 拉取并缓存，ObjectStoreConfig.from_control_plane()
+# 无参构造消费——与 database.yaml 完全同一机制。
 #
-# References:
-# - SRS §C00 (MinIO Object Storage Foundation), §8.1 (bucket/key strategy)
-# - ADR-0003 D-002 (dual adapter), D-006 (guarded MinIO), D-020 (location)
+# 参考：SRS §C00（MinIO Object Storage Foundation）、§8.1（bucket/key 策略）；
+#       ADR-0003 D-002（双 adapter）、D-020（location 寻址）。
 #
-# WARNING: credentials are managed by the Secret system / env, NOT committed.
-# The minio section below is an EXAMPLE shape only — replace placeholders via
-# secret injection and never commit real access_key / secret_key values.
+# 敏感凭据说明：access_key / secret_key 为 MinIO 长期凭据。本项目沿用 database.yaml
+# 「配置文件含明文凭据、随仓库提交」的既有惯例（与 DB 密码同处理）。如后续需隔离，
+# 可改用 Secret / 环境变量注入，此处仅留占位。
 
 object_store:
-  # Adapter selection: "fake" | "minio".
-  provider: fake
+  # adapter 选择："minio"（生产）| "fake"（本地文件系统，开发/测试）
+  provider: minio
 
-  # Shared: concatenated with artifact_class to form bucket names (SRS §8.1).
+  # bucket 名 = {bucket_prefix}{artifact_class}，须匹配 MinIO 凭据策略与已建 bucket。
+  # 当前部署：凭据 agentickb-app-* 锁定 agentickb-dev-* 前缀，已建
+  # agentickb-dev-{source,staging,parse,binary}（SRS §8.1 四类）。
   bucket_prefix: agentickb-dev-
 
-  # ---- fake adapter (filesystem) ----
-  root_path: ./.object_store
+  # ---- minio adapter（生产）----
+  endpoint: 121.89.90.178:19000
+  access_key: agentickb-app-e832ae69
+  secret_key: ce332f72a9d7b7212e4ed8e4109666c404f495de88142c2f403ca245b0a8548f
+  secure: false        # 121.89.90.178:19000 走 HTTP；启用 TLS 后改 true
+  region: null
 
-  # ---- minio adapter (production) ----
-  # Uncomment and supply via Secret injection for production.
-  # provider: minio
-  # endpoint: minio.local:9000
-  # access_key: REPLACE_VIA_SECRET   # 凭据由 Secret 管理，勿提交真实值
-  # secret_key: REPLACE_VIA_SECRET   # 凭据由 Secret 管理，勿提交真实值
-  # secure: true
-  # region: null
+  # ---- fake adapter（本地开发/测试，切回时取消注释并注释上面 minio 段）----
+  # provider: fake
+  # root_path: ./.object_store

@@ -91,6 +91,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("auth bootstrap skipped: %s", exc)
 
+    # M1：拉 storage.yaml（对象存储配置），best-effort——控制面不可达不阻断启动。
+    # mining 现有链路不依赖对象存储；ObjectStorePort 使用方经
+    # ObjectStoreConfig.from_control_plane() 自行读缓存。
+    from knowledge_mining.mining.infra.control_plane import fetch_storage_config
+    try:
+        fetch_storage_config(force=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("storage config fetch skipped: %s", exc)
+
     workflow_repo = GlobalWorkflowRepository(pool)
     app.state.workflow_service = WorkflowService(workflow_repo)
     await app.state.workflow_service.ensure_workflow_library()

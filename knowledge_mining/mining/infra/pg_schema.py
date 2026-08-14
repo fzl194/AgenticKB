@@ -43,6 +43,11 @@ _KB_MINING_BINDING_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "005_kb_m
 _ASSET_BUILD_KB_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "006_asset_build_kb.sql"
 _ASSET_BLOCK_TYPE_IMAGE_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "007_asset_block_type_image.sql"
 _MINING_RUN_KB_DDL = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "007_mining_run_kb.sql"
+# M1 对象存储地基（WP0.4/WP1A）：storage objects / upload sessions / quotas /
+# outbox + asset_documents/snapshots/snapshot_links 扩展。纯增量幂等（ADR-0003 D-004）。
+_OBJECT_STORAGE_DDL = (
+    _REPO_ROOT / "databases" / "asset_core" / "schemas" / "008_object_storage_foundation_postgresql.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -117,6 +122,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _ASSET_BUILD_KB_DDL,
         _ASSET_BLOCK_TYPE_IMAGE_DDL,
         _MINING_RUN_KB_DDL,
+        # M1 对象存储地基：依赖 asset_documents / asset_document_snapshots（链内已建）。
+        _OBJECT_STORAGE_DDL,
     )
 
 

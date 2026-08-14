@@ -260,6 +260,24 @@ def _make_md_image_block(
     kind = ctx.get("image_kind") or "md_image"
     fetch_remote = bool(ctx.get("fetch_remote_images"))
 
+    if ctx.get("disable_image_resolution"):
+        # Opt-in 无 IO 模式（M2 影子解析适配器用）：不触碰本地文件系统/
+        # 远程抓取，只保留原文 src 与 alt——避免不受信文档内容触发本地读取。
+        structure: dict[str, Any] = {
+            "kind": kind,
+            "original_src": src,
+            "image_resolution": "disabled",
+        }
+        if alt.strip():
+            structure["native_caption"] = alt.strip()
+        return ContentBlock(
+            block_type="image",
+            text="",
+            line_start=line_start,
+            line_end=line_end,
+            structure=structure,
+        )
+
     resolved = resolve_local_image_src(
         src,
         base_dir=base_dir,
@@ -267,7 +285,7 @@ def _make_md_image_block(
         stem=f"md_{index:02d}",
         fetch_remote=fetch_remote,
     )
-    structure: dict[str, Any] = {
+    structure = {
         "kind": kind,
         "original_src": resolved.get("original_src") or src,
     }

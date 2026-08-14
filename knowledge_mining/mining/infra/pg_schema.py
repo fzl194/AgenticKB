@@ -48,6 +48,11 @@ _MINING_RUN_KB_DDL = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "
 _OBJECT_STORAGE_DDL = (
     _REPO_ROOT / "databases" / "asset_core" / "schemas" / "008_object_storage_foundation_postgresql.sql"
 )
+# M2 影子解析运行投影（Shadow Parse）：asset_parse_runs 一张表，纯增量幂等。
+# 依赖 008（parse_ir_storage_object_id 指向 asset_storage_objects），必须挂在其后。
+_SHADOW_PARSE_DDL = (
+    _REPO_ROOT / "databases" / "asset_core" / "schemas" / "009_shadow_parse_runs_postgresql.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -124,6 +129,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _MINING_RUN_KB_DDL,
         # M1 对象存储地基：依赖 asset_documents / asset_document_snapshots（链内已建）。
         _OBJECT_STORAGE_DDL,
+        # M2 影子解析投影：依赖 008 的 asset_storage_objects（parse_ir 对象注册），挂链尾。
+        _SHADOW_PARSE_DDL,
     )
 
 

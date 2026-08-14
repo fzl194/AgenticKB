@@ -192,7 +192,7 @@
 
 ---
 
-> 后续决策按 D-026… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
+> 后续决策按 D-028… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
 
 ## D-026 ｜ 真实环境接通（MinIO 121.89.90.178:19000 + PG kb_db）
 - **决策与事实**：
@@ -204,3 +204,19 @@
   6. psycopg async 在 Windows 需 `WindowsSelectorEventLoopPolicy`（ProactorEventLoop 不可用，同项目测试惯例）。
 - **真实环境验证结果**：MinIO put/get/stat/delete + ensure_buckets 幂等全通；PG 6 表落地全通；e2e 上传事务（initiate→stage→complete）中 quota/audit/session/storage_objects PG repos 全部工作。
 - **已知缺口（下一轮修）**：`PgDocumentCurrentContentRepository.create_document` 未填 `asset_documents.domain`（NOT NULL，SRS §A12）→ 真实 e2e 在最后一步 NotNullViolation。修复需同步 contracts Protocol（加 domain 参数或 PG 内查 knowledge_bases）+ memory repo + PG repo。
+
+---
+
+## D-027 ｜ M2 Legacy Shadow Parse（WP3+WP4 压缩版 + WP2 解析模型子集）：Parser Adapter SDK 契约、MD/TXT 原子化适配、影子写入硬隔离
+- **决策**：M2 按"压缩策略"落地——legacy 适配器只包 Markdown/TXT，PDF/DOCX/Excel/HTML 等复杂格式全部留给 M3 Docling（SRS §4.5 路由表中 MD/TXT 的 primary 本就是 native adapter，复杂格式 legacy 保真不足是调研报告 §1.2 的既定结论）：
+  1. **契约冻结（§C06/C07/C04 子集）**：新文件 `mining/contracts/parser_adapter.py`——`DocumentParser` Protocol（**同步纯函数** `parse(text, *, mime) -> BackendParseArtifact`：流式读 MinIO 是 Operator 职责，§4.6"Adapter 将冻结对象转换为库输入"）、`ParseIRNormalizer` Protocol、`BackendBlock`（行号导向：line_start/line_end 供 §A01 line-addressable）、`BackendParseArtifact`（保留 raw_output 供 §9.5 replay）、`ParserDescriptor`+`BackendRegistry`（确定性 select_for(mime)，无路由规则——WP6/M3 的事）。纯 stdlib，零第三方依赖。
+  2. **适配器（WP4 压缩版）**：`mining/parse_adapters/`——`LegacyMarkdownParser` 复用 `infra/structure.py` 的 token→block 转换（实测 SectionNode 树会丢 heading 块级身份和行号，token 级拍平才保真）；`LegacyPlainTextParser` 按空行分段，**不复现旧 PlainTextParser 的 300-token 切分**（调研报告 §1.5 风险：parser 输出必须是原子结构，切分是 Segment Compiler 的职责）；`LegacyLineNormalizer` 产 stable_element_id（scope=source_raw_hash）、行级 EvidenceSpan（source_locator+text_range+raw_text）、heading 弹栈 parent 链 + parent_of/next_in_reading_order relations、pipe table → TableAsset（首行 is_header、cell 保 raw）；产出必过 `parse_ir.validate`，error 级 issue 即 raise（§4.7"normalization failure 不可进入质量门禁"）。MD/TXT 单一 `section` 容器，page_number 留 None 不伪造（§3.6）。
+  3. **影子写入（§C08 + M2 退出条件）**：DDL `009_shadow_parse_runs{,_postgresql}.sql` 新表 `asset_parse_runs`——幂等键 `UNIQUE(document_id, source_raw_hash, parser_fingerprint)`（§2.2），status 仅 SUCCEEDED/FAILED（影子运行无状态机，M4 才扩展完整 Parse Run 状态机）。`mining/shadow_parse/ShadowParseService.run(frozen)`：幂等探针（命中 SUCCEEDED → reused=True）→ `ObjectStoreSourceArtifactReader.open_stream` 流式 sha256 校验读 → 严格 UTF-8 → parse → normalize → IR JSON（sort_keys 内容寻址）→ `build_object_key("parse_ir", sha)` put 到 `{prefix}parse` bucket（artifact_class=parse_ir + expected_sha256）→ find_by_location 去重后 register StorageObject → upsert SUCCEEDED 投影（含 element/container/relation 计数）。失败先落 FAILED 行再 re-raise。**硬隔离：绝不写 asset_document_snapshots / asset_raw_segments / mining_run_documents**（M2 退出条件"不影响现有发布"；Snapshot 正式提交是 M4 WP9 的事）。
+  4. **PG 仓储**：`PgParseRunRepository` 用 `ON CONFLICT(幂等键) DO UPDATE RETURNING`；**池必须带 `kwargs={"row_factory": dict_row}`**（file_management/app.py 既有惯例，真实 e2e 首跑踩到 `dict(tuple)` 崩溃后修正）。
+- **依据**：SRS §14 M2（退出条件：legacy parser 从 MinIO Frozen Input 读取并 shadow-write 新 Snapshot 解析制品，不影响现有发布）、§C04/C06/C07、§4.5-§4.7、§2.2（幂等）、§A01（line-addressable）、§9.5（replay）；ADR-0003 D-001（frozen dataclass 契约）、D-002（内容寻址去重）、D-020（location 寻址 Port）、D-022（Protocol 分层）、D-023/D-024（新包共存）。
+- **SRS 覆盖情况**：M2 退出条件全部显式覆盖；"影子运行的 status 枚举收窄为 SUCCEEDED/FAILED""IR object key 用 IR 字节 sha 内容寻址""mode=shadow 元数据标记"为按边界纪律补全（SRS 未规定影子运行表结构）。
+- **取舍 / 已知缺口**：(a) 真实 MinIO multipart seam 仍未接（upload_part/complete/abort NotImplementedError，M1 遗留）；(b) `BackendRegistry.select_for` 是"先注册先得"，无 reason codes/fallback/budget——WP6 路由器在 M3 落地；(c) 影子链路尚未挂进 workflow 算子（`document_parse`/`segment_compile` 拆分是 M6 WP11）；(d) PDF 等复杂格式走 legacy 无保真路径，直接等 M3 Docling；(e) `asset_parse_runs` 无 domain 列——影子运行按 document_id 关联，域隔离由 document 侧保证。
+- **评审修正（code-review 后合入，3 HIGH 全修）**：(H1) `normalize` 不再传 `parse_run_id` 进 IR——run 级字段会使制品字节不确定、内容寻址去重（D-002）永远 miss；run 归属只记录在投影行。(H2) PG upsert 加 `WHERE status='FAILED'` guard + RETURNING 空时回读——与 memory 实现"双 SUCCEEDED 等价、返回原行"语义对齐，防并发双跑覆盖已成功行。(H3) `infra/structure._make_md_image_block` 增 opt-in `disable_image_resolution` 开关（默认行为不变），MD 适配器启用——否则不受信 markdown 图片路径触发本地文件读取+sha256（违反 §C06 无 IO 契约且构成存在性 oracle）；service 侧 parse/normalize 经 `asyncio.to_thread` 下放（D-021）。另修 MEDIUM：`_record_failure` 双层兜底（审计落库失败不吞原异常）、bucket 前缀缺失 fail-fast（不猜 dev 命名空间）、`_provider()` 缺属性 raise（溯源字段不猜测）、normalize 拆出 `_build_element_graph`。LOW-2：list 回退整体块时产 warning（§7.4"缺可以，但应可见"）。
+- **真实 e2e 二轮发现的完整性缺口（已修）**：cleanup 残留的"注册行在、对象没了"场景暴露两处盲信——(a) `_persist_ir` dedup 命中注册行时未确认对象在 → 现在 `head_exists` 校验，缺失则重放内容寻址字节（同 key 同 sha 幂等安全）并 `mark_verified`；(b) **幂等探针命中 SUCCEEDED 时未校验制品可用** → 现在 `_ir_object_available` 前置校验，制品缺失不复用、走完整重跑经 upsert 幂等回到原行（§2.2 幂等的前提是制品在，§8.6 完整性事故不静默）。
+- **影响**：新文件 `contracts/parser_adapter.py`、`parse_adapters/{__init__,legacy_markdown,legacy_txt,normalizer,registry}.py`、`shadow_parse/{__init__,contracts,repositories_memory,repositories_pg,service}.py`、`databases/asset_core/schemas/009_shadow_parse_runs{,_postgresql}.sql`、`tests/parse_adapters/`（3 文件 34 用例）、`tests/shadow_parse/`（3 文件 11 用例）。唯一修改的既有文件：`infra/pg_schema.py`（追加 009 挂载）。旧链路（ingestion/stages/workflow/handlers）零改动。
+

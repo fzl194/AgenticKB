@@ -9,14 +9,15 @@
 
 ## 一句话现状
 
-**M0 契约冻结 + M1 文件地基已完成**，369 项测试全绿（4 项 PG/MinIO gated skip）。对象存储 Port + Fake/MinIO 双 adapter + 文件管理服务 + 冻结输入 + 迁移工具全部就位，业务逻辑**无需部署 PG/MinIO 即可全测**（用户要求「假的测试」已落实）。解析平台（M2+）尚未开始。
+**M0 契约冻结 + M1 文件地基 + M2 Legacy Shadow Parse 已完成**，且已接通真实环境（MinIO 121.89.90.178 + PG kb_db）：上传事务、影子解析全链路（MD/TXT → Parse IR → parse bucket + asset_parse_runs 投影）真实 e2e 全绿，**现有发布链路零污染**。下一站 M3：Docling 基线 + 路由（复杂格式保真解析的主战场）。
 
 ## 完成里程碑
 
 | 里程碑 | 主题 | 报告 | 测试 |
 |---|---|---|---|
 | **M0** | 契约冻结（ADR + Parse IR v0.1 + Object Store Port + DDL + 状态机） | [M0-契约冻结.md](./M0-契约冻结.md) | 211 |
-| **M1** | MinIO 文件管理地基（adapter + 文件管理 + 冻结输入 + 迁移） | [M1-文件地基.md](./M1-文件地基.md) | +158（合计 369） |
+| **M1** | MinIO 文件管理地基（adapter + 文件管理 + 冻结输入 + 迁移 + 真实环境接通） | [M1-文件地基.md](./M1-文件地基.md) | +158（合计 369） |
+| **M2** | Legacy Shadow Parse（Parser Adapter SDK + MD/TXT 适配器 + 影子写入） | [M2-Legacy影子解析.md](./M2-Legacy影子解析.md) | +45 |
 
 提交链（分支 `feat/doc-parse-platform-m0`）：
 ```
@@ -68,7 +69,7 @@ databases/asset_core/schemas/008_*  对象存储 6 新表 + 3 表扩展（双 sq
 
 - `docs/adr/0001` SRS §15.1 十一条已锁定地基决策（固化）
 - `docs/adr/0002` §15 六个阻塞决策 O1-O6（自主采纳）
-- `docs/adr/0003` 自主决策日志 **D-001 ~ D-025**（每条带 SRS 依据）
+- `docs/adr/0003` 自主决策日志 **D-001 ~ D-027**（每条带 SRS 依据）
 
 两条值得关注的「字面偏离 SRS 但符合 SRS 原则」的决策：
 - **D-020**：ObjectStorePort 改 location 寻址（SRS §C00 未规定寻址键；按 S3 模型补全，使 MinIO adapter 不需自带注册表）。
@@ -102,19 +103,18 @@ python -m pytest knowledge_mining/tests/{contracts,infra,file_management,frozen_
 | 项 | 归属 | 说明 |
 |---|---|---|
 | 双读（Phase 3）统一接线 | M1 收尾 | 读侧「MinIO 优先 / storage_path 回退」未接（M1 报告 §6.1） |
-| MinIO multipart 接通 | M1 收尾 | 契约已锁，待 MinIO 部署后补真 SDK 实现 + smoke |
-| PG repositories 实跑 | 部署后 | 代码已写，需 PG 验证 |
+| MinIO multipart 接通 | M1 收尾 | 契约已锁，待补真 SDK 实现 + smoke |
 | app 启动依赖注入接线 | M1 收尾 | factory+service 就绪，接 service.py 配置加载 |
-| **M2 Legacy Shadow Parse** | 下一里程碑 | WP4 把现有 parser 包成 Adapter，从 FrozenInput 读对象→产 Parse IR→shadow-write Snapshot |
-| M3 Docling + 路由 | 后续 | WP5/WP6 |
+| **M3 Docling 基线 + 路由** | 下一里程碑 | WP5 Docling Adapter + WP6 Inspector/Router + WP7 Orchestrator 初版（复杂格式保真主战场） |
+| M4-M7 | 后续 | 质量门禁/Snapshot/Segment Compiler/Workflow/Knowledge Access |
 | M4-M7 | 后续 | 质量门禁/Snapshot/Segment Compiler/Workflow/Knowledge Access |
 
 ## 文件位置速查
 
 - 决策：`docs/adr/`（0001/0002/0003）
-- 报告：`docs/文档解析平台化-里程碑报告/`（本文件 + M0 + M1）
-- 契约代码：`knowledge_mining/mining/contracts/{parse_ir,storage}/`、`contracts/{file_management,state_machines}.py`
-- 实现代码：`knowledge_mining/mining/{infra/object_store,file_management,frozen_input,file_migration}/`
-- DDL：`databases/asset_core/schemas/008_object_storage_foundation{,_postgresql}.sql`
+- 报告：`docs/文档解析平台化-里程碑报告/`（本文件 + M0 + M1 + M2）
+- 契约代码：`knowledge_mining/mining/contracts/{parse_ir,storage}/`、`contracts/{file_management,state_machines,parser_adapter}.py`
+- 实现代码：`knowledge_mining/mining/{infra/object_store,file_management,frozen_input,file_migration,parse_adapters,shadow_parse}/`
+- DDL：`databases/asset_core/schemas/008_object_storage_foundation{,_postgresql}.sql`、`009_shadow_parse_runs{,_postgresql}.sql`
 - 配置：`main_control_service/config/system/storage.yaml`
-- 测试：`knowledge_mining/tests/{contracts,infra,file_management,frozen_input,file_migration}/`
+- 测试：`knowledge_mining/tests/{contracts,infra,file_management,frozen_input,file_migration,parse_adapters,shadow_parse}/`

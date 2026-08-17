@@ -167,18 +167,22 @@ def test_parse_heading_and_paragraph_blocks(parser: NativePdfParser) -> None:
     assert artifact.parser_id == "native_pdf"
     assert artifact.mime == "application/pdf"
     types = [b.block_type for b in artifact.blocks]
-    assert types == ["heading", "paragraph", "paragraph"]
+    # 段落聚合（验收 v2）：同段行距的两行正文合并为一个段落块
+    assert types == ["heading", "paragraph"]
+    assert "Body line one." in artifact.blocks[1].text
+    assert "Body line two." in artifact.blocks[1].text
 
     heading = artifact.blocks[0]
     assert heading.text == "Big Title Here"
+    # 旧断言按单行块写；段落聚合后正文两行合并（验收 v2）
     assert heading.level == 1
     # 启发式标注：规则写进 structure，不冒充高置信
     assert heading.structure["heading_rule"] == "font_size_ratio"
     assert heading.structure["type_confidence"] < 0.7
     assert heading.structure["line_size"] > heading.structure["modal_size"]
 
-    assert artifact.blocks[1].text == "Body line one."
-    assert artifact.blocks[2].text == "Body line two."
+    assert artifact.blocks[1].text.startswith("Body line one.")
+    assert "Body line two." in artifact.blocks[1].text  # 段落聚合（验收 v2）
     # 正文块不带 heading 启发式标注
     assert "heading_rule" not in artifact.blocks[1].structure
 
@@ -292,7 +296,7 @@ def test_normalize_page_container_and_elements(
     assert page.order_index == 0
 
     assert [e.element_type for e in doc.elements] == [
-        "heading", "paragraph", "paragraph",
+        "heading", "paragraph",
     ]
     for element in doc.elements:
         assert element.page_span_ids == (page.container_id,)
@@ -321,26 +325,24 @@ def test_normalize_reading_order_and_parent_chain(
     parser: NativePdfParser, normalizer: PdfNormalizer
 ) -> None:
     doc = _normalize_text_pdf(parser, normalizer)
-    heading, p1, p2 = doc.elements
+    # 段落聚合（验收 v2）：两行正文合并为一个段落 element
+    heading, body = doc.elements
 
     assert heading.parent_id is None
-    assert p1.parent_id == heading.element_id
-    assert p2.parent_id == heading.element_id
+    assert body.parent_id == heading.element_id
+    assert body.text.startswith("Body line one.")
 
     next_ids = {
         r.source_element_id: r.target_element_id
         for r in doc.relations
         if r.relation_type == "next_in_reading_order"
     }
-    assert next_ids == {
-        heading.element_id: p1.element_id,
-        p1.element_id: p2.element_id,
-    }
+    assert next_ids == {heading.element_id: body.element_id}
     parent_rels = {
         r.target_element_id for r in doc.relations
         if r.relation_type == "parent_of"
     }
-    assert parent_rels == {p1.element_id, p2.element_id}
+    assert parent_rels == {body.element_id}
 
 
 def test_normalize_validates_and_roundtrips(

@@ -73,7 +73,14 @@ LINE_TOP_TOLERANCE = 6.0
 # - 纯数字/罗马数字短行 -> page_number。
 _FURNITURE_REPEAT_PAGES = 3
 
-# 学术三线表回退策略：无横线表格按文本对齐推断（验收修复）。
+# 表格识别策略（真实论文验收三轮修正）：
+# - 主策略 MIXED：横线切行 + 文本对齐切列——三线表有横线无竖线，
+#   纯 lines 找不到列、纯 text 把整页正文当表；混合两者正好。
+# - 回退 TEXT：无横线的表格；须通过紧凑+有效率过滤（假表防御）。
+TABLE_SETTINGS_MIXED = {
+    "horizontal_strategy": "lines",
+    "vertical_strategy": "text",
+}
 TABLE_SETTINGS_TEXT = {
     "horizontal_strategy": "text",
     "vertical_strategy": "text",
@@ -130,6 +137,8 @@ class NativePdfParser:
                             and len(ln["text"]) <= HEADING_MAX_LINE_CHARS
                         ):
                             doc_heading_sizes.append(size)
+                # 档位频次过滤（验收 v2）：档位表只用出现 ≥3 次的字号，
+                # 封面/内封装饰大字（1-2 次）不再污染层级。
                 for index, page in enumerate(pdf.pages):
                     produced, page_warnings = _page_to_blocks(
                         page, index, doc_heading_sizes=doc_heading_sizes
@@ -202,13 +211,50 @@ def _page_to_blocks(
     table_boxes = [tuple(table.bbox) for table in tables]
 
     # CJK 修复（真实论文验收）：extract_words 按空格分词，中文连排会被
-    # 拆成单字碎片——直接用 chars 聚行并按 CJK 规则拼接。
+    # 拆成单字碎片——直接用 chars 聚行并按 CJK 规则拼接。随后：
+    # (1) 字号启发式先摘出 heading 行（标题是独立块，不参与段落合并，
+    #     否则大字号标题会被粘进邻近正文段）；
+    # (2) 剩余正文行按 gap 聚成段落（段内行距 vs 段间距信号，验收
+    #     第二轮修复"一行一行"问题）。
     lines = group_chars_into_lines(
         [c for c in page.chars if not _in_any_box(c, table_boxes)]
     )
+    heading_lines: list[dict[str, Any]] = []
+    body_lines: list[dict[str, Any]] = []
+    for ln in lines:
+        size = float(ln.get("size") or 0.0)
+        by_size = (
+            modal_size > 0
+            and size > HEADING_SIZE_RATIO * modal_size
+            and len(ln["text"]) <= HEADING_MAX_LINE_CHARS
+        )
+        # 编号标题（验收 v3，通用规则非定制）：与正文同字号的
+        # "第X章 …"/"1.2.3 …" 是中文学术/技术文档的通行标题形态，
+        # 字号启发式天然盲区；两个信号任一命中即为 heading。
+        by_pattern = numbered_heading_level(ln["text"]) is not None
+        if by_size or by_pattern:
+            enriched = dict(ln)
+            if by_pattern and not by_size:
+                enriched["size"] = size or modal_size  # 保持档位可映射
+                enriched["heading_by_pattern"] = True
+            heading_lines.append(enriched)
+        else:
+            body_lines.append(ln)
+    heading_lines = merge_heading_runs(
+        heading_lines, intra_gap=_paragraph_gap_threshold(body_lines)
+    )
+    paragraphs = group_lines_into_paragraphs(
+        body_lines, intra_gap_threshold=_paragraph_gap_threshold(body_lines)
+    )
+    # 表格 bbox 顶边收缩：标题行不属表格（mixed 策略偶发圈入页眉/标题）
+    if heading_lines:
+        tables = [_shrink_table_below_headings(t, heading_lines) for t in tables]
+        table_blocks = [
+            _table_block(table, k, index) for k, table in enumerate(tables)
+        ]
     text_blocks = [
-        _line_block(line, modal_size, container_ref, doc_heading_sizes)
-        for line in lines
+        _line_block(ln, modal_size, container_ref, doc_heading_sizes)
+        for ln in [*heading_lines, *paragraphs]
     ]
 
     ordered = _sort_by_top(text_blocks + table_blocks)
@@ -251,6 +297,25 @@ def _annotate_furniture(blocks: list[BackendBlock]) -> None:
             )
 
 
+def _paragraph_gap_threshold(lines: list[dict[str, Any]]) -> float:
+    """段落断行阈值：页内行间隙中位数 × 1.7（自适应字号/排版）.
+
+    真实论文段内 gap ≈7.4pt、段间 ≈22.8pt——中位数(≈7.4)×1.7≈12.6
+    恰好落在两者之间。中位数天然是"段内行距"（正文行占多数）。
+    """
+    if len(lines) < 3:
+        return float("inf")  # 行太少不聚合
+    gaps = sorted(
+        float(b["bbox"][1]) - float(a["bbox"][3])
+        for a, b in zip(lines, lines[1:])
+        if float(b["bbox"][1]) > float(a["bbox"][3])
+    )
+    if not gaps:
+        return float("inf")
+    mid = gaps[len(gaps) // 2]
+    return mid * 1.7 if mid > 0 else float("inf")
+
+
 def _find_tables_with_fallback(page: Any) -> list[Any]:
     """默认（lines）策略找不到表格时回退 text 策略.
 
@@ -259,20 +324,51 @@ def _find_tables_with_fallback(page: Any) -> list[Any]:
     text 策略对稀疏正文有误报（单列文本被当表），故回退结果必须
     ≥2 行且 ≥2 列才接受；两次都失败（异常）返回空。
     """
-    try:
-        found = page.find_tables()
-        if found:
-            return list(found)
-        candidates = page.find_tables(TABLE_SETTINGS_TEXT)
-        accepted = []
-        for table in candidates:
-            try:
-                cols = max((len(r.cells) for r in table.rows), default=0)
-                if cols >= 2 and len(table.rows) >= 2:
+    # 三层策略（验收三轮修正）：默认（全线条线框表，最可靠）→
+    # mixed（横线切行+文本切列，三线表）→ text（无横线表，误报高，
+    # 仅前两层空时尝试且须通过紧凑+有效率过滤）。
+    for settings in (None, TABLE_SETTINGS_MIXED):
+        accepted: list[Any] = []
+        try:
+            found = page.find_tables(settings) if settings else page.find_tables()
+            for table in found:
+                if _is_plausible_table(table, page):
                     accepted.append(table)
-            except Exception:  # noqa: BLE001 —— 单表判定失败不影响其余
-                continue
-        return accepted
+            if accepted:
+                return accepted
+        except Exception:  # noqa: BLE001
+            continue
+    accepted = []
+    try:
+        for table in page.find_tables(TABLE_SETTINGS_TEXT):
+            if _is_plausible_table(table, page):
+                accepted.append(table)
+    except Exception:  # noqa: BLE001 —— 表格识别失败不阻断整页解析
+        pass
+    return accepted
+
+
+def _is_plausible_table(table: Any, page: Any) -> bool:
+    """表格合理性判定（真实论文验收三轮修正）.
+
+    - 结构：≥2 行且 ≥2 列；
+    - 紧凑：表格面积 ≤60% 页面（整页正文流假表通常 >60%）；
+    - 有效率：非空格占比 ≥40%（纯 text 假表空格子占大半）；
+    - 行数上限：≤35 行（整页文本流假表 50-77 行）。
+    """
+    try:
+        rows = len(table.rows)
+        cols = max((len(r.cells) for r in table.rows), default=0)
+        if rows < 2 or cols < 2 or rows > 35:
+            return False
+        bx = table.bbox
+        area = (bx[2] - bx[0]) * (bx[3] - bx[1]) / (page.width * page.height)
+        if area > 0.60:
+            return False
+        ratio = _table_grid_effective_ratio(table.extract() or [])
+        return ratio >= 0.40
+    except Exception:  # noqa: BLE001 —— 单表判定失败按不成立处理
+        return False
     except Exception:  # noqa: BLE001 —— 表格识别失败不阻断整页解析
         return []
 
@@ -295,13 +391,19 @@ def _modal_char_size(chars: list[dict[str, Any]]) -> float:
 
 #: CJK 字符区间（判断拼接时是否加空格 + 双宽步进检测用）。
 def _is_cjk(ch: str) -> bool:
-    """CJK 表意文字/全角符号判定（拼接规则用）。"""
-    code = ord(ch)
-    return (
-        0x4E00 <= code <= 0x9FFF      # CJK Unified Ideographs
-        or 0x3000 <= code <= 0x303F   # CJK 标点
-        or 0xFF00 <= code <= 0xFFEF   # 全角形式
-        or 0x3400 <= code <= 0x4DBF   # 扩展 A
+    """CJK 表意文字/全角符号判定（拼接规则用）.
+
+    输入可能是**多字符**（pdfplumber 对连字/聚类字符产出如 "fi" 的
+    text）——按"全部字符都是 CJK 才算 CJK"处理；空串按非 CJK。
+    """
+    if not ch:
+        return False
+    return all(
+        0x4E00 <= ord(c) <= 0x9FFF      # CJK Unified Ideographs
+        or 0x3000 <= ord(c) <= 0x303F   # CJK 标点
+        or 0xFF00 <= ord(c) <= 0xFFEF   # 全角形式
+        or 0x3400 <= ord(c) <= 0x4DBF   # 扩展 A
+        for c in ch
     )
 
 
@@ -415,19 +517,192 @@ def classify_furniture(
     return verdicts
 
 
-def heading_levels_for(sizes: list[float]) -> list[int]:
-    """标题行字号 -> 文档级档位 level（两遍式第二遍，验收修复）.
+def heading_levels_for(
+    sizes: list[float], min_occurrences: int = 1
+) -> list[int]:
+    """标题行字号 -> 文档级档位 level（两遍式第二遍，验收修复 v2）.
 
-    单页众数在"正文 12pt/表注 8pt/章题 16pt"页面上会把 8pt 也算档；
-    改为**全文档**收集 heading 行字号，排序去重后映射 1..n（大字号 =
-    浅 level）。同字号同档，保证章（16pt）=2、节（14pt）=3 这类真实
-    层级可恢复。字号集合为空时全部返回 1。
+    - 全文档收集 heading 行字号，排序去重映射 1..n（大字号=浅 level）；
+    - **频次过滤**（``min_occurrences``，默认 1 保持原行为）：出现次数
+      少于阈值的字号（封面/内封装饰大字只出现 1-2 次）**不进档位表**，
+      其 heading 映射到不超过自身的最近高频档（26pt 封面字 → 16pt 章
+      档）。真实结构标题必然重复出现（每章/每节同字号），这是封面
+      装饰字与结构标题的可靠区分信号（验收修复：档位被封面字污染后
+      "第一章"被垫到第 5 层）。
     """
     if not sizes:
         return []
-    distinct = sorted(set(round(float(s), 1) for s in sizes), reverse=True)
-    rank = {size: i + 1 for i, size in enumerate(distinct)}
-    return [rank[round(float(s), 1)] for s in sizes]
+    from collections import Counter
+
+    counts = Counter(round(float(s), 1) for s in sizes)
+    frequent = sorted(
+        (size for size, n in counts.items() if n >= min_occurrences),
+        reverse=True,
+    )
+    if not frequent:
+        return [1] * len(sizes)
+    rank = {size: i + 1 for i, size in enumerate(frequent)}
+
+    def _level_of(size: float) -> int:
+        key = round(float(size), 1)
+        if key in rank:
+            return rank[key]
+        # 稀有字号：向"不超过自身的最近高频档"取整
+        below = [s for s in frequent if s < key]
+        return rank[max(below)] if below else 1
+
+    return [_level_of(s) for s in sizes]
+
+
+#: 中文章节词（第一章…第九章，支持"第十二章"）。
+_CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def merge_heading_runs(
+    heading_lines: list[dict[str, Any]], intra_gap: float
+) -> list[dict[str, Any]]:
+    """相邻 heading 行合并（通用规则，验收 v4）.
+
+    长标题在 PDF 中常被排版折成多行（"第三章 …性 / 能研究"），字号与
+    行距都与单行标题一致。规则：相邻 heading 行 gap ≤ 阈值即视为同一
+    标题的续行，文本以空格拼接、bbox 联合。与段落聚合同一判据（行距
+    信号），非针对特定文档。
+    """
+    if not heading_lines:
+        return []
+    merged: list[list[dict[str, Any]]] = [[heading_lines[0]]]
+    for prev, cur in zip(heading_lines, heading_lines[1:]):
+        gap = float(cur["bbox"][1]) - float(prev["bbox"][3])
+        if gap <= intra_gap:
+            merged[-1].append(cur)
+        else:
+            merged.append([cur])
+    out: list[dict[str, Any]] = []
+    for members in merged:
+        text = " ".join(m["text"] for m in members)
+        out.append({
+            "text": text,
+            "bbox": (
+                min(m["bbox"][0] for m in members),
+                min(m["bbox"][1] for m in members),
+                max(m["bbox"][2] for m in members),
+                max(m["bbox"][3] for m in members),
+            ),
+            "size": members[0].get("size"),
+            "heading_by_pattern": any(
+                m.get("heading_by_pattern") for m in members
+            ),
+        })
+    return out
+
+
+def _shrink_table_below_headings(table: Any, heading_lines: list[dict[str, Any]]) -> Any:
+    """表格 bbox 顶边收缩：heading 行不属表格（通用防御，验收 v4）.
+
+    pdfplumber 的 mixed 策略有时把标题/页眉行圈进表格首行（"第二章…"
+    被吞）。规则：若 heading 行与表格 bbox 相交，表格顶边下压到这些行
+    的下沿——标题永远不属于表格，这是文档语义而非文档特定。
+    """
+    bx = list(table.bbox)
+    for line in heading_lines:
+        lb = line["bbox"]
+        # 相交判定（heading 行与表格顶带重叠）
+        if bx[0] < lb[2] and lb[0] < bx[2] and lb[1] < bx[3] and lb[3] > bx[1]:
+            if lb[3] > bx[1]:
+                bx[1] = max(bx[1], lb[3])
+    table.bbox = tuple(bx)
+    return table
+
+
+def numbered_heading_level(text: str) -> int | None:
+    """中文文档编号标题模式 -> 层级（纯映射规则，验收 v3）.
+
+    - ``第X章 …``（X 为中文数字，支持组合如"十二"）-> level 1；
+    - ``1.2 …`` / ``1.2.3 …`` / ``2.3.1.4 …``（1-4 级点分编号 + 空格 +
+      标题文字，且标题文字不以标点结尾）-> 编号段数 + 1；
+    - 其余 -> None（普通句子/年份/表号"表 2-2"等不匹配）。
+    """
+    import re
+
+    s = text.strip()
+    m = re.match(r"^第([一二三四五六七八九十]+)章\s+\S", s)
+    if m:
+        digits = m.group(1)
+        if len(digits) == 1:
+            return 1 if digits in _CN_NUM else None
+        # "十二" 组合（10-19），工程上够用
+        if len(digits) == 2 and digits[0] == "十" and digits[1] in _CN_NUM:
+            return 1
+        return None
+    m2 = re.match(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s+(\S[^。；，！？]{1,40})$", s)
+    if m2:
+        # 排除"表 2-2""图 1-1"类引用（开头不是数字已被正则排除）；
+        # 排除句尾是标点的普通句（正则已限）；年份如 "2023 年" 不带点分段
+        # "1.2"(1个点)->2、"1.2.2"(2个点)->3：层级=点数+1
+        return m2.group(1).count(".") + 1
+    return None
+
+
+def group_lines_into_paragraphs(
+    lines: list[dict[str, Any]],
+    intra_gap_threshold: float,
+) -> list[dict[str, Any]]:
+    """行 -> 段落聚合（gap 判段，真实论文验收修复）.
+
+    真实中文论文的行距信号非常清晰：段内行距 ≈7.4pt、段间距 ≈22.8pt
+    （3 倍差）。本函数按"行间隙 > 阈值即断段"聚合；段落 bbox 覆盖全部
+    成员行；文本拼接：上一行以 CJK 结尾且下一行以 CJK 开头 -> 无缝，
+    否则加一个空格（Latin 换行处还原词边界）。
+    """
+    if not lines:
+        return []
+    paragraphs: list[list[dict[str, Any]]] = [[lines[0]]]
+    for prev, cur in zip(lines, lines[1:]):
+        gap = float(cur["bbox"][1]) - float(prev["bbox"][3])
+        if gap > intra_gap_threshold:
+            paragraphs.append([cur])
+        else:
+            paragraphs[-1].append(cur)
+
+    out: list[dict[str, Any]] = []
+    for members in paragraphs:
+        texts = [m["text"] for m in members]
+        joined = ""
+        for i, t in enumerate(texts):
+            if i == 0:
+                joined = t
+            elif (
+                _is_cjk(texts[i - 1][-1]) if texts[i - 1] else False
+            ) and t and _is_cjk(t[0]):
+                joined += t  # CJK 跨行无缝
+            else:
+                joined += " " + t
+        out.append({
+            "text": joined,
+            "bbox": (
+                min(m["bbox"][0] for m in members),
+                min(m["bbox"][1] for m in members),
+                max(m["bbox"][2] for m in members),
+                max(m["bbox"][3] for m in members),
+            ),
+            "size": members[0].get("size"),
+        })
+    return out
+
+
+def _table_grid_effective_ratio(grid: list[list[str | None]]) -> float:
+    """text 回退策略的表格有效率（假表过滤，验收修复）.
+
+    page5 英文摘要被 text 策略误判为 78×6 表——单词间距被当成列对齐，
+    大半格子是 None。真实表格空格子只占少数；本函数返回非空格占比。
+    """
+    if not grid:
+        return 0.0
+    total = sum(len(row) for row in grid)
+    filled = sum(
+        1 for row in grid for cell in row if cell and str(cell).strip()
+    )
+    return filled / total if total else 0.0
 
 
 def _line_block(
@@ -456,9 +731,16 @@ def _line_block(
             container_ref=container_ref,
             bbox=bbox,
         )
-    level = 1
-    if doc_heading_sizes:
-        level = heading_levels_for(doc_heading_sizes + [line_size])[-1]
+    # level 优先级：编号模式（精确）> 字号档位（启发式，频次过滤后）。
+    pattern_level = numbered_heading_level(text)
+    if pattern_level is not None:
+        level = pattern_level
+    elif doc_heading_sizes:
+        level = heading_levels_for(
+            doc_heading_sizes + [line_size], min_occurrences=3
+        )[-1]
+    else:
+        level = 1
     return BackendBlock(
         block_type="heading",
         text=text,

@@ -99,3 +99,171 @@ class TestHeaderFooterAnnotation:
         assert verdict[0] == "page_number"
         assert verdict[1] == "page_number"
         assert verdict[2] is None  # 含年份数字的长行不是页码
+
+
+def _line(text, x0, top, x1, bottom, size=12.0):
+    return {"text": text, "bbox": (x0, top, x1, bottom), "size": size}
+
+
+class TestParagraphAssembly:
+    """行 -> 段落聚合（段内行距 vs 段间行距，真实论文 gap 7.4/22.8）."""
+
+    def test_lines_merge_into_paragraph_by_gap(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            group_lines_into_paragraphs,
+        )
+        lines = [
+            _line("第一段第一行", 79, 100, 300, 110),
+            _line("第一段第二行", 79, 117.4, 300, 127.4),  # gap 7.4 同段
+            _line("第二段第一行", 79, 150, 300, 160),      # gap 22.6 断段
+        ]
+        paras = group_lines_into_paragraphs(lines, intra_gap_threshold=13.5)
+        assert len(paras) == 2
+        assert paras[0]["text"].startswith("第一段第一行")
+        assert "第一段第二行" in paras[0]["text"]
+        assert paras[1]["text"] == "第二段第一行"
+
+    def test_cjk_paragraph_text_seamless(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            group_lines_into_paragraphs,
+        )
+        lines = [
+            _line("中文段落跨行", 79, 100, 300, 110),
+            _line("接排不断开", 79, 117.4, 300, 127.4),
+        ]
+        paras = group_lines_into_paragraphs(lines, intra_gap_threshold=13.5)
+        assert paras[0]["text"] == "中文段落跨行接排不断开"
+
+    def test_paragraph_bbox_covers_all_lines(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            group_lines_into_paragraphs,
+        )
+        lines = [
+            _line("甲", 79, 100, 200, 110),
+            _line("乙", 90, 117, 300, 127),
+        ]
+        paras = group_lines_into_paragraphs(lines, intra_gap_threshold=13.5)
+        assert paras[0]["bbox"] == (79, 100, 300, 127)
+
+    def test_single_line_stands_alone(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            group_lines_into_paragraphs,
+        )
+        paras = group_lines_into_paragraphs(
+            [_line("孤行", 79, 100, 200, 110)], intra_gap_threshold=13.5
+        )
+        assert len(paras) == 1 and paras[0]["text"] == "孤行"
+
+
+class TestTableQualityFilter:
+    """text 回退策略的假表过滤（page5 英文摘要被当 78×6 表，空格子大半）."""
+
+    def test_sparse_grid_rejected(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            _table_grid_effective_ratio,
+        )
+        grid = [["a", None, None], [None, None, "b"], [None, None, None]]
+        assert _table_grid_effective_ratio(grid) < 0.5
+
+    def test_dense_grid_accepted(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            _table_grid_effective_ratio,
+        )
+        grid = [["h1", "h2", "h3"], ["a", "b", "c"], ["d", "e", "f"]]
+        assert _table_grid_effective_ratio(grid) >= 0.5
+
+
+class TestHeadingFrequencyFilter:
+    """低频字号档（封面/内封装饰字，出现 1-2 次）不参与档位表."""
+
+    def test_rare_sizes_do_not_create_levels(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            heading_levels_for,
+        )
+        # 26pt 出现 2 次（封面装饰）、16pt×5（章）、14pt×8（节）
+        sizes = [26.0, 26.0] + [16.0] * 5 + [14.0] * 8
+        levels = heading_levels_for(sizes, min_occurrences=3)
+        # 26pt 被剔除档位表，映射到最近的高频档（16pt -> level 1）
+        assert levels[0] == 1 and levels[1] == 1
+        assert levels[2] == 1  # 16pt -> 1
+        assert levels[7] == 2  # 14pt -> 2
+
+    def test_no_frequent_sizes_all_level_one(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            heading_levels_for,
+        )
+        assert heading_levels_for([], min_occurrences=3) == []
+
+
+class TestNumberedHeading:
+    """编号标题模式（与正文同字号，字号启发式天然盲区）."""
+
+    def test_chapter_pattern(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            numbered_heading_level,
+        )
+        assert numbered_heading_level("第一章 绪论") == 1
+        assert numbered_heading_level("第十二章 结论") == 1
+
+    def test_section_depth(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            numbered_heading_level,
+        )
+        assert numbered_heading_level("1.2 光催化还原技术概述") == 2
+        assert numbered_heading_level("1.2.2 光催化还原技术的影响因素") == 3
+        assert numbered_heading_level("2.3.1.2 深层编号") == 4
+
+    def test_plain_text_not_heading(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            numbered_heading_level,
+        )
+        assert numbered_heading_level("这是一个普通句子。") is None
+        assert numbered_heading_level("2023 年数据统计如下") is None  # 年份非标题
+        assert numbered_heading_level("表 2-2 主要仪器") is None
+
+
+class TestHeadingContinuation:
+    """跨行标题合并（通用规则：相邻同字号 heading 行、行距为段内级）."""
+
+    def test_multiline_heading_merged(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            merge_heading_runs,
+        )
+        runs = [
+            _line("第三章 某材料的制备及其性能", 79, 100, 400, 114, size=16),
+            _line("研究", 79, 118, 120, 132, size=16),  # gap 4pt 续行
+            _line("3.1 引言", 79, 180, 160, 194, size=16),  # gap 48pt 断开
+        ]
+        merged = merge_heading_runs(runs, intra_gap=13.5)
+        assert len(merged) == 2
+        assert merged[0]["text"] == "第三章 某材料的制备及其性能 研究"
+        assert merged[1]["text"] == "3.1 引言"
+
+
+class TestTableDoesNotSwallowHeadings:
+    """表格 bbox 吞标题防御（通用：heading 行不属表格，顶边收缩）."""
+
+    def test_heading_row_excluded_and_bbox_shrunk(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            _shrink_table_below_headings,
+        )
+        table = type("T", (), {})()
+        table.bbox = (79, 83, 524, 400)  # 顶边渗入标题区
+        lines = [
+            {"text": "第二章 实验试剂", "bbox": (79, 90, 300, 104)},
+            {"text": "试剂名称", "bbox": (79, 130, 160, 144)},
+        ]
+        out = _shrink_table_below_headings(table, lines)
+        assert out.bbox[1] > 104  # 顶边压到标题行之下
+
+
+class TestLigatureSafety:
+    """连字/多字符 text 防御（对抗自审发现：fi 连字会崩单字符假设）."""
+
+    def test_multichar_ligature_handled(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            group_chars_into_lines,
+        )
+        chars = [_c(0, 0, "fi", x1=12), _c(12, 0, "镍", x1=24, size=12.0)]
+        lines = group_chars_into_lines(chars)
+        assert lines[0]["text"] == "fi 镍"

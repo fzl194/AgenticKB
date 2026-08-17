@@ -7,16 +7,18 @@
     读文件 bytes → FileInspector 探测 → ParserRouter 路由 → 适配器解析
     → Normalizer 产 Parse IR → validate → 渲染 HTML 报告
 
-报告内容：
-    - 概要：探测画像、路由决策（parser + 原因码）、指纹、元素/关系/容器计数
-    - 结构树：按容器分组，标题按层级缩进，段落全文，表格渲染为 HTML 网格
-      （合并单元格用 rowspan/colspan 还原），每元素附证据定位
-    - 质量标记：置信度 < 0.7 的元素（如 PDF 字号启发式标题）黄底标注
+报告 v2（结构化信息可见化）：
+    - 左栏：解析出的标题树（目录），点击跳转
+    - 概要：路由/容器/元素构成/关系数/表格数/IR 校验
+    - 主区结构视图：每个元素一行 = 类型徽章 + 内容 + 证据定位（页码/坐标），
+      家具（页眉/页码）折叠计数，表格渲染为网格（合并格跨行跨列）
+    - 尾部：TableAsset JSON 样例（展示下游消费的结构化数据形态）
 """
 from __future__ import annotations
 
 import argparse
 import html
+import json
 import sys
 from pathlib import Path
 
@@ -53,58 +55,85 @@ def parse_document(data: bytes, declared_mime: str | None = None):
 
 
 # ---------------------------------------------------------------------------
-# HTML 渲染
+# HTML 渲染（v2：结构化信息可见化）
 # ---------------------------------------------------------------------------
 
 _CSS = """
-body { font-family: "Microsoft YaHei", sans-serif; margin: 24px auto; max-width: 1080px;
-       color: #1f2937; line-height: 1.6; }
+body { font-family: "Microsoft YaHei", sans-serif; margin: 0; color: #1f2937; }
+.layout { display: flex; min-height: 100vh; }
+.toc { width: 320px; background: #f8fafc; border-right: 1px solid #e2e8f0;
+       padding: 20px 14px; position: sticky; top: 0; overflow-y: auto;
+       max-height: 100vh; font-size: 0.85em; }
+.toc a { color: #334155; text-decoration: none; display: block; padding: 2px 6px;
+         border-radius: 4px; }
+.toc a:hover { background: #e0e7ff; }
+.main { flex: 1; padding: 24px 40px; max-width: 920px; }
 h1 { border-bottom: 3px solid #2563eb; padding-bottom: 8px; }
-h2 { border-left: 4px solid #2563eb; padding-left: 10px; margin-top: 32px; }
+h2 { border-left: 4px solid #2563eb; padding-left: 10px; margin-top: 36px; }
 table.meta td { padding: 4px 12px; }
 table.meta td:first-child { color: #6b7280; white-space: nowrap; }
-section.doc { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 20px; margin: 12px 0; }
-.container { margin: 10px 0 18px 0; }
-.container-title { color: #2563eb; font-weight: 600; font-size: 0.95em; }
-.low-conf { background: #fef9c3; border-radius: 4px; padding: 1px 6px; }
-.ev { color: #9ca3af; font-size: 0.78em; margin-left: 8px; font-family: Consolas, monospace; }
-table.grid { border-collapse: collapse; margin: 6px 0 6px 28px; }
-table.grid td, table.grid th { border: 1px solid #d1d5db; padding: 4px 10px; font-size: 0.9em; }
+.badge { display: inline-block; font-size: 0.72em; border-radius: 10px;
+         padding: 1px 8px; margin-right: 6px; font-family: Consolas, monospace; }
+.b-heading { background: #dbeafe; color: #1d4ed8; }
+.b-paragraph { background: #dcfce7; color: #15803d; }
+.b-table { background: #fef3c7; color: #b45309; }
+.b-furniture { background: #f1f5f9; color: #94a3b8; }
+.b-unknown, .b-figure, .b-list_item, .b-code, .b-quote { background: #ede9fe; color: #6d28d9; }
+.low-conf { background: #fef9c3; border-radius: 4px; padding: 1px 6px; font-size: 0.75em; }
+.ev { color: #9ca3af; font-size: 0.75em; margin-left: 8px; font-family: Consolas, monospace; }
+.el { margin: 5px 0; padding: 4px 10px; border-radius: 6px; }
+.el-heading { background: #eff6ff; font-weight: 600; }
+.el-paragraph { background: #ffffff; }
+.el-table { background: #fffbeb; }
+.el-furniture { background: #f8fafc; color: #94a3b8; font-size: 0.85em; }
+table.grid { border-collapse: collapse; margin: 6px 0 6px 20px; }
+table.grid td, table.grid th { border: 1px solid #d1d5db; padding: 4px 10px; font-size: 0.88em; }
 table.grid th { background: #f3f4f6; }
 .warn { color: #b45309; }
-.headings { border-left: 2px solid #e5e7eb; margin-left: 10px; padding-left: 16px; }
+.container-head { color: #2563eb; font-weight: 600; margin-top: 18px;
+                  border-bottom: 1px dashed #cbd5e1; padding-bottom: 4px; }
+pre.ir { background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 8px;
+         overflow-x: auto; font-size: 0.8em; }
 """
+
+_FURNITURE = ("page_header", "page_footer", "page_number")
 
 
 def _e(text: str) -> str:
     return html.escape(text or "")
 
 
-def _evidence_tag(element) -> str:
-    parts = []
+def _ev_tag(element) -> str:
     for span in element.source_spans:
+        if span.visual_region:
+            vr = span.visual_region
+            pg, bbox = vr.get("page_index"), vr.get("bbox")
+            if pg is not None and bbox:
+                coords = ",".join(str(round(v)) for v in bbox)
+                return f'<span class="ev">p{pg + 1} · bbox({coords})</span>'
         if span.source_locator:
-            parts.append(str(span.source_locator))
-        elif span.visual_region:
-            parts.append(str(span.visual_region))
-        elif span.native_ref:
-            parts.append(str(span.native_ref))
-    return f'<span class="ev">{_e(" | ".join(parts[:1]))}</span>' if parts else ""
+            return f'<span class="ev">{_e(str(span.source_locator)[:60])}</span>'
+        if span.native_ref:
+            return f'<span class="ev">{_e(str(span.native_ref)[:60])}</span>'
+    return ""
+
+
+def _badge(t: str) -> str:
+    cls = "b-furniture" if t in _FURNITURE else f"b-{t}"
+    return f'<span class="badge {cls}">{t}</span>'
 
 
 def _render_table_asset(asset) -> str:
-    grid: dict[tuple[int, int], str] = {}
-    span_map: dict[tuple[int, int], tuple[int, int]] = {}
+    grid, span_map = {}, {}
     for cell in asset.cells:
-        span_map[(cell.row_index, cell.column_index)] = (
-            cell.row_span, cell.column_span,
-        )
+        span_map[(cell.row_index, cell.column_index)] = (cell.row_span, cell.column_span)
         grid[(cell.row_index, cell.column_index)] = _e(cell.text)
     if not grid:
         return ""
     max_r = max(r for r, _ in grid) + 1
     max_c = max(c for _, c in grid) + 1
-    covered: set[tuple[int, int]] = set()
+    header_cells = {(c.row_index, c.column_index) for c in asset.cells if c.is_header}
+    covered: set = set()
     rows_html = []
     for r in range(max_r):
         cells_html = []
@@ -115,39 +144,39 @@ def _render_table_asset(asset) -> str:
             for rr in range(r, r + rs):
                 for cc in range(c, c + cs):
                     covered.add((rr, cc))
-            attrs = ""
-            if rs > 1:
-                attrs += f' rowspan="{rs}"'
-            if cs > 1:
-                attrs += f' colspan="{cs}"'
-            tag = "th" if any(
-                cell.row_index == r and cell.column_index == c and cell.is_header
-                for cell in asset.cells
-            ) else "td"
+            attrs = (f' rowspan="{rs}"' if rs > 1 else "") + (f' colspan="{cs}"' if cs > 1 else "")
+            tag = "th" if (r, c) in header_cells else "td"
             cells_html.append(f"<{tag}{attrs}>{grid[(r, c)]}</{tag}>")
         if cells_html:
             rows_html.append("<tr>" + "".join(cells_html) + "</tr>")
-    return (
-        f'<table class="grid">{"".join(rows_html)}</table>'
-        f'<div class="ev">table {asset.rows}×{asset.columns}'
-        + (f'，续表→{_e(asset.continuation_of)}' if asset.continuation_of else "")
-        + "</div>"
-    )
+    note = f'<div class="ev">{asset.rows}行×{asset.columns}列' + (
+        f" · 续表→{_e(asset.continuation_of)}" if asset.continuation_of else "") + "</div>"
+    return f'<table class="grid">{"".join(rows_html)}</table>{note}'
 
 
-def _container_group_html(doc: ParsedDocument) -> str:
-    tables_by_element = {}
-    for asset in doc.structured_assets.values():
-        if hasattr(asset, "rows"):
-            tables_by_element.setdefault(None, None)  # 占位，见下方关联
-    # TableAsset 与 table element 的关联：按 caption/顺序无法稳定反查，
-    # 简化处理——表格渲染跟随其对应 table element 的文档顺序（按
-    # structured_assets 中的出现顺序在对应容器尾部展示）。
-    table_assets = [
-        a for a in doc.structured_assets.values() if hasattr(a, "rows")
-    ]
-    table_iter = iter(table_assets)
+def _heading_depth(doc: ParsedDocument, element) -> int:
+    by_id = {e.element_id: e for e in doc.elements}
+    d, node = 0, element
+    while node.parent_id and node.parent_id in by_id:
+        d += 1
+        node = by_id[node.parent_id]
+    return d
 
+
+def _toc_html(doc: ParsedDocument) -> str:
+    items = []
+    for e in doc.elements:
+        if e.element_type != "heading":
+            continue
+        d = min(_heading_depth(doc, e), 5)
+        items.append(
+            f'<div style="margin-left:{d * 12}px"><a href="#el-{e.element_id}">'
+            f"{_e(e.text[:40])}</a></div>"
+        )
+    return "\n".join(items) if items else "<div>(无标题)</div>"
+
+
+def _structure_html(doc: ParsedDocument) -> str:
     by_container: dict[str | None, list] = {}
     order: list[str | None] = []
     for element in doc.elements:
@@ -156,133 +185,130 @@ def _container_group_html(doc: ParsedDocument) -> str:
             by_container[cid] = []
             order.append(cid)
         by_container[cid].append(element)
-
     containers_by_id = {c.container_id: c for c in doc.containers}
-    out = []
+    table_assets = [a for a in doc.structured_assets.values() if hasattr(a, "rows")]
+    table_iter = iter(table_assets)
+
+    parts = []
     for cid in order:
         meta = containers_by_id.get(cid) if cid else None
-        title = (
-            f"{meta.container_type}"
-            + (f" #{meta.page_number}" if meta.page_number else "")
-            + (f" · {meta.name}" if meta.name else "")
-        ) if meta else "文档（无容器）"
-        out.append('<div class="container">')
-        out.append(f'<div class="container-title">▣ {_e(title)}</div>')
-        depth = 0
-        pending_tables: list[str] = []
-        furniture_count = 0
-        for element in by_container[cid]:
-            if element.element_type in ("page_header", "page_footer", "page_number"):
-                furniture_count += 1
-                continue  # 家具折叠：不逐条展示（见容器尾摘要）
-        if furniture_count:
-            out.append(
-                f'<div class="ev">⋯ 本页家具（页眉/页码）{furniture_count} 项已折叠</div>'
+        if meta:
+            title = f"{meta.container_type}" + (
+                f" #{meta.page_number}" if meta.page_number else "")
+            if meta.name:
+                title += f" · {_e(meta.name)}"
+        else:
+            title = "文档"
+        parts.append(f'<div class="container-head">{title}</div>')
+        elements = by_container[cid]
+        furniture = [e for e in elements if e.element_type in _FURNITURE]
+        content = [e for e in elements if e.element_type not in _FURNITURE]
+        if furniture:
+            n_h = sum(1 for e in furniture if e.element_type == "page_header")
+            n_n = sum(1 for e in furniture if e.element_type == "page_number")
+            parts.append(
+                f'<div class="el el-furniture">⋯ 家具 {len(furniture)} 项'
+                f"（页眉 {n_h} / 页码 {n_n}）——已按类型分流，可过滤</div>"
             )
-        content = [
-            e for e in by_container[cid]
-            if e.element_type not in ("page_header", "page_footer", "page_number")
-        ]
         for element in content:
+            conf = ""
+            if element.confidence.type is not None and element.confidence.type < 0.7:
+                conf = f'<span class="low-conf">置信 {round(element.confidence.type, 2)}</span> '
+            anchor = f'id="el-{element.element_id}"'
             if element.element_type == "heading":
-                level = 1
-                for span in element.source_spans:
-                    pass
-                # heading 深度：由父链推断（同容器内向父 heading 数）
-                depth = _heading_depth(doc, element)
-                tag = f"h{min(depth + 1, 6)}"
-                out.append(
-                    f'<div style="margin-left:{depth * 14}px">'
-                    f"<{tag}>{_e(element.text)}{_evidence_tag(element)}</{tag}></div>"
+                d = min(_heading_depth(doc, element), 5)
+                parts.append(
+                    f'<div class="el el-heading" {anchor} style="margin-left:{d * 18}px">'
+                    f"{_badge(element.element_type)}{conf}{_e(element.text)}{_ev_tag(element)}</div>"
                 )
-                continue
-            if element.element_type == "paragraph":
-                conf = ""
-                if element.confidence.type is not None and element.confidence.type < 0.7:
-                    conf = '<span class="low-conf">低置信</span> '
-                out.append(
-                    f'<p style="margin-left:{depth * 14 + 10}px">{conf}'
-                    f"{_e(element.text)}{_evidence_tag(element)}</p>"
-                )
-                continue
-            if element.element_type == "table":
+            elif element.element_type == "table":
                 asset = next(table_iter, None)
-                if asset is not None:
-                    pending_tables.append(_render_table_asset(asset))
-                continue
-            # 其余类型（list_item/code/figure/…）
-            out.append(
-                f'<p style="margin-left:{depth * 14 + 10}px">'
-                f'<b>[{_e(element.element_type)}]</b> {_e(element.text)}'
-                f"{_evidence_tag(element)}</p>"
-            )
-        for rendered in pending_tables:
-            out.append(rendered)
-        out.append("</div>")
-    return "\n".join(out)
-
-
-def _heading_depth(doc: ParsedDocument, element) -> int:
-    by_id = {e.element_id: e for e in doc.elements}
-    depth = 0
-    node = element
-    while node.parent_id is not None and node.parent_id in by_id:
-        depth += 1
-        node = by_id[node.parent_id]
-    return depth
+                rendered = _render_table_asset(asset) if asset else ""
+                parts.append(
+                    f'<div class="el el-table" {anchor}>'
+                    f"{_badge(element.element_type)}表格{rendered}</div>"
+                )
+            else:
+                parts.append(
+                    f'<div class="el el-paragraph" {anchor}>'
+                    f"{_badge(element.element_type)}{conf}{_e(element.text)}{_ev_tag(element)}</div>"
+                )
+    return "\n".join(parts)
 
 
 def render_report(profile, decision, doc: ParsedDocument, source_name: str) -> str:
     verdict = validate(doc)
     warnings = list(doc.diagnostics.warnings)
-    low_conf_count = sum(
-        1 for e in doc.elements
-        if e.confidence.type is not None and e.confidence.type < 0.7
-    )
-    meta_rows = [
-        ("文件", _e(source_name)),
-        ("探测格式", f"{profile.source_format}（MIME {profile.detected_mime}）"),
-        ("容器数/类型", f"{len(doc.containers)} · {profile.container_kind or '—'}"),
-        ("路由决策", f"<b>{_e(decision.primary_parser_id)}</b>"
-         f"（reason: {', '.join(decision.reason_codes) or '—'}）"),
-        ("解析器指纹", _e(doc.source_identity.parser_fingerprint)),
-        ("元素总数", str(len(doc.elements))),
-        ("结构关系数", str(len(doc.relations))),
-        ("表格资产数", str(len(doc.structured_assets))),
-        ("IR 校验", "通过" if verdict.valid else f"<b class='warn'>失败</b>"),
-        ("低置信元素", f"{low_conf_count}" + ("（如 PDF 启发式标题）" if low_conf_count else "")),
-    ]
-    if warnings:
-        meta_rows.append(("解析警告", f'<span class="warn">{_e("; ".join(warnings[:5]))}</span>'))
-
     types_count: dict[str, int] = {}
     for e in doc.elements:
         types_count[e.element_type] = types_count.get(e.element_type, 0) + 1
-    type_summary = " · ".join(f"{k}×{v}" for k, v in sorted(types_count.items()))
+    table_assets = [a for a in doc.structured_assets.values() if hasattr(a, "rows")]
+
+    meta_rows = [
+        ("文件", _e(source_name)),
+        ("格式 → 路由", f"{profile.source_format} → <b>{_e(decision.primary_parser_id)}</b>"),
+        ("容器", f"{len(doc.containers)}（{profile.container_kind or '—'}）"),
+        ("元素", f"{len(doc.elements)}（" + " · ".join(
+            f"{k}×{v}" for k, v in sorted(types_count.items())) + "）"),
+        ("结构关系", f"{len(doc.relations)} 条（heading 父子 / 阅读顺序）"),
+        ("表格资产", f"{len(table_assets)} 张（网格 + 合并格 + 表头标记）"),
+        ("IR 校验", "通过" if verdict.valid else "<b class='warn'>失败</b>"),
+    ]
+    if warnings:
+        meta_rows.append(("警告", f'<span class="warn">{_e("; ".join(warnings[:4]))}</span>'))
+
+    sample = ""
+    if table_assets:
+        asset = table_assets[0]
+        sample = json.dumps(
+            {
+                "kind": "table",
+                "table_id": asset.table_id,
+                "rows": asset.rows,
+                "columns": asset.columns,
+                "header_regions": [list(r) for r in asset.header_regions],
+                "cells(sample)": [
+                    {
+                        "row": c.row_index, "col": c.column_index,
+                        "text": c.text[:20], "row_span": c.row_span,
+                        "column_span": c.column_span, "is_header": c.is_header,
+                    }
+                    for c in asset.cells[:6]
+                ],
+                "confidence": {"type": asset.confidence.type, "source": asset.confidence.source},
+            },
+            ensure_ascii=False, indent=2,
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8">
-<title>解析预览 · {_e(source_name)}</title>
+<title>解析结构 · {_e(source_name)}</title>
 <style>{_CSS}</style></head>
 <body>
-<h1>解析效果预览</h1>
+<div class="layout">
+<nav class="toc"><b>目录（解析出的标题树）</b>
+{_toc_html(doc)}
+</nav>
+<div class="main">
+<h1>文档解析结构报告</h1>
 <table class="meta">
 {''.join(f'<tr><td>{k}</td><td>{v}</td></tr>' for k, v in meta_rows)}
 </table>
-<p class="ev">元素构成：{_e(type_summary)}</p>
-<h2>解析出的文档结构（按容器分组）</h2>
-<section class="doc">
-{_container_group_html(doc)}
-</section>
-<p class="ev">说明：黄底“低置信”= 解析器自报置信度 &lt; 0.7（如 PDF 字号启发式判定
-的标题）；灰色等宽字 = 证据定位（行号/页码+坐标/单元格/xpath）。</p>
+<h2>结构视图</h2>
+<p class="ev">每个元素 = 类型徽章 + 内容 + 证据定位；黄底=低置信判定；家具已分流。</p>
+{_structure_html(doc)}
+<h2>结构化数据形态（表格资产 JSON 样例）</h2>
+<p class="ev">下游（检索 / Agent / 切片编译）消费的就是这样的记录：行列数、单元格
+网格（文本+坐标+跨行跨列）、表头区、置信度——不是一段 Markdown 文本。</p>
+<pre class="ir">{_e(sample or "(无表格资产)")}</pre>
+</div></div>
 </body></html>"""
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="解析效果预览器（纯本地验收工具）")
     ap.add_argument("file", help="待解析文档（pdf/docx/xlsx/pptx/html/md/txt）")
-    ap.add_argument("-o", "--out", default=None, help="输出 HTML 路径（默认与源文件同目录）")
+    ap.add_argument("-o", "--out", default=None, help="输出 HTML 路径")
     args = ap.parse_args()
 
     path = Path(args.file)
@@ -297,17 +323,13 @@ def main() -> None:
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }.get(path.suffix.lower())
-    if declared is None:
-        print(f"提示：未识别扩展名 {path.suffix}，交由内容签名探测")
 
     profile, decision, doc = parse_document(data, declared_mime=declared)
     out = Path(args.out) if args.out else path.with_suffix(".parse-preview.html")
-    out.write_text(
-        render_report(profile, decision, doc, path.name), encoding="utf-8"
-    )
+    out.write_text(render_report(profile, decision, doc, path.name), encoding="utf-8")
     print(f"路由: {decision.primary_parser_id}  元素: {len(doc.elements)}  "
           f"容器: {len(doc.containers)}  表格: {len(doc.structured_assets)}")
-    print(f"报告已生成: {out.resolve()}")
+    print(f"报告: {out.resolve()}")
 
 
 if __name__ == "__main__":

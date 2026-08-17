@@ -205,10 +205,40 @@ def _page_to_blocks(
 
     modal_size = _modal_char_size(page.chars)
     tables = _find_tables_with_fallback(page)
+    # 数据核心收缩（验收 v6）：上下框陷阱中候选区域上半部是标题/正文；
+    # 按行片段数（列对齐信号）求收缩框。pdfplumber Table.bbox 只读且
+    # crop 重查会丢行——收缩结果走旁路表：``_table_block`` 以收缩框
+    # 报告 bbox，正文过滤（table_boxes）也用收缩框，使标题/正文行
+    # 不再被当作表内内容剔除；表格行列数据仍用原 extract（顶部偶带
+    # 一行页眉文本，由家具标注兜底）。
+    shrink_overrides: dict[int, tuple] = {}
+    for ti, table in enumerate(tables):
+        bx = tuple(table.bbox)
+        region_chars = [
+            c for c in page.chars
+            if bx[0] <= c["x0"] <= bx[2] and bx[1] <= c["top"] <= bx[3]
+        ]
+        region_lines = [
+            {**ln, "_chars": [
+                c for c in region_chars
+                if ln["bbox"][1] <= c["top"] <= ln["bbox"][3]
+            ]}
+            for ln in group_chars_into_lines(region_chars)
+        ]
+        target = shrink_bbox_to_data_core(bx, region_lines)
+        if target != bx:
+            shrink_overrides[ti] = target
     table_blocks = [
-        _table_block(table, k, index) for k, table in enumerate(tables)
+        _table_block(
+            table, k, index,
+            bbox_override=shrink_overrides.get(k),
+        )
+        for k, table in enumerate(tables)
     ]
-    table_boxes = [tuple(table.bbox) for table in tables]
+    table_boxes = [
+        shrink_overrides.get(k) or tuple(table.bbox)
+        for k, table in enumerate(tables)
+    ]
 
     # CJK 修复（真实论文验收）：extract_words 按空格分词，中文连排会被
     # 拆成单字碎片——直接用 chars 聚行并按 CJK 规则拼接。随后：
@@ -246,12 +276,8 @@ def _page_to_blocks(
     paragraphs = group_lines_into_paragraphs(
         body_lines, intra_gap_threshold=_paragraph_gap_threshold(body_lines)
     )
-    # 表格 bbox 顶边收缩：标题行不属表格（mixed 策略偶发圈入页眉/标题）
-    if heading_lines:
-        tables = [_shrink_table_below_headings(t, heading_lines) for t in tables]
-        table_blocks = [
-            _table_block(table, k, index) for k, table in enumerate(tables)
-        ]
+    # 注：早期"_shrink_table_below_headings"已被数据核心收缩
+    # （shrink_bbox_to_data_core，旁路 bbox_override）取代并移除接线。
     text_blocks = [
         _line_block(ln, modal_size, container_ref, doc_heading_sizes)
         for ln in [*heading_lines, *paragraphs]
@@ -345,7 +371,147 @@ def _find_tables_with_fallback(page: Any) -> list[Any]:
                 accepted.append(table)
     except Exception:  # noqa: BLE001 —— 表格识别失败不阻断整页解析
         pass
-    return accepted
+    if accepted:
+        return accepted
+    # 第四层（验收 v7）：片段块聚类——数据行（列对齐）自建候选框，
+    # crop 内用 text 策略提取。覆盖无线三线表/上下框陷阱后仍能救回
+    # 真表（p27 场景：主候选被拒后，text 整页粘连，真表 16 行藏在其中）。
+    try:
+        return _tables_from_fragment_blocks(page)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _tables_from_fragment_blocks(page: Any) -> list[Any]:
+    """多片段行块 -> crop 内 text 提取的表（第四层候选来源）."""
+    lines = group_chars_into_lines(page.chars)
+    enriched = []
+    for ln in lines:
+        cs = [
+            c for c in page.chars
+            if ln["bbox"][1] <= c["top"] <= ln["bbox"][3]
+        ]
+        enriched.append({**ln, "segments": _line_segments(cs)})
+    blocks = cluster_fragment_lines(enriched)
+    out: list[Any] = []
+    for block in blocks:
+        top = min(l["bbox"][1] for l in block) - 3
+        bottom = max(l["bbox"][3] for l in block) + 3
+        left = min(l["bbox"][0] for l in block) - 3
+        right = max(l["bbox"][2] for l in block) + 3
+        cropped = page.crop((left, top, right, bottom))
+        found = cropped.find_tables({
+            "horizontal_strategy": "text",
+            "vertical_strategy": "text",
+            "snap_tolerance": 4,
+        })
+        for table in found:
+            if _is_plausible_table(table, page):
+                out.append(table)
+    return out
+
+
+def _line_segments(line_chars: list[dict[str, Any]], gap: float = 20.0) -> int:
+    """一行字符的文本片段数（x 间隔 >gap 断开）——列对齐信号."""
+    if not line_chars:
+        return 0
+    frags: list[list[float]] = []
+    for c in sorted(line_chars, key=lambda c: c["x0"]):
+        if frags and c["x0"] - frags[-1][1] < gap:
+            frags[-1][1] = max(frags[-1][1], c["x1"])
+        else:
+            frags.append([c["x0"], c["x1"]])
+    return len(frags)
+
+
+def cluster_fragment_lines(
+    lines: list[dict[str, Any]], max_gap: float = 45, min_rows: int = 2
+) -> list[list[dict[str, Any]]]:
+    """多片段行聚成连续块（第四层表格候选，验收 v7）.
+
+    数据行（segments >=2，列对齐）按 top 排序后，行间隙 <= ``max_gap``
+    聚为同块；块内行数 >= ``min_rows`` 才输出（孤行多为图注/页脚）。
+    与数据核心收缩共用同一信号（行片段数），非文档特定。
+    """
+    multi = sorted(
+        (ln for ln in lines if int(ln.get("segments") or 1) >= 2),
+        key=lambda ln: ln["bbox"][1],
+    )
+    blocks: list[list[dict[str, Any]]] = []
+    for ln in multi:
+        if blocks and ln["bbox"][1] - blocks[-1][-1]["bbox"][3] <= max_gap:
+            blocks[-1].append(ln)
+        else:
+            blocks.append([ln])
+    return [b for b in blocks if len(b) >= min_rows]
+
+
+def shrink_bbox_to_data_core(
+    bbox: tuple, region_lines: list[dict[str, Any]]
+) -> tuple:
+    """表格 bbox 收缩到"数据核心区"（验收 v6，通用规则）.
+
+    上下框陷阱中，候选区域上半部是标题/正文（每行 1 个文本片段），
+    下半部才是真表格数据（每行 >=2 片段——列对齐）。规则：
+    - 找出全部多片段行（``segments >= 2``）；
+    - 若这些行的 top 最大间隔 > 1.8×区域行距中位数（说明中间夹了
+      非表格内容），只取**连续行块**（从最下方块起）；
+    - bbox 顶边收缩到该块首行 top；无多片段行则原样返回（另行由
+      调用方的列校验拒绝）。
+    """
+    multi = [
+        ln for ln in region_lines
+        if int(ln.get("segments") or 1) >= 2 or _line_segments(
+            ln.get("_chars") or []
+        ) >= 2
+    ]
+    if not multi:
+        return tuple(bbox)
+    # 连续块：按 top 排序，行距异常处断开，取含最多行的末块
+    multi.sort(key=lambda ln: ln["bbox"][1])
+    blocks: list[list[dict[str, Any]]] = [[multi[0]]]
+    for prev, cur in zip(multi, multi[1:]):
+        gap = cur["bbox"][1] - prev["bbox"][3]
+        blocks[-1].append(cur) if gap <= 30 else blocks.append([cur])
+    core = max(blocks, key=len) if len(blocks) > 1 else blocks[0]
+    top = min(ln["bbox"][1] for ln in core)
+    # 守卫（区分两类场景）：真表格区域里多片段行占**多数**（表头+数据
+    # 行都列对齐）；上下框陷阱里多片段行只是末尾小部（上部全是单片段
+    # 标题/正文）。多片段行占比 <40% 时收缩可疑（可能误伤），放弃。
+    total_lines = len(region_lines)
+    multi_ratio = len(multi) / total_lines if total_lines else 0.0
+    if multi_ratio < 0.40 and (top - bbox[1]) > (bbox[3] - bbox[1]) * 0.5:
+        return tuple(bbox)
+    return (bbox[0], max(bbox[1], top), bbox[2], bbox[3])
+
+
+def _region_has_column_structure(
+    region_lines: list[dict[str, Any]],
+) -> bool:
+    """区域文本是否呈列对齐结构（表格语义校验，验收 v5）.
+
+    上下框陷阱：仅两条横线夹住的正文（章标题+正文段）会被 mixed 策略
+    圈成"表"。真表格的单元格文本在列方向对齐——把区域按行聚出的文本
+    片段 x0 做簇分析，**同一纵向位置出现 >=2 行**才算一列；有效列数
+    >=2 才是表格。
+    """
+    if len(region_lines) < 2:
+        return False
+    # (x0, x1) 文本片段；行间允许 gap
+    x_starts = sorted(
+        (ln["x0"], ln["x1"]) for ln in region_lines if ln.get("text")
+    )
+    if not x_starts:
+        return False
+    # 贪心聚列簇：x0 相差 <12pt 归同簇
+    columns: list[list[tuple[float, float]]] = [[x_starts[0]]]
+    for xs in x_starts[1:]:
+        if xs[0] - columns[-1][-1][0] < 12:
+            columns[-1].append(xs)
+        else:
+            columns.append([xs])
+    effective_cols = sum(1 for col in columns if len(col) >= 2)
+    return effective_cols >= 2
 
 
 def _is_plausible_table(table: Any, page: Any) -> bool:
@@ -366,7 +532,55 @@ def _is_plausible_table(table: Any, page: Any) -> bool:
         if area > 0.60:
             return False
         ratio = _table_grid_effective_ratio(table.extract() or [])
-        return ratio >= 0.40
+        if ratio < 0.40:
+            return False
+        # 上下框陷阱防御（验收 v5/v6）：三个网格级校验。
+        # 1) 有效列数 >=2（"仅两条横线夹住的正文"多数行 1 列非空）；
+        # 2) 无跨列文本行（竖切列若把同一文字行切碎——行内多个相邻格
+        #    有内容且拼接后是连续正文——说明列边界切在文字中间，
+        #    p27 场景：标题/正文被切成 4 列"内容"骗过列数校验）。
+        #    判定：格子文本以中缀（无标点/空格结尾）断裂跨格 >=2 次即拒。
+        grid = table.extract() or []
+        n_cols = max((len(row) for row in grid), default=0)
+        if n_cols < 2:
+            return False
+        col_filled = [0] * n_cols
+        import re as _re
+
+        def _row_breaks(cells: list[str]) -> int:
+            breaks = 0
+            for a, b in zip(cells, cells[1:]):
+                if a and b and a[-1] not in "。；，、：）)] " and b[0] not in "（([ ":
+                    breaks += 1
+            return breaks
+
+        def _is_caption_row(cells: list[str]) -> bool:
+            """题注行：'表 N-N'/'Table N-N' 开头或跨全列的单行内容."""
+            joined = "".join(cells)
+            return bool(
+                _re.match(r"^(表\s*\d|Table\s*\d)", joined)
+                or sum(1 for c in cells if c) <= 1
+            )
+
+        split_word_rows = 0
+        data_rows = 0
+        for row in grid:
+            cells = [str(c).strip() if c else "" for c in row]
+            for ci, cell in enumerate(cells):
+                if cell and ci < n_cols:
+                    col_filled[ci] += 1
+            if _is_caption_row(cells):
+                continue  # 题注跨列居中是正常形态
+            data_rows += 1
+            if _row_breaks(cells) >= 2:
+                split_word_rows += 1
+        effective_cols = sum(1 for n in col_filled if n >= 2)
+        if effective_cols < 2:
+            return False
+        # 多数**数据行**的文本被列边界切碎 = 列切在文字中间 = 不是表
+        if data_rows and split_word_rows > data_rows / 2:
+            return False
+        return True
     except Exception:  # noqa: BLE001 —— 单表判定失败按不成立处理
         return False
     except Exception:  # noqa: BLE001 —— 表格识别失败不阻断整页解析
@@ -719,7 +933,10 @@ def _line_block(
     text = line["text"]
     bbox = line["bbox"]
     line_size = float(line.get("size") or 0.0)
-    is_heading = (
+    # 分流已在 _page_to_blocks 完成（字号启发式 ∨ 编号模式）；此处尊重
+    # 上游判定——heading_by_pattern 标记的行字号同正文，不能再按字号
+    # 重判降级（接缝 bug：模式识别命中后在这里被冲掉，验收 v5）。
+    is_heading = bool(line.get("heading_by_pattern")) or (
         modal_size > 0
         and line_size > HEADING_SIZE_RATIO * modal_size
         and len(text) <= HEADING_MAX_LINE_CHARS
@@ -756,14 +973,24 @@ def _line_block(
     )
 
 
-def _table_block(table: Any, table_index: int, page_index: int) -> BackendBlock:
-    """pdfplumber Table -> table 块（cells 坐标网格推 span）."""
+def _table_block(
+    table: Any,
+    table_index: int,
+    page_index: int,
+    bbox_override: tuple | None = None,
+) -> BackendBlock:
+    """pdfplumber Table -> table 块（cells 坐标网格推 span）.
+
+    ``bbox_override``：数据核心收缩框（pdfplumber Table.bbox 只读，
+    收缩结果经旁路传入；行列数据保持原 extract）。
+    """
     structure = _table_structure(table)
+    box = bbox_override or tuple(float(v) for v in table.bbox)
     return BackendBlock(
         block_type="table",
         text=_table_text(structure),
         container_ref={"container_type": "page", "index": page_index},
-        bbox=tuple(float(v) for v in table.bbox),
+        bbox=tuple(float(v) for v in box),
         native_ref={"page": page_index, "table_index": table_index},
         structure=structure,
     )

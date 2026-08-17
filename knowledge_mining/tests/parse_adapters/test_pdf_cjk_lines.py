@@ -267,3 +267,89 @@ class TestLigatureSafety:
         chars = [_c(0, 0, "fi", x1=12), _c(12, 0, "镍", x1=24, size=12.0)]
         lines = group_chars_into_lines(chars)
         assert lines[0]["text"] == "fi 镍"
+
+
+class TestTwoLineTrapTable:
+    """上下框陷阱防御：仅两条横线夹住的正文不是表格（通用语义）.
+
+    真表格的文本在列方向上对齐成 >=2 列（多行共享相近的 x 起点）；
+    普通正文行 x0 高度一致但每行是一整段——用"行内文本是否可切出
+    >=2 个列簇"判定。
+    """
+
+    def test_trap_rejected(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            _region_has_column_structure,
+        )
+        # 普通正文行：每行一个连续文本块，无列簇
+        region = [
+            {"x0": 79, "x1": 500, "text": "第二章 实验试剂及研究方法"},
+            {"x0": 79, "x1": 500, "text": "2.1 实验试剂"},
+            {"x0": 79, "x1": 500, "text": "本论文实验部分所涉及的全部化学试剂"},
+        ]
+        assert _region_has_column_structure(region) is False
+
+    def test_real_columns_accepted(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            _region_has_column_structure,
+        )
+        # 表格行：试剂名 | 规格 | 厂商 三列，行间 x0 形成簇
+        region = [
+            {"x0": 79, "x1": 200, "text": "乙腈"},
+            {"x0": 210, "x1": 320, "text": "分析纯"},
+            {"x0": 330, "x1": 480, "text": "广东光华"},
+            {"x0": 79, "x1": 200, "text": "三乙醇胺"},
+            {"x0": 210, "x1": 320, "text": "分析纯"},
+            {"x0": 330, "x1": 480, "text": "光华科技"},
+        ]
+        assert _region_has_column_structure(region) is True
+
+
+class TestDataCoreShrink:
+    """表格 bbox 收缩到数据核心区（通用：列对齐行块反推边界）."""
+
+    def test_shrink_to_multifragment_rows(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            shrink_bbox_to_data_core,
+        )
+        # 上半部单片段（标题/正文），下半部三片段（表头+数据）
+        region_lines = [
+            {"text": "第二章", "bbox": (79, 98, 400, 110)},
+            {"text": "2.1", "bbox": (79, 140, 300, 152)},
+            {"text": "正文段落", "bbox": (79, 171, 500, 183)},
+            {"text": "表头A 表头B", "bbox": (79, 269, 500, 281), "segments": 3},
+            {"text": "d1 d2", "bbox": (79, 290, 500, 302), "segments": 3},
+            {"text": "e1 e2", "bbox": (79, 311, 500, 323), "segments": 3},
+            {"text": "f1 f2", "bbox": (79, 332, 500, 344), "segments": 3},
+        ]
+        # 多片段行 4/7 >= 40% 且收缩是"剥掉上部单片段区"——允许
+        new_box = shrink_bbox_to_data_core((79, 60, 508, 350), region_lines)
+        assert new_box[1] >= 250  # 顶边压到多片段行块
+
+    def test_no_multifragment_no_shrink(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            shrink_bbox_to_data_core,
+        )
+        lines = [{"text": "只有标题和正文", "bbox": (79, 98, 400, 110), "segments": 1}]
+        assert shrink_bbox_to_data_core((79, 60, 508, 310), lines) == (79, 60, 508, 310)
+
+
+class TestFragmentBlockClustering:
+    """片段块聚类（第四层表格候选来源，验收 v7，通用）."""
+
+    def test_cluster_multifragment_lines_into_blocks(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            cluster_fragment_lines,
+        )
+        lines = [
+            {"text": "正文行", "bbox": (79, 100, 500, 112), "segments": 1},
+            {"text": "表头 c1 c2", "bbox": (79, 269, 500, 281), "segments": 3},
+            {"text": "d1 d2 d3", "bbox": (79, 298, 500, 310), "segments": 3},
+            {"text": "e1 e2 e3", "bbox": (79, 326, 500, 338), "segments": 3},
+            {"text": "隔开的另一块", "bbox": (79, 500, 500, 512), "segments": 3},
+            {"text": "f1 f2", "bbox": (79, 530, 500, 542), "segments": 2},
+        ]
+        blocks = cluster_fragment_lines(lines, max_gap=45, min_rows=2)
+        assert len(blocks) == 2
+        assert len(blocks[0]) == 3
+        assert blocks[0][0]["text"].startswith("表头")

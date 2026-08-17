@@ -56,6 +56,11 @@ _BLOCK_TYPE_TO_ELEMENT_TYPE: dict[str, str] = {
     "heading": "heading",
     "paragraph": "paragraph",
     "table": "table",
+    # 家具标注（适配层 classify_furniture 产出，SRS §7.3 合法元素类型）：
+    # 保留内容但可被下游按类型过滤/去重（M4 Reconciler 消费）。
+    "page_header": "page_header",
+    "page_footer": "page_footer",
+    "page_number": "page_number",
 }
 
 

@@ -192,7 +192,7 @@
 
 ---
 
-> 后续决策按 D-029… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
+> 后续决策按 D-030… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
 
 ## D-028 ｜ M3.0 契约演进：DocumentParser.parse 输入统一 bytes（v1.1）
 - **决策**：M3 引入二进制格式（PDF/DOCX/XLSX/PPTX）后，M2 的 `parse(text: str, *, mime)` 不再成立。契约演进为 `parse(data: bytes, *, mime: str)`：
@@ -246,3 +246,14 @@
 - **真实 e2e 二轮发现的完整性缺口（已修）**：cleanup 残留的"注册行在、对象没了"场景暴露两处盲信——(a) `_persist_ir` dedup 命中注册行时未确认对象在 → 现在 `head_exists` 校验，缺失则重放内容寻址字节（同 key 同 sha 幂等安全）并 `mark_verified`；(b) **幂等探针命中 SUCCEEDED 时未校验制品可用** → 现在 `_ir_object_available` 前置校验，制品缺失不复用、走完整重跑经 upsert 幂等回到原行（§2.2 幂等的前提是制品在，§8.6 完整性事故不静默）。
 - **影响**：新文件 `contracts/parser_adapter.py`、`parse_adapters/{__init__,legacy_markdown,legacy_txt,normalizer,registry}.py`、`shadow_parse/{__init__,contracts,repositories_memory,repositories_pg,service}.py`、`databases/asset_core/schemas/009_shadow_parse_runs{,_postgresql}.sql`、`tests/parse_adapters/`（3 文件 34 用例）、`tests/shadow_parse/`（3 文件 11 用例）。唯一修改的既有文件：`infra/pg_schema.py`（追加 009 挂载）。旧链路（ingestion/stages/workflow/handlers）零改动。
 
+
+
+## D-030 ｜ 真实中文论文验收驱动的 PDF 解析修复（CJK 聚行/三线表回退/标题档位/家具标注）
+- **背景**：用户提供 73 页中文学位论文（镍基 MOF 光催化研究）做 M3 验收，暴露 4 个手写英文 fixture 覆盖不到的真实问题。全部按 TDD 修复（先写 `tests/parse_adapters/test_pdf_cjk_lines.py` RED 再实现）：
+  1. **CJK 碎片（最严重）**：`extract_words` 按空格分词，中文连排被拆成"镍/基/M/O"单字碎片（2609 元素中大半是碎片）。修法：绕过 words 直接聚合 `page.chars`——`group_chars_into_lines`（top 容差聚行）+ `_join_line_text`（CJK-CJK 无空格 / Latin 按字符间距判词边界，阈值 0.15×字号：Helvetica 词内 gap≈0、空格宽 0.278×字号 / CJK↔Latin 边界一个空格）。
+  2. **学术三线表识别为 0**：三线表无横线，默认 lines 策略找不到。修法：`_find_tables_with_fallback` 回退 text 策略，且要求 ≥2 行 ≥2 列才接受（防稀疏正文误报）。论文 20 张三线表全部识别。
+  3. **标题无层级**：heading level 恒 1，标题树建不起来。修法：两遍式——第一遍全文档收集 heading 行字号，`heading_levels_for` 排序去重映射档位（26pt 封面/16pt 章/14pt 节 → level 1/2/3），第二遍产块。修复后论文"章→节"层级完整恢复。
+  4. **页眉/页码混入正文**：同一页眉跨 49 页重复、纯数字页码 274 处碎片。修法：`classify_furniture` 文档级判定（跨 ≥3 页重复且 >12 字符 → page_header；纯数字/罗马数字 ≤6 字符 → page_number），`_annotate_furniture` 经 `dataclasses.replace` 改块类型（frozen 不可变，注意不能原地赋值）。**只标注不删除**——去重是 M4 Reconciler 职责（§4.8），下游按 element_type 过滤即可。下标拆行同修：LINE_TOP_TOLERANCE 3→6pt（CO₂ 的"2"下标偏移 4-5pt）。
+- **附带**：新增验收工具 `tools/parse_preview.py`（纯本地：探测→路由→解析→IR→HTML 报告，家具折叠、合并格 rowspan/colspan 还原、低置信黄标）——用户可在不启动 pipeline 的情况下验收任意文档。
+- **验证**：`test_pdf_cjk_lines.py` 9 用例 + 全套 145 passed；论文重解析效果：元素 2609 碎片 → 1614（正文 1383 段 + 35 标题成树 + 20 表格 + 家具分流 176）。
+- **影响**：`native_pdf.py`（chars 聚行/两遍式/表格回退/家具标注）、`pdf_normalizer.py`（家具类型映射）、`tools/parse_preview.py`（新增）、`test_pdf_cjk_lines.py`（新增）。

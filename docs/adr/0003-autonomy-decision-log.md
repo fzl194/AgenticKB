@@ -192,7 +192,33 @@
 
 ---
 
-> 后续决策按 D-028… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
+> 后续决策按 D-029… 追加。每个里程碑结束在对应交付报告中引用本日志条目。
+
+## D-028 ｜ M3.0 契约演进：DocumentParser.parse 输入统一 bytes（v1.1）
+- **决策**：M3 引入二进制格式（PDF/DOCX/XLSX/PPTX）后，M2 的 `parse(text: str, *, mime)` 不再成立。契约演进为 `parse(data: bytes, *, mime: str)`：
+  1. **decode 责任移入文本适配器**：MD/TXT 适配器内部严格 UTF-8 解码，坏字节包 `ParserAdapterError`（不再由 service 预解码——二进制格式本来就不能解码，解码是"文本格式适配器"的格式知识）。ShadowParseService 相应只做"流式收集 bytes → 传 parser"。
+  2. **TDD 执行**：先批量改测试到 bytes 目标契约（RED，25 failed）→ 契约+适配器+service 实现（GREEN，46 passed）。
+  3. **兼容性**：M2 影子链路语义零变化（e2e 重跑全绿）；只有 parse 签名从 str→bytes，所有调用方在库内同步。
+- **依据**：SRS §C06（Adapter SDK 演进）、§4.6（Adapter 将冻结对象转换为库输入）；用户 M3 需求对齐（2026-08-14：纯代码混合路线，二进制原生格式接入）。
+- **影响**：`contracts/parser_adapter.py`（签名+docstring）、`parse_adapters/legacy_{txt,markdown}.py`（接 bytes + `_decode_utf8`）、`shadow_parse/service.py`（去掉 decode）、相关测试。
+
+## D-028A ｜ M3 路线拍板记录（用户对齐，2026-08-14）
+- **用户决策**：① M3 第一期走**纯代码混合路线**——DOCX/XLSX/PPTX/HTML 原生适配器 + PDF 增强适配器，**全部用工业级成熟库**（python-docx / openpyxl / python-pptx / lxml / pdfplumber，均已在环境中，零新增依赖；自研代码只做"库输出 → Parse IR"映射，不写解析算法）；② **OCR 暂不做但预留云端接口**（backend_kind="cloud" 槽位 + 配置位，用户将来配模型即插即用）；③ **不引入本地 AI 模型**（Docling/模型权重 3-6GB 暂缓，复杂版面 PDF 留待后续按需接入，解析后端可插拔保证主链不改）；④ 验收语料 = 自造 fixture 自动化 TDD + 用户后续提供 2-3 份真实文档人工验收。
+- **SRS 对齐**：调研报告 §3.1（PyMuPDF AGPL 排除、pdfplumber 类方案定位）、§3.2（组合表：DOCX/PPTX/XLSX 用原生库专项 adapter 正是建议组合）、SRS §4.5（路由表 Office 的 primary 可为 native adapter）、§C04（backend_kind cloud 槽位）、用户"不重复造轮子"工程约束。
+
+## D-029 ｜ M3 实现：Inspector/Router/原生适配器 ×5 + 工厂；评审修正 2 HIGH + 5 MEDIUM
+- **决策**：M3 按 D-028A 路线落地（严格 TDD，每个工作包先 RED 后 GREEN）：
+  1. **File Inspector（§C03）**：`file_inspector/inspect.py` `DocumentProfile`（格式/容器数/加密/文本层）——复用 `safe_intake.detect_mime` 签名探测；ZIP→OOXML 以 `[Content_Types].xml` 消歧；PDF 走 pdfplumber（BytesIO 不落盘，`/Encrypt` 先扫）；未知格式不抛。**路由**：`ParserRouter.plan(profile) -> RouteDecision`（reason codes：`no_text_layer_needs_ocr`/`ocr_reserved_cloud`/`unsupported_format`），按 registry 查 local+license=ok 的 backend，不硬编码 parser_id。
+  2. **原生适配器 ×5（§C06）**：`parse_adapters/native/{native_docx,native_xlsx,native_pptx,native_html,_base}.py` + `{native_pdf,pdf_normalizer}.py`。全部"库 API 直读 → BackendBlock"映射（零解析算法）；公共骨架 `_base.BaseNativeNormalizer`（类型映射/heading 弹栈/阅读序/stable id/强制 validate）。关键映射决策：XLSX openpyxl 标准双读（公式/展示值分离）；HTML 无 charset 声明强制 UTF-8（lxml 默认 latin-1 会把中文变 mojibake）；PDF heading 字号启发式（1.15×众数）`confidence.type=0.6` 如实降权不冒充高置信。
+  3. **工厂（M3.5）**：`parse_adapters/factory.py` `resolve_pipeline(parser_id) -> (parser, normalizer)`——实现类↔descriptor 对应的单一事实源；`build_default_registry()` 经 `iter_native_parsers()` 注册全部已实现 parser（7 个）+ docling/cloud_vlm 占位槽位（license != "ok"，Router 永不选中）。
+- **评审修正（合入前全修）**：
+  - **HIGH-1 DOCX 矩形合并 row_span 多计**：vMerge continue 按列累计使 2 列宽合并的 row_span 翻倍——改为按行去重（`counted_this_row` 集合），补矩形合并回归测试（2×3 合并 row_span=3）。
+  - **HIGH-2 不可信声明几何 DoS**：HTML `rowspan/colspan` 上限 10k（超限截断为 1 + `clamped_spans` 可见标记，§7.4）；XLSX 网格维度上限 10k/面积 2M + 合并区域面积上限 100k（超限跳过展开 + `clamped_geometry` 标记）。**已知库级边界**：`mergeCell A1:XFD1048576` 形态会让 openpyxl **打开期**挂死（发生在适配层截断之前），该形态依赖上游 M1 intake 文件级限制兜底，记录于 M3 报告缺口。
+  - **MED×5**：(a) 四个 native 适配器的块迭代循环包 try——中段损坏也归一 `ParserAdapterError`（§C06"第三方异常不得穿越"原本只在打开期成立）；(b) HTML 嵌套表格 `iter("tr")` 递归后代遍历改为仅直接子行（`_nearest_table_within` 判定，thead/tbody 包裹仍归外层）；(c) `_base` annotations 白名单过滤 cells/rows/cols——表格数据不再在 IR 双份存储；(d) `reset_heading_stack_on_container_change` 钩子，PPTX 开启——无标题 slide 的正文不再误挂上一张 slide 的标题。
+- **LOW 未修项（记录）**：`/Encrypt` 全文子串扫描可能误报（正文含该字面量的 PDF）；base 与 pdf normalizer 的 `Confidence.source`/`Relation.method` 取值不一致；`native_html` 声明 `application/xhtml+xml` 但 Inspector 不产出该 MIME（不可达声明）；XLSX `"="` 前缀判公式的固有误报；PPTX group shape/DOCX 嵌套表格/内联图片未遍历（保真缺口，M4 范围）。
+- **验证**：M3 套件 136 passed（含恶意 rowspan/稀疏网格/矩形合并 3 个评审回归用例）；scoped 回归 M0-M3 **520 passed, 6 skipped**；真实环境 e2e（真 MinIO+PG，7 格式全链路）两轮全绿（修复前后各一轮），发布表零污染。
+- **影响**：新包 `file_inspector/`、`parse_adapters/native/`、`parse_adapters/{native_pdf,pdf_normalizer,factory}.py`；修改 `contracts/parser_adapter.py`（v1.1：parse(bytes)、BackendBlock 结构化字段、note）、`parse_adapters/{legacy_markdown,legacy_txt,normalizer,registry}.py`、`shadow_parse/service.py`（去 decode）、`infra/structure/__init__.py`（M2 评审 H3 的 disable_image_resolution）；测试 +100。
+
 
 ## D-026 ｜ 真实环境接通（MinIO 121.89.90.178:19000 + PG kb_db）
 - **决策与事实**：

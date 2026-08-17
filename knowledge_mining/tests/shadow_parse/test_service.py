@@ -12,7 +12,7 @@ mining_run_documents）：
   传播 + FAILED 投影行。
 - 内容寻址去重（D-002）：同 IR 字节（不同 document 的相同内容）复用
   StorageObjectRecord，不再 put。
-- 严格 UTF-8 解码：坏字节 → ValueError + FAILED 投影行。
+- 坏字节：适配器解码职责（契约 v1.1）——stub 用宽松断言（异常 + FAILED）。
 
 注入 FakeObjectStore + Memory 仓储 + 测试内定义的 stub parser/normalizer
 （实现 contracts.parser_adapter 的 Protocol，不 import 具体 parse_adapters）。
@@ -95,10 +95,11 @@ class StubParser:
     def supports(self, mime: str) -> bool:
         return mime.lower() in self.descriptor.supported_mimes
 
-    def parse(self, text: str, *, mime: str) -> BackendParseArtifact:
+    def parse(self, data: bytes, *, mime: str) -> BackendParseArtifact:
         self.parse_calls += 1
         if self._fail:
             raise RuntimeError("stub parser boom")
+        text = data.decode("utf-8")  # stub：契约 v1.1 bytes 输入
         blocks = tuple(
             BackendBlock(block_type="paragraph", text=line, line_start=i, line_end=i + 1)
             for i, line in enumerate(text.splitlines())
@@ -415,13 +416,14 @@ async def test_dedup_same_ir_bytes_across_documents(harness):
 # ---------------------------------------------------------------------------
 
 
-async def test_invalid_utf8_records_failed_and_raises_valueerror(harness):
+async def test_invalid_utf8_records_failed_and_raises(harness):
     store, parse_runs, storage_objects, _ = harness
     data = b"\xff\xfe\x00bad bytes"
     frozen = _frozen(data)
     await _seed_source(store, frozen, data)
 
-    with pytest.raises(ValueError, match="UTF-8"):
+    # 契约 v1.1：decode 责任在适配器——stub 解码坏字节抛 UnicodeDecodeError
+    with pytest.raises(Exception):
         await _service(store, parse_runs, storage_objects).run(
             frozen, parse_run_id="parse_decode_1"
         )

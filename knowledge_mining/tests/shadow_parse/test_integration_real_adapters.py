@@ -288,5 +288,7 @@ def test_registry_routes_by_mime() -> None:
     txt = registry.select_for("text/plain")
     assert md is not None and md.parser_id == LEGACY_MARKDOWN_PARSER_ID
     assert txt is not None and txt.parser_id == LEGACY_TXT_PARSER_ID
-    # M3 Docling 接入前不伪造覆盖（SRS §C03 unsupported 语义）
-    assert registry.select_for("application/pdf") is None
+    # M3.5：PDF 由已实现的 native_pdf 承接；占位槽位（docling/cloud_vlm）
+    # 仍注册但许可未过审，Router 不会选为 primary（SRS §C04）
+    pdf_slot = registry.select_for("application/pdf")
+    assert pdf_slot is not None and pdf_slot.parser_id == "native_pdf"

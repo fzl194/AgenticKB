@@ -10,8 +10,17 @@ import pytest
 
 from knowledge_mining.mining.contracts.parser_adapter import UnsupportedFormat
 from knowledge_mining.mining.parse_adapters.legacy_markdown import (
+
+
     LegacyMarkdownParser,
 )
+
+
+def _b(s: str) -> bytes:
+    """契约 v1.1：parse 输入统一 bytes（文本格式由适配器解码）。"""
+    return s.encode("utf-8")
+
+
 
 MD_SAMPLE = (
     "# Title\n"
@@ -51,13 +60,13 @@ def test_supports_mimes(parser: LegacyMarkdownParser) -> None:
 
 def test_parse_rejects_unsupported_mime(parser: LegacyMarkdownParser) -> None:
     with pytest.raises(UnsupportedFormat):
-        parser.parse("hello", mime="text/plain")
+        parser.parse(_b("hello"), mime="text/plain")
 
 
 def test_parse_block_sequence_and_line_ranges(
     parser: LegacyMarkdownParser,
 ) -> None:
-    artifact = parser.parse(MD_SAMPLE, mime="text/markdown")
+    artifact = parser.parse(_b(MD_SAMPLE), mime="text/markdown")
 
     assert artifact.parser_id == "legacy_markdown"
     assert artifact.mime == "text/markdown"
@@ -80,14 +89,14 @@ def test_parse_block_sequence_and_line_ranges(
 
 
 def test_heading_levels_and_text(parser: LegacyMarkdownParser) -> None:
-    artifact = parser.parse(MD_SAMPLE, mime="text/markdown")
+    artifact = parser.parse(_b(MD_SAMPLE), mime="text/markdown")
     headings = [b for b in artifact.blocks if b.block_type == "heading"]
     assert [(b.level, b.text) for b in headings] == [(1, "Title"), (2, "Sub A")]
 
 
 def test_multi_level_headings(parser: LegacyMarkdownParser) -> None:
     text = "# H1\n\n## H2\n\n### H3\n\ntext\n"
-    artifact = parser.parse(text, mime="text/markdown")
+    artifact = parser.parse(_b(text), mime="text/markdown")
     headings = [b for b in artifact.blocks if b.block_type == "heading"]
     assert [b.level for b in headings] == [1, 2, 3]
     assert [(b.line_start, b.line_end) for b in headings] == [
@@ -98,7 +107,7 @@ def test_multi_level_headings(parser: LegacyMarkdownParser) -> None:
 
 
 def test_list_items_carry_depth_and_text(parser: LegacyMarkdownParser) -> None:
-    artifact = parser.parse(MD_SAMPLE, mime="text/markdown")
+    artifact = parser.parse(_b(MD_SAMPLE), mime="text/markdown")
     items = [b for b in artifact.blocks if b.block_type == "list_item"]
     assert [(b.level, b.text) for b in items] == [
         (1, "alpha"),
@@ -109,7 +118,7 @@ def test_list_items_carry_depth_and_text(parser: LegacyMarkdownParser) -> None:
 
 def test_ordered_list_expands_to_items(parser: LegacyMarkdownParser) -> None:
     text = "1. first\n2. second\n3. third\n"
-    artifact = parser.parse(text, mime="text/markdown")
+    artifact = parser.parse(_b(text), mime="text/markdown")
     items = [b for b in artifact.blocks if b.block_type == "list_item"]
     assert [b.text for b in items] == ["first", "second", "third"]
     assert [(b.line_start, b.line_end) for b in items] == [
@@ -118,7 +127,7 @@ def test_ordered_list_expands_to_items(parser: LegacyMarkdownParser) -> None:
 
 
 def test_code_block_language_and_content(parser: LegacyMarkdownParser) -> None:
-    artifact = parser.parse(MD_SAMPLE, mime="text/markdown")
+    artifact = parser.parse(_b(MD_SAMPLE), mime="text/markdown")
     code = [b for b in artifact.blocks if b.block_type == "code"][0]
     assert code.text == "x = 1\n"
     assert code.structure["language"] == "python"
@@ -126,14 +135,14 @@ def test_code_block_language_and_content(parser: LegacyMarkdownParser) -> None:
 
 
 def test_quote_block(parser: LegacyMarkdownParser) -> None:
-    artifact = parser.parse(MD_SAMPLE, mime="text/markdown")
+    artifact = parser.parse(_b(MD_SAMPLE), mime="text/markdown")
     quote = [b for b in artifact.blocks if b.block_type == "quote"][0]
     assert quote.text == "quoted line"
     assert (quote.line_start, quote.line_end) == (14, 15)
 
 
 def test_table_structure_roundtrip(parser: LegacyMarkdownParser) -> None:
-    artifact = parser.parse(MD_SAMPLE, mime="text/markdown")
+    artifact = parser.parse(_b(MD_SAMPLE), mime="text/markdown")
     table = [b for b in artifact.blocks if b.block_type == "table"][0]
     assert (table.line_start, table.line_end) == (16, 19)
     assert table.structure["columns"] == ["a", "b"]

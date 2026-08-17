@@ -34,8 +34,17 @@ from knowledge_mining.mining.parse_adapters.normalizer import (
     LegacyLineNormalizer,
 )
 from knowledge_mining.mining.parse_adapters.registry import (
+
+
     build_default_registry,
 )
+
+
+def _b(s: str) -> bytes:
+    """契约 v1.1：parse 输入统一 bytes（文本格式由适配器解码）。"""
+    return s.encode("utf-8")
+
+
 
 MD_SAMPLE = (
     "# Title\n"        # 0
@@ -66,7 +75,7 @@ def normalizer() -> LegacyLineNormalizer:
 
 
 def _md_doc(normalizer: LegacyLineNormalizer) -> ParsedDocument:
-    artifact = LegacyMarkdownParser().parse(MD_SAMPLE, mime="text/markdown")
+    artifact = LegacyMarkdownParser().parse(_b(MD_SAMPLE), mime="text/markdown")
     return normalizer.normalize(artifact, source_raw_hash=RAW_HASH)
 
 
@@ -180,7 +189,7 @@ def test_identity_and_diagnostics(normalizer: LegacyLineNormalizer) -> None:
 
 
 def test_parse_run_id_propagates(normalizer: LegacyLineNormalizer) -> None:
-    artifact = LegacyMarkdownParser().parse(MD_SAMPLE, mime="text/markdown")
+    artifact = LegacyMarkdownParser().parse(_b(MD_SAMPLE), mime="text/markdown")
     doc = normalizer.normalize(
         artifact, source_raw_hash=RAW_HASH, parse_run_id="run-123"
     )
@@ -232,7 +241,7 @@ def test_unmapped_block_type_falls_to_unknown_with_warning(
 
 def test_txt_all_paragraphs_no_fake_headings(normalizer: LegacyLineNormalizer) -> None:
     text = "first para\nwith two lines\n\nsecond para\n" * 1
-    artifact = LegacyPlainTextParser().parse(text, mime="text/plain")
+    artifact = LegacyPlainTextParser().parse(_b(text), mime="text/plain")
     doc = normalizer.normalize(artifact, source_raw_hash=RAW_HASH)
 
     assert all(e.element_type == "paragraph" for e in doc.elements)
@@ -286,5 +295,14 @@ def test_default_registry_selects_backends_by_mime() -> None:
     txt = registry.select_for("text/plain")
     assert md is not None and md.parser_id == "legacy_markdown"
     assert txt is not None and txt.parser_id == "legacy_txt"
-    assert registry.select_for("application/pdf") is None
-    assert len(registry.all()) == 2
+    # M3 云端槽位（SRS §C04）：docling/cloud_vlm 占位已注册；select_for
+    # 不做许可过滤，但占位符 license_status != "ok"，不可被 Router 选为
+    # primary（路由层过滤见 tests/parse_adapters/test_registry.py）。
+    # M3.5：PDF 现在由已实现的 native_pdf 承接（license ok），
+    # 占位槽位 docling/cloud_vlm 仍在但 license != "ok"。
+    pdf_slot = registry.select_for("application/pdf")
+    by_id = {d.parser_id: d for d in registry.all()}
+    assert pdf_slot is not None and pdf_slot.parser_id == "native_pdf"
+    assert by_id["docling"].license_status != "ok"
+    assert by_id["cloud_vlm"].license_status != "ok"
+    assert len(registry.all()) == 9

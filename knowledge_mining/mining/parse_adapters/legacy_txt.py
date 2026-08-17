@@ -13,6 +13,7 @@ from __future__ import annotations
 from knowledge_mining.mining.contracts.parser_adapter import (
     BackendBlock,
     BackendParseArtifact,
+    ParserAdapterError,
     ParserDescriptor,
     UnsupportedFormat,
 )
@@ -43,11 +44,12 @@ class LegacyPlainTextParser:
     def supports(self, mime: str) -> bool:
         return self.descriptor.supports(mime)
 
-    def parse(self, text: str, *, mime: str) -> BackendParseArtifact:
+    def parse(self, data: bytes, *, mime: str) -> BackendParseArtifact:
         if not self.supports(mime):
             raise UnsupportedFormat(
                 f"{LEGACY_TXT_PARSER_ID} cannot parse mime {mime!r}"
             )
+        text = _decode_utf8(data, LEGACY_TXT_PARSER_ID)
         blocks = tuple(
             BackendBlock(
                 block_type="paragraph",
@@ -64,6 +66,16 @@ class LegacyPlainTextParser:
             blocks=blocks,
             raw_output=text,
         )
+
+
+def _decode_utf8(data: bytes, parser_id: str) -> str:
+    """严格 UTF-8 解码；坏字节包 ParserAdapterError（契约 v1.1，D-028）。"""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ParserAdapterError(
+            f"{parser_id}: source bytes are not valid UTF-8: {exc}"
+        ) from exc
 
 
 def _split_paragraphs(text: str) -> list[tuple[str, int, int]]:

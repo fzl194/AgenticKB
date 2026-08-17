@@ -31,6 +31,7 @@ from knowledge_mining.mining.contracts.parser_adapter import (
     ParserDescriptor,
     UnsupportedFormat,
 )
+from knowledge_mining.mining.parse_adapters.legacy_txt import _decode_utf8
 from knowledge_mining.mining.infra.structure import _tokens_to_blocks
 
 # --- 身份与指纹（SRS §C04 descriptor / §3.5 parser_fingerprint） -------------
@@ -82,11 +83,12 @@ class LegacyMarkdownParser:
     def supports(self, mime: str) -> bool:
         return self.descriptor.supports(mime)
 
-    def parse(self, text: str, *, mime: str) -> BackendParseArtifact:
+    def parse(self, data: bytes, *, mime: str) -> BackendParseArtifact:
         if not self.supports(mime):
             raise UnsupportedFormat(
                 f"{LEGACY_MARKDOWN_PARSER_ID} cannot parse mime {mime!r}"
             )
+        text = _decode_utf8(data, LEGACY_MARKDOWN_PARSER_ID)
         try:
             tokens = MarkdownIt().enable("table").parse(text)
             # disable_image_resolution：适配器契约是无 IO 纯函数（§C06），

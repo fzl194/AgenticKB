@@ -213,13 +213,8 @@ class ShadowParseService:
         chunks: list[bytes] = []
         async for chunk in self._reader.open_stream(frozen):
             chunks.append(chunk)
-        try:
-            text = b"".join(chunks).decode("utf-8")  # 严格：坏字节即失败
-        except UnicodeDecodeError as exc:
-            raise ValueError(
-                f"source bytes of {frozen.document_id!r} are not valid UTF-8: {exc}"
-            ) from exc
-        artifact = await asyncio.to_thread(self._parser.parse, text, mime=frozen.mime)
+        data = b"".join(chunks)
+        artifact = await asyncio.to_thread(self._parser.parse, data, mime=frozen.mime)
         return await asyncio.to_thread(
             self._normalizer.normalize,
             artifact,

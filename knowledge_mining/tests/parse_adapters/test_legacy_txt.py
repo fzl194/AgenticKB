@@ -10,8 +10,17 @@ import pytest
 
 from knowledge_mining.mining.contracts.parser_adapter import UnsupportedFormat
 from knowledge_mining.mining.parse_adapters.legacy_txt import (
+
+
     LegacyPlainTextParser,
 )
+
+
+def _b(s: str) -> bytes:
+    """契约 v1.1：parse 输入统一 bytes（文本格式由适配器解码）。"""
+    return s.encode("utf-8")
+
+
 
 
 @pytest.fixture
@@ -27,14 +36,14 @@ def test_supports_plain_text_only(parser: LegacyPlainTextParser) -> None:
 
 def test_parse_rejects_markdown_mime(parser: LegacyPlainTextParser) -> None:
     with pytest.raises(UnsupportedFormat):
-        parser.parse("# nope", mime="text/markdown")
+        parser.parse(_b("# nope"), mime="text/markdown")
 
 
 def test_multiple_paragraphs_with_exact_lines(
     parser: LegacyPlainTextParser,
 ) -> None:
     text = "aaa\nbbb\n\n\ncmp\n"
-    artifact = parser.parse(text, mime="text/plain")
+    artifact = parser.parse(_b(text), mime="text/plain")
 
     assert artifact.parser_id == "legacy_txt"
     assert artifact.raw_output == text
@@ -48,7 +57,7 @@ def test_multiple_paragraphs_with_exact_lines(
 
 def test_paragraph_keeps_internal_lines(parser: LegacyPlainTextParser) -> None:
     text = "line one\nline two\nline three\n\nsecond para\n"
-    artifact = parser.parse(text, mime="text/plain")
+    artifact = parser.parse(_b(text), mime="text/plain")
     first = artifact.blocks[0]
     assert first.text == "line one\nline two\nline three"
     assert (first.line_start, first.line_end) == (0, 3)
@@ -62,7 +71,7 @@ def test_single_long_paragraph_never_token_split(
     # 无空行的长文本：必须仍是 1 个 element，不得引入 token 切分
     long_line = "word " * 2000
     text = long_line + "\n" + long_line + "\n" + long_line
-    artifact = parser.parse(text, mime="text/plain")
+    artifact = parser.parse(_b(text), mime="text/plain")
     assert len(artifact.blocks) == 1
     block = artifact.blocks[0]
     assert block.block_type == "paragraph"
@@ -72,7 +81,7 @@ def test_single_long_paragraph_never_token_split(
 
 def test_leading_and_trailing_blank_lines(parser: LegacyPlainTextParser) -> None:
     text = "\n\n\nbody\n\n\n"
-    artifact = parser.parse(text, mime="text/plain")
+    artifact = parser.parse(_b(text), mime="text/plain")
     assert len(artifact.blocks) == 1
     block = artifact.blocks[0]
     assert block.text == "body"
@@ -80,7 +89,7 @@ def test_leading_and_trailing_blank_lines(parser: LegacyPlainTextParser) -> None
 
 
 def test_empty_text_yields_no_blocks(parser: LegacyPlainTextParser) -> None:
-    artifact = parser.parse("\n\n\n", mime="text/plain")
+    artifact = parser.parse(_b("\n\n\n"), mime="text/plain")
     assert artifact.blocks == ()
 
 
@@ -89,3 +98,13 @@ def test_descriptor_identity(parser: LegacyPlainTextParser) -> None:
     assert d.parser_id == "legacy_txt"
     assert d.parser_fingerprint == "legacy_txt@1.0.0#blankline-paragraphs"
     assert d.supported_mimes == frozenset({"text/plain"})
+
+
+def test_invalid_utf8_bytes_raise_adapter_error() -> None:
+    """契约 v1.1：decode 责任在适配器，坏字节包 ParserAdapterError（D-028）。"""
+    import pytest
+
+    from knowledge_mining.mining.contracts.parser_adapter import ParserAdapterError
+
+    with pytest.raises(ParserAdapterError):
+        LegacyPlainTextParser().parse(b"\xff\xfe\x00bad", mime="text/plain")

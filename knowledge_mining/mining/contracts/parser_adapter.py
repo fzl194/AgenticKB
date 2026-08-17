@@ -71,11 +71,24 @@ class UnsupportedFormat(ParserAdapterError):
 class BackendBlock:
     """One flat block emitted by a backend, pre-normalization.
 
-    M2 legacy backends are line-oriented: every block carries a 0-based
-    ``line_start``/``line_end`` (end-exclusive) into the decoded source text
-    so the Normalizer can fabricate line-addressable EvidenceSpans (SRS §A01
-    "line-addressable Parse IR"). ``block_type`` is backend vocabulary — the
-    Normalizer owns the mapping to project element types (SRS §4.7).
+    Locator fields are per-format and independently optional (contract v1.1,
+    ADR-0003 D-028 — "未知可缺，不得伪造", SRS §7.4):
+
+    - Line-oriented backends (M2 MD/TXT) fill ``line_start``/``line_end``
+      (0-based, end-exclusive) for line-addressable EvidenceSpans (§A01).
+    - Structured backends (M3 PDF/Office/HTML) fill instead:
+      * ``container_ref`` — owning native container, e.g.
+        ``{"container_type": "page", "index": 3}`` (PDF),
+        ``{"container_type": "sheet", "name": "Sheet1"}`` (XLSX),
+        ``{"container_type": "slide", "index": 0}`` (PPTX).
+      * ``bbox`` — on-page bounding box ``(x0, top, x1, bottom)`` in the
+        container's coordinate system (PDF/PPTX shape).
+      * ``native_ref`` — native structural locator, e.g. ``{"sheet": "S1",
+        "cell": "A1"}`` (XLSX), ``{"paragraph_index": 12}`` (DOCX),
+        ``{"xpath": "/html/body/div[2]/p[1]"}`` (HTML).
+
+    ``block_type`` is backend vocabulary — the Normalizer owns the mapping to
+    project element types (SRS §4.7).
     """
 
     block_type: str
@@ -83,6 +96,9 @@ class BackendBlock:
     line_start: int | None = None
     line_end: int | None = None
     level: int | None = None  # heading level / list depth when known
+    container_ref: dict[str, Any] | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    native_ref: dict[str, Any] | None = None
     structure: dict[str, Any] = field(default_factory=dict)
 
 
@@ -126,6 +142,9 @@ class ParserDescriptor:
     license_status: str = "ok"  # M2 placeholder; WP13 gates this
     parser_fingerprint: str = ""
     capabilities: frozenset[str] = frozenset()
+    # M3 最小演进（SRS §C04 云端槽位）：占位 backend 的说明性元数据，
+    # 例如用户将来配置云端模型的位置。带默认值，不破坏 M2 既有构造。
+    note: str = ""
 
     def supports(self, mime: str) -> bool:
         """True if this backend claims ``mime`` (normalized, lower-case)."""
@@ -183,11 +202,15 @@ class DocumentParser(Protocol):
         """True if this backend can parse ``mime``."""
         ...
 
-    def parse(self, text: str, *, mime: str) -> BackendParseArtifact:
-        """Parse decoded source ``text`` into a candidate backend artifact.
+    def parse(self, data: bytes, *, mime: str) -> BackendParseArtifact:
+        """Parse raw source ``data`` (bytes) into a candidate backend artifact.
 
-        Synchronous and pure (no IO): the Operator is responsible for
-        streaming bytes off the frozen Storage Object and decoding them.
+        Synchronous and pure (no filesystem/network IO): the Operator is
+        responsible for streaming bytes off the frozen Storage Object.
+        Contract v1.1 (ADR-0003 D-028): the input is **bytes** so binary
+        formats (PDF/DOCX/XLSX/PPTX) flow through the same seam; text-format
+        adapters decode UTF-8 themselves and wrap decode failures in
+        :class:`ParserAdapterError` (code ``invalid_encoding``).
         """
         ...
 

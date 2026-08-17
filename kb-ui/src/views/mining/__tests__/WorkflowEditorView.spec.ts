@@ -168,6 +168,20 @@ describe('mining Workflow editor', () => {
     expect(next).toHaveBeenCalled()
   })
 
+  it('allows editing parameters of fixed-skeleton nodes (e.g. parse_segment chunk sizes)', async () => {
+    const wrapper = shallowMount(WorkflowEditorView, { props: { id: 'wf' } })
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      updateNodeParams: (nodeId: string, params: Record<string, unknown>) => void
+      graph: { nodes: Array<{ nodeId: string; params: Record<string, unknown> }> }
+    }
+
+    // 'input' 是 input_ingest（editPolicy: 'fixed'）。editPolicy 只锁结构，参数应可调，
+    // 否则 parse_segment 的分段 token 上下限等关键旋钮无法调整。
+    vm.updateNodeParams('input', { minSegmentTokens: 120 })
+    expect(vm.graph.nodes[0].params.minSegmentTokens).toBe(120)
+  })
+
   it('opens immutable history and restores it only as a new draft revision', async () => {
     state.api.getVersion.mockResolvedValueOnce({ workflow_id: 'wf', version: 1, graph_json: graph })
     state.api.restoreDraft.mockResolvedValueOnce({ ...workflow, draft_revision: 4 })

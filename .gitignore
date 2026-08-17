@@ -57,6 +57,9 @@
 !backfill_default_kb.py
 
 # === But still exclude these within allowlisted dirs ===
+# 本地 Agent 知识研究产物，按用户指定不纳入 git 跟踪
+docs/agent_knowledge_research/
+docs/agent_knowledge*/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

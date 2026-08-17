@@ -68,16 +68,17 @@ describe('serving search payload', () => {
   })
 })
 
-describe('X-KB-User injection', () => {
+describe('proxy request interceptors', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    localStorage.clear()
   })
 
-  /** Run the real request interceptor and report the headers it set. */
-  function runInterceptor(service: string, url: string) {
-    let interceptor: ((c: Record<string, unknown>) => Record<string, unknown>) | undefined
+  /** Run every request interceptor the client registered, in registration order. */
+  function runInterceptors(service: string, url: string) {
+    const interceptors: Array<(config: Record<string, unknown>) => Record<string, unknown>> = []
     vi.spyOn(axios, 'create').mockReturnValue({
-      interceptors: { request: { use: (fn: never) => { interceptor = fn } } },
+      interceptors: { request: { use: (fn: never) => { interceptors.push(fn) } } },
     } as never)
 
     createProxyClient(service)
@@ -85,29 +86,38 @@ describe('X-KB-User injection', () => {
     domainStore.currentDomain = 'cloud_core_network'
 
     const headers: Record<string, string> = {}
-    const config = { url, headers: { set: (k: string, v: string) => { headers[k] = v } } }
-    interceptor?.(config as never)
-    return { headers, config: config as unknown as { baseURL?: string } }
+    let config: Record<string, unknown> = {
+      url,
+      params: {},
+      headers: { set: (key: string, value: string) => { headers[key] = value } },
+    }
+    for (const fn of interceptors) config = fn(config as never)
+    return { headers, config }
   }
 
-  it('injects the identity header on serving requests', () => {
-    // Without it every KB-narrowed search would be anonymous and 404 on private KBs.
-    const { headers } = runInterceptor('serving', '/api/v1/search')
-    expect(headers['X-KB-User']).toBeTruthy()
+  it('injects Authorization Bearer when a token is stored', () => {
+    localStorage.setItem('kb-token', 'jwt-abc')
+    const { headers } = runInterceptors('serving', '/api/v1/search')
+    expect(headers.Authorization).toBe('Bearer jwt-abc')
   })
 
-  it('still injects on mining KB routes', () => {
-    const { headers } = runInterceptor('mining', '/api/kb/abc/documents')
-    expect(headers['X-KB-User']).toBeTruthy()
+  it('omits Authorization when no token is stored', () => {
+    const { headers } = runInterceptors('serving', '/api/v1/search')
+    expect(headers.Authorization).toBeUndefined()
   })
 
-  it('does not inject on unrelated mining routes', () => {
-    const { headers } = runInterceptor('mining', '/api/runs')
-    expect(headers['X-KB-User']).toBeUndefined()
-  })
-
-  it('does not inject on control-plane-ish services', () => {
-    const { headers } = runInterceptor('llm', '/api/v1/tasks')
-    expect(headers['X-KB-User']).toBeUndefined()
+  it('never injects X-KB-User from the frontend — the gateway derives it from the JWT', () => {
+    localStorage.setItem('kb-token', 'jwt-abc')
+    // Phase 2：X-KB-User 由 main_control_service/proxy.py 从 JWT 派生统一注入，
+    // 前端拦截器对任何 service / 路由都不应再写这个头（旧的按 service/路径分支注入已废弃）。
+    const cases: Array<[string, string]> = [
+      ['serving', '/api/v1/search'],
+      ['mining', '/api/kb/abc/documents'],
+      ['mining', '/api/runs'],
+      ['llm', '/api/v1/tasks'],
+    ]
+    for (const [service, url] of cases) {
+      expect(runInterceptors(service, url).headers['X-KB-User']).toBeUndefined()
+    }
   })
 })

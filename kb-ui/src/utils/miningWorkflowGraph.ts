@@ -54,7 +54,7 @@ export function effectiveEditReason(
   nodes: MiningWorkflowNode[],
 ): string {
   const state = effectiveEditState(definition, nodes)
-  if (state === 'fixed') return '系统固定骨架节点，不能删除'
+  if (state === 'fixed') return '系统固定骨架节点，不能删除或禁用；参数仍可调整'
   if (state === 'optional') return '当前 Workflow 中可选'
   if (definition.type === 'ontology_review_gate') return '当前存在本体归纳，发布前必须完成本体审核'
   if (definition.type === 'entity_review_gate') return '当前存在实体或本体能力线，发布前必须完成实体审核'
@@ -66,9 +66,11 @@ export function canDisableNode(definition: MiningOperatorDef): boolean {
   return definition.editPolicy === 'editable'
 }
 
-export function canEditNodeParams(definition: MiningOperatorDef): boolean {
-  return definition.editPolicy !== 'fixed'
-}
+/**
+ * 算子参数的编辑权限与 editPolicy 无关：editPolicy 只管结构（能否删除/移动/禁用），
+ * 后端 compiler 对所有算子（含 fixed）一视同仁地校验并接受其参数。因此参数始终可调——
+ * 例如 parse_segment（fixed）的分段 token 上下限是最重要的挖掘旋钮。调用方无需再判定。
+ */
 
 export function canReconnectNode(definition: MiningOperatorDef): boolean {
   return definition.editPolicy !== 'fixed'

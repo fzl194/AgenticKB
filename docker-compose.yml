@@ -23,13 +23,6 @@ services:
     # 容器名称
     container_name: cmkb
 
-    # 加载环境变量文件。
-    # 下方 volumes 中也会将同一个 .env 文件挂载到容器内。
-    # 使用 deploy-server.sh --apply-config 重新创建容器时，
-    # 环境变量视图和容器内文件都会同时更新。
-    env_file:
-      - .env
-
     # deploy-server.sh 会将 CMKB_ORDERED_STARTUP 设置为 1。
     # 此时 Supervisor 启动后，所有子服务默认先保持停止状态，
     # 部署脚本会在依赖检查通过后，再按顺序启动各个子服务。
@@ -71,7 +64,6 @@ services:
       # 挂到宿主机是为了：容器重建后日志不丢，且能直接 tail / grep / scp。
       - ./logs:/app/logs
 
-      - ./.env:/app/.env
       - ./knowledge_mining:/app/knowledge_mining
       - ./llm_service:/app/llm_service
       - ./main_control_service:/app/main_control_service

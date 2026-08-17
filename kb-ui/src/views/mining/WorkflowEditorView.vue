@@ -182,7 +182,6 @@ import WorkflowVersionPreview from '@/components/mining/workflow/WorkflowVersion
 import {
   canDeleteNodeInGraph,
   canDisableNode,
-  canEditNodeParams,
   canMoveNode,
   effectiveEditReason,
   effectiveEditState,
@@ -316,7 +315,8 @@ function recordMutation(mutator: () => void) {
 
 function updateNodeParams(nodeId: string, params: Record<string, unknown>) {
   const definition = definitionMap.value.get(graph.value.nodes.find(node => node.nodeId === nodeId)?.operatorType ?? '')
-  if (!definition || !canEditNodeParams(definition) || readOnly.value) return
+  // 参数编辑不受 editPolicy 限制：editPolicy 只管结构（删除/移动/禁用），参数始终可调。
+  if (!definition || readOnly.value) return
   recordMutation(() => {
     const node = graph.value.nodes.find(item => item.nodeId === nodeId)
     if (node) node.params = { ...params }

@@ -819,6 +819,17 @@ class KbDB:
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def find_folder_by_path(self, *, kb_id: str, path: str) -> dict[str, Any] | None:
+        """按规范化完整 path 查找（如 ``5G/AMF``）。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, kb_id, parent_id, name, path FROM kb_folders
+                   WHERE kb_id = %s AND path = %s""",
+                [kb_id, path],
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
     async def insert_folder(
         self, *, folder_id: str, kb_id: str, parent_id: str | None, name: str,
         path: str, created_by: str | None = None,

@@ -317,11 +317,13 @@ async function handleUpload(opts: UploadRequestOptions) {
     if (file.name.toLowerCase().endsWith('.zip')) {
       const n = (await kbApi.uploadZip(props.kbId, file)).length
       ElMessage.success(`已解压上传 ${n} 个文档`)
+      // zip 可能新建子文件夹（kb_folders），需连同树一起刷新
+      await reload()
     } else {
       await kbApi.uploadDocument(props.kbId, file, { directory: currentPath.value || undefined })
       ElMessage.success(`已上传 ${file.name}`)
+      await loadFiles()
     }
-    await loadFiles()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
   finally { uploading.value -= 1 }
 }

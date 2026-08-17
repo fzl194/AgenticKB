@@ -31,13 +31,18 @@ knowledge_mining  :8901                      agent_serving_java :8081
 
 ### ⚠️ 重大变化（务必先读）
 
-本仓库近期有两波大改动：先是「挖掘算子化」（workflow 引擎），再是「KB 中心化」（知识库管理 + 配置层去 .env）。
+本仓库近期有三波大改动：先是「挖掘算子化」（workflow 引擎），再是「KB 中心化」（知识库管理 + 配置层去 .env），最近一波是「**Phase-2 鉴权 + 站点品牌 + Office/图片知识输入**」。
 
 | 主题 | 现状 |
 |---|---|
-| 挖掘执行 | **新 run 默认走 workflow 算子 DAG**（`mining_config.py` 默认 `workflow`）。legacy 固定流水线仍在，作为回退引擎，按 run 的 `execution_engine` 列（不可变）决定，二者永久共存 |
+| **鉴权（最新一波，最大坑）** | **全站已上真登录**：main_control 装 `AuthMiddleware`（JWT-HS256），前端带 `Authorization: Bearer`，反代从 JWT 派生 `X-KB-User`/`X-KB-Role`/`X-Internal-Auth` 注入给后端。`X-KB-User` **不再由前端写死**。配置在 `config/system/auth.yaml`。**出厂 auth.yaml 是占位符 secret → 鉴权强制关闭 + 所有 `/api/kb/*` 401，KB 前端整体不可用**，见「鉴权与用户体系」 |
+| **站点品牌** | 站名/图标/侧栏 logo 改为运行时可配：`config/system/ui.yaml` 的 `site:` 块，前端启动期 `GET /api/v1/system/ui` 拉取并写 `document.title` + favicon；「系统设置 → 品牌外观」Tab 可视化编辑 |
+| **知识输入扩面** | 新增 **Excel（.xls/.xlsx）→ Markdown** 摄取（`ingestion/excel_*`），legacy **.doc → .docx**（LibreOffice headless，镜像内置）；**PDF/MD/HTML/DOCX 抽图** 落盘并可选调 VLM 写图注（默认关闭）。`block_type` 枚举新增 `image` |
+| 域数量 | **5 个**（新增 `vendor_tech_docs`）。它是**唯一**声明了 `mining-entity-extraction` / `mining-ontology-induction` 模板的 pack |
+| KB 可见性 | `shared` **已砍**，只剩 `private` / `public`（`007_kb_visibility_narrow.sql` 把历史 shared 降级为 private 并收紧 CHECK）。前端已是二元开关 |
+| 挖掘执行 | **新 run 默认走 workflow 算子 DAG**（`mining_config.py` 默认 `workflow`）。legacy 固定流水线仍在，作为回退引擎，按 run 的 `execution_engine` 列（不可变）决定，二者永久共存。域级 `/api/runs` 已标记**废弃**（调用即打 warning），普通挖掘走 KB 入口 |
 | **配置来源（最大坑）** | **mining 已不读 `.env`**：service + DB 配置改走 HTTP 控制面（`control_plane.py`，`GET /api/v1/system/mining\|database/raw`），与 llm_service/serving 同构。唯一还读文件系统的是 `domain_pack.py` 的域 registry/scenario pack。serving 也去掉了 `.env` 导入。`.env` 已废弃，勿恢复 |
-| 库名 | 全线 `coremasterkb` → **`kb_db`**（registry、`system/database.yaml`）。4 个域现在都有 inline `database:` 块、都指向同一个 `kb_db` |
+| 库名 | 全线 `coremasterkb` → **`kb_db`**（registry、`system/database.yaml`）。**5 个域现在都有** inline `database:` 块、都指向同一个 `kb_db` |
 | **DB 地址真相源** | **`main_control_service/config/` 是唯一真相源，Java 侧最后一处硬编码已消除**。serving 的默认数据源改从 `GET {control}/api/v1/system/database` 的 `default` 块构造（`ServingBeans.defaultDataSource`）。`application.yml` 的 `spring.datasource.*` 出厂**留空**，只做控制面不可达时的兜底；两者都没有则启动失败报 `default_datasource_unresolved`——**故意不静默回落**，因为静默连上旧库正是它从前的坑 |
 | **文档身份归属** | `asset_documents` 身份由 **KB 包独占写**；UNIQUE 从 `(domain, document_key)` 改成 `(kb_id, document_key)`；mining 的 `upsert_document` 退到只服务 legacy `/api/runs` |
 | `deploy-server.sh --force` | **不删配置**：`--force` 把宿主机 `main_control_service/config` 复制进暂存快照再换入（`deploy-server.sh:502-506`），保留配置。只有 `--force-config`（或 config 目录不存在）才覆盖配置 |
@@ -47,7 +52,7 @@ knowledge_mining  :8901                      agent_serving_java :8081
 
 | 服务 | 端口 | 启动优先级 | 职责 |
 |---|---|---|---|
-| `main_control_service` (control) | 8910 | 10（**最先**） | YAML 配置中心 + 域感知反向代理 |
+| `main_control_service` (control) | 8910 | 10（**最先**） | YAML 配置中心 + 域感知反向代理 + **JWT 鉴权网关**（登录/身份派生） |
 | `llm_service` | 8900 | 20 | 统一 LLM 运行时，租约式任务队列（`FOR UPDATE SKIP LOCKED`） |
 | `knowledge_mining` (mining) | 8901 | 30 | 挖掘线 |
 | `agent_serving_java` (serving) | 8081 | 30 | 检索线 |
@@ -65,9 +70,13 @@ nginx 只有一条后端路由（`/api/control-plane/` → `127.0.0.1:8910`）�
     └── nginx/vite 剥掉 ──┘ service ∈ {mining, serving, llm}   ← 前端实际只用 3 个
 ```
 
-`createProxyClient(service)`（`kb-ui/src/api/proxyClient.ts`）建的 axios **没有固定 baseURL**，在**每个请求的拦截器里**重算 `/api/control-plane/api/v1/proxy/{当前域}/{service}`（域从 `useDomainStore()` 实时读），所以切域无需重建客户端。`mining` 服务默认额外注入 `domain` query 参数（`includeDomainQuery:false` 可关，全局 workflow API 就关了它）。**KB 相关请求（`/api/kb/*`，走 mining service）会额外注入 `X-KB-User` 头**（值取 `VITE_KB_DEFAULT_USER || 'admin'`）作为 Phase-1 身份——服务端 `mining/kb/auth.py` 据此 upsert `kb_users`。这是内网信任头，不是生产级鉴权。
+`createProxyClient(service)`（`kb-ui/src/api/proxyClient.ts`）建的 axios **没有固定 baseURL**，在**每个请求的拦截器里**重算 `/api/control-plane/api/v1/proxy/{当前域}/{service}`（域从 `useDomainStore()` 实时读），所以切域无需重建客户端。`mining` 服务默认额外注入 `domain` query 参数（`includeDomainQuery:false` 可关，全局 workflow API 就关了它）。
 
-例外：`controlPlane.ts` **直连**控制面（`baseURL=/api/control-plane`，不走 `/proxy/{domain}/{service}` 形状），用于系统配置 / 域 / scenario pack / 日志。reload 按钮则通过 proxy 打 `/proxy/{domain}/{service}/api/v1/admin/reload-config`。
+**身份头已改由网关注入**：`installAuthInterceptors()` 给每个客户端（含直连控制面的 `controlPlane.ts` / `auth.ts`）装请求拦截器，从 `tokenStorage` 读 JWT 加 `Authorization: Bearer`。前端**不再发 `X-KB-User`**（`VITE_KB_DEFAULT_USER` 已废弃）——那个头现在由 `proxy._build_forward_headers` 从 JWT 派生并注入，客户端自带的同名头会被 `_STRIP_REQUEST_HEADERS` 剥掉。
+
+**响应拦截里刻意不自动登出**：代理请求的 401 可能是下游 mining 的 `X-Internal-Auth` 失配等基础设施问题，核掉整个会话会把配置问题伪装成过期。会话有效性只由启动期 `auth.fetchMe()`（`/me` 明确 401 才 logout）+ 路由守卫把关。
+
+例外：`controlPlane.ts` / `api/auth.ts` **直连**控制面（`baseURL=/api/control-plane`，不走 `/proxy/{domain}/{service}` 形状），用于登录 / 系统配置 / 域 / scenario pack / 日志。reload 按钮则通过 proxy 打 `/proxy/{domain}/{service}/api/v1/admin/reload-config`。
 
 `README.md` 里写的 `/api/mining`、`/api/serving`、`/api/llm` **已不存在**，是早期遗留。加新接口从 `kb-ui/src/api/*.ts` 入手。
 
@@ -79,12 +88,80 @@ nginx 只有一条后端路由（`/api/control-plane/` → `127.0.0.1:8910`）�
 |---|---|---|
 | `llm_service` | **纯 HTTP 拉控制面**：`GET {control}/api/v1/system/llm_service/raw` + `/system/database/raw`。**只读 `CONTROL_PLANE_BASE_URL` 一个环境变量**，其余完全不读 `.env` | `POST /api/v1/admin/reload-config`（只拉 service config，**不碰 db_config**，host/port 也不热切） |
 | `agent_serving_java` | **HTTP 拉控制面**：per-domain 走 `GET {control}/api/v1/serving-config`（不可达时回落本地文件）；默认数据源（非路由的 `operator_paradigm*` 等）走 `GET {control}/api/v1/system/database` 的 `default` 块，与 mining 同源。不再读 `.env` `PG_*`，`application.yml` 里也**不再硬编码**地址 | `POST /api/v1/admin/reload-config`（只重载 per-domain；**默认数据源不热切**，改了要重启 serving）；控制面扇出：`POST {control}/api/v1/admin/reload-serving` |
-| `knowledge_mining` | **HTTP 拉控制面**（`control_plane.py`）：service 配置 `GET {control}/api/v1/system/mining/raw`、DB 配置 `GET /system/database/raw`，启动时抓一次缓存。**不再读 `.env`/`PG_*`/`MINING_API_PORT`**。**唯一还读文件系统的**是 `domain_pack.py` 加载 `domain_registry.yaml` + `scenario_packs/*/domain.yaml`（域知识，非 service/DB 配置） | 无，改配置必须重启 |
-| `kb-ui` | HTTP 走控制面 | — |
+| `knowledge_mining` | **HTTP 拉控制面**（`control_plane.py`）：service 配置 `GET {control}/api/v1/system/mining/raw`、DB 配置 `GET /system/database/raw`、**auth 配置 `GET /system/auth/raw`**，启动时抓一次缓存。**不再读 `.env`/`PG_*`/`MINING_API_PORT`**。**唯一还读文件系统的**是 `domain_pack.py` 加载 `domain_registry.yaml` + `scenario_packs/*/domain.yaml`（域知识，非 service/DB 配置） | 只有 auth 有：`POST /api/kb/admin/reload-auth-config`（内部端点，由控制面 `reload-auth` 扇出）。mining/DB 配置改了仍必须重启 |
+| `main_control_service` 自己 | 直接读 `config/` 下 YAML；`auth.yaml` 由 `AuthMiddleware` 持有并可 reload；`ui.yaml` 只经 `GET /system/ui` 下发给前端 | `POST /api/v1/admin/reload-auth` |
+| `kb-ui` | HTTP 走控制面（品牌 `GET /system/ui`、域列表、登录） | — |
 
-控制面自己只有两个 admin 端点：`POST /api/v1/admin/reload-ip-whitelist` 和 `POST /api/v1/admin/reload-serving`（后者向每个 distinct 的 `serving_url` 扇出 reload-config，best-effort）。**没有 `reload-llm` 扇出**——LLM 的重载由前端自己经 proxy 打到对应服务。
+控制面的 admin 端点：`POST /api/v1/admin/reload-ip-whitelist`、`POST /api/v1/admin/reload-serving`（向每个 distinct 的 `serving_url` 扇出 reload-config，best-effort）、**`POST /api/v1/admin/reload-auth`**（重载自身 auth.yaml，**并扇出到每个 distinct `mining_url` 的 `/api/kb/admin/reload-auth-config`**——否则网关换了新 `internal_verify_secret`、mining 还在验旧值，全部代理请求 401）。**没有 `reload-llm` 扇出**——LLM 的重载由前端自己经 proxy 打到对应服务。
 
 **`.env` 已全面废弃**：mining/serving 都改走控制面，`.env.example` 里的 `LLM_SERVICE_PROVIDER_*` / `EMBEDDING_*` / `RERANK_*` / `PG_*` 全是死变量。真配置在 `main_control_service/config/system/`（`llm_service.yaml` / `mining.yaml` / `database.yaml`）。唯一还被读的 bootstrap 环境变量是各服务的 `CONTROL_PLANE_BASE_URL`（默认 `http://localhost:8910`）；`LLM_SERVICE_URL` 仍由调用方读（在 mining.yaml/application.yml 里配）。
+
+---
+
+## 鉴权与用户体系（Phase 2，最新一波）
+
+真登录已上线。链路：**浏览器 → 控制面网关（验 JWT、派生身份）→ 反代注入头 → mining/serving**。设计见 `docs/superpowers/specs/2026-08-06-user-permissions-design.md` 与 `2026-08-07-auth-intranet-login-design.md`。
+
+### 链路与三个头
+
+```
+前端 Authorization: Bearer <JWT>
+   │
+   ▼ main_control AuthMiddleware（HS256，手写 jwt_util，钉死 alg=HS256 防 alg-confusion/none）
+   │   payload: {sub=username, role=site_role, name=display_name, iat, exp}
+   │   → request.state.user；admin-only 路径白名单命中且 role≠admin → 403
+   ▼ proxy._build_forward_headers
+       X-KB-User  = username     ← 客户端自带的同名头先被剥掉（_STRIP_REQUEST_HEADERS）
+       X-KB-Role  = role
+       X-Internal-Auth = auth.yaml 的 internal_verify_secret
+   ▼ mining kb/auth.current_user：X-KB-User + X-Internal-Auth **双校验**
+```
+
+- **为什么要 `X-Internal-Auth`**：mining:8901 被 publish 到宿主机，光有 `X-KB-User` 谁都能直连伪造身份。加了这一道，全部 `/api/kb/*` 的伪装被堵死。`site_role` 一律**现查库**（`require_admin`），不信 `X-KB-Role` 头。禁用账号即使持有未过期 JWT 也立刻 401（`status='disabled'` 现查）。
+- **⚠️ serving 侧没有这道锁**：`agent_serving_java` 只读 `X-KB-User`（`KbAccessService`），不校验 `X-Internal-Auth`。直连 8081 仍可伪造身份收窄/放宽 `kbIds`。这一轮 Java 侧**一行未改**。
+- **匿名仍合法**：`mcp_server` 不发任何身份头 → serving 按 `public` KB 处理（`selectAccessibleKbIds` 的 `LEFT JOIN kb_users`）。
+
+### ⚠️ 出厂配置 = 全站 401（最容易踩）
+
+`config/system/auth.yaml` 出厂是 `enabled: true` **加占位符 secret**（`change-me-*`）。两侧都**拒绝用占位符运行**：
+
+- 网关 `AuthMiddleware.enabled` 要求 `secrets_valid` → 占位符时**强制视为关闭**（打 CRITICAL 日志），于是不注入任何身份头；
+- mining `get_internal_verify_secret()` 对 `change-me` 前缀返回 `None` → `current_user` 直接 401 `auth not initialized`。
+
+结果：**不改 secret，前端所有 KB 页面 401，且不会告诉你原因是配置**。部署时必须把 `jwt_secret` / `internal_verify_secret` / `bootstrap.admin_password` 全改成强随机值，然后重启 control + mining。这是刻意的 fail-closed——比「带着公开 secret 继续跑」安全。彻底锁死时的逃生门是 `enabled: false` + 重启 control（缺文件同样等于禁用，此时 KB 也用不了）。
+
+### 登录两步 + 工号（SSO 口子）
+
+- `POST /api/v1/auth/identify`（免 token）→ 透传 mining `identify()` → `{mode}`：`password`（有 `password_hash`，前端弹密码框）/ `member`（在库但无密码的**工号**账号，前端直接登录）/ `not_found`（不在库或已禁用）。
+- `POST /api/v1/auth/login`（免 token）→ 网关拿**任一启用域**的 `mining_url`（验密码与域无关）调 mining `/api/kb/auth/verify`（带 `X-Internal-Auth`）→ 成功后签 JWT（默认 TTL 43200s=12h）。
+- `GET /api/v1/auth/me` 只回显 JWT 里的 claim，不查库。
+- 密码：`kb/security.py` PBKDF2-HMAC-SHA256，200k 轮，`hmac.compare_digest` 比较。`verify_credentials` 对**不存在/禁用/无密码**三条路径都跑一次 dummy PBKDF2，抹掉「用户是否存在 / 是不是 admin」的时序侧信道。
+- `UserService.verify_intranet_auth()` 是 **SSO 口子**：当前恒 `True`（在 `kb_users` 表里有行即信任）。接内网 SSO 时只换这个函数，调用方不动。
+
+### 用户管理与不变量（`mining/kb/routes/auth.py` + `services/user_service.py`）
+
+`GET/POST/PATCH /api/kb/users`、`POST /api/kb/users/{id}/reset-password`（admin）、`POST /api/kb/users/me/password`（任一登录用户，要旧密码）。守卫都在 `UserService`，不在路由：
+
+- `site_role ∈ {admin, member}`；admin **必须**有密码；无密码的工号账号**不能直接升 admin**。
+- **last-admin 守卫**：降级/禁用会让启用 admin 归零 → 拒绝；**不能禁用或降级自己**。
+- `upsert_user_by_username`（`current_user` 每次请求都调）冲突时**只更新 `display_name`**——绝不动 `site_role`/`password_hash`，否则某 admin 的日常 KB 流量会把自己降级或清空密码。
+- **启动期播种**（`kb/bootstrap.py`，mining lifespan 里 best-effort）：库里不存在「有密码的 admin」时，用 `auth.yaml` 的 `bootstrap.admin_password` 建/提权 `admin` 用户。占位符密码**拒绝播种**。已有同名带密码账号不覆盖。
+- **路由注册顺序是承重的**：`app.py` 里 `kb_auth_router` **必须先于** `kb_router` 注册，否则 `GET /api/kb/users` 被 `/api/kb/{kb_id}` 抢匹配（kb_id="users"）→ 404。
+
+### 站点角色 vs KB 角色（两层，别混）
+
+| 层 | 值 | 存哪 | 管什么 |
+|---|---|---|---|
+| 站点级 | `admin` / `member` | `kb_users.site_role` | 能不能进管理类页面；能不能管用户 |
+| KB 级 | `owner` / `editor` / `viewer` | `knowledge_bases.owner_id` + `kb_members.role` | 具体某个 KB 能读/能写 |
+
+**site admin 对全部 KB 全通**：`is_visible` / `can_write` / `list_visible` 里都加了 `EXISTS(kb_users.site_role='admin')` 短路，列表页对 admin 返回域内全部 active KB 且 `my_role='admin'`。
+
+前端：`router/index.ts` 的 `beforeEach` **先 `await auth.ready`** 再判断（初始导航在 `app.use(router)` 时就触发，早于 `fetchMe`；不等就会「刷新即登出」——这是 `ae0daac` 修的真根因，所以 `main.ts` 里 `auth.bootstrap()` 必须在 `app.use(router)` **之前**调用）。`ADMIN_ROUTES` 集合挡 member 深链（知识资产/图谱/范式/本体/LLM/设置）；`kb-*` 路由对 member 开放。
+
+### 控制面的鉴权边界（有意留的洞）
+
+`_is_open_config_read()` 让所有 `GET /api/v1/system/*`（**含 `/raw`**）、`GET /api/v1/serving-config`、`GET /api/v1/domains*` **免 token**——因为 mining/serving/llm 启动时要拉自己的配置，它们没有用户 token。代价是 `/raw` 会暴露 `llm_api_key` 等，边界靠 IP 白名单/防火墙兜。admin-only 白名单（`_is_admin_only`）盖的是 `/api/v1/admin/*`、`PUT /system/*/raw`、域的增删改、`/api/v1/logs`、`/api/v1/code-sync`。CORS 中间件必须在 Auth **之外**（注册在其后），否则浏览器 preflight 的 `OPTIONS` 无 token 被判 401。
 
 ---
 
@@ -119,25 +196,56 @@ nginx 只有一条后端路由（`/api/control-plane/` → `127.0.0.1:8910`）�
 
 `domain_db.resolve_domain_database(entry, default)` 解析顺序：① **inline `database:` 块** → ② 回落全局默认库（控制面 `database.yaml` 的 `default`）。原先的 `database_url_env` 环境覆盖分支**已删除**（`environ` 形参只为签名兼容保留，不再使用）。inline 块被 API 侧 `DomainPoolManager._resolve` 和 job 侧 `_create_dbs` 读取，池按 conninfo 去重共享。
 
-**但**：出厂 `domain_registry.yaml` 现在给 **4 个域全部**配了 inline `database:` 块，且都指向**同一个** `kb_db@121.89.90.178`。所以实际上 mining 仍写一个物理库，靠 `domain` + `kb_id` 列隔离——机制是真的 per-domain-capable。想让某域独立分库，改它的 inline `database:` 块即可。（`pg_config.py:conninfo_from_env` 这个旧死代码已随配置层重构删除。）
+**但**：出厂 `domain_registry.yaml` 现在给 **5 个域全部**配了 inline `database:` 块，且都指向**同一个** `kb_db@121.89.90.178`。所以实际上 mining 仍写一个物理库，靠 `domain` + `kb_id` 列隔离——机制是真的 per-domain-capable。想让某域独立分库，改它的 inline `database:` 块即可。（`pg_config.py:conninfo_from_env` 这个旧死代码已随配置层重构删除。）
 
 ### LLM 模板的静默 no-op（仍是坑，细节已更新）
 
 `LlmClient.submit_task()` 对**任何**失败（HTTP 错、模板未知）都只 warning 并**返回 `None`**，调用方当「无任务」静默跳过——不报错、不失败文档。
 
-- `mining-entity-extraction`（`stages/entity_extract`）：**未在任何 pack 声明**，但有 compat 兜底——`build_templates_from_profile()` 从 `mining-segment-understanding` 里的 `entities` 子 schema 合成它。**若 pack 的 `mining-segment-understanding` 没有 `entities` 属性，则实体抽取静默产不出东西。**
-- `mining-ontology-induction`（`stages/ontology_induction`）：**未声明、且无 compat 生成器** → 除非有人手工 POST 进 llm_service，否则本体归纳静默产零候选。
+- `mining-entity-extraction`（`stages/entity_extract`）：**只有 `vendor_tech_docs` pack 声明了**；其余 4 个域靠 compat 兜底——`build_templates_from_profile()` 从 `mining-segment-understanding` 里的 `entities` 子 schema 合成它。**若 pack 的 `mining-segment-understanding` 没有 `entities` 属性，则实体抽取静默产不出东西。**
+- `mining-ontology-induction`（`stages/ontology_induction`）：**只有 `vendor_tech_docs` 声明**，且**无 compat 生成器** → 其余域除非有人手工 POST 进 llm_service，否则本体归纳静默产零候选。
+- `vendor_tech_docs` 还声明了 `mining-entity-fact`——**代码里没有任何地方提交这个 key**，是条空模板，别照着它推断有对应阶段。
 - `mining-question-gen`：pack 已正确声明；`llm_templates.py` 有别名 `mining-question-generation → mining-question-gen` 兜底老 key。
 - LLM 阶段只在 llm_service `health_check()` 通过时才构造；不可达则整个 LLM dict 为 `None`、抽取器根本不建（外面还有宽泛 `except (ImportError, Exception)` 吞异常）。
 
 **改 pack 的 `template_key` 前先 grep 代码**：`submit_task` 的 key 与 pack/代码不一致时静默失效。`generic` pack **完全没有 `llm_templates` 段** → 该域下所有 mining LLM 阶段降级。`config_library/` 种子库里 odn/civil_engineering/tender_rfp 仍写着错的 `mining-question-generation`（靠上面的别名兜底），但生效的 `main_control_service/config/scenario_packs/` 已修对。
 
+### 摄取与预处理：文件类型、Excel、诊断字段
+
+`ingestion/__init__.py:ingest_directory()` 是所有引擎共用的入口，按扩展名分派。上传白名单在 `api/routes/uploads.py:_ACCEPTED_EXTENSIONS`（已含 `.xls`/`.xlsx`）：
+
+| 扩展名 | 处理 | 落到哪个 parser |
+|---|---|---|
+| `.md` / `.txt` | 直接读 | MarkdownParser / PlainText |
+| `.html` / `.htm` | `html_to_markdown()` | 转成 `file_type="markdown"` |
+| `.chm` / `.hdx` | 解包 + 转 md | 同上 |
+| `.pdf` | `pdf_to_text()` 预抽文本 + PdfParser 结构化 | PdfParser（**读 file_path**） |
+| `.docx` | 不预处理 | DocxParser（**读 file_path**） |
+| **`.doc`** | `doc_to_docx()`：**LibreOffice headless** → 回落 Word COM(Windows) → 否则 `PreprocessingError` | 转成 `file_type="docx"` 走 DocxParser |
+| **`.xls` / `.xlsx`** | `excel_to_markdown()` | 转成 `file_type="markdown"` |
+
+- **`.doc` 的转换产物**写进**进程生命周期**的 staging 目录（`atexit` 清理）——不能急着删，parse 阶段稍后还要重新打开它。`source_uri`/`relative_path`/`file_name` 仍指向原始 `.doc`，只有 `file_path`（`parse_path`）指向转换后的 `.docx`。转完还会 `count_embedded_images()`，为 0 时记 `image_conversion_warning`（转换器常把图丢掉）。
+- **Excel → Markdown**：`excel_reader`（openpyxl 读 .xlsx，xlrd 读 .xls；同时用 `data_only=True/False` 读两遍以便对公式发告警）→ `excel_structure.detect_regions()` 按空行/空列切表格区域 + `infer_headers()` 猜表头 → `excel_preprocessing` 渲成 `# 文件名 / ## 工作表 / ### 表格 A1:D20` 的 Markdown，宽表按 `table_chunk_target_tokens` 切块重复表头。单列区域渲成列表而非表格。限额在 `system/mining.yaml` 的 `excel:` 块（`max_sheets` 200 / `max_nonempty_cells` 1e6 / `table_chunk_target_tokens` 420），超限抛 `excel_limits_exceeded`。
+- **预处理诊断已可查库/可查 API**（原来只有日志）：失败/降级统一走 `ingestion/errors.PreprocessingError(code, message)`，`as_metadata()` 产 `preprocess_status`/`preprocess_error_code`/`preprocess_error`；Excel 另带 `preprocess_warnings[]` + `excel_summary{}`。`jobs/run.py:_copy_preprocess_metadata()` 把这 5 个键复制进 `mining_run_documents.metadata_json`（legacy 与 workflow 两条路径都做），`_log_preprocess_diagnostics()` 对 `partial`/`failed` 打结构化 warning。`GET /api/runs/{id}/documents` 与单文档端点用 `_expand_preprocess_metadata()` 摊平成 `preprocess_status`/`error_code`/`error_detail`/`warnings`/`excel_summary` 返回；前端是 `PreprocessNotice.vue`。**错误码**：`doc_converter_unavailable` / `doc_conversion_failed` / `excel_dependency_missing` / `excel_unsupported_format` / `excel_password_protected` / `excel_corrupt_file` / `excel_limits_exceeded` / `excel_no_usable_content`。
+
+### 图片抽取 + VLM 图注（默认关闭）
+
+`block_type` 新增 `image`（`contracts/models.VALID_BLOCK_TYPES`、`databases/asset_core/schemas/007_asset_block_type_image.sql` 放宽了 `asset_raw_segments` / `asset_retrieval_units` 的 CHECK）。
+
+- **抽图在 parse**：`infra/image_assets.py` 提供落盘/哈希/data-URI 解码/远程抓取的公共件；PDF 走 `pdf_parser` 的 `LTImage` + `ImageWriter`（按阅读顺序与文本混排），MD/HTML/DOCX 走 `structure/` 与 `docx_parser`。**图片目录是 run 级的**：`infra/run_workdir.resolve_run_image_dir(run_id, document_key)` → `{tmp}/mining_runs/{run_id}/images/{doc}/`。只有 `IMAGE_CAPABLE_FILE_TYPES = {pdf, markdown, docx, doc, html}` 才分配目录，`.txt` 故意不参与。
+- **远程图默认跳过**（`caption_source="remote_skipped"`），要开得靠 `fetchRemoteImages` 选项——parse 阶段同步拉网很贵。
+- **图注在 segment，不是独立阶段**：`pipeline._caption_tree_for_segment()` 在切段**之前**把空的 image block 填上文本，这样 `raw_text`/`content_hash`/`token_count` 都能看到图注。`stages/image_caption.ImageCaptioner` 调 llm_service 同步 `/execute`（`build_vision_user_message` 造 OpenAI 风格 multimodal 消息），失败一律回落 `native_caption` → 占位符，**绝不失败文档**。
+- **空图注也要有稳定且互不相同的 hash**：`_make_segment` 对无文本的 image 段用 `image:{image_sha256 或 image_path 或 doc:idx}` 当哈希源，否则所有空图撞成同一个 hash。
+- image 段是**独立段**（`_INDEPENDENT_BLOCK_TYPES`）且**永不参与合并/吸收**（`_NON_MERGEABLE_BLOCK_TYPES`，与 table/code 同级），块类型优先级最高（5）。
+- **开关**：workflow 走 `ParseSegmentOptions` 的 `enableImageCaption`（默认 `false`）/ `imageCaptionModel`（默认 `glm-4.5v`）/ `maxImagesPerDoc`（默认 20）/ `fetchRemoteImages`；legacy 走环境变量 `MINING_ENABLE_IMAGE_CAPTION=1`。**默认关是为了别产生额外费用**。
+- `structure_json` 里的键：`kind`（`pdf_image`/`md_image`/`html_image`/`docx_image`）、`image_path`、`image_sha256`、`native_caption`、`original_src`、`caption_source`（`vlm`/`fallback`/`missing_file`/`remote_skipped`/…）、`vlm_caption`、`vlm_model`。`summarize_image_blocks()` 统计这些用于 run 观测。
+
 ### mining API 表面（`mining/api/`）
 
-routers：health, runs, knowledge, config, builds, uploads, ontology, document_lifecycle, **workflows**，外加 KB 层的 4 个 router（kbs / documents / folders / mining，见「KB 层」）。
+routers：health, runs, knowledge, config, builds, uploads, ontology, document_lifecycle, **workflows**，外加 KB 层的 **5 个** router（**auth** / kbs / documents / folders / mining，见「KB 层」与「鉴权与用户体系」；auth **必须最先注册**）。
 
 - **全局 workflow 管理 + 编辑器**（`/api/mining-workflows` + `/api/mining-operators/catalog`）：列表/创建/草稿保存（`expected_revision` 乐观锁，冲突 409 `DraftRevisionConflict`）/校验（publish 模式编译，失败 422）/发布/版本历史/预览/恢复成新草稿/克隆/归档。系统默认 `system-full-baseline` 不可归档。前端叫「挖掘范式」页（`/mining/workflows`），仍在。
-- **批次上传 → workflow 绑定（legacy `/api/runs` 入口）**：`POST /api/runs/preflight` 把上传批次与已有 snapshot 做 diff；`POST /api/runs` 接 `workflow_id/workflow_version`。**注意**：前端旧的「全局挖掘任务发起页」（CreateRunView/RunsView）已删除，普通用户挖掘统一走 KB 入口（`/api/kb/{id}/mine`）；`/api/runs` 仍在但不再有前端入口。
+- **批次上传 → workflow 绑定（legacy `/api/runs` 入口，已废弃）**：`POST /api/runs/preflight` 把上传批次与已有 snapshot 做 diff；`POST /api/runs` 接 `workflow_id/workflow_version`。**它现在会打 deprecation warning**：域级挖掘写 `asset_documents.kb_id=NULL`、默认 `publish=true` 进域级 active release，与 KB 作用域知识分属两套模型。前端旧的「全局挖掘任务发起页」（CreateRunView/RunsView）已删除，普通用户挖掘统一走 KB 入口（`/api/kb/{id}/mine`）。
 - **冻结 workflow run trace**：`GET /api/runs/{id}/trace` 只从 run 的 manifest 快照渲染冻结图 + `mining_workflow_node_events` 节点事件 + 抽取的告警。`POST /{id}/resume` 支持 failed/interrupted/崩溃 running 恢复。
 
 ---
@@ -150,12 +258,13 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 
 新表 `kb_users` / `knowledge_bases` / `kb_members` / `kb_folders`（`databases/kb/schemas/`），**建在每个域库 + 主控制库**（`pg_schema` 的 domain 和 primary 路径都注册了），所以 `asset_documents.kb_id → knowledge_bases(id)` 是**同库真 FK**（`ON DELETE RESTRICT`）。
 
-- `knowledge_bases`：属于某 `domain`，有 `owner_id`、可见性 `private/shared/public`、软删除（`status='deleted'`）、`UNIQUE(domain, name)`、`mining_workflow_id`（绑定的挖掘范式，软引用控制库的 `mining_workflows`，NULL → `/mine` 报 400）。
-- `kb_members`：PK `(kb_id, user_id)`，`role ∈ {viewer, editor}`，仅 `shared` 用。
+- `kb_users`：`username` 唯一，Phase 2 加了 `password_hash`（NULL = 工号账号/不可密码登录）与 `site_role ∈ {admin, member}`（见「鉴权与用户体系」）。
+- `knowledge_bases`：属于某 `domain`，有 `owner_id`、可见性 **`private` / `public`（`shared` 已砍）**、软删除（`status='deleted'`）、`UNIQUE(domain, name)`、`mining_workflow_id`（绑定的挖掘范式，软引用控制库的 `mining_workflows`，NULL → `/mine` 报 400）。
+- `kb_members`：PK `(kb_id, user_id)`，`role ∈ {viewer, editor}`。**private 库靠它授权；public 库只有 `editor` 成员还有意义**——`add_member` 对 public 库加 `viewer` 直接报 `InvalidVisibility`（全员本来就能读，加只读成员是噪音）。
 - `kb_folders`：一等文件夹树（自引用 `parent_id`），`UNIQUE(kb_id, path)`，磁盘目录镜像它。
 - `asset_documents` 加列：`kb_id`（真 FK）、`storage_path`、`directory_path`、`owner_id`、`file_size`、`modified_at`；**UNIQUE 从 `(domain, document_key)` 改成 `(kb_id, document_key)`**（legacy 行 `kb_id=NULL` 不冲突）。
 
-**写方铁律（设计铁律 1）**：`asset_documents` 身份**只由 KB 包 `KbDB.insert_document_identity` 写**；mining 只**读**（按 `storage_path`）、只产 snapshot 及派生资产。legacy `AssetCoreDB.upsert_document` 被隔离到只服务 `/api/runs`（且已去掉 `ON CONFLICT(domain,document_key)`）。
+**写方铁律（设计铁律 1）**：`asset_documents` 身份**只由 KB 包 `KbDB.insert_document_identity` 写**；mining 只**读**（按 `storage_path`）、只产 snapshot 及派生资产。legacy `AssetCoreDB.upsert_document` 被隔离到只服务（已废弃的）`/api/runs`，且已去掉 `ON CONFLICT(domain,document_key)`——改成「先查后插」：按 `(domain, document_key)` 查任意已有行，**`ORDER BY kb_id NULLS LAST` 优先命中 KB 拥有的那行**；命中 KB 行只**复用 id、绝不改元数据**（KB 是真相源），命中 legacy 行才更新，都没有才插 `kb_id=NULL` 新行。这样同一物理文件不会因为 `(kb_id, document_key)` 唯一约束容许多 NULL 而分叉出一堆 NULL 行。
 
 ### 身份 vs 位置分离（G1/G3，易踩）
 
@@ -168,7 +277,7 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 `POST /api/kb/{kb_id}/mine`（body `document_ids?` / `force_redo?`）：
 
 - **永远用 workflow 引擎**，绑定 KB 的 `mining_workflow_id` 当前发布版本；`insert_queued_run(execution_engine="workflow")`，metadata 里塞 `{kb_id, publish:False, force_redo, signature, document_ids?}`，后台线程跑。
-- **`publish=False` 是刻意的**：KB 挖掘只 build、不发布到域级 active release（避免共享域里跨 KB 互相 retire）。
+- **`publish=False` 是刻意的**：KB 挖掘只 build、不发布到域级 active release（避免共享域里跨 KB 互相 retire）。这条护栏**已下推到发布边界**：`stages/publishing.publish_release()` 见到 `build.kb_id` 非空直接 `ValueError` 拒绝——原先只有 KB 挖掘入口那一行 `metadata.publish=false`，任何别的调用方都能绕过。
 - **整库 vs 选中**：空 `document_ids` = 整库增量（`input_path` 锁到 `{upload_root}/{kb_id}`，未变文档靠 lifecycle SKIP/RESTORE 免挖）；非空则按 id → storage_path 过滤 ingest。
 - **`force_redo`**：用户勾选 **OR** 范式签名（`workflow_id:version:graph_hash`）比上次变了 → 自动 `auto_force_redo`。生效时清空 snapshot 派生资产（单元/向量/关系/切片）并强制 `UPDATE`，绕过内容哈希 SKIP。
 - **状态是派生的、不落库**（`db.py` 的 `_STATUS_CASE_SQL`，折进 list/detail SQL 免 N+1）：优先级 `published > failed > mined(committed) > mining > withdrawn > uploaded`。**`committed⇒mined` 这档是 KB 特有的**——因为 KB run 无 active release，否则 committed 文档会掉回 `uploaded`。
@@ -176,9 +285,11 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 
 ### 鉴权与前端
 
-- Phase-1 鉴权 = `X-KB-User` 头（`auth.py:current_user` upsert `kb_users`），**内网信任头，可伪造**，Phase-2 只换身份来源、表和权限逻辑不变。
-- 权限：读 = owner/public/member；写 = owner/editor。不可见一律映射成 404（不泄露存在性）。
-- 前端在 `kb-ui/src/views/kb/`：KB 列表 → 详情（文件/成员/挖掘/设置 4 tab）→ 文档预览（`mined/published` 才挂动态知识 tab）→ KB 内的 run 详情（12 阶段 `PipelineFlow`）+ 单文档详情。路由 `/kb/*`。
+- 身份 = `X-KB-User` + `X-Internal-Auth` **双校验**（Phase 2，见「鉴权与用户体系」）。两个头都由控制面网关从 JWT 派生注入，前端不再自己发。
+- 权限：读 = **site admin** / owner / public / member；写 = **site admin** / owner / editor。不可见一律映射成 404（不泄露存在性），可见但无写权限才 403。
+- **写权限校验必须在 service 层**：文档上传/ZIP 导入原先只查了 KB 存在性就落盘（IDOR），现在 `DocumentService` 两个入口都先 `_assert_write`。加新写入口时照抄这行。
+- `add_member` **不再 upsert 用户**：目标用户名必须已存在（admin 建过或本人登录过），否则 404。避免 owner 随手打字就注册垃圾账号、抢占用户名、绕过 admin 准入。配套新增 `GET /api/kb/{kb_id}/members/candidates?q=`（需写权限；只返回 `id/username/display_name` 最小集，不暴露 `site_role`/`status`/`has_password`），前端成员面板据此做选择器。
+- 前端在 `kb-ui/src/views/kb/`：KB 列表 → 详情（文件/成员/挖掘/设置 4 tab）→ 文档预览（`mined/published` 才挂动态知识 tab）→ KB 内的 run 详情（12 阶段 `PipelineFlow`）+ 单文档详情。路由 `/kb/*`（对 `member` 角色开放，是普通用户的主战场）。建库/设置里的可见性已从三选一单选框换成 `public` 二元开关。
 
 ---
 
@@ -191,7 +302,7 @@ routers：health, runs, knowledge, config, builds, uploads, ontology, document_l
 - `POST /api/v1/search` 的 body 收 `kbIds`（`@JsonAlias("kb_ids")`，默认空 = 老的全域行为）。**注意 `SearchRequest` 里 `scope` 和 `kbIds` 无关**：`scope` 过滤文档内部结构（章节等），`kbIds` 决定检索哪个语料库。
 - 范式侧由 `scope_resolve` 的 **`kbIds` 节点参数**承载——它是**设计态**属性，冻结进存储的图，不是每请求传。参数 schema 带 `x-widget: "kb-picker"`（JSON Schema 忽略未知关键字，纯 UI 提示），前端 `ParadigmEditorView` 据此渲染知识库选择器。
 
-**身份与鉴权**：`X-KB-User` 头（同 mining 的内网信任头）→ `KbAccessService.authorize()`，**每次执行都校验**，存图不会变成绕过可见性的后门。`KnowledgeBaseMapper.selectAccessibleKbIds` 用 `LEFT JOIN kb_users` 解析用户，无头/未知用户只剩 `public` KB（`mcp_server` 就是这种匿名调用）。任一请求 id 不可读则**整个**请求失败成 `kb_not_found`（400），不做静默子集——返回子集与「那个 KB 没有匹配内容」无法区分；不存在与无权限也共用同一错误，不泄露存在性。
+**身份与鉴权**：`X-KB-User` 头 → `KbAccessService.authorize()`，**每次执行都校验**，存图不会变成绕过可见性的后门。该头**现在由控制面网关从 JWT 派生注入**（前端不再自己发），但 **serving 侧本身没有 `X-Internal-Auth` 校验**（Java 这一轮一行未改）——直连 8081 仍可伪造身份，边界靠网络层。`KnowledgeBaseMapper.selectAccessibleKbIds` 用 `LEFT JOIN kb_users` 解析用户，无头/未知用户只剩 `public` KB（`mcp_server` 就是这种匿名调用）。任一请求 id 不可读则**整个**请求失败成 `kb_not_found`（400），不做静默子集——返回子集与「那个 KB 没有匹配内容」无法区分；不存在与无权限也共用同一错误，不泄露存在性。
 
 **关键：KB 范围不走 release，走 build。** 因为 KB 挖掘 `publish=False`，域级 active release 里压根没有 KB 内容，走 `resolveActiveScope` 必然落空。`AssetRepository.resolveActiveScope(domain, channel, kbIds)` 在 `kbIds` 非空时改派给 `resolveKbScope()`，从 `asset_build_document_snapshots` 按**每个文档自己 KB 的最新 build** 解析（`AssetBuildDocumentSnapshotMapper.selectLatestKbSnapshots`：`DISTINCT ON (document_id)` 按 `b.created_at DESC`，`b.kb_id = d.kb_id` 防兄弟 KB 的 build 抢答，`selection_status='active'` **必须在外层过滤**否则被后续 build 标 removed 的文档会回落到旧 active 行，`d.domain` 防跨域同名 id）。零命中抛 `no_active_kb_build`。
 
@@ -283,10 +394,14 @@ MCP 只有 domain、没有 paradigm id，靠「域绑定」找范式（`Paradigm
 
 ```
 main_control_service/config/
-  domain_registry.yaml          # 4 个域：cloud_core_network / generic / civil_engineering / odn
+  domain_registry.yaml          # 5 个域：cloud_core_network / generic / civil_engineering / odn / vendor_tech_docs
   scenario_packs/<pack>/domain.yaml   # 分 ontology: / mining: / serving: 三段
-  system/llm_service.yaml, system/database.yaml ...
+  system/llm_service.yaml, system/database.yaml, system/mining.yaml
+  system/auth.yaml              # Phase 2 鉴权（jwt_secret / internal_verify_secret / bootstrap）
+  system/ui.yaml                # 站点品牌 site: 块（title/name/badge/logo_text/icon）
 ```
+
+`auth.yaml` 与 `ui.yaml` 都**不下发给 serving**（不在 `/serving-config` 快照里）：前者由控制面自己持有 + mining 经 `/system/auth/raw` 拉，后者只经 `GET /system/ui` 给前端。
 
 历史上根目录另有一份副本（`./domain_registry.yaml` + `./scenario_packs/`）——已删除，**勿恢复**。（`config_library/site|enterprise/` 是种子库，不是生效配置。）若在旧文档/分支/issue 看到 `../scenario_packs`、`/app/scenario_packs`、`COREMASTERKB_DB_CLOUD_CORE`，那是统一前的描述。
 
@@ -307,7 +422,7 @@ GET {main_control}/api/v1/system/database          ← 只在启动时拉一次
   → MainControlClient.fetchDefaultDatabase() → ServingBeans 建 defaultDataSource
 ```
 
-`generic` 域没有 inline `database:` → 快照里 `database: null` → 用默认库（即上面那份 `default` 块）。scenario pack 的 `serving:` 段被当根解析（`route_policy`/`query_understanding`/`extractor_rules`/`intent_strategy` 同级，无 ontology/mining 嵌套）。
+出厂 5 个域**都**有 inline `database:`，所以快照里 `database` 都非 null、每个域都走自己的 Hikari 池（只是全指向同一个 `kb_db`）；只有把某个域的 `database:` 块删掉，它才会回落默认 DataSource（那份 `default` 块）。scenario pack 的 `serving:` 段被当根解析（`route_policy`/`query_understanding`/`extractor_rules`/`intent_strategy` 同级，无 ontology/mining 嵌套）。
 
 ### mining 侧怎么拿到它
 
@@ -321,8 +436,8 @@ GET {main_control}/api/v1/system/database          ← 只在启动时拉一次
 
 ### 表分组（含 workflow + KB 新增）
 
-- **asset_core**：`asset_documents / asset_document_snapshots / asset_document_snapshot_links / asset_raw_segments / asset_raw_segment_relations / asset_retrieval_units / asset_retrieval_embeddings / asset_source_batches / asset_builds / asset_build_document_snapshots / asset_publish_releases`。`003` 加 `domain` 列；`004_kb_isolation` 给 `asset_documents` 加 KB 列并改 UNIQUE；`005_kb_file_meta` 加 `file_size/modified_at`；`006_asset_build_kb` 加 `asset_builds.kb_id`。
-- **kb（域库 + 主库都建）**：`kb_users / knowledge_bases / kb_members / kb_folders`；`005_kb_mining_binding` 给 `knowledge_bases` 加 `mining_workflow_id`。
+- **asset_core**：`asset_documents / asset_document_snapshots / asset_document_snapshot_links / asset_raw_segments / asset_raw_segment_relations / asset_retrieval_units / asset_retrieval_embeddings / asset_source_batches / asset_builds / asset_build_document_snapshots / asset_publish_releases`。`003` 加 `domain` 列；`004_kb_isolation` 给 `asset_documents` 加 KB 列并改 UNIQUE；`005_kb_file_meta` 加 `file_size/modified_at`；`006_asset_build_kb` 加 `asset_builds.kb_id`；**`007_asset_block_type_image` 放宽 `asset_raw_segments`/`asset_retrieval_units` 的 `block_type` CHECK 收 `image`**。
+- **kb（域库 + 主库都建）**：`kb_users / knowledge_bases / kb_members / kb_folders`；`005_kb_mining_binding` 给 `knowledge_bases` 加 `mining_workflow_id`；**`006_kb_users_auth` 给 `kb_users` 加 `password_hash` + `site_role`（必须紧跟 `001`）**；**`007_kb_visibility_narrow` 把 `shared` 降级成 `private` 并收紧 `visibility` CHECK（必须紧跟 `002`）**。
 - **mining_control（仅控制库）**：`mining_workflows` / `mining_workflow_versions`。
 - **mining_runtime**：`005` 给 `mining_runs` 加 workflow 系列列 + 建 `mining_workflow_node_events`；`006` 加 `preflight_manifest_json`；`007` 加 `mining_runs.kb_id`。
 - **asset_core/004_asset_snapshot_workflow_binding（snapshot ↔ workflow 绑定）**：给 `asset_document_snapshots` 加 `workflow_*` 列，唯一性**按 workflow 版本拆成两个部分索引**。**行为变化**：同内容文件在不同 workflow release 下产生**不同 snapshot**。
@@ -330,7 +445,7 @@ GET {main_control}/api/v1/system/database          ← 只在启动时拉一次
 
 ### ⚠️ asset_core 里有两个 `004_`（不是冲突，但迷惑）
 
-`asset_core/schemas/` 下同时有 `004_asset_snapshot_workflow_binding.sql` 和 `004_kb_isolation.sql`。**不是加载冲突**——`pg_schema.py` 按显式命名常量加载，两者在不同时点执行（`004_kb_isolation` 早、`004_asset_snapshot_workflow_binding` 晚），`003_asset_core_domain_isolation` 甚至**故意排在 `004_kb_isolation` 之后**（它要看到 `(kb_id, document_key)` 唯一约束已存在）。所以**编号不再代表加载顺序**，改 schema 时别按文件名数字推顺序，看 `pg_schema.py` 的常量列表。`reset_db.py` 的 `SCHEMA_FILES` 现已与 `pg_schema.py` 对齐（含全部 kb schema、`004_asset_snapshot_workflow_binding`、`006_mining_run_preflight`）。
+`asset_core/schemas/` 下同时有 `004_asset_snapshot_workflow_binding.sql` 和 `004_kb_isolation.sql`。**不是加载冲突**——`pg_schema.py` 按显式命名常量加载，两者在不同时点执行（`004_kb_isolation` 早、`004_asset_snapshot_workflow_binding` 晚），`003_asset_core_domain_isolation` 甚至**故意排在 `004_kb_isolation` 之后**（它要看到 `(kb_id, document_key)` 唯一约束已存在）。kb 组的 `006`/`007` 更是被**插在 `001`/`002` 正后面**（都是 ALTER，依赖基表刚建好）。所以**编号完全不代表加载顺序**，改 schema 时别按文件名数字推顺序，看 `pg_schema.py` 的常量列表。`reset_db.py` 的 `SCHEMA_FILES` 现已与 `pg_schema.py` 对齐（含全部 kb schema、`004_asset_snapshot_workflow_binding`、`006_mining_run_preflight`、`007_asset_block_type_image`）——**加 DDL 必须两处同改**，只加一处就是「孤儿 DDL」（`a64564a` 修的就是这个）。
 
 ### DB 脚本（仓库根）
 
@@ -361,7 +476,7 @@ python -m knowledge_mining.mining.api          # 8901
 python -m mcp_server --transport streamable-http --port 9000
 ```
 
-Windows 上 `llm_service` 和 `knowledge_mining` 必须走 `python -m`：入口模块会 monkey-patch uvicorn 用 `SelectorEventLoop`，psycopg async 在默认 ProactorEventLoop 上不工作。`pip install -e .` 要在**仓库根**跑，但它**装不全依赖**——`pyproject.toml` 缺 `jieba` 和 `python-multipart`（真依赖以 `docker/Dockerfile` 的 pip 列表 + `knowledge_mining/requirements.txt` 为准，三处已漂移）。缺 `python-multipart` 跑 uploads 路由会 ImportError，缺 `jieba` 中文分词降级。
+Windows 上 `llm_service` 和 `knowledge_mining` 必须走 `python -m`：入口模块会 monkey-patch uvicorn 用 `SelectorEventLoop`，psycopg async 在默认 ProactorEventLoop 上不工作。`pip install -e .` 要在**仓库根**跑，但它**装不全依赖**——`pyproject.toml` 仍缺 `jieba` 和 `python-multipart`（真依赖以 `docker/Dockerfile` 的 pip 列表 + `knowledge_mining/requirements.txt` 为准，三处已漂移）。缺 `python-multipart` 跑 uploads 路由会 ImportError，缺 `jieba` 中文分词降级。Excel 依赖 `openpyxl` + `xlrd` 三处都已补齐；`xlwt` 只在 `[dev]` 里（测试造 `.xls` 夹具用）。**`.doc` 需要系统装 LibreOffice**（镜像里有 `libreoffice-writer`；本机没有则 `.doc` 报 `doc_converter_unavailable`，Windows 上装了 Word 可走 COM 回落）。
 
 ### 测试
 
@@ -388,6 +503,7 @@ mvn test -Dtest=QueryUnderstandingEngineTest#方法名
 1. **autouse 是 `_guard_test_database`**：`_assert_disposable_database` **拒绝任何库名不以 `_test` 结尾的库**（不连库就 fail），护住生产库 `kb_db`。测试请指向 `kb_db_test` 之类。
 2. `_ensure_schema` 是普通 session fixture（**非 autouse**），只有真正 request 它/连接池的测试才触发真 PG 要求（会建全部 schema 含 `databases/kb/`）。KB 测试在 `tests/kb/`，用 async 池（Windows 强制 `WindowsSelectorEventLoopPolicy`）。
 3. `_truncate_all()` 除非 `KB_ALLOW_TEST_TRUNCATE=1` 否则**硬 no-op**。PostgreSQL 验收还需 `KB_RUN_POSTGRES_ACCEPTANCE=1`，域隔离测试需独立的 `MINING_TEST_DOMAIN_PG_DBNAME`。
+4. **KB 路由测试必须用 `conftest.kb_headers()`**（同时给 `X-KB-User` 和 `X-Internal-Auth`）——`current_user` 现在双校验，只发 `X-KB-User` 一律 401。secret 由 autouse 的 `_reset_auth_config` fixture 每个用例前重置成 `KB_TEST_INTERNAL_AUTH`（默认 `test-ivs`），防止改写 auth 缓存的用例污染别的模块。
 
 > 本地跑测试的完整环境变量样例见 `docs/开发与发布流程.md`（含 `PG_*` 指向 `kb_db_test` + `KB_ALLOW_TEST_TRUNCATE=1`；虽然运行时不读 `.env`，测试仍用这些环境变量拼 `_test` 库连接）。
 
@@ -402,7 +518,7 @@ rm -rf target/classes target/test-classes && mvn -o test
 ### 部署
 
 ```bash
-bash deploy-build.sh                # docker compose build → docker save → cmkb.tar
+bash deploy-build.sh                # build → 镜像内依赖自检 → docker save | zstd → cmkb-<git短SHA>.tar.zst + .sha256
 bash deploy-server.sh               # 默认：仅补缺，保留服务器本地改动
 bash deploy-server.sh --force       # 用镜像代码覆盖代码，但保留宿主机配置
 bash deploy-server.sh --force-config # 用镜像覆盖 .env + main_control_service/config
@@ -412,7 +528,11 @@ docker compose exec app supervisorctl status
 docker compose exec app supervisorctl restart mining
 ```
 
-**`--force` 现在保留配置**（`stage_code_from_image` 把宿主机 `main_control_service/config` 复制进暂存快照再换入）——旧文档里「`--force` 会 `rm -rf` 掉配置」的说法**已不成立**。真正会覆盖配置的是 `--force-config`（覆盖 `.env` + `config/`），或 config 目录不存在的兜底补齐。启动按依赖顺序 control → llm → mining → serving → mcp → nginx，逐个 health 检查，并对 `.env` + 3 个 config 文件做 host-vs-container sha256 校验。
+**归档格式已变**：不再是 `cmkb.tar`，而是版本化的 **`cmkb-<version>.tar.zst` + 同名 `.sha256`**（`CMKB_VERSION` 默认取 `git rev-parse --short HEAD`），两个文件必须一起传。`deploy-server.sh` 默认 `find . -maxdepth 1 -name 'cmkb-*.tar.zst'`（可用 `IMAGE_ARCHIVE=` 指定），**先 `sha256sum -c` 校验再 `zstd -dc | docker load`**；缺 `.sha256` 直接 die。构建机与部署机**都**会 `docker run --rm` 跑一次依赖自检（`libreoffice --headless --version` + `import openpyxl, xlrd`），任一失败即停——离线环境里「镜像少了 LibreOffice」表现为 `.doc` 静默失败，早查一步值。构建机需装 `zstd`。
+
+**`--force` 保留配置**（`stage_code_from_image` 在 `FORCE_CONFIG=false` 时把宿主机 `main_control_service/config` 复制进暂存快照再换入，`deploy-server.sh:503-506`）——旧文档里「`--force` 会 `rm -rf` 掉配置/auth.yaml」的说法**已不成立**（`docs/开发与发布流程.md` §5.2 仍这么写，是错的）。真正会覆盖配置的是 `--force-config`（覆盖 `.env` + `config/`），或 config 目录不存在的兜底补齐。启动按依赖顺序 control → llm → mining → serving → mcp → nginx，逐个 health 检查，并对 `.env` + 3 个 config 文件做 host-vs-container sha256 校验。
+
+**⚠️ `.env` 已不在镜像里**（Dockerfile 现在只 `COPY .env.example`），但 `deploy-server.sh` 里「宿主机缺 `.env`」和 `--force-config` 两条路径仍在 `docker cp $TMP:/app/.env ./.env`——在 `set -Eeuo pipefail` 下会直接失败。`require_host_config()` 也仍硬性要求宿主机有 `.env`。首次部署到新机器时要**手工放一份 `.env`**（内容基本只剩 compose 用的端口/子网变量，服务本身早已不读它）。`auth.yaml` 同理**不在** `require_host_config()` 的检查清单里，缺了不会在部署时报错，而是等到 KB 页面 401 才发现。
 
 **Python 改宿主机文件后 `supervisorctl restart` 即生效**（`docker-compose.yml` bind-mount 了 `.env` / `knowledge_mining` / `llm_service` / `main_control_service` / `mcp_server` / `databases`）。**Java jar 和前端 dist 烤进镜像、无 volume 挂载**，改动必须重新 `deploy-build.sh` + 重部署。
 
@@ -426,6 +546,10 @@ docker compose exec app supervisorctl restart mining
 
 **LLM 配置键是 `provider_type` 不是 `provider.type`。** 写错（或写成嵌套 `provider.type`）会被静默忽略，`fallback` 到 `openai_compatible`——因为它不在 `_REQUIRED_PATHS` 里，不校验。`system/llm_service.yaml` 里 anthropic 模型条目就靠这个键。
 
+**`llm_service` 现在支持按请求换模型（`model` 参数）。** `/tasks` 与 `/execute` 都收可选 `model`，值可以是 `provider.models` 下的**键名**（如 `glm-4.5v`）**或**该条目的 API `model` 值——`config.resolve_model_config()` 两种都认，`LLMService._get_chat_provider()` 按键名缓存 provider 实例，**不改 `active_model`**。这是 VLM 图注走的路。**未知 model 会 `raise ValueError`**（不像 `active_model` 找不到时只 warning 回落基础配置）——因为那是调用方明确点名的模型，静默换成别的模型比报错糟。构建 provider 的逻辑已从 `api/admin.py` 抽到 `providers/factory.build_chat_provider()`，两处共用。
+
+**多模态消息在 provider 层转换。** 调用方统一发 OpenAI 风格（`content` 是 `[{type:"text"},{type:"image_url"}]` 数组），`providers/multimodal.py` 负责转 Anthropic 的 `image`/`source` 块、把多模态 system 拍平成纯文本、以及 `schema_instruction` 注入时区分 str/list content（往 list 里 append 一个 text part，直接字符串拼接会炸）。加新 provider 时记得走这层。
+
 **算子系统的 `scope` 必须显式连线（Java）。** `ParadigmCompiler.ENTRY_SLOTS` **只有 `query`**，`scope` 被故意排除——否则图「编译通过但运行时 scope 为 null，静默检索不到」。所有需要 scope 的检索算子必须连到 `scope_resolve`。这是 `missing_required_input` 的来源。
 
 **虚拟线程不继承 `DomainContext`（Java）。** `DomainContext` 是普通 `ThreadLocal`（非 `InheritableThreadLocal`），而检索都跑在 `newVirtualThreadPerTaskExecutor()` 上。任何 `CompletableFuture.*Async` 提交的任务都必须用 `DomainContext.wrapRunnable/wrapCallable/wrapSupplier` 或显式 `set()`。现有调用点都已包好（`ParadigmExecutor` 每节点、`RetrievalOrchestrator` 的路由扇出、`SearchService` 的变体循环与子查询循环），**新加并行分支时别漏**——漏了不会报错：`DomainRoutingDataSource` 把 null 域静默当 default，配了 inline `database:` 的域会悄悄查默认库，而 `EntityGraphRouteRetriever`（除 `DomainContext` 外没有域来源）会恒返回空。
@@ -437,6 +561,12 @@ docker compose exec app supervisorctl restart mining
 **mining workflow 的 manifest 是运行时强校验、不信任的。** `runtime._verify_and_build_plan` 重算 graphHash + 每节点 paramsHash 并拒绝任何漂移；编辑/重发布 workflow 不会回溯改已绑定的 run。改算子 catalog 或 option 模型会改 `catalogVersion`/`paramsHash`，注意与已发布版本的兼容。
 
 **mining 的 `execution_engine` 是每 run 不可变、从 DB 读的。** legacy run 永不自动升级；`_run_legacy`/`StreamingPipeline` 是活代码（回退引擎），不能当废弃删。切换/回滚引擎绝不改已有 run 的 `execution_engine`/workflow 绑定字段/manifest/节点事件。
+
+**改鉴权相关的 secret 必须走 `reload-auth`，不能只改文件。** mining 的 `internal_verify_secret` 是**启动期拉一次的进程内缓存**；只在网关侧 reload、不扇出到 mining，就会「网关注入新 secret / mining 验旧 secret」→ 全部代理请求 401，而且看起来像登录坏了。`POST {control}/api/v1/admin/reload-auth` 已带扇出（响应里的 `mining[]` 列了每个 mining 实例的结果，**要看**，它是 best-effort 不抛）。
+
+**新增 `/api/kb/*` 静态路径时注意路由注册顺序。** `kb_router` 有 `/{kb_id}` 这个吞噬型动态段；任何新的 `/api/kb/<字面量>` 路由必须挂在**先于** `kb_router` 注册的 router 上（目前是 `kb_auth_router`），否则被当成 `kb_id` → 404。`62aebd1` 就是这么炸的。
+
+**给 `asset_documents`/`kb_users` 之类加 DDL 时，`pg_schema.py` 和 `reset_db.py` 要一起改**，而且**位置**比编号重要：ALTER 型 schema 必须排在它 ALTER 的基表 CREATE 之后（kb 的 `006`/`007` 就被插在 `001`/`002` 正后面）。只改一处 = 孤儿 DDL：新库能起、老库缺列。
 
 **mcp_server 直连 serving、有硬编码远程 IP 兜底。** `BACKEND_URL` 读环境变量 **`SERVING_URL`**，默认 `http://121.89.90.178:8081`，只有 supervisord 把它覆盖成 localhost（本地手测不设它就是在打线上那台）。transport 默认 `streamable-http`（模块 docstring 说 stdio 是过时的）。
 
@@ -480,8 +610,12 @@ docker compose exec app supervisorctl restart mining
 
 | 文档 | 状态 |
 |---|---|
-| `docs/开发与发布流程.md` | ✅ **准确**，分支/测试/PR（merge commit 不 squash）/部署/挖掘运维的权威流程。改代码前应读（尤其「配置不读 .env」「测试只打 `_test` 库」「改挖掘逻辑要强制重挖」） |
-| `docs/kb-management-design.md`、`kb-management-implementation-plan.md`、`kb-filesystem-plan.md` | ✅ KB 中心化的需求/技术设计/实现计划，与已落地代码基本对得上，可作背景。注意仍是设计视角，个别表名/细节以源码为准 |
+| `docs/开发与发布流程.md` | ✅ 大体准确，分支/测试/PR（merge commit 不 squash）/部署/挖掘运维的权威流程。改代码前应读（尤其「配置不读 .env」「测试只打 `_test` 库」「改挖掘逻辑要强制重挖」）。新增 §5.1 品牌外观、§5.2 用户权限上线步骤（可信）。**两处已过时**：§5.2 说 `--force` 会 `rm -rf main_control_service/` 连带删 `auth.yaml`（不成立，`--force` 保留配置）；部署段仍按 `cmkb.tar` 描述（现为 `cmkb-<ver>.tar.zst` + `.sha256`） |
+| `docs/superpowers/specs/2026-08-06-user-permissions-design.md`、`2026-08-07-auth-intranet-login-design.md`、`plans/2026-08-06-user-permissions.md` | ✅ Phase-2 鉴权的设计规格与实现计划（含不变量编号 §5.3、admin-only 路径 §8.1，代码注释直接引它们）。工号登录 + SSO 口子的语义以 `auth-intranet-login-design` 为准 |
+| `docs/superpowers/specs/2026-08-07-word-excel-knowledge-input-design.md`、`plans/2026-08-07-word-excel-knowledge-input.md` | ✅ Excel/Word 摄取的设计与实现计划，与 `ingestion/excel_*` + `doc_preprocessing.py` 对得上 |
+| `docs/deployment/offline-document-dependencies.md` | ✅ 离线部署时 LibreOffice / openpyxl / xlrd 的依赖来源与自检说明，配合 `deploy-build.sh`/`deploy-server.sh` 的依赖验证读 |
+| `docs/superpowers/specs|plans/2026-07-31-site-branding-config*` | ✅ 站点品牌配置（`ui.yaml` 的 `site:` 块）的设计与计划 |
+| `docs/kb-management-design.md`、`kb-management-implementation-plan.md`、`kb-filesystem-plan.md` | ✅ KB 中心化的需求/技术设计/实现计划，与已落地代码基本对得上，可作背景。注意仍是设计视角，个别表名/细节以源码为准。**已被超越两处**：可见性只剩 `private`/`public`（`shared` 已砍）；身份从 Phase-1 的裸 `X-KB-User` 换成 JWT 网关派生 + `X-Internal-Auth` 双校验 |
 | `docs/mining-workflow-rollout-runbook.md` | ✅ **准确**，挖掘 workflow 灰度/回滚的权威规程，与源码对得上（16 算子、控制库/域库边界、冻结 manifest、`MINING_RUN_SUBMISSION_ENGINE`） |
 | `docs/mcp-paradigm-routing-design.md` | ✅ 质量高，MCP↔范式域绑定的设计依据（数据模型、回落语义、响应归一）。**一处已被后续改动超越**：它写「保持单工具 `search_knowledge`」，现在是 2 个 tool（下钻工具是后加的） |
 | `docs/segment-fulltext-retrieval-design.md` | ✅ 质量高，原文下钻的设计依据；§0 那六条现状事实（`selectWithMeta` 空 scope 退化成不过滤、snapshot 1:N）本身就值得单读 |
@@ -498,4 +632,4 @@ docker compose exec app supervisorctl restart mining
 | `databases/README.md` | ⚠️ 声称「逻辑分库必须坚持」，但 ontology DDL 已跨库建 FK，物理合库不可逆；漏列在用的 `ontology/` `serving_runtime/` `mining_control/` |
 | 根 `README.md` | ⚠️ 部署部分大体准确；nginx 路由描述已过时（见「前端调用范式」） |
 
-新人最短上手路径：先读 `docs/开发与发布流程.md`（含配置/测试/部署铁律），起 `main_control_service`（配置中心，必须最先）；KB 层读 `kb-management-design.md`，挖掘线读 `mining-workflow-rollout-runbook.md`，检索线读 `ontology-retrieval-explained.md` + `检索范式使用说明.md`，其余文档一律对着源码读。`docker/nginx.conf` 里的三行注释比 `FRONTEND-PLAN.md` 和 `kb-ui/README.md` 加起来都准确。
+新人最短上手路径：先读 `docs/开发与发布流程.md`（含配置/测试/部署铁律），起 `main_control_service`（配置中心，必须最先）；**跑起来第一件事是把 `config/system/auth.yaml` 的三个占位符改成真值**，否则前端登录不了、KB 全 401；KB 层读 `kb-management-design.md` + 本文「鉴权与用户体系」，挖掘线读 `mining-workflow-rollout-runbook.md`，检索线读 `ontology-retrieval-explained.md` + `检索范式使用说明.md`，其余文档一律对着源码读。`docker/nginx.conf` 里的三行注释比 `FRONTEND-PLAN.md` 和 `kb-ui/README.md` 加起来都准确。

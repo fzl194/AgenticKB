@@ -54,6 +54,10 @@ class QualityMetrics:
     table_count_match: bool | None = None
     structure_accuracy: float | None = None
     reading_order_monotonicity: float | None = None
+    #: 无元素的**叶子**容器（有子容器的结构节点如 workbook 不算）——
+    #: 低质页信号，供 QualityGate 产出 REPAIR 请求定位目标（SRS §7.1
+    #: empty page ratio / §4.9 REPAIR 指定页）。
+    empty_container_ids: tuple[str, ...] = ()
     warning_counts: dict[str, int] = field(default_factory=dict)
 
 
@@ -146,6 +150,7 @@ def compute_metrics(
         table_count_match=table_count_match,
         structure_accuracy=structure_accuracy,
         reading_order_monotonicity=reading_order,
+        empty_container_ids=_empty_leaf_containers(doc),
         warning_counts=_warning_distribution(doc),
     )
 
@@ -161,6 +166,32 @@ def _char_coverage(source_text: str, ir_text: str) -> float:
         for ch, n in Counter(src).items()
     )
     return hit / len(src)
+
+
+def _empty_leaf_containers(doc: ParsedDocument) -> tuple[str, ...]:
+    """无元素的叶子容器 id（结构父节点如 workbook 不算空页）.
+
+    元素经 ``page_span_ids`` 绑定容器（历史命名，承载的是容器 id）。
+    文档无任何元素-容器绑定时（legacy MD/TXT 形态：无页容器，
+    ``page_span_ids`` 恒空）**不做空页判定**——无法区分「容器空」与
+    「格式不表达容器归属」，宁缺勿误报。
+    """
+    parents = {
+        c.parent_container_id
+        for c in doc.containers
+        if c.parent_container_id is not None
+    }
+    with_elements = {
+        cid for e in doc.elements for cid in e.page_span_ids
+    }
+    if not with_elements:
+        return ()
+    return tuple(
+        c.container_id
+        for c in sorted(doc.containers, key=lambda c: c.order_index)
+        if c.container_id not in parents
+        and c.container_id not in with_elements
+    )
 
 
 def _has_locator(e: Element) -> bool:

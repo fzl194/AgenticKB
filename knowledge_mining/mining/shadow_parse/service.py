@@ -42,6 +42,7 @@ import logging
 import tempfile
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,21 @@ from knowledge_mining.mining.shadow_parse.contracts import (
 _CHUNK_SIZE = 64 * 1024
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AttemptOutcome:
+    """一次 backend 尝试的完整产物（供 Parse Operator 编排消费，M4）.
+
+    ``quality_decision`` 为 None 表示未注入 quality gate（M2 兼容）；
+    ``quality_meta`` 是进投影 metadata 的 JSON 片段（决策/issues/指标）。
+    """
+
+    document: ParsedDocument
+    artifact: Any
+    parse_ir_storage_object_id: str
+    quality_decision: Any | None = None
+    quality_meta: dict[str, Any] = dataclass_field(default_factory=dict)
 
 
 def _utcnow() -> str:
@@ -177,13 +193,7 @@ class ShadowParseService:
         run_id = parse_run_id or _new_id("parse")
         started_at = _utcnow()
         try:
-            doc, artifact = await self._read_and_parse(frozen)
-            if self._reconciler is not None:
-                outcome = await asyncio.to_thread(self._reconciler.reconcile, doc)
-                doc = getattr(outcome, "document", outcome)
-            parse_ir_object_id = await self._persist_ir(doc)
-            await self._persist_raw_artifact(artifact)
-            quality_meta = self._evaluate_quality(doc, frozen)
+            outcome = await self.execute(frozen)
         except Exception as exc:  # noqa: BLE001 —— 影子运行必须落 FAILED 后透传
             try:
                 await self._record_failure(frozen, run_id, started_at, exc)
@@ -193,17 +203,92 @@ class ShadowParseService:
                 )
             raise
         record = await self._record_success(
-            frozen, run_id, started_at, doc, parse_ir_object_id, quality_meta
+            frozen, run_id, started_at, outcome.document,
+            outcome.parse_ir_storage_object_id, outcome.quality_meta,
         )
         return ShadowParseResult(
             parse_run_id=record.id,
             status="SUCCEEDED",
-            parse_ir_storage_object_id=parse_ir_object_id,
+            parse_ir_storage_object_id=outcome.parse_ir_storage_object_id,
             element_count=record.element_count,
             reused=False,
         )
 
-    # -- replay（SRS §9.5 A09） ----------------------------------------------
+    # -- 尝试执行（M4：供 Parse Operator 编排消费） --------------------------
+
+    async def execute(
+        self,
+        frozen: FrozenInput,
+        *,
+        source_text: str | None = None,
+        budget: Any | None = None,
+        backend_attempts_used: int = 0,
+    ) -> AttemptOutcome:
+        """执行一次 backend 尝试（读流→parse→normalize→reconcile→落制品→评估）.
+
+        与 ``run`` 的区别：不写 ``asset_parse_runs`` 投影、不做幂等探针
+        ——Run 生命周期与 attempt 审计由调用方（DocumentParseService）拥有。
+        """
+        doc, artifact = await self._read_and_parse(frozen)
+        return await self._finish(
+            doc, artifact, source_text=source_text, budget=budget,
+            backend_attempts_used=backend_attempts_used,
+        )
+
+    async def replay(
+        self,
+        artifact: Any,
+        *,
+        source_raw_hash: str,
+        normalizer: Any | None = None,
+        source_text: str | None = None,
+        budget: Any | None = None,
+        backend_attempts_used: int = 0,
+    ) -> AttemptOutcome:
+        """从 backend raw artifact 重放 normalize（不重跑 parser，§9.5 A09）.
+
+        ``normalizer`` 覆盖注入实现"normalizer 升级后重放"（升级版产出新
+        指纹 → 新 Snapshot）；缺省用构造时注入的 normalizer。
+        """
+        norm = normalizer or self._normalizer
+        doc = await asyncio.to_thread(
+            norm.normalize, artifact, source_raw_hash=source_raw_hash,
+        )
+        return await self._finish(
+            doc, artifact, source_text=source_text, budget=budget,
+            backend_attempts_used=backend_attempts_used,
+        )
+
+    async def _finish(
+        self,
+        doc: ParsedDocument,
+        artifact: Any,
+        *,
+        source_text: str | None = None,
+        budget: Any | None = None,
+        backend_attempts_used: int = 0,
+    ) -> AttemptOutcome:
+        """reconcile → 落 IR/raw 制品 → 质量评估（execute/replay 共用尾段）."""
+        if self._reconciler is not None:
+            outcome = await asyncio.to_thread(self._reconciler.reconcile, doc)
+            doc = getattr(outcome, "document", outcome)
+        parse_ir_object_id = await self._persist_ir(doc)
+        await self._persist_raw_artifact(artifact)
+        decision, quality_meta = self._evaluate_quality(
+            doc,
+            source_text=source_text,
+            budget=budget,
+            backend_attempts_used=backend_attempts_used,
+        )
+        return AttemptOutcome(
+            document=doc,
+            artifact=artifact,
+            parse_ir_storage_object_id=parse_ir_object_id,
+            quality_decision=decision,
+            quality_meta=quality_meta,
+        )
+
+    # -- replay（SRS §9.5 A09，M2 兼容入口） ----------------------------------
 
     async def renormalize(
         self,
@@ -216,15 +301,8 @@ class ShadowParseService:
         §9.5 "adapter mapping bug" 恢复行：normalizer 升级后用持久化的
         raw artifact 重放转换，不重复调用（昂贵的）parser/云 API。
         """
-        doc = await asyncio.to_thread(
-            self._normalizer.normalize,
-            artifact,
-            source_raw_hash=source_raw_hash,
-        )
-        if self._reconciler is not None:
-            outcome = await asyncio.to_thread(self._reconciler.reconcile, doc)
-            doc = getattr(outcome, "document", outcome)
-        return doc
+        outcome = await self.replay(artifact, source_raw_hash=source_raw_hash)
+        return outcome.document
 
     # -- 读取 + 解析 --------------------------------------------------------
 
@@ -267,16 +345,25 @@ class ShadowParseService:
         return doc, artifact
 
     def _evaluate_quality(
-        self, doc: ParsedDocument, frozen: FrozenInput
-    ) -> dict[str, Any]:
-        """质量门禁评估（C09）；未注入 gate 时返回空（影子观测不阻断）。"""
+        self,
+        doc: ParsedDocument,
+        *,
+        source_text: str | None = None,
+        budget: Any | None = None,
+        backend_attempts_used: int = 0,
+    ) -> tuple[Any | None, dict[str, Any]]:
+        """质量门禁评估（C09）；未注入 gate 时返回 (None, {})（影子观测不阻断）."""
         if self._quality_gate is None:
-            return {}
+            return None, {}
         from knowledge_mining.mining.parse_quality import compute_metrics
 
-        metrics = compute_metrics(doc, source_text=None)
-        decision = self._quality_gate.evaluate(metrics)
-        return {
+        metrics = compute_metrics(doc, source_text=source_text)
+        decision = self._quality_gate.evaluate(
+            metrics,
+            budget=budget,
+            backend_attempts_used=backend_attempts_used,
+        )
+        meta = {
             "quality_decision": decision.decision,
             "quality_issues": [
                 {"code": i.code, "message": i.message}
@@ -289,6 +376,7 @@ class ShadowParseService:
                 "reading_order_monotonicity": metrics.reading_order_monotonicity,
             },
         }
+        return decision, meta
 
     # -- 制品落存（parse bucket + 对象注册） ---------------------------------
 

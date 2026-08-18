@@ -285,3 +285,18 @@
 - **执行事故留档**：整改中途一次 `rm -rf` 误删 `knowledge_mining/mining` 包（mkdir 相对路径错误），经 `git checkout` 恢复 HEAD + 上下文重建全部未提交改动（含前轮 v9 未提交增量），三格式/契约/影子全量测试验证恢复完整（652→659 passed）。教训：涉及 rm 的目录操作必须先 pwd + 绝对路径。
 - **依据**：用户整改指令全量（审计先行/不变量/逐格式修复清单/M3 重定义/测试要求）；SRS §4.6-§4.9 主线、§7.4 不伪造、§3.5 指纹、§9.5 replay、§C08/§C09。
 - **影响**：新增 `parse_reconciler/`、`parse_quality/`、`rendered_text.py`、`tests/{parse_reconciler,parse_quality,golden_corpus}/`、`tools/golden_benchmark.py`、审计文档；改 `contracts/{parser_adapter,parse_ir/types,parse_ir/schema}`、7 个 adapter/normalizer、`shadow_parse/service.py`；native_pdf 版本 2.0.0（家具迁出+结构修复）、native_docx/xlsx/pptx 2.0.0、native_html@2/legacy-line@2；测试 661 passed（scoped）。
+
+## D-033 ｜ M4 质量门控解析资产：状态机补边 / 幂等锚点上移 / 真表转正隔离 / 唯一性演进
+- **背景**：用户确认开启 M4（SRS §14：WP8+WP9，退出条件「低质量文档不会形成 READY Snapshot；可 fallback/replay，过期输入不会自动发布」）。对齐时按用户要求以业务语言重述（五条保证：垃圾不入库/不张冠李戴/出生证明/修复不重复花钱/失败看得见有备胎）。
+- **决策与实现**：
+  1. **状态机契约补边（§9.2 图的操作性缺口）**：加 `SUPERSEDED` 终态（仅 `EVALUATING→SUPERSEDED`——pre-commit revision check 发生在评估后提交前）+ 四条崩溃/回退边（`PARSING/NORMALIZING/RECONCILING→FAILED`、`PARSING→FALLING_BACK`）。依据：SRS §2.2「fallback 可由失败或质量策略触发」——解析器崩溃发生在 PARSING，不补边则要么伪造走完 EVALUATING、要么无法表达 A06。按 D-015 显式枚举原则逐条添加。
+  2. **幂等锚点上移（009 修订）**：M2 的 `UNIQUE(document_id, source_raw_hash, parser_fingerprint)` 在 Run 表上与「同键多次执行」冲突（A09 重放、A07 升级、FAILED 重跑都需要第二行）。Run 是执行历史，幂等的正确锚点是 Snapshot 指纹（SRS §2.2「幂等复用 Snapshot」本意 + §8.3A）——009 索引降级为普通索引，`find_by_document_hash` 探针改为优先返回 SUCCEEDED+snapshot 行。
+  3. **真表转正 + 串线隔离**：新链快照写真 `asset_document_snapshots`（SRS 固定其为唯一知识版本根，禁并行版本表）。审计发现 legacy `find_reusable_snapshot` 的 `workflow_graph_hash IS NULL` 分支理论上可命中新行（MD/TXT 同字节场景）——新链 workflow 绑定四元组填哨兵 `new-parse-chain@1`（满足 004 CHECK 的四列同态要求），两个 legacy 分支均永不匹配。
+  4. **快照唯一性演进（010）**：004 的 `uq_asset_snapshot_workflow_content`（partial unique **索引**而非表约束——首次 DO 块按 pg_constraint 查找扑空后实测确认）会误拒「同内容 + 管线升级 → 新快照」（A07/A09）。重建为额外排除 `snapshot_fingerprint IS NOT NULL` 行的 partial；新链唯一性由 008 的指纹索引承担（§8.3A 原文「唯一性……演进为 UNIQUE(domain, snapshot_fingerprint)」）。
+  5. **REPAIR 的 M4 降级策略**：门禁可产出 REPAIR（空容器定位 + 原因），但 M4 无页级修复执行器——编排层有备胎则按 FALLBACK 处理，无备胎则保守 WARN 提交并追加 `repair_unavailable` issue（空页信号不阻断可用结果，但必须可见）。
+  6. **空容器口径**：`empty_container_ids` 只统计无元素的**叶子**容器（排除 workbook 等结构父节点）；文档无任何元素-容器绑定时（legacy MD/TXT 的 `page_span_ids=()` 形态）不判空页——无法区分「容器空」与「格式不表达容器归属」，宁缺勿误报。
+  7. **ShadowParseService 重构**：`run()` 的执行体抽为公开 `execute()`（读流→parse→normalize→reconcile→落制品→评估，不写投影）与 `replay()`（normalizer 可覆盖注入）——`DocumentParseService`（parse_operator 包）按 attempt 组装临时 ShadowParseService 复用制品落存逻辑，零代码复制；M2 `run()` 语义与全部既有测试不变。
+  8. **snapshot mime 白名单放宽（010）**：legacy CHECK 缺 XLSX/PPTX 两个 OOXML MIME——新链必须如实记录真实 MIME（§7.4 不伪造精神），双方言放宽（SQLite 走标准重建表）。
+- **验证**：scoped 全量 701 passed/9 skipped（整改轮 661 → +40）；真实环境 e2e 五场景（转正/重放新快照 parser 零调用/垃圾 FAILED/过期 SUPERSEDED/发布表零污染+哨兵隔离）两轮幂等全绿；golden corpus 50 份端到端转正验收（6 空坏样本零快照）。
+- **依据**：SRS §14 M4、§2.2（幂等/fallback 留原因）、§4.9（五值决策+预算）、§4.10（pre-commit revision check）、§8.3A（快照唯一性演进）、§9.2/§9.4/§9.5；ADR-0003 D-015（显式枚举）、D-022（Protocol 分层）、D-032（影子包路径怪癖——e2e 脚本 sys.path 必须仓库根置顶）。
+- **影响**：新增 `mining/parse_operator/`、`mining/snapshot_store/`、`contracts/{parse_plan,snapshot_store}.py`、`tests/{parse_operator,snapshot_store}/`、`tests/contracts/test_m4_*.py`、`tests/parse_quality/test_gate_decisions.py`、`tests/shadow_parse/test_parse_run_lifecycle.py`、`tests/golden_corpus/test_corpus_commit.py`、`databases/asset_core/schemas/010_m4_parse_run_state_machine{,_postgresql}.sql`、`var/e2e/_e2e_m4_quality_gated.py`、`docs/文档解析平台化-里程碑报告/M4-质量门控解析资产.md`；改 `contracts/state_machines.py`、`shadow_parse/{contracts,repositories_memory,repositories_pg,service}.py`、`parse_quality/{gate,metrics}.py`、`infra/pg_schema.py`（010 挂链）、009 双方言（索引降级）。

@@ -9,7 +9,7 @@
 
 ## 一句话现状
 
-**M0 契约冻结 + M1 文件地基 + M2 Legacy 影子解析 + M3A 原生解析 fast-path（已整改）**。7 条 route（MD/TXT/DOCX/XLSX/PPTX/HTML/PDF）+ 跨格式 IR 不变量契约 + Reconciler + Quality Gate + raw replay + 50 份 golden corpus 基准（六类指标）。**注意：原规划 M3（真实第二后端/版本化 Router policy/fallback attempts/Parse Operator）未达成，现为 M3B/M4 范围**——不得以"已预留"冒充"已支持"。
+**M0 契约冻结 + M1 文件地基 + M2 Legacy 影子解析 + M3A 原生解析 fast-path（已整改）+ M4 质量门控解析资产**。解析链路已闭环到"成品入库"：质量门禁五值决策（PASS/WARN/REPAIR/FALLBACK/FAIL）+ 尝试预算 + 后端回退编排 + attempt 审计；PASS/WARN 转正为不可变 Document Snapshot（真表 + 出生证明 + 幂等指纹）；过期输入 SUPERSEDED 不发布；backend raw 重放升级产新快照（A09）。**仍属 M3B 未达成**：真实第二后端（Docling/云 OCR）、Router policy 版本化——fallback 编排机制已建成并测试，真备胎待用户配置模型。
 
 ## 完成里程碑
 
@@ -19,6 +19,7 @@
 | **M1** | MinIO 文件管理地基（adapter + 文件管理 + 冻结输入 + 迁移 + 真实环境接通） | [M1-文件地基.md](./M1-文件地基.md) | +158（合计 369） |
 | **M2** | Legacy Shadow Parse（Parser Adapter SDK + MD/TXT 适配器 + 影子写入） | [M2-Legacy影子解析.md](./M2-Legacy影子解析.md) | +45 |
 | **M3A** | 原生解析 fast-path + 整改轮（不变量契约/Reconciler/Quality Gate/replay/golden corpus） | [M3A-原生解析fastpath.md](./M3A-原生解析fastpath.md) | +88 → 整改轮后 scoped 659（见下） |
+| **M4** | 质量门控解析资产（五值决策/预算回退/attempt 审计/快照转正/SUPERSEDED/A09 重放） | [M4-质量门控解析资产.md](./M4-质量门控解析资产.md) | +40 → scoped 701；真实环境 e2e 五场景 |
 
 提交链（分支 `feat/doc-parse-platform-m0`）：
 ```
@@ -70,7 +71,7 @@ databases/asset_core/schemas/008_*  对象存储 6 新表 + 3 表扩展（双 sq
 
 - `docs/adr/0001` SRS §15.1 十一条已锁定地基决策（固化）
 - `docs/adr/0002` §15 六个阻塞决策 O1-O6（自主采纳）
-- `docs/adr/0003` 自主决策日志 **D-001 ~ D-028A**（每条带 SRS 依据）
+- `docs/adr/0003` 自主决策日志 **D-001 ~ D-033**（每条带 SRS 依据）
 
 两条值得关注的「字面偏离 SRS 但符合 SRS 原则」的决策：
 - **D-020**：ObjectStorePort 改 location 寻址（SRS §C00 未规定寻址键；按 S3 模型补全，使 MinIO adapter 不需自带注册表）。
@@ -108,16 +109,16 @@ python -m pytest knowledge_mining/tests/{contracts,infra,file_management,frozen_
 | app 启动依赖注入接线 | M1 收尾 | factory+service 就绪，接 service.py 配置加载 |
 | 真实文档人工验收 | M3 收尾 | 用户提供 2-3 份真实业务文档验证保真效果 |
 | 云端 OCR/VLM 槽位实现 | 按需 | 用户提供模型配置后接入（扫描件解析） |
-| **M4 质量门禁 + Snapshot 正式提交** | 下一里程碑 | WP8 Quality Gate + WP9 Atomic Snapshot Store（影子转正、SUPERSEDED 语义） |
-| M5-M7 | 后续 | Segment Compiler/Workflow 切换/Knowledge Access |
-| M4-M7 | 后续 | 质量门禁/Snapshot/Segment Compiler/Workflow/Knowledge Access |
+| **M5 Segment Compiler** | 下一里程碑 | WP10：IR → 下游兼容 segments + element links + compiler fingerprint |
+| M3B（真实第二后端/Router 版本化） | 按需 | fallback 编排已就绪，待用户提供模型配置 |
+| M6-M7 | 后续 | Workflow 切换/Build 复现/Knowledge Access/Legacy 退役评估 |
 
 ## 文件位置速查
 
 - 决策：`docs/adr/`（0001/0002/0003）
-- 报告：`docs/文档解析平台化-里程碑报告/`（本文件 + M0 + M1 + M2）
+- 报告：`docs/文档解析平台化-里程碑报告/`（本文件 + M0 + M1 + M2 + M3A + M4）
 - 契约代码：`knowledge_mining/mining/contracts/{parse_ir,storage}/`、`contracts/{file_management,state_machines,parser_adapter}.py`
 - 实现代码：`knowledge_mining/mining/{infra/object_store,file_management,frozen_input,file_migration,parse_adapters,shadow_parse}/`
-- DDL：`databases/asset_core/schemas/008_object_storage_foundation{,_postgresql}.sql`、`009_shadow_parse_runs{,_postgresql}.sql`
+- DDL：`databases/asset_core/schemas/008_…`、`009_…`、`010_m4_parse_run_state_machine{,_postgresql}.sql`
 - 配置：`main_control_service/config/system/storage.yaml`
 - 测试：`knowledge_mining/tests/{contracts,infra,file_management,frozen_input,file_migration,parse_adapters,shadow_parse}/`

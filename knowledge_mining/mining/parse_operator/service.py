@@ -1,0 +1,502 @@
+"""Document Parse Operator（M4，SRS §4.6/§4.9/§4.10 / WP7+WP9 编排）.
+
+驱动一次**质量门控的完整解析执行**：
+
+```text
+ParsePlan（primary + 有序 fallback + 预算）
+  -> Run 状态机推进（QUEUED→INSPECTING→PLANNED→PARSING→…→EVALUATING）
+  -> 每 backend 尝试：ShadowParseService.execute（读流→parse→normalize→
+     reconcile→落 IR/raw 制品→质量评估）+ attempt 审计事件
+  -> EVALUATING 决策（SRS §4.9）：
+       PASS/WARN  -> pre-commit revision check -> SnapshotCommitService
+                     （过期输入 → Run=SUPERSEDED，不建快照）
+       FALLBACK   -> 预算内换链上下一后端重试
+       REPAIR     -> M4 无修复执行器：有备选则降级为 FALLBACK，否则按
+                     WARN 收尾（问题保留可见性，如实记录 repair_unavailable）
+       FAIL       -> Run=FAILED（低质量不形成 READY Snapshot）
+  -> SUCCEEDED（携带 snapshot_id）/ FAILED / SUPERSEDED
+```
+
+不负责：切片（M5）、workflow 算子挂接（M6）、Build 选择（M6）。
+
+设计（ADR-0003 D-001/D-022）：
+- 只依赖注入 Protocol；``parser_resolver`` 把 parser_id 解析为
+  ``(parser, normalizer)`` 成对实例（组合根通常接 parse_adapters.factory）；
+- 每 attempt 一个临时 ``ShadowParseService``（共享对象存储与仓储），
+  复用其制品落存/replay 逻辑，不复制代码。
+"""
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Any
+
+from knowledge_mining.mining.contracts.file_management import (
+    StorageObjectRepository,
+)
+from knowledge_mining.mining.contracts.parse_plan import ParsePlan
+from knowledge_mining.mining.contracts.storage.port import ObjectStorePort
+from knowledge_mining.mining.contracts.storage.types import ObjectLocation
+from knowledge_mining.mining.frozen_input.contracts import (
+    FrozenInput,
+    FrozenInputStale,
+)
+from knowledge_mining.mining.parse_quality.gate import (
+    QualityDecision,
+    QualityGate,
+)
+from knowledge_mining.mining.shadow_parse.contracts import (
+    ParseAttemptRecord,
+    ParseAttemptRepository,
+    ParseRunRecord,
+    ParseRunRepository,
+)
+from knowledge_mining.mining.shadow_parse.service import ShadowParseService
+from knowledge_mining.mining.snapshot_store.service import SnapshotCommitService
+
+logger = logging.getLogger(__name__)
+
+ParserResolver = Callable[[str], tuple[Any, Any]]
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex}"
+
+
+class DocumentParseService:
+    """质量门控解析编排器（Run 状态机 + attempt 审计 + 快照转正）."""
+
+    def __init__(
+        self,
+        *,
+        object_store: ObjectStorePort,
+        parse_runs: ParseRunRepository,
+        attempts: ParseAttemptRepository,
+        storage_objects: StorageObjectRepository,
+        parser_resolver: ParserResolver,
+        commit_service: SnapshotCommitService,
+        quality_gate: QualityGate | None = None,
+        reconciler: Any | None = None,
+        bucket_prefix: str | None = None,
+        parse_bucket: str | None = None,
+    ) -> None:
+        self._store = object_store
+        self._parse_runs = parse_runs
+        self._attempts = attempts
+        self._storage_objects = storage_objects
+        self._resolver = parser_resolver
+        self._commit = commit_service
+        self._gate = quality_gate or QualityGate()
+        self._reconciler = reconciler
+        if not bucket_prefix and not parse_bucket:
+            raise ValueError(
+                "DocumentParseService requires a bucket prefix "
+                "(bucket_prefix=... or parse_bucket=...); refusing to guess "
+                "a default namespace"
+            )
+        self._bucket_prefix = bucket_prefix
+        self._parse_bucket = parse_bucket
+
+    # -- 入口 ---------------------------------------------------------------
+
+    async def execute(
+        self,
+        frozen: FrozenInput,
+        plan: ParsePlan,
+        *,
+        domain: str,
+        source_text: str | None = None,
+        title: str | None = None,
+        run_id: str | None = None,
+    ) -> ParseRunRecord:
+        """按计划执行一次质量门控解析；返回终态 Run 记录."""
+        primary_fp = self._resolver(plan.primary_parser_id)[0].descriptor.parser_fingerprint
+
+        # 幂等探针（SRS §2.2）：同输入同 primary 的 SUCCEEDED Run 且快照仍在
+        # → 直接复用，不重复解析。
+        existing = await self._parse_runs.find_by_document_hash(
+            frozen.document_id, frozen.source_raw_hash, primary_fp
+        )
+        if (
+            existing is not None
+            and existing.status == "SUCCEEDED"
+            and existing.snapshot_id
+        ):
+            return existing
+
+        rid = run_id or _new_id("parse")
+        await self._parse_runs.insert(ParseRunRecord(
+            id=rid,
+            document_id=frozen.document_id,
+            source_storage_object_id=frozen.source_storage_object_id,
+            source_raw_hash=frozen.source_raw_hash,
+            source_content_revision=frozen.source_content_revision,
+            parser_id=plan.primary_parser_id,
+            parser_fingerprint=primary_fp,
+            status="QUEUED",
+            started_at=_utcnow(),
+            metadata_json=json.dumps(
+                {"mode": "m4-operator", "plan_id": plan.plan_id},
+                ensure_ascii=False, sort_keys=True,
+            ),
+        ))
+        await self._advance(rid, "INSPECTING")
+        await self._advance(rid, "PLANNED")
+
+        chain = plan.backend_chain()
+        budget = plan.budget
+        attempt_index = 0
+        while attempt_index < len(chain) and attempt_index < budget.max_backend_attempts:
+            parser_id = chain[attempt_index]
+            kind = "primary" if attempt_index == 0 else "fallback"
+            shadow = self._shadow_for(parser_id)
+            await self._advance(rid, "PARSING")
+            attempt_started = _utcnow()
+            try:
+                outcome = await shadow.execute(
+                    frozen,
+                    source_text=source_text,
+                    budget=budget,
+                    backend_attempts_used=attempt_index + 1,
+                )
+            except Exception as exc:  # noqa: BLE001 —— attempt 失败必须留档
+                await self._attempts.append(self._attempt(
+                    rid, attempt_index, parser_id, kind, "FAILED",
+                    attempt_started, error_message=f"{type(exc).__name__}: {exc}",
+                ))
+                if attempt_index + 1 < len(chain) and attempt_index + 1 < budget.max_backend_attempts:
+                    await self._advance(rid, "FALLING_BACK")
+                    attempt_index += 1
+                    continue
+                await self._advance(
+                    rid, "FAILED",
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
+                return await self._final(rid)
+
+            # 阶段如实推进（normalize/reconcile 已在 shadow.execute 内完成）。
+            await self._advance(rid, "NORMALIZING")
+            await self._advance(rid, "RECONCILING")
+            await self._advance(
+                rid, "EVALUATING",
+                parse_ir_storage_object_id=outcome.parse_ir_storage_object_id,
+                parse_ir_schema_version=outcome.document.schema_version,
+                element_count=len(outcome.document.elements),
+                container_count=len(outcome.document.containers),
+                relation_count=len(outcome.document.relations),
+            )
+            decision = outcome.quality_decision
+            effective = self._resolve_decision(decision)
+
+            if effective.decision in ("PASS", "WARN"):
+                await self._attempts.append(self._attempt(
+                    rid, attempt_index, parser_id, kind, "SUCCEEDED",
+                    attempt_started,
+                ))
+                committed = await self._commit_or_supersede(
+                    frozen, outcome, effective, rid, domain, title,
+                )
+                if committed is None:  # SUPERSEDED
+                    return await self._final(rid)
+                await self._advance(
+                    rid, "SUCCEEDED", snapshot_id=committed.snapshot.id,
+                    finished_at=_utcnow(),
+                )
+                return await self._final(rid)
+
+            # FALLBACK / REPAIR / FAIL：attempt 本身按失败留档（质量拒绝）。
+            await self._attempts.append(self._attempt(
+                rid, attempt_index, parser_id, kind, "FAILED",
+                attempt_started,
+                error_message=f"quality: {effective.decision}"
+                              + (f" ({'; '.join(i.code for i in effective.issues)})"
+                                 if effective.issues else ""),
+            ))
+            if effective.decision in ("FALLBACK", "REPAIR"):
+                if attempt_index + 1 < len(chain) and attempt_index + 1 < budget.max_backend_attempts:
+                    await self._advance(rid, "FALLING_BACK")
+                    attempt_index += 1
+                    continue
+            await self._advance(
+                rid, "FAILED",
+                error_message=(
+                    f"quality decision {effective.decision}; no admissible "
+                    f"attempt left in plan {plan.plan_id!r}"
+                ),
+                finished_at=_utcnow(),
+            )
+            return await self._final(rid)
+
+        # 链耗尽仍未返回（理论不可达：循环内必达终态）。
+        await self._advance(
+            rid, "FAILED", error_message="backend chain exhausted"
+        )
+        return await self._final(rid)
+
+    # -- replay（SRS §9.5 A09） ----------------------------------------------
+
+    async def replay(
+        self,
+        frozen: FrozenInput,
+        *,
+        backend_raw_storage_object_id: str,
+        parser_id: str,
+        domain: str,
+        normalizer: Any | None = None,
+        source_text: str | None = None,
+        title: str | None = None,
+        run_id: str | None = None,
+    ) -> ParseRunRecord:
+        """用已持久化的 backend raw artifact 重放 normalize 并转正新快照.
+
+        parser **不被调用**（A09：修复 adapter mapping bug 不重复花钱）。
+        ``normalizer`` 覆盖注入升级版实现——新指纹 → 新 Snapshot。
+        """
+        parser, resolved_norm = self._resolver(parser_id)
+        norm = normalizer or resolved_norm
+        artifact = await self._load_raw_artifact(backend_raw_storage_object_id)
+
+        rid = run_id or _new_id("parse")
+        await self._parse_runs.insert(ParseRunRecord(
+            id=rid,
+            document_id=frozen.document_id,
+            source_storage_object_id=frozen.source_storage_object_id,
+            source_raw_hash=frozen.source_raw_hash,
+            source_content_revision=frozen.source_content_revision,
+            parser_id=parser_id,
+            parser_fingerprint=parser.descriptor.parser_fingerprint,
+            status="QUEUED",
+            started_at=_utcnow(),
+            metadata_json=json.dumps(
+                {"mode": "m4-operator", "replay_of": backend_raw_storage_object_id},
+                ensure_ascii=False, sort_keys=True,
+            ),
+        ))
+        await self._advance(rid, "INSPECTING")
+        await self._advance(rid, "PLANNED")
+        await self._advance(rid, "PARSING")  # 重放无 parse 工作，状态如实走过
+        attempt_started = _utcnow()
+        shadow = self._shadow_for(parser_id)
+        try:
+            outcome = await shadow.replay(
+                artifact,
+                source_raw_hash=frozen.source_raw_hash,
+                normalizer=norm,
+                source_text=source_text,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._attempts.append(self._attempt(
+                rid, 0, parser_id, "replay", "FAILED", attempt_started,
+                error_message=f"{type(exc).__name__}: {exc}",
+            ))
+            await self._advance(
+                rid, "FAILED", error_message=f"{type(exc).__name__}: {exc}"
+            )
+            return await self._final(rid)
+
+        await self._advance(rid, "NORMALIZING")
+        await self._advance(rid, "RECONCILING")
+        await self._advance(
+            rid, "EVALUATING",
+            parse_ir_storage_object_id=outcome.parse_ir_storage_object_id,
+            parse_ir_schema_version=outcome.document.schema_version,
+            element_count=len(outcome.document.elements),
+            container_count=len(outcome.document.containers),
+            relation_count=len(outcome.document.relations),
+        )
+        await self._attempts.append(self._attempt(
+            rid, 0, parser_id, "replay", "SUCCEEDED", attempt_started,
+        ))
+        effective = self._resolve_decision(outcome.quality_decision)
+        if effective.decision not in ("PASS", "WARN"):
+            await self._advance(
+                rid, "FAILED",
+                error_message=(
+                    f"quality decision {effective.decision} on replay"
+                ),
+                finished_at=_utcnow(),
+            )
+            return await self._final(rid)
+        committed = await self._commit_or_supersede(
+            frozen, outcome, effective, rid, domain, title,
+        )
+        if committed is None:
+            return await self._final(rid)
+        await self._advance(
+            rid, "SUCCEEDED", snapshot_id=committed.snapshot.id,
+            finished_at=_utcnow(),
+        )
+        return await self._final(rid)
+
+    # -- 内部 ---------------------------------------------------------------
+
+    def _shadow_for(self, parser_id: str) -> ShadowParseService:
+        """为一次尝试组装 ShadowParseService（共享存储/仓储，换 parser）."""
+        parser, normalizer = self._resolver(parser_id)
+        return ShadowParseService(
+            object_store=self._store,
+            parse_runs=self._parse_runs,
+            storage_objects=self._storage_objects,
+            parser=parser,
+            normalizer=normalizer,
+            reconciler=self._reconciler,
+            quality_gate=self._gate,
+            bucket_prefix=self._bucket_prefix,
+            parse_bucket=self._parse_bucket,
+        )
+
+    def _resolve_decision(
+        self, decision: QualityDecision | None
+    ) -> QualityDecision:
+        """REPAIR 的 M4 降级策略：无修复执行器 → 保守 WARN（问题保留）.
+
+        有后续备选时上层已按 FALLBACK 处理；此处只兜「无备选」的 REPAIR
+        ——空页信号不应阻断可用结果，但必须以 WARN + issue 可见。
+        """
+        if decision is None:
+            from knowledge_mining.mining.parse_quality.gate import (
+                QualityIssue,
+            )
+
+            return QualityDecision(decision="WARN", issues=(QualityIssue(
+                code="quality_gate_not_injected",
+                message="no quality gate wired; committing with WARN",
+            ),), metrics=None)
+        if decision.decision != "REPAIR":
+            return decision
+        from knowledge_mining.mining.parse_quality.gate import QualityIssue
+
+        return QualityDecision(
+            decision="WARN",
+            issues=decision.issues + (QualityIssue(
+                code="repair_unavailable",
+                message=(
+                    "gate requested REPAIR but M4 has no repair executor; "
+                    "committed with WARN visibility"
+                ),
+            ),),
+            metrics=decision.metrics,
+        )
+
+    async def _commit_or_supersede(
+        self,
+        frozen: FrozenInput,
+        outcome: Any,
+        decision: QualityDecision,
+        rid: str,
+        domain: str,
+        title: str | None,
+    ) -> Any | None:
+        """提交快照；过期输入 → Run=SUPERSEDED 并返回 None（不建快照）."""
+        try:
+            return await self._commit.commit(
+                frozen=frozen,
+                document=outcome.document,
+                parse_ir_storage_object_id=outcome.parse_ir_storage_object_id,
+                quality_decision=decision,
+                run_id=rid,
+                domain=domain,
+                title=title,
+            )
+        except FrozenInputStale as stale:
+            await self._advance(
+                rid, "SUPERSEDED",
+                error_message=(
+                    f"frozen input stale: document revision moved "
+                    f"{stale.frozen_revision} -> {stale.current_revision} "
+                    f"during parse; snapshot suppressed"
+                ),
+                finished_at=_utcnow(),
+            )
+            return None
+
+    async def _load_raw_artifact(self, storage_object_id: str) -> Any:
+        """回读持久化的 backend raw artifact 并重建（§9.5 replay 原料）."""
+        from knowledge_mining.mining.contracts.parser_adapter import (
+            BackendParseArtifact,
+        )
+        from knowledge_mining.mining.contracts.storage.errors import (
+            StorageObjectMissing,
+        )
+
+        record = await self._storage_objects.get(storage_object_id)
+        if record is None:
+            raise StorageObjectMissing(
+                f"backend raw artifact {storage_object_id!r} is not registered"
+            )
+        location = ObjectLocation(
+            bucket=record.bucket, object_key=record.object_key,
+            version_id=record.object_version_id,
+        )
+        chunks: list[bytes] = []
+        async for chunk in self._store.get_stream(location):
+            chunks.append(chunk)
+        payload = b"".join(chunks)
+        return BackendParseArtifact.from_dict(json.loads(payload))
+
+    def _attempt(
+        self,
+        rid: str,
+        index: int,
+        parser_id: str,
+        kind: str,
+        outcome: str,
+        started_at: str,
+        *,
+        error_message: str | None = None,
+    ) -> ParseAttemptRecord:
+        return ParseAttemptRecord(
+            id=_new_id("att"),
+            parse_run_id=rid,
+            attempt_index=index,
+            parser_id=parser_id,
+            parser_fingerprint=(
+                self._resolver(parser_id)[0].descriptor.parser_fingerprint
+            ),
+            attempt_kind=kind,
+            outcome=outcome,
+            started_at=started_at,
+            finished_at=_utcnow(),
+            error_message=error_message,
+        )
+
+    async def _advance(
+        self,
+        rid: str,
+        status: str,
+        *,
+        error_message: str | None = None,
+        snapshot_id: str | None = None,
+        finished_at: str | None = None,
+        parse_ir_storage_object_id: str | None = None,
+        parse_ir_schema_version: str | None = None,
+        element_count: int | None = None,
+        container_count: int | None = None,
+        relation_count: int | None = None,
+    ) -> None:
+        await self._parse_runs.set_status(
+            rid, status,
+            error_message=error_message,
+            snapshot_id=snapshot_id,
+            finished_at=finished_at,
+            parse_ir_storage_object_id=parse_ir_storage_object_id,
+            parse_ir_schema_version=parse_ir_schema_version,
+            element_count=element_count,
+            container_count=container_count,
+            relation_count=relation_count,
+        )
+
+    async def _final(self, rid: str) -> ParseRunRecord:
+        record = await self._parse_runs.get(rid)
+        assert record is not None, f"run {rid} disappeared mid-flight"
+        return record
+
+
+__all__ = ["DocumentParseService", "ParserResolver"]

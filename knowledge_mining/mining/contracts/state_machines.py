@@ -50,12 +50,14 @@ VALID_DOCUMENT_CONTENT_STATES: frozenset[str] = frozenset({
     "DELETED",
 })
 
-# Parse Run states (SRS §9.2).
+# Parse Run states (SRS §9.2 + §9.5 SUPERSEDED, M4).
 # QUEUED -> INSPECTING -> PLANNED -> PARSING -> NORMALIZING -> RECONCILING
 #        -> EVALUATING
 # EVALUATING -> REPAIRING -> EVALUATING
 # EVALUATING -> FALLING_BACK -> PARSING
 # EVALUATING -> SUCCEEDED / FAILED
+# EVALUATING -> SUPERSEDED   (pre-commit revision check failed, §9.5:
+#                             解析期间文档被编辑 → 不创建 Snapshot)
 # any non-terminal -> CANCELLED
 VALID_PARSE_RUN_STATES: frozenset[str] = frozenset({
     "QUEUED",
@@ -70,6 +72,7 @@ VALID_PARSE_RUN_STATES: frozenset[str] = frozenset({
     "SUCCEEDED",
     "FAILED",
     "CANCELLED",
+    "SUPERSEDED",
 })
 
 # Snapshot Commit states (SRS §9.4).
@@ -176,9 +179,22 @@ _PARSE_RUN_TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("REPAIRING", "EVALUATING"),
     ("EVALUATING", "FALLING_BACK"),
     ("FALLING_BACK", "PARSING"),
+    # Failure-triggered fallback (SRS §2.2: fallback 可由失败或质量策略触发
+    # ——§9.2 图只画了 EVALUATING 出发；解析器崩溃发生在 PARSING，补边)。
+    ("PARSING", "FALLING_BACK"),
     # Terminal outcomes from the evaluation gate.
     ("EVALUATING", "SUCCEEDED"),
     ("EVALUATING", "FAILED"),
+    # Crash-failure terminations from execution stages (SRS §9.2 图的操作性
+    # 缺口：parse/normalize/reconcile 抛错必须直接落终态，不得伪造走完
+    # EVALUATING）。SUPERSEDED 仍只来自 EVALUATING（提交前校验点）。
+    ("PARSING", "FAILED"),
+    ("NORMALIZING", "FAILED"),
+    ("RECONCILING", "FAILED"),
+    # Stale input detected at the pre-commit revision check (§9.5): the run
+    # parsed an older content revision than the document's current one, so
+    # its result must never become a Snapshot.
+    ("EVALUATING", "SUPERSEDED"),
     # Cancellation from any non-terminal state.
     ("QUEUED", "CANCELLED"),
     ("INSPECTING", "CANCELLED"),
@@ -234,8 +250,12 @@ _STORAGE_OBJECT_TERMINAL: frozenset[str] = frozenset({"DELETED"})
 # Exposed as the empty set so is_terminal() returns False for every state.
 _DOCUMENT_CONTENT_TERMINAL: frozenset[str] = frozenset()
 
-# Parse Run (§9.2): SUCCEEDED / FAILED / CANCELLED are terminal.
-_PARSE_RUN_TERMINAL: frozenset[str] = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+# Parse Run (§9.2 + §9.5): SUCCEEDED / FAILED / CANCELLED / SUPERSEDED are
+# terminal. SUPERSEDED means the run's frozen input was stale at commit time;
+# the outcome is preserved for audit but never produces a Snapshot.
+_PARSE_RUN_TERMINAL: frozenset[str] = frozenset({
+    "SUCCEEDED", "FAILED", "CANCELLED", "SUPERSEDED",
+})
 
 # Snapshot Commit (§9.4): READY is immutable; FAILED / CANCELLED are terminal.
 _SNAPSHOT_COMMIT_TERMINAL: frozenset[str] = frozenset({"READY", "FAILED", "CANCELLED"})

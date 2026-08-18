@@ -29,16 +29,20 @@ import json
 from typing import Any
 
 from knowledge_mining.mining.shadow_parse.contracts import (
+    ParseAttemptRecord,
     ParseRunRecord,
-    SHADOW_PARSE_STATUSES,
+)
+from knowledge_mining.mining.contracts.state_machines import (
+    IllegalTransition,
+    assert_transition,
 )
 
 _COLUMNS = (
     "id, document_id, source_storage_object_id, source_raw_hash, "
     "source_content_revision, parser_id, parser_fingerprint, "
     "parse_ir_storage_object_id, parse_ir_schema_version, element_count, "
-    "container_count, relation_count, status, error_message, started_at, "
-    "finished_at, metadata_json"
+    "container_count, relation_count, snapshot_id, status, error_message, "
+    "started_at, finished_at, metadata_json"
 )
 
 # ON CONFLICT 覆盖列：除 id 与幂等键三列外的全部列。
@@ -47,8 +51,8 @@ _CONFLICT_UPDATE = ", ".join(
     for col in (
         "source_storage_object_id", "source_content_revision", "parser_id",
         "parse_ir_storage_object_id", "parse_ir_schema_version", "element_count",
-        "container_count", "relation_count", "status", "error_message",
-        "started_at", "finished_at", "metadata_json",
+        "container_count", "relation_count", "snapshot_id", "status",
+        "error_message", "started_at", "finished_at", "metadata_json",
     )
 )
 
@@ -77,6 +81,7 @@ def _parse_run_from_row(r: dict[str, Any]) -> ParseRunRecord:
         element_count=r.get("element_count"),
         container_count=r.get("container_count"),
         relation_count=r.get("relation_count"),
+        snapshot_id=r.get("snapshot_id"),
         error_message=r.get("error_message"),
         started_at=r["started_at"].isoformat()
         if hasattr(r["started_at"], "isoformat")
@@ -95,18 +100,48 @@ class PgParseRunRepository:
         self._pool = pool
 
     async def upsert(self, record: ParseRunRecord) -> ParseRunRecord:
-        if record.status not in SHADOW_PARSE_STATUSES:
-            raise ValueError(f"unknown shadow parse status: {record.status!r}")
         async with self._pool.connection() as conn:
             # 幂等语义与 memory 实现对齐（契约 docstring）：只有 FAILED 行可被
             # 翻转/覆盖；已 SUCCEEDED 的行视为等价重复写入，返回原行不改写
             # （防止并发双跑时后写者覆盖已成功行的制品指针）。
+            # 010 起幂等键无唯一索引（Run 允许多行），改为读-判-写。
+            cur = await conn.execute(
+                f"""UPDATE asset_parse_runs SET {_CONFLICT_UPDATE}
+                   WHERE document_id = %s AND source_raw_hash = %s
+                     AND parser_fingerprint = %s
+                     AND status = 'FAILED'
+                   RETURNING *""",
+                (
+                    record.source_storage_object_id,
+                    record.source_content_revision, record.parser_id,
+                    record.parse_ir_storage_object_id,
+                    record.parse_ir_schema_version, record.element_count,
+                    record.container_count, record.relation_count,
+                    record.snapshot_id, record.status, record.error_message,
+                    record.started_at, record.finished_at,
+                    json.dumps(json.loads(record.metadata_json or "{}"),
+                               ensure_ascii=False),
+                    record.document_id, record.source_raw_hash,
+                    record.parser_fingerprint,
+                ),
+            )
+            row = await cur.fetchone()
+            if row is not None:
+                return _parse_run_from_row(dict(row))
+            existing = await self.find_by_document_hash(
+                record.document_id, record.source_raw_hash,
+                record.parser_fingerprint,
+            )
+            if existing is not None:
+                return existing
+            return await self.insert(record)
+
+    async def insert(self, record: ParseRunRecord) -> ParseRunRecord:
+        """追加新执行行（M4 Operator）；record.status 由 __post_init__ 校验."""
+        async with self._pool.connection() as conn:
             cur = await conn.execute(
                 f"""INSERT INTO asset_parse_runs ({_COLUMNS})
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (document_id, source_raw_hash, parser_fingerprint)
-                   DO UPDATE SET {_CONFLICT_UPDATE}
-                   WHERE asset_parse_runs.status = 'FAILED'
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    RETURNING *""",
                 (
                     record.id, record.document_id,
@@ -115,6 +150,7 @@ class PgParseRunRepository:
                     record.parser_fingerprint, record.parse_ir_storage_object_id,
                     record.parse_ir_schema_version, record.element_count,
                     record.container_count, record.relation_count,
+                    record.snapshot_id,
                     record.status, record.error_message,
                     record.started_at, record.finished_at,
                     json.dumps(json.loads(record.metadata_json or "{}"),
@@ -122,16 +158,8 @@ class PgParseRunRepository:
                 ),
             )
             row = await cur.fetchone()
-            if row is not None:
-                return _parse_run_from_row(dict(row))
-            # WHERE guard 拦下了写入：幂等键上已有 SUCCEEDED 行，读回返回。
-            existing = await self.find_by_document_hash(
-                record.document_id,
-                record.source_raw_hash,
-                record.parser_fingerprint,
-            )
-            assert existing is not None, "conflict row must exist when RETURNING is empty"
-            return existing
+            assert row is not None, "INSERT ... RETURNING must yield a row"
+            return _parse_run_from_row(dict(row))
 
     async def get(self, parse_run_id: str) -> ParseRunRecord | None:
         async with self._pool.connection() as conn:
@@ -152,11 +180,140 @@ class PgParseRunRepository:
             cur = await conn.execute(
                 """SELECT * FROM asset_parse_runs
                    WHERE document_id = %s AND source_raw_hash = %s
-                     AND parser_fingerprint = %s""",
+                     AND parser_fingerprint = %s
+                   ORDER BY (status = 'SUCCEEDED' AND snapshot_id IS NOT NULL)
+                            DESC, started_at DESC
+                   LIMIT 1""",
                 [document_id, source_raw_hash, parser_fingerprint],
             )
             row = await cur.fetchone()
             return _parse_run_from_row(dict(row)) if row else None
 
+    async def set_status(
+        self,
+        parse_run_id: str,
+        new_status: str,
+        *,
+        error_message: str | None = None,
+        snapshot_id: str | None = None,
+        finished_at: str | None = None,
+        parse_ir_storage_object_id: str | None = None,
+        parse_ir_schema_version: str | None = None,
+        element_count: int | None = None,
+        container_count: int | None = None,
+        relation_count: int | None = None,
+    ) -> ParseRunRecord:
+        """执行内状态推进：读当前行 -> assert_transition -> 条件 UPDATE.
 
-__all__ = ["PgParseRunRepository"]
+        服务端 WHERE 兜底并发（两次并发推进只允许其一改行）；受影响行数
+        为 0 时重读——id 不存在抛 KeyError，存在则说明并发竞争让 UPDATE
+        条件失效，重读后校验并返回最新行。
+        """
+        existing = await self.get(parse_run_id)
+        if existing is None:
+            raise KeyError(f"unknown parse run id: {parse_run_id!r}")
+        assert_transition("parse_run", existing.status, new_status)
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE asset_parse_runs
+                   SET status = %s,
+                       error_message = COALESCE(%s, error_message),
+                       snapshot_id = COALESCE(%s, snapshot_id),
+                       finished_at = COALESCE(%s, finished_at),
+                       parse_ir_storage_object_id = COALESCE(
+                           %s, parse_ir_storage_object_id),
+                       parse_ir_schema_version = COALESCE(
+                           %s, parse_ir_schema_version),
+                       element_count = COALESCE(%s, element_count),
+                       container_count = COALESCE(%s, container_count),
+                       relation_count = COALESCE(%s, relation_count)
+                   WHERE id = %s AND status = %s
+                   RETURNING *""",
+                [
+                    new_status, error_message, snapshot_id, finished_at,
+                    parse_ir_storage_object_id, parse_ir_schema_version,
+                    element_count, container_count, relation_count,
+                    parse_run_id, existing.status,
+                ],
+            )
+            row = await cur.fetchone()
+            if row is None:
+                latest = await self.get(parse_run_id)
+                if latest is None:
+                    raise KeyError(f"unknown parse run id: {parse_run_id!r}")
+                if latest.status != new_status:
+                    raise IllegalTransition(
+                        "parse_run", existing.status, new_status,
+                        f"concurrent update moved status to {latest.status}",
+                    )
+                return latest
+            return _parse_run_from_row(dict(row))
+
+
+def _attempt_from_row(r: dict[str, Any]) -> ParseAttemptRecord:
+    return ParseAttemptRecord(
+        id=r["id"],
+        parse_run_id=r["parse_run_id"],
+        attempt_index=r["attempt_index"],
+        parser_id=r["parser_id"],
+        parser_fingerprint=r["parser_fingerprint"],
+        attempt_kind=r["attempt_kind"],
+        outcome=r["outcome"],
+        started_at=r["started_at"].isoformat()
+        if hasattr(r["started_at"], "isoformat")
+        else str(r["started_at"]),
+        finished_at=r["finished_at"].isoformat()
+        if hasattr(r["finished_at"], "isoformat")
+        else (str(r["finished_at"]) if r.get("finished_at") is not None else None),
+        error_message=r.get("error_message"),
+        metadata_json=_metadata_json_str(r.get("metadata_json")),
+    )
+
+
+class PgParseAttemptRepository:
+    """PG ``ParseAttemptRepository`` over ``asset_parse_run_attempts``（010）."""
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    async def append(self, record: ParseAttemptRecord) -> ParseAttemptRecord:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """INSERT INTO asset_parse_run_attempts (
+                       id, parse_run_id, attempt_index, parser_id,
+                       parser_fingerprint, attempt_kind, outcome, started_at,
+                       finished_at, error_message, metadata_json
+                   ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (parse_run_id, attempt_index) DO NOTHING
+                   RETURNING *""",
+                (
+                    record.id, record.parse_run_id, record.attempt_index,
+                    record.parser_id, record.parser_fingerprint,
+                    record.attempt_kind, record.outcome, record.started_at,
+                    record.finished_at, record.error_message,
+                    json.dumps(json.loads(record.metadata_json or "{}"),
+                               ensure_ascii=False),
+                ),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise ValueError(
+                    f"attempt_index {record.attempt_index} already exists for "
+                    f"run {record.parse_run_id!r}"
+                )
+            return _attempt_from_row(dict(row))
+
+    async def list_by_run(
+        self, parse_run_id: str
+    ) -> tuple[ParseAttemptRecord, ...]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT * FROM asset_parse_run_attempts
+                   WHERE parse_run_id = %s ORDER BY attempt_index""",
+                [parse_run_id],
+            )
+            rows = await cur.fetchall()
+            return tuple(_attempt_from_row(dict(r)) for r in rows)
+
+
+__all__ = ["PgParseAttemptRepository", "PgParseRunRepository"]

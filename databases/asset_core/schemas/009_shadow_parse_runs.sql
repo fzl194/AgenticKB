@@ -44,8 +44,10 @@ CREATE TABLE IF NOT EXISTS asset_parse_runs (
     metadata_json               TEXT NOT NULL DEFAULT '{}'      -- parser 版本 / warnings / mode=shadow 等
 );
 
--- 幂等键：同 document + 同内容 + 同 parser 只有一行投影（SRS §2.2）。
-CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_parse_runs_idem
+-- 幂等探针索引（M4 修订：普通索引）。Run 是执行历史，同键多行合法
+-- （FAILED 重跑 / A09 重放 / A07 升级）——幂等锚点在 Snapshot 指纹
+-- （SRS §2.2/§8.3A），010 负责把既有环境的唯一索引降级为本索引。
+CREATE INDEX IF NOT EXISTS idx_asset_parse_runs_idem
     ON asset_parse_runs(document_id, source_raw_hash, parser_fingerprint);
 
 -- 常用探查：按文档看历史运行 / 按 parser 指纹做回归比对。

@@ -53,6 +53,10 @@ _OBJECT_STORAGE_DDL = (
 _SHADOW_PARSE_DDL = (
     _REPO_ROOT / "databases" / "asset_core" / "schemas" / "009_shadow_parse_runs_postgresql.sql"
 )
+# M4 Parse Run 完整状态机（含 SUPERSEDED）+ attempt 事件表；依赖 009。
+_M4_PARSE_RUN_STATE_DDL = (
+    _REPO_ROOT / "databases" / "asset_core" / "schemas" / "010_m4_parse_run_state_machine_postgresql.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -131,6 +135,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _OBJECT_STORAGE_DDL,
         # M2 影子解析投影：依赖 008 的 asset_storage_objects（parse_ir 对象注册），挂链尾。
         _SHADOW_PARSE_DDL,
+        # M4 状态机扩列 + attempt 事件：依赖 009 的 asset_parse_runs。
+        _M4_PARSE_RUN_STATE_DDL,
     )
 
 

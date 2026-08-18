@@ -24,7 +24,6 @@ import asyncio
 import hashlib
 import json
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,9 +81,9 @@ class _Handles:
 
 
 @pytest_asyncio.fixture
-async def env():
+async def env(tmp_path):
     """Wire the service with empty fakes + a fresh FakeObjectStore root."""
-    root = tempfile.mkdtemp(prefix="mig_test_")
+    root = str(tmp_path / "objects")
     store = FakeObjectStore(root)
     storage_objects = MemoryStorageObjectRepository()
     documents = MemoryDocumentCurrentContentRepository()

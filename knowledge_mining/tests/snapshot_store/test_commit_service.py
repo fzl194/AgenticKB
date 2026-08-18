@@ -215,14 +215,14 @@ async def test_memory_mark_lifecycle_one_way() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_commit_happy_path_pass() -> None:
+async def test_commit_happy_path_pass(tmp_path) -> None:
     from knowledge_mining.mining.snapshot_store.repositories_memory import (
         MemorySnapshotRepository,
     )
 
     snaps = MemorySnapshotRepository()
     objects = MemoryStorageObjectRepository()
-    store = FakeObjectStore(str(FakeObjectStore.__mro__ and _tmp_root()))
+    store = FakeObjectStore(str(tmp_path / "objects"))
     await _register_ir_object(store, objects, "so_ir")
     service = _service(snaps, objects, store)
 
@@ -250,13 +250,13 @@ async def test_commit_happy_path_pass() -> None:
     assert again.snapshot.id == snap.id
 
 
-async def test_commit_warn_allowed_fail_rejected() -> None:
+async def test_commit_warn_allowed_fail_rejected(tmp_path) -> None:
     from knowledge_mining.mining.snapshot_store.repositories_memory import (
         MemorySnapshotRepository,
     )
 
     objects = MemoryStorageObjectRepository()
-    store = FakeObjectStore(_tmp_root())
+    store = FakeObjectStore(str(tmp_path / "objects"))
     await _register_ir_object(store, objects, "so_ir")
     service = _service(MemorySnapshotRepository(), objects, store)
 
@@ -277,14 +277,14 @@ async def test_commit_warn_allowed_fail_rejected() -> None:
         )
 
 
-async def test_commit_stale_input_propagates_and_writes_nothing() -> None:
+async def test_commit_stale_input_propagates_and_writes_nothing(tmp_path) -> None:
     from knowledge_mining.mining.frozen_input.contracts import FrozenInputStale
     from knowledge_mining.mining.snapshot_store.repositories_memory import (
         MemorySnapshotRepository,
     )
 
     objects = MemoryStorageObjectRepository()
-    store = FakeObjectStore(_tmp_root())
+    store = FakeObjectStore(str(tmp_path / "objects"))
     await _register_ir_object(store, objects, "so_ir")
     snaps = MemorySnapshotRepository()
 
@@ -306,13 +306,13 @@ async def test_commit_stale_input_propagates_and_writes_nothing() -> None:
     assert snaps.count() == 0  # 不产生半成品快照（§9.4）
 
 
-async def test_commit_missing_ir_object_blocks() -> None:
+async def test_commit_missing_ir_object_blocks(tmp_path) -> None:
     from knowledge_mining.mining.snapshot_store.repositories_memory import (
         MemorySnapshotRepository,
     )
 
     objects = MemoryStorageObjectRepository()  # 未注册 so_ir
-    store = FakeObjectStore(_tmp_root())
+    store = FakeObjectStore(str(tmp_path / "objects"))
     service = _service(MemorySnapshotRepository(), objects, store)
     with pytest.raises(StorageObjectMissing):
         await service.commit(
@@ -323,13 +323,13 @@ async def test_commit_missing_ir_object_blocks() -> None:
         )
 
 
-async def test_commit_fingerprint_sensitive_to_parser() -> None:
+async def test_commit_fingerprint_sensitive_to_parser(tmp_path) -> None:
     from knowledge_mining.mining.snapshot_store.repositories_memory import (
         MemorySnapshotRepository,
     )
 
     objects = MemoryStorageObjectRepository()
-    store = FakeObjectStore(_tmp_root())
+    store = FakeObjectStore(str(tmp_path / "objects"))
     await _register_ir_object(store, objects, "so_ir")
     service = _service(MemorySnapshotRepository(), objects, store)
 
@@ -348,7 +348,3 @@ async def test_commit_fingerprint_sensitive_to_parser() -> None:
     assert b.created is True
 
 
-def _tmp_root() -> str:
-    import tempfile
-
-    return tempfile.mkdtemp(prefix="snapstore-test-")

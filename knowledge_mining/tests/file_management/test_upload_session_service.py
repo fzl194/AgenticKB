@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sys
-import tempfile
 
 import pytest
 import pytest_asyncio
@@ -68,9 +67,9 @@ def _sha256(data: bytes) -> str:
 
 
 @pytest_asyncio.fixture
-async def env():
+async def env(tmp_path):
     """A fully wired service with in-memory fakes + a FakeObjectStore."""
-    root = tempfile.mkdtemp(prefix="fm_test_")
+    root = str(tmp_path / "objects")
     store = FakeObjectStore(root)
     sessions = MemoryUploadSessionRepository()
     storage_objects = MemoryStorageObjectRepository()

@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sys
-import tempfile
 
 import pytest
 import pytest_asyncio
@@ -73,9 +72,9 @@ async def _bytes_stream(data: bytes):
 
 
 @pytest_asyncio.fixture
-async def env():
+async def env(tmp_path):
     """Wire FileManagementService + UploadSessionService on shared fakes."""
-    root = tempfile.mkdtemp(prefix="fmsvc_")
+    root = str(tmp_path / "objects")
     store = FakeObjectStore(root)
     sessions = MemoryUploadSessionRepository()
     storage_objects = MemoryStorageObjectRepository()

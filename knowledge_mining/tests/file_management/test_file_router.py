@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sys
-import tempfile
 
 import pytest
 from fastapi import FastAPI
@@ -62,9 +61,9 @@ def _sha256(data: bytes) -> str:
 
 
 @pytest.fixture
-def app_env():
+def app_env(tmp_path):
     """Wire a fresh FastAPI app + fakes; return (app, client, handles)."""
-    root = tempfile.mkdtemp(prefix="fmrouter_")
+    root = str(tmp_path / "objects")
     store = FakeObjectStore(root)
     sessions = MemoryUploadSessionRepository()
     storage_objects = MemoryStorageObjectRepository()

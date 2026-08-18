@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sys
-import tempfile
 
 import pytest
 import pytest_asyncio
@@ -142,8 +141,8 @@ async def _seed_document_with_object(
 
 
 @pytest_asyncio.fixture
-async def env() -> _Env:
-    root = tempfile.mkdtemp(prefix="frozen_test_")
+async def env(tmp_path) -> _Env:
+    root = str(tmp_path / "objects")
     store = FakeObjectStore(root)
     documents = MemoryDocumentCurrentContentRepository()
     storage_objects = MemoryStorageObjectRepository()

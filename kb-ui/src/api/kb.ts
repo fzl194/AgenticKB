@@ -8,7 +8,8 @@
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
-  KbOverview, KbRunRecord, KbSummary, KbUpdateBody, KbUserCandidate, DocumentKnowledge,
+  KbOverview, KbRunRecord, KbStats, KbSummary, KbUpdateBody, KbUserCandidate,
+  DocumentKnowledge,
 } from '@/types/kb'
 
 export function useKbApi() {
@@ -31,6 +32,18 @@ export function useKbApi() {
     async getOverview(domain: string): Promise<KbOverview> {
       const { data } = await client.get('/api/kb/overview', { params: { domain } })
       return extractOne<KbOverview>(data)
+    },
+
+    /**
+     * 概览页的统计数字与图表数据（文档状态分布 / 知识资产量 / 检索单元类型 / 挖掘趋势），
+     * 口径为当前用户在本域可见的全部知识库。
+     *
+     * 与 getOverview 分开而不是并进一个端点：overview 是检索页的热路径（只要 KB 列表），
+     * stats 要扫 asset_* 四张表和 30 天 run。合并会让检索页白付统计的代价。
+     */
+    async getStats(domain: string): Promise<KbStats> {
+      const { data } = await client.get('/api/kb/stats', { params: { domain } })
+      return extractOne<KbStats>(data)
     },
 
     async createKb(body: KbCreateBody): Promise<KbDetail> {

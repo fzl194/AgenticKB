@@ -1,5 +1,5 @@
 /**
- * SearchView 的默认检索范围接线（缺陷 D8）。
+ * SearchView 的默认检索范围接线。
  *
  * 走 `?q=` 自动检索这条路径来观察实际发出的请求：Element Plus 在 test/setup.ts 里被
  * 全局 stub 掉了（el-select 不带 v-model），操作选择器等于在测 stub；而 onMounted 里

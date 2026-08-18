@@ -1,5 +1,5 @@
 /**
- * 挖掘 run 状态的中文文案（缺陷 D5）。
+ * 挖掘 run 状态的中文文案。
  *
  * 权威取值来自 DB 的 CHECK 约束（`002_mining_runtime_postgresql.sql:12`），共 **7 个**：
  *   queued / running / completed / interrupted / failed / cancelled / awaiting_review

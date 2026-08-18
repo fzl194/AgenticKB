@@ -1,4 +1,4 @@
-"""概览页聚合的 SQL 语义（设计文档 §5.1）+ 可见集轻量查询（§5.2 的护栏也用它）。
+"""概览页聚合的 SQL 语义 + 可见集轻量查询（/api/runs 的身份护栏也用它）。
 
 路由装配与组装逻辑在 test_overview_route.py（用假 KbDB，不需要库）；这里跑真 SQL。
 
@@ -117,7 +117,11 @@ async def test_status_counts_empty_input_short_circuits(async_pool):
 
 
 async def test_status_counts_do_not_bleed_across_kbs(async_pool):
-    """D9 的聚合版：同名文档在另一个库失败，不得计进本库的 failed。"""
+    """状态串味的聚合版：同名文档在另一个库失败，不得计进本库的 failed。
+
+    document_key 不含 kb_id，只按它关联 mining_run_documents 会让两个库的同名文件
+    互相串状态——聚合计数这条路径同样要按 kb 维度收敛。
+    """
     db = KbDB(async_pool)
     owner = await db.upsert_user_by_username("alice")
     kb_a = await db.create_kb(domain=DOMAIN, name="A", owner_id=owner["id"])
@@ -218,6 +222,6 @@ async def test_recent_runs_exclude_kbs_outside_the_scope(async_pool):
 # ── has_active_release ──────────────────────────────────────────────────────
 
 async def test_has_active_release_false_on_kb_only_deployment(async_pool):
-    """KB 挖掘 publish=False，永不产 release —— 这是 D8 里那个「不存在的范围」。"""
+    """KB 挖掘 publish=False，永不产 release —— 检索范围里那个「不存在的选项」。"""
     db = KbDB(async_pool)
     assert await db.has_active_release(domain=DOMAIN) is False

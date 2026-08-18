@@ -3,7 +3,6 @@ import {
   DASHBOARD_KB_LIMIT,
   kbCardStatus,
   pendingTasks,
-  searchTarget,
   visibleKbCards,
 } from '@/utils/dashboard'
 import { runStatusLabel } from '@/utils/runStatus'
@@ -52,7 +51,7 @@ describe('待处理清单', () => {
     expect(tasks.map(t => t.type)).toEqual(['review', 'failed'])
   })
 
-  it('待人审链接指向 /kb/{kbId}/run/{runId}（修 D1 的死链形状）', () => {
+  it('待人审链接指向 /kb/{kbId}/run/{runId}，不是已删除的 /mining/{runId}', () => {
     const [task] = pendingTasks([kb({ id: 'kb-a', awaiting_review_run_id: 'run-9' })])
     expect(task.to).toBe('/kb/kb-a/run/run-9')
   })
@@ -90,20 +89,7 @@ describe('卡片截断', () => {
   })
 })
 
-describe('搜索跳转', () => {
-  it('显式带上范围，让 /search 复现同一次范围', () => {
-    expect(searchTarget(' SMF ', ['kb-a', 'kb-b'])).toEqual({
-      path: '/search',
-      query: { q: 'SMF', kbIds: 'kb-a,kb-b' },
-    })
-  })
-
-  it('范围为空时不带 kbIds —— 空串会被当成"没传"', () => {
-    expect(searchTarget('x', [])).toEqual({ path: '/search', query: { q: 'x' } })
-  })
-})
-
-describe('run 状态文案（D5）', () => {
+describe('run 状态文案', () => {
   it('覆盖 DB CHECK 里的全部 7 个状态，不再露出英文', () => {
     for (const s of [
       'queued', 'running', 'completed', 'interrupted', 'failed', 'cancelled',

@@ -10,7 +10,7 @@ import {
 
 const KBS = [{ id: 'kb-a' }, { id: 'kb-b' }, { id: 'kb-c' }]
 
-describe('默认范围（缺陷 D8）', () => {
+describe('默认范围', () => {
   it('默认选中全部可见知识库', () => {
     expect(defaultScopeSelection(KBS)).toEqual(['kb-a', 'kb-b', 'kb-c'])
   })
@@ -36,7 +36,7 @@ describe('发给后端的 kbIds', () => {
   })
 
   it('空数组这条路径只能由「域级发布」进入', () => {
-    // 清空选择时 canSearchWithScope 为 false，请求根本不会发出——这是 D8 的堵点
+    // 清空选择时 canSearchWithScope 为 false，请求根本不会发出——堵死 no_active_release
     expect(canSearchWithScope([])).toBe(false)
     expect(canSearchWithScope([DOMAIN_RELEASE_SCOPE])).toBe(true)
     expect(canSearchWithScope(['kb-a'])).toBe(true)

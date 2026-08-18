@@ -214,7 +214,7 @@ import { ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
 import { useMiningApi } from '@/api/mining'
-// 共用一份 run 状态文案：这里原先缺 queued、多一个 DB 里不存在的 pending（D5）
+// 共用一份 run 状态文案：这里原先缺 queued、多一个 DB CHECK 里不存在的 pending
 import { runStatusLabel as statusLabel } from '@/utils/runStatus'
 import type { RunTrace } from '@/types'
 import StatusBadge from '@/components/common/StatusBadge.vue'

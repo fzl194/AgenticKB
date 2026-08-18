@@ -1,4 +1,4 @@
-"""派生文档状态的归属边界（缺陷 D9）。
+"""派生文档状态的归属边界。
 
 `_STATUS_JOIN_SQL` 原本只按 `r.document_key = d.document_key` 关联 mining_run_documents。
 但 `build_document_key()` 产的是 `doc:/{相对路径}`、**不含 kb_id**——全局唯一的是

@@ -1,4 +1,4 @@
-"""GET /api/kb/overview —— 概览页聚合端点（设计文档 §5.1）。
+"""GET /api/kb/overview —— 概览页聚合端点。
 
 用假 KbDB + dependency_overrides 走真 HTTP，不需要 PostgreSQL：这里要钉的是**装配与
 组装逻辑**（路由不被 /{kb_id} 抢匹配、可见集边界、补零、排序、can_write 推导），
@@ -220,7 +220,7 @@ def test_all_aggregations_are_bounded_by_the_visible_set():
 
 
 def test_recent_runs_carry_kb_id_for_deep_link():
-    """kb_id 是 D1 死链缺的那一环：前端要用它拼 /kb/{kbId}/run/{runId}。"""
+    """前端要用 kb_id 拼 /kb/{kbId}/run/{runId}；缺了只能拼出已删除的 /mining/{runId}。"""
     db = FakeKbDB(
         visible=[_kb("kb-a", "A")],
         recent=[{
@@ -237,7 +237,7 @@ def test_recent_runs_carry_kb_id_for_deep_link():
 
 
 def test_has_active_release_is_reported_for_scope_picker():
-    """纯 KB 部署恒 False → 前端不呈现「域级发布」项（D8 的成因就是那个隐式范围）。"""
+    """纯 KB 部署恒 False → 前端不呈现「域级发布」项（那个隐式范围必撞 no_active_release）。"""
     for present in (True, False):
         db = FakeKbDB(visible=[], active_release=present)
         body = _client(db).get("/api/kb/overview", params={"domain": "d1"}).json()

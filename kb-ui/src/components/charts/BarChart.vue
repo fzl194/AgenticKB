@@ -46,7 +46,15 @@ function render() {
       : { type: 'value', axisLabel: { color: '#94a3b8', fontSize: 11 }, splitLine: { lineStyle: { color: '#f1f5f9' } } },
     series: [{
       type: 'bar',
-      data: values.map((v, i) => ({ value: v, itemStyle: { color: colors[i], borderRadius: [4, 4, 0, 0] } })),
+      // 圆角只加在「数据端」，贴基线的那头保持直角——两头都圆会让短柱看起来像胶囊，
+      // 读不出它是从 0 长出来的。横向条的数据端在右，纵向条在上。
+      data: values.map((v, i) => ({
+        value: v,
+        itemStyle: {
+          color: colors[i],
+          borderRadius: props.horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0],
+        },
+      })),
       barWidth: '50%',
       barMaxWidth: 40,
     }],

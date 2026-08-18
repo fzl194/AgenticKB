@@ -1,7 +1,12 @@
-"""概览页聚合端点 —— GET /api/kb/overview。
+"""概览页聚合端点 —— GET /api/kb/overview 与 GET /api/kb/stats。
 
-首页（检索入口 + 我的知识库）一次调用取齐所需：可见知识库全集 + 每库状态摘要 +
-跨库最近挖掘 + 该域有无 active release。
+- `/overview`：可见知识库全集 + 每库状态摘要 + 跨库最近挖掘 + 该域有无 active release。
+  检索页也用它（要 has_active_release 才能决定范围选择器给不给「域级发布」）。
+- `/stats`：概览页的数字与图表 —— 文档状态分布 / 知识资产量 / 检索单元类型 / 挖掘趋势。
+
+**为什么拆成两个端点而不是一个**：`/overview` 是检索页的热路径，只需要 KB 列表；
+`/stats` 要扫 asset_* 四张表和 30 天 run。合成一个会让检索页白付统计的钱。概览页
+两个并发发起，一次往返的时间。
 
 **为什么是聚合端点而不是几个小接口**：
 - 一个授权点。拆成多个接口，只要有一个忘了按可见集收敛就是个越权口（/api/runs 就是
@@ -12,6 +17,7 @@
 **⚠️ 路由注册顺序是承重的**：本 router 与 kb_router 同 prefix（/api/kb），而 kb_router
 有吞噬型动态段 /{kb_id}。app.py 必须把本 router 注册在 kb_router **之前**，否则
 GET /api/kb/overview 会被当成 kb_id="overview" → 404。同款事故见 62aebd1。
+新增静态路径（如 /stats）加在本文件即可，注册顺序已经是对的。
 """
 from __future__ import annotations
 
@@ -27,6 +33,10 @@ router = APIRouter(prefix="/api/kb", tags=["kb-overview"])
 
 # 首页卡片只渲染前 6 张，但 kbs 不截断——检索范围要用全集（默认全选）。
 RECENT_RUN_LIMIT = 5
+
+# 挖掘趋势的窗口。30 天：短于一个月看不出「这个月比上个月挖得多」，长于一个月在
+# 折线上一天就窄到 3px，读不出单日高低。
+TREND_DAYS = 30
 
 # 有写权限的有效角色。与 KbDB.can_write 的 SQL 条件（admin 全通 / owner / editor 成员）
 # 逐项对应；这里从 list_visible 已返回的 my_role 推导，避免逐库再查一次。
@@ -87,4 +97,35 @@ async def kb_overview(
         "has_active_release": has_release,
         "kbs": kbs,
         "recent_runs": recent_runs,
+    }
+
+
+@router.get("/stats")
+async def kb_stats(
+    domain: str = Query(..., min_length=1),
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    """概览页的统计数字与图表数据。口径 = **当前用户在本域可见的全部知识库**。
+
+    可见集为空时返回一份全零结构而不是 404 / 空对象：前端照样渲染出图表骨架和「0」，
+    「一个知识库都没有」与「接口挂了」在页面上必须长得不一样。
+
+    `has_active_release` 同时是 published/withdrawn 两档的**口径开关**：域里没有
+    active release 时这两个数恒 0（KB 挖掘 publish=False 不产 release），前端据此把
+    它们从图例里摘掉，而不是画两个恒零的扇区让人以为「一篇都没发布」。
+    """
+    kb_ids = await kbdb.list_visible_kb_ids(user_id=user["id"], domain=domain)
+    has_release = await kbdb.has_active_release(domain=domain)
+
+    return {
+        "kb_count": len(kb_ids),
+        "has_active_release": has_release,
+        "trend_days": TREND_DAYS,
+        "document_status": await kbdb.stats_document_status(
+            kb_ids=kb_ids, with_release=has_release,
+        ),
+        "assets": await kbdb.stats_assets(kb_ids=kb_ids),
+        "retrieval_unit_types": await kbdb.stats_retrieval_unit_types(kb_ids=kb_ids),
+        "mining_trend": await kbdb.stats_mining_trend(kb_ids=kb_ids, days=TREND_DAYS),
     }

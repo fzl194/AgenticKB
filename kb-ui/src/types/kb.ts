@@ -205,7 +205,10 @@ export interface DocumentKnowledge {
 
 // ── 概览页聚合（GET /api/kb/overview）──────────────────────────────────────
 
-/** 每库状态摘要。只有首页真正渲染的三个数，见设计文档 §5.1。 */
+/**
+ * 每库状态摘要。**只有首页卡片真正渲染的三个数** —— 后端刻意不回六态齐全：
+ * published/withdrawn 要多挂两条 release⋈snapshot 的 EXISTS，而这是登录落地页。
+ */
 export interface KbStatusCounts {
   /** 文档总数（即卡片上的「N 篇」；后端不另发 document_count，两个数迟早会不一致）。 */
   total: number
@@ -243,9 +246,59 @@ export interface KbOverview {
   /**
    * 该域有无域级 active release。
    * 纯 KB 部署恒 false（KB 挖掘 publish=false，永不产 release）——此时检索范围选择器
-   * 不呈现「域级发布」项，否则用户选中后必撞 no_active_release（缺陷 D8）。
+   * 不呈现「域级发布」项，否则用户选中后必撞 no_active_release。
    */
   has_active_release: boolean
   kbs: KbOverviewItem[]
   recent_runs: KbOverviewRun[]
+}
+
+// ── 概览页统计（GET /api/kb/stats）────────────────────────────────────────────
+
+/** 文档六态。与后端 _STATUS_CASE_SQL 的 CASE 分支一一对应。 */
+export type KbDocStatusKey =
+  | 'uploaded'
+  | 'mining'
+  | 'mined'
+  | 'published'
+  | 'withdrawn'
+  | 'failed'
+
+/**
+ * 「当前知识」的资产量。口径是每个文档最近一次进入 validated/published build 的快照，
+ * 不是 asset_* 表的累计行数——重挖会产生新快照，累计计数会把挖了 3 遍的库虚报 3 倍。
+ */
+export interface KbAssetCounts {
+  snapshots: number
+  segments: number
+  retrieval_units: number
+  entity_mentions: number
+  relations: number
+}
+
+/** 挖掘趋势的一天。后端已补齐空天（补零），前端直接照数组画，不必自己填缺口。 */
+export interface KbMiningTrendPoint {
+  /** YYYY-MM-DD（UTC）。 */
+  date: string
+  runs: number
+  completed: number
+  /** 当天入库（committed）的文档数。 */
+  documents: number
+}
+
+export interface KbStats {
+  /** 统计口径覆盖的知识库数 = 当前用户在本域可见的全部库。 */
+  kb_count: number
+  /**
+   * false 时 document_status 的 published / withdrawn 恒为 0——那是「口径不适用」，
+   * 不是「一篇都没发布」。图表据此把这两档从图例里摘掉，而不是画两个恒零扇区。
+   */
+  has_active_release: boolean
+  /** 趋势窗口天数（后端 TREND_DAYS），用于图表标题，避免前后端各写一个 30。 */
+  trend_days: number
+  document_status: Record<KbDocStatusKey, number>
+  assets: KbAssetCounts
+  /** 只含非零类型；前端按拿到的键渲染，不假定 unit_type 全集。 */
+  retrieval_unit_types: Record<string, number>
+  mining_trend: KbMiningTrendPoint[]
 }

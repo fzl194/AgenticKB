@@ -264,7 +264,7 @@ async function loadScope({ fromQuery = false } = {}) {
     const overview = await kbApi.getOverview(domain)
     kbs.value = overview.kbs
     hasActiveRelease.value = overview.has_active_release
-    // 默认全选 —— 这是修 D8 的核心：留空会被 serving.ts 省掉 kbIds 键，
+    // 默认全选 —— 留空会被 serving.ts 省掉 kbIds 键，
     // 后端转而去找域级 active release，而 KB 挖掘永不产生 release。
     // URL 上的 kbIds 只在首次进入时作数：它描述的是那一次跳转的范围，切域后
     // 那些 id 属于旧域、已经没有意义（照抄过去也会被过滤掉，但别依赖那个副作用）。

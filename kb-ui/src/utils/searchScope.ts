@@ -1,5 +1,5 @@
 /**
- * 检索范围的选择语义（设计文档 §5.3 / 缺陷 D8）。
+ * 检索范围的选择语义。
  *
  * 背景：`selectedKbIds` 原本默认 `[]`，而 `serving.ts` 对空数组会**省掉 kbIds 键**，
  * 后端于是走域级 active release 分支。KB 挖掘 `publish=false` 永不产 release，所以
@@ -47,7 +47,10 @@ export function resolveRequestKbIds(selected: string[]): string[] {
   return selected.filter(id => !!id)
 }
 
-/** 能否发起检索。什么都没选 = 不能——这正是 D8 的隐式路径，堵死它。 */
+/**
+ * 能否发起检索。什么都没选 = 不能 —— 空 kbIds 会被后端当成「域级 active release」范围，
+ * 而纯 KB 部署永不产 release，于是必撞 no_active_release。堵死这条隐式路径。
+ */
 export function canSearchWithScope(selected: string[]): boolean {
   return selected.length > 0
 }

@@ -1,5 +1,99 @@
 <template>
   <div class="sys-status">
+    <!-- ── 检索使用分析（明细）───────────────────────────────────────
+      概览页放的是摘要（四个数字 + 零结果前 5 + 两张图），这里是全量：热门查询、
+      各范式明细、意图与渠道分布。两边同源于 GET /api/ops/usage，职责不重叠。
+    -->
+    <section class="sys-status__section">
+      <div class="sys-status__head">
+        <h3 class="sys-status__title">检索使用分析</h3>
+        <span class="sys-status__scope">近 {{ usage?.days ?? 7 }} 天 · 全域检索流量</span>
+        <el-button text type="primary" size="small" :loading="usageLoading" @click="loadUsage">
+          刷新
+        </el-button>
+      </div>
+
+      <div v-if="usageError" class="sys-status__notice sys-status__notice--error">
+        加载失败
+        <el-button text type="primary" size="small" @click="loadUsage">重试</el-button>
+      </div>
+
+      <div v-else-if="usage && !usage.available" class="sys-status__notice sys-status__notice--info">
+        <strong>尚未产生检索日志</strong>
+        <span>
+          检索服务还没有写入过查询日志（serving_query_logs 不存在）。这张表由 serving
+          在启动时创建、在每次检索后写入；发生过检索之后这里就会有数据。
+        </span>
+      </div>
+
+      <template v-else-if="usage">
+        <div class="sys-status__stats">
+          <StatsCard label="检索次数" :value="usage.summary.queries" icon="🔍" />
+          <StatsCard label="零结果" :value="usage.summary.no_result" icon="🕳" />
+          <StatsCard label="零结果率" :value="formatRate(usage.summary.no_result_rate)" icon="📉" />
+          <StatsCard label="P95 延迟" :value="formatMs(usage.summary.p95_duration_ms)" icon="⏱" />
+          <StatsCard label="平均延迟" :value="formatMs(usage.summary.avg_duration_ms)" icon="〽" />
+        </div>
+
+        <!-- 各范式明细：调用量之外还要给零结果率与 P95——「调用多」不等于「跑得好」 -->
+        <div class="sys-status__chart">
+          <h4 class="sys-status__subtitle">各检索范式</h4>
+          <table v-if="usage.paradigms.length" class="ptable">
+            <thead>
+              <tr><th>范式</th><th>调用</th><th>零结果</th><th>P95</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in usage.paradigms" :key="p.paradigm_id">
+                <td class="ptable__name">{{ paradigmLabel(p.paradigm_id) }}</td>
+                <td>{{ p.calls }}</td>
+                <td>{{ p.no_result }}（{{ formatRate(p.calls ? p.no_result / p.calls : 0) }}）</td>
+                <td>{{ formatMs(p.p95_duration_ms) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else class="sys-status__muted">窗口内没有检索调用</p>
+        </div>
+
+        <div class="sys-status__chart">
+          <h4 class="sys-status__subtitle">
+            热门查询
+            <span class="sys-status__hint">用户输入原文，仅管理员可见</span>
+          </h4>
+          <ul v-if="usage.top_queries.length" class="qlist">
+            <li v-for="q in usage.top_queries" :key="q.query_text" class="qlist__row">
+              <span class="qlist__text" :title="q.query_text">{{ q.query_text }}</span>
+              <span class="qlist__count">{{ q.count }} 次</span>
+              <span v-if="q.no_result" class="qlist__warn">{{ q.no_result }} 次无结果</span>
+            </li>
+          </ul>
+          <p v-else class="sys-status__muted">窗口内没有查询</p>
+        </div>
+
+        <div class="sys-status__split">
+          <div>
+            <h4 class="sys-status__subtitle">查询意图分布</h4>
+            <BarChart
+              v-if="intentBars.length"
+              :data="intentBars"
+              horizontal
+              :height="`${Math.max(140, intentBars.length * 28 + 40)}px`"
+            />
+            <p v-else class="sys-status__muted">无数据</p>
+          </div>
+          <div>
+            <h4 class="sys-status__subtitle">接入渠道分布</h4>
+            <BarChart
+              v-if="channelBars.length"
+              :data="channelBars"
+              horizontal
+              :height="`${Math.max(140, channelBars.length * 28 + 40)}px`"
+            />
+            <p v-else class="sys-status__muted">无数据</p>
+          </div>
+        </div>
+      </template>
+    </section>
+
     <!-- ── 服务状态 ────────────────────────────────────────────────── -->
     <section class="sys-status__section">
       <div class="sys-status__head">
@@ -77,10 +171,14 @@ import { useDomainStore } from '@/stores/domain'
 import { useMiningApi } from '@/api/mining'
 import { useServingApi } from '@/api/serving'
 import { useLlmApi } from '@/api/llm'
+import { useOpsApi } from '@/api/ops'
+import { breakdownBars, formatMs, formatRate, paradigmLabel } from '@/utils/opsStats'
 import type { HealthStatus, KnowledgeStats } from '@/types'
+import type { OpsUsage } from '@/types/ops'
 import StatsCard from '@/components/common/StatsCard.vue'
 import ServiceHealthCard from '@/components/common/ServiceHealthCard.vue'
 import PieChart from '@/components/charts/PieChart.vue'
+import BarChart from '@/components/charts/BarChart.vue'
 
 type Health = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
 
@@ -88,11 +186,19 @@ const domainStore = useDomainStore()
 const miningApi = useMiningApi()
 const servingApi = useServingApi()
 const llmApi = useLlmApi()
+const opsApi = useOpsApi()
 
 const stats = ref<KnowledgeStats | null>(null)
 const statsLoading = ref(false)
 const statsError = ref(false)
 const healthLoading = ref(false)
+
+const usage = ref<OpsUsage | null>(null)
+const usageLoading = ref(false)
+const usageError = ref(false)
+
+const intentBars = computed(() => breakdownBars(usage.value?.intents))
+const channelBars = computed(() => breakdownBars(usage.value?.channels))
 
 const services = ref([
   { key: 'mining', name: '挖掘服务', icon: '⚙', status: 'unknown' as Health, detail: '' },
@@ -128,6 +234,25 @@ const unitTypeData = computed(() => {
 // 直接作废，健康检查结果永远落不下来。
 let statsGen = 0
 let healthGen = 0
+let usageGen = 0
+
+async function loadUsage() {
+  const gen = ++usageGen
+  usageLoading.value = true
+  usageError.value = false
+  try {
+    const data = await opsApi.getUsage(domainStore.currentDomain)
+    if (gen !== usageGen) return
+    usage.value = data
+  } catch (e) {
+    if (gen !== usageGen) return
+    console.error('Failed to load ops usage:', e)
+    usageError.value = true
+    usage.value = null
+  } finally {
+    if (gen === usageGen) usageLoading.value = false
+  }
+}
 
 async function loadStats() {
   const gen = ++statsGen
@@ -186,10 +311,11 @@ async function loadHealth() {
 function loadAll() {
   loadHealth()
   loadStats()
+  loadUsage()
 }
 
 onMounted(loadAll)
-onUnmounted(() => { statsGen++; healthGen++ })
+onUnmounted(() => { statsGen++; healthGen++; usageGen++ })
 watch(() => domainStore.currentDomain, loadAll)
 </script>
 
@@ -278,5 +404,88 @@ watch(() => domainStore.currentDomain, loadAll)
   font-size: 12px;
   color: var(--kb-text-tertiary);
   margin: 0;
+}
+
+.sys-status__hint {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--kb-text-tertiary);
+  margin-left: 8px;
+}
+
+.sys-status__split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+/* ── 各范式明细表 ── */
+.ptable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ptable th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--kb-text-tertiary);
+  letter-spacing: 0.5px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--kb-border-light);
+}
+
+.ptable td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--kb-border-light);
+  color: var(--kb-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.ptable tr:last-child td { border-bottom: none; }
+
+.ptable__name {
+  color: var(--kb-text-primary);
+  font-weight: 500;
+}
+
+/* ── 查询清单 ── */
+.qlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.qlist__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 4px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--kb-border-light);
+}
+
+.qlist__row:last-child { border-bottom: none; }
+
+.qlist__text {
+  flex: 1;
+  color: var(--kb-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qlist__count {
+  color: var(--kb-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.qlist__warn {
+  color: var(--kb-warning);
+  font-size: 12px;
+  flex-shrink: 0;
 }
 </style>

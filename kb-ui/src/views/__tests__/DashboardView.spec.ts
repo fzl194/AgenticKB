@@ -10,6 +10,9 @@ import { enableAutoUnmount, mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 const kbApi = vi.hoisted(() => ({ getOverview: vi.fn(), getStats: vi.fn() }))
+const opsApi = vi.hoisted(() => ({ getUsage: vi.fn() }))
+/** 角色也必须是响应式的，理由同域：组件用 computed 读它。 */
+const roleRef = vi.hoisted(() => ({ current: null as { value: string } | null }))
 /**
  * 域必须是**响应式**的，否则 `watch(() => domainStore.currentDomain)` 根本不会触发，
  * 切域竞态那条用例就会在"第二次请求从未发出"的情况下假绿。
@@ -17,6 +20,16 @@ const kbApi = vi.hoisted(() => ({ getOverview: vi.fn(), getStats: vi.fn() }))
 const domainRef = vi.hoisted(() => ({ current: null as { value: string } | null }))
 
 vi.mock('@/api/kb', () => ({ useKbApi: () => kbApi }))
+vi.mock('@/api/ops', () => ({ useOpsApi: () => opsApi }))
+vi.mock('@/stores/auth', async () => {
+  const { ref } = await import('vue')
+  roleRef.current = ref('member')
+  return {
+    useAuthStore: () => ({
+      get siteRole() { return roleRef.current!.value },
+    }),
+  }
+})
 vi.mock('@/stores/domain', async () => {
   const { ref } = await import('vue')
   domainRef.current = ref('cloud_core_network')
@@ -40,6 +53,29 @@ vi.mock('@/components/charts/LineChart.vue', () => ({
 
 function setDomain(name: string) {
   domainRef.current!.value = name
+}
+
+function setRole(role: 'admin' | 'member') {
+  roleRef.current!.value = role
+}
+
+function usage(over: Record<string, unknown> = {}) {
+  return {
+    available: true,
+    days: 7,
+    trend_days: 30,
+    summary: {
+      queries: 100, no_result: 7, no_result_rate: 0.07,
+      p95_duration_ms: 412, avg_duration_ms: 180, active_paradigms: 2,
+    },
+    no_result_queries: [{ query_text: 'SMF 会话建立超时', count: 12, last_at: null }],
+    top_queries: [{ query_text: '5GC 计费接口', count: 30, no_result: 2 }],
+    paradigms: [{ paradigm_id: 'p-1', calls: 80, no_result: 3, p95_duration_ms: 300 }],
+    trend: [{ date: '2026-08-18', queries: 10, no_result: 1 }],
+    intents: { lookup: 60 },
+    channels: { mcp: 100 },
+    ...over,
+  }
 }
 
 // 用例之间必须卸载：域 ref 是模块级共享的，残留的组件仍挂着 watch，
@@ -108,8 +144,10 @@ describe('概览页（统计仪表盘）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     setDomain('cloud_core_network')
+    setRole('member')          // 默认非 admin，运维区块的用例各自提权
     kbApi.getOverview.mockResolvedValue(overview([kb('kb-a')]))
     kbApi.getStats.mockResolvedValue(stats())
+    opsApi.getUsage.mockResolvedValue(usage())
   })
 
   it('两个聚合接口各打一次，都带当前域', async () => {
@@ -235,6 +273,90 @@ describe('概览页（统计仪表盘）', () => {
     expect(wrapper.text()).toContain('核心网文档')
     expect(wrapper.text()).toContain('已完成')             // 不再显示英文 status
     expect(wrapper.html()).not.toContain('/mining/run-1')  // 已删除的旧路由形状
+  })
+
+  // ── 运维区块（admin-only）────────────────────────────────────────────
+
+  it('member 看不到运维区块，也不发那个请求', async () => {
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).not.toContain('运维概览')
+    // 后端会 403：白打一次往返还在控制台留一条红
+    expect(opsApi.getUsage).not.toHaveBeenCalled()
+  })
+
+  it('admin 才渲染运维区块并取数', async () => {
+    setRole('admin')
+
+    const { wrapper } = await mountDash()
+
+    expect(opsApi.getUsage).toHaveBeenCalledWith('cloud_core_network')
+    expect(wrapper.text()).toContain('运维概览')
+    expect(wrapper.text()).toContain('零结果率')
+  })
+
+  it('admin 能看到答不上来的问题原文——这是整块里最有行动价值的一段', async () => {
+    setRole('admin')
+
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).toContain('SMF 会话建立超时')
+    expect(wrapper.text()).toContain('12 次')
+  })
+
+  it('运维接口挂掉不牵连知识库统计', async () => {
+    setRole('admin')
+    opsApi.getUsage.mockRejectedValue(new Error('boom'))
+
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).toContain('运维数据加载失败')
+    expect(wrapper.text()).toContain('120')      // 检索单元数还在
+    expect(wrapper.text()).toContain('KB-A')     // 卡片还在
+  })
+
+  it('serving 没产出过日志时说明原因，而不是画一屏 0', async () => {
+    setRole('admin')
+    opsApi.getUsage.mockResolvedValue(usage({
+      available: false,
+      summary: {
+        queries: 0, no_result: 0, no_result_rate: 0,
+        p95_duration_ms: 0, avg_duration_ms: 0, active_paradigms: 0,
+      },
+    }))
+
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).toContain('尚未产生检索日志')
+    expect(wrapper.text()).not.toContain('零结果率')
+  })
+
+  it('零结果率高但样本太少时不报警——3 次里 1 次就是 33%，据此弹红没有意义', async () => {
+    setRole('admin')
+    opsApi.getUsage.mockResolvedValue(usage({
+      summary: {
+        queries: 3, no_result: 1, no_result_rate: 0.333,
+        p95_duration_ms: 100, avg_duration_ms: 80, active_paradigms: 1,
+      },
+    }))
+
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).not.toContain('建议从下面的清单补充知识')
+  })
+
+  it('样本足够且零结果率超阈值时才报警', async () => {
+    setRole('admin')
+    opsApi.getUsage.mockResolvedValue(usage({
+      summary: {
+        queries: 200, no_result: 60, no_result_rate: 0.3,
+        p95_duration_ms: 100, avg_duration_ms: 80, active_paradigms: 1,
+      },
+    }))
+
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).toContain('建议从下面的清单补充知识')
   })
 
   it('切域时丢弃旧域的迟到响应（竞态守卫）', async () => {

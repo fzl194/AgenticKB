@@ -42,6 +42,20 @@
       </div>
     </section>
 
+    <!-- ── 区块 2.5：运维概览（仅 admin）────────────────────────────────
+      放在「待处理」之后、知识库统计之前：它和待处理一样是"要人动手"的内容
+      （零结果 = 该补知识），但优先级低于已经明确挂起的任务。
+      member 完全看不到——服务指标对无权处理的人只是噪声，且这里含用户输入原文。
+    -->
+    <OpsPanel
+      v-if="isAdmin"
+      :usage="opsUsage"
+      :loading="loading"
+      :error="opsError"
+      @detail="router.push('/settings?tab=status')"
+      @retry="load"
+    />
+
     <!-- ── 区块 3：图表 ──────────────────────────────────────────────── -->
     <!--
       一个库都没有时不画四张空图：一排 0 和一条贴地的线会被读成「系统没在干活」，
@@ -207,14 +221,18 @@ import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElButton } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
+import { useAuthStore } from '@/stores/auth'
 import { useKbApi } from '@/api/kb'
+import { useOpsApi } from '@/api/ops'
 import {
   TOP_KB_BAR_LIMIT, documentStatusSlices, kbDocumentBars, pendingTasks,
   trendSeries, trendTotals, unitTypeBars, visibleKbCards,
 } from '@/utils/dashboard'
 import { runStatusLabel } from '@/utils/runStatus'
 import type { KbOverviewItem, KbOverviewRun, KbStats } from '@/types/kb'
+import type { OpsUsage } from '@/types/ops'
 import KbCard from '@/components/dashboard/KbCard.vue'
+import OpsPanel from '@/components/dashboard/OpsPanel.vue'
 import StatsCard from '@/components/common/StatsCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -235,18 +253,25 @@ const BlockError = (_: unknown, { emit }: { emit: (e: 'retry') => void }) => h(
 
 const router = useRouter()
 const domainStore = useDomainStore()
+const authStore = useAuthStore()
 const kbApi = useKbApi()
+const opsApi = useOpsApi()
+
+/** 运维区块仅 admin 可见。后端 require_admin 才是护栏，这里只是不给无关的人添噪声。 */
+const isAdmin = computed(() => authStore.siteRole === 'admin')
 
 const kbs = ref<KbOverviewItem[]>([])
 const recentRuns = ref<KbOverviewRun[]>([])
 const stats = ref<KbStats | null>(null)
+const opsUsage = ref<OpsUsage | null>(null)
 const loading = ref(true)
 /**
- * 两个数据源各记各的错。共用一个 error 的话，统计接口挂了会把知识库卡片和最近挖掘
+ * 三个数据源各记各的错。共用一个 error 的话，统计接口挂了会把知识库卡片和最近挖掘
  * 一起变成「加载失败」——那两块的数据其实好好地在手里。
  */
 const overviewError = ref(false)
 const statsError = ref(false)
+const opsError = ref(false)
 
 const cards = computed(() => visibleKbCards(kbs.value))
 const tasks = computed(() => pendingTasks(kbs.value))
@@ -301,10 +326,13 @@ async function load() {
   loading.value = true
   overviewError.value = false
   statsError.value = false
+  opsError.value = false
 
-  const [ov, st] = await Promise.allSettled([
+  // 非 admin 不发运维请求：后端会 403，白打一次往返还在控制台留一条红。
+  const [ov, st, ops] = await Promise.allSettled([
     kbApi.getOverview(domain),
     kbApi.getStats(domain),
+    isAdmin.value ? opsApi.getUsage(domain) : Promise.resolve(null),
   ])
   if (gen !== generation) return   // 旧域的响应，整批丢弃
 
@@ -324,6 +352,14 @@ async function load() {
     console.error('Failed to load kb stats:', st.reason)
     statsError.value = true
     stats.value = null
+  }
+
+  if (ops.status === 'fulfilled') {
+    opsUsage.value = ops.value
+  } else {
+    console.error('Failed to load ops usage:', ops.reason)
+    opsError.value = true
+    opsUsage.value = null
   }
 
   loading.value = false

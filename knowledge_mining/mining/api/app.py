@@ -29,6 +29,7 @@ from knowledge_mining.mining.api.routes.builds import router as builds_router
 from knowledge_mining.mining.api.routes.uploads import router as uploads_router
 from knowledge_mining.mining.api.routes.ontology import router as ontology_router
 from knowledge_mining.mining.api.routes.workflows import router as workflows_router
+from knowledge_mining.mining.api.routes.ops import router as ops_router
 from knowledge_mining.mining.api.routes.document_lifecycle import (
     router as document_lifecycle_router,
 )
@@ -157,6 +158,8 @@ def create_app() -> FastAPI:
     app.include_router(uploads_router)
     app.include_router(ontology_router)
     app.include_router(document_lifecycle_router)
+    # /api/ops/* —— 运维使用分析（admin-only）。独立 prefix，不与 /api/kb 的动态段相争。
+    app.include_router(ops_router)
     # kb_auth_router / kb_overview_router 必须在 kb_router 之前注册：它们的静态路由
     # （/api/kb/users、/api/kb/auth/verify、/api/kb/overview）否则会被 kb_router 的动态
     # /api/kb/{kb_id} 抢先匹配（GET /api/kb/users 被当成 kb_id="users" → 404）。

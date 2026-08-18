@@ -31,7 +31,9 @@ References: SRS §C04 (Backend Registry), §C06 (Parser Adapter SDK), §C07
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from knowledge_mining.mining.contracts.parse_ir.types import ParsedDocument
@@ -108,7 +110,9 @@ class BackendParseArtifact:
 
     ``raw_output`` preserves the backend's own representation (for legacy
     MD/TXT this is the decoded source text) for later replay through an
-    upgraded Normalizer (SRS §9.5 "adapter mapping bug" row).
+    upgraded Normalizer (SRS §9.5 "adapter mapping bug" row). For binary
+    formats (Office/PDF/HTML) the serialized blocks themselves are the
+    replayable backend raw artifact (contract v1.2).
     """
 
     parser_id: str
@@ -119,6 +123,153 @@ class BackendParseArtifact:
     warnings: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     usage: dict[str, Any] = field(default_factory=dict)
+
+    # -- Serialization（持久化 + replay 的先决条件，contract v1.2）--------
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-compatible dict（blocks 的 tuple/list 归一，可 json.dumps）."""
+        return {
+            "parser_id": self.parser_id,
+            "parser_version": self.parser_version,
+            "mime": self.mime,
+            "blocks": [_block_to_dict(b) for b in self.blocks],
+            "raw_output": self.raw_output,
+            "warnings": list(self.warnings),
+            "errors": list(self.errors),
+            "usage": dict(self.usage),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> BackendParseArtifact:
+        blocks = tuple(_block_from_dict(b) for b in data.get("blocks", []))
+        return cls(
+            parser_id=data["parser_id"],
+            parser_version=data["parser_version"],
+            mime=data["mime"],
+            blocks=blocks,
+            raw_output=data.get("raw_output", ""),
+            warnings=tuple(data.get("warnings", [])),
+            errors=tuple(data.get("errors", [])),
+            usage=dict(data.get("usage", {})),
+        )
+
+
+def _block_to_dict(b: BackendBlock) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "block_type": b.block_type,
+        "text": b.text,
+    }
+    if b.line_start is not None:
+        out["line_start"] = b.line_start
+    if b.line_end is not None:
+        out["line_end"] = b.line_end
+    if b.level is not None:
+        out["level"] = b.level
+    if b.container_ref is not None:
+        out["container_ref"] = dict(b.container_ref)
+    if b.bbox is not None:
+        out["bbox"] = [b.bbox[0], b.bbox[1], b.bbox[2], b.bbox[3]]
+    if b.native_ref is not None:
+        out["native_ref"] = dict(b.native_ref)
+    if b.structure:
+        out["structure"] = dict(b.structure)
+    return out
+
+
+def _block_from_dict(d: dict[str, Any]) -> BackendBlock:
+    bbox = d.get("bbox")
+    return BackendBlock(
+        block_type=d["block_type"],
+        text=d.get("text", ""),
+        line_start=d.get("line_start"),
+        line_end=d.get("line_end"),
+        level=d.get("level"),
+        container_ref=dict(d["container_ref"]) if d.get("container_ref") else None,
+        bbox=(bbox[0], bbox[1], bbox[2], bbox[3]) if bbox else None,
+        native_ref=dict(d["native_ref"]) if d.get("native_ref") else None,
+        structure=dict(d.get("structure", {})),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rule configuration + effective pipeline fingerprint（contract v1.2）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ParseRuleConfig:
+    """Adapter 启发式阈值的单一契约（SRS §3.5 指纹输入）。
+
+    各 adapter 只读取自己关心的字段；**任何阈值变化都必须改变
+    ``config_fingerprint()``**，进而改变 effective pipeline fingerprint
+    （用户整改指令：parser、规则配置、依赖和 normalizer 任一变化都会
+    改变 effective pipeline fingerprint）。
+
+    默认值 = 各 adapter 在 M3 验收轮收敛出的现行值（迁移时逐一对照）。
+    """
+
+    # --- PDF（native_pdf.py）---
+    heading_size_ratio: float = 1.15
+    heading_max_line_chars: int = 60
+    line_top_tolerance: float = 6.0
+    x_gap_split_min: float = 25.0
+    latin_word_gap_ratio: float = 0.15
+    paragraph_gap_factor: float = 1.7
+    heading_min_occurrences: int = 3
+    furniture_repeat_pages: int = 3
+    table_max_rows: int = 35
+    table_max_area_ratio: float = 0.60
+    table_min_effective_ratio: float = 0.40
+    modal_purity_floor: float = 0.50
+    heading_size_floor_ratio: float = 0.60
+    title_type_confidence: float = 0.6
+
+    # --- PPTX（native_pptx.py）---
+    title_zone_ratio: float = 0.30
+    title_max_chars: int = 24
+
+    # --- HTML（native_html.py）---
+    max_declared_span: int = 10_000
+    max_span_area: int = 100_000
+
+    # --- XLSX（native_xlsx.py）---
+    max_grid_edge: int = 10_000
+    max_grid_area: int = 2_000_000
+    max_merge_area: int = 100_000
+
+    def config_fingerprint(self) -> str:
+        """全部阈值的确定性指纹（sha256 前 16 hex；排序 key 保证稳定）."""
+        payload = json.dumps(asdict(self), sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def effective_pipeline_fingerprint(
+    *,
+    parser_fingerprint: str,
+    normalizer_version: str | None = None,
+    rule_config_fingerprint: str | None = None,
+    dependency_fingerprint: str | None = None,
+    reconciler_version: str | None = None,
+    parse_ir_schema_version: str = "",
+) -> str:
+    """合成 effective pipeline fingerprint（SRS §3.5，contract v1.2）。
+
+    任何一个组成部分变化都必须改变结果（用户整改指令 I-5）。Snapshot
+    层计算 ``snapshot_fingerprint`` 时应使用本函数而不是裸 parser 指纹。
+    """
+    parts = json.dumps(
+        {
+            "parser": parser_fingerprint,
+            "normalizer": normalizer_version,
+            "rules": rule_config_fingerprint,
+            "deps": dependency_fingerprint,
+            "reconciler": reconciler_version,
+            "ir_schema": parse_ir_schema_version,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return "pipe-" + hashlib.sha256(parts.encode("utf-8")).hexdigest()[:24]
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +399,9 @@ __all__ = [
     # backend output
     "BackendBlock",
     "BackendParseArtifact",
+    # rule config + fingerprint（v1.2）
+    "ParseRuleConfig",
+    "effective_pipeline_fingerprint",
     # registry
     "ParserDescriptor",
     "BackendRegistry",

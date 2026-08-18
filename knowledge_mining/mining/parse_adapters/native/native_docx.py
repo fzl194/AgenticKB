@@ -48,7 +48,7 @@ from knowledge_mining.mining.parse_adapters.native._base import (
 )
 
 NATIVE_DOCX_PARSER_ID = "native_docx"
-NATIVE_DOCX_VERSION = "1.0.0"
+NATIVE_DOCX_VERSION = "2.0.0"
 _PYTHON_DOCX_VERSION = _pkg_version("python-docx")
 NATIVE_DOCX_FINGERPRINT = (
     f"{NATIVE_DOCX_PARSER_ID}@{NATIVE_DOCX_VERSION}"
@@ -76,7 +76,9 @@ class NativeDocxParser:
             supported_mimes=NATIVE_DOCX_MIMES,
             backend_kind="local",
             parser_fingerprint=NATIVE_DOCX_FINGERPRINT,
-            capabilities=frozenset({"headings", "paragraphs", "tables", "merges"}),
+            capabilities=frozenset({
+                "headings", "paragraphs", "lists", "tables", "merges",
+            }),
         )
 
     def supports(self, mime: str) -> bool:
@@ -96,6 +98,7 @@ class NativeDocxParser:
 
         blocks: list[BackendBlock] = []
         try:
+            warnings = _diagnose_unsupported_structures(document)
             paragraph_index = 0
             table_index = 0
             for item in _iter_body(document):
@@ -105,8 +108,8 @@ class NativeDocxParser:
                     if block is not None:
                         blocks.append(block)
                 else:
-                    blocks.append(_table_block(item, table_index))
-                    table_index += 1
+                    blocks.extend(_table_blocks(item, table_index))
+                    table_index += 1 + _count_nested_tables(item)
         except Exception as exc:  # 中段损坏也归一（§C06，评审 MED）
             raise ParserAdapterError(
                 f"{NATIVE_DOCX_PARSER_ID}: failed to walk document body: {exc}"
@@ -117,7 +120,7 @@ class NativeDocxParser:
             parser_version=NATIVE_DOCX_VERSION,
             mime=mime.lower(),
             blocks=tuple(blocks),
-            warnings=(),
+            warnings=tuple(warnings),
         )
 
 
@@ -136,10 +139,24 @@ def _iter_body(document):
 
 
 def _paragraph_block(paragraph: Paragraph, index: int) -> BackendBlock | None:
-    """w:p -> heading/paragraph 块；空段落跳过但索引已计数."""
+    """w:p -> heading/list_item/paragraph 块；空段落跳过但索引已计数.
+
+    列表语义（整改轮）：``w:numPr``（编号/项目符号属性）是 OOXML 的
+    列表成员声明——映射为 ``list_item``，``level = w:ilvl + 1``（0 基
+    缩进层级 -> 1 基元素层级）。无 numPr 的 "List *" 样式段落仍是普通
+    段落（样式不等于列表成员资格）。
+    """
     text = paragraph.text.strip()
     if not text:
         return None
+    num_level = _list_level_of(paragraph)
+    if num_level is not None:
+        return BackendBlock(
+            block_type="list_item",
+            text=text,
+            level=num_level,
+            native_ref={"paragraph_index": index},
+        )
     style_name = paragraph.style.name if paragraph.style is not None else ""
     heading_match = _HEADING_STYLE_RE.match(style_name or "")
     if heading_match:
@@ -156,15 +173,68 @@ def _paragraph_block(paragraph: Paragraph, index: int) -> BackendBlock | None:
     )
 
 
-def _table_block(table: DocxTable, table_index: int) -> BackendBlock:
+def _list_level_of(paragraph: Paragraph) -> int | None:
+    """w:numPr -> 列表层级（ilvl+1）；无 numPr 返回 None（非列表成员）."""
+    pPr = paragraph._p.pPr
+    if pPr is None:
+        return None
+    numPr = pPr.find(qn("w:numPr"))
+    if numPr is None:
+        return None
+    ilvl = numPr.find(qn("w:ilvl"))
+    try:
+        level = int(ilvl.get(qn("w:val"))) if ilvl is not None else 0
+    except (TypeError, ValueError):
+        level = 0
+    return level + 1
+
+
+def _table_blocks(table: DocxTable, table_index: int) -> list[BackendBlock]:
+    """w:tbl -> [父表块, 嵌套表块...]（嵌套表独立成块，整改轮）.
+
+    嵌套表经 **XML 层**遍历（``w:tbl//w:tbl``）发现——lxml 元素代理的
+    Python ``id()`` 不稳定（代理可被回收重建），按 id 去重会在跨测试
+    组合下偶发漏检。宿主格以 ``in_cell`` 标记（宿主表索引）。
+    """
+    out = [_table_block(table, table_index)]
+    nested_index = table_index + 1
+    for tbl_el in table._tbl.iter(qn("w:tbl")):  # noqa: SLF001
+        if tbl_el is table._tbl:  # noqa: SLF001
+            continue
+        out.append(_table_block(
+            DocxTable(tbl_el, table._parent),  # noqa: SLF001
+            nested_index,
+            in_cell_table=table_index,
+        ))
+        nested_index += 1
+    return out
+
+
+def _count_nested_tables(table: DocxTable) -> int:
+    return sum(
+        1 for tbl_el in table._tbl.iter(qn("w:tbl"))  # noqa: SLF001
+        if tbl_el is not table._tbl  # noqa: SLF001
+    )
+
+
+def _table_block(
+    table: DocxTable,
+    table_index: int,
+    in_cell_table: int | None = None,
+) -> BackendBlock:
     """w:tbl -> table 块：structure 网格含 span（gridSpan/vMerge 直读）."""
     rows, cols = len(table.rows), len(table.columns)
     cells = _table_cells(table, rows, cols)
     structure: dict[str, Any] = {"rows": rows, "cols": cols, "cells": cells}
+    native_ref: dict[str, Any] = {"table_index": table_index}
+    if in_cell_table is not None:
+        # 嵌套表：宿主表索引即 OOXML 定位（宿主格坐标由网格合并语义
+        # 推导不可靠，不伪造）。
+        native_ref["in_cell"] = in_cell_table
     return BackendBlock(
         block_type="table",
         text=_table_text(rows, cols, cells),
-        native_ref={"table_index": table_index},
+        native_ref=native_ref,
         structure=structure,
     )
 
@@ -226,7 +296,7 @@ def _table_cells(
                         )
                     origins[cc] = (idx, r)
             else:
-                out.append(_GridCell(r, c, _Cell(tc, table).text.strip(), col_span))
+                out.append(_GridCell(r, c, _cell_text_excluding_nested(tc), col_span))
                 for cc in spanned:
                     if vmerge is not None:  # restart（含无 val 的 <w:vMerge/>）
                         origins[cc] = (len(out) - 1, r)
@@ -235,7 +305,147 @@ def _table_cells(
             for cc in spanned:
                 occupied[r][cc] = True
             c += col_span
-    return [cell.as_dict() for cell in out]
+    cells = [cell.as_dict() for cell in out]
+    for k, cell in enumerate(cells):
+        cell["evidence_index"] = k  # cell 级证据索引（不变量 I-4）
+    return cells
+
+
+def _cell_text_excluding_nested(tc: Any) -> str:
+    """单元格直属段落文本（嵌套表由独立块表达，不并入宿主格文本）."""
+    parts: list[str] = []
+    for child in tc.iterchildren():
+        if child.tag != qn("w:p"):
+            continue
+        text = "".join(
+            t.text or ""
+            for t in child.iter() if t.tag == qn("w:t")
+        ).strip()
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()
+
+
+# ---------------------------------------------------------------------------
+# 未支持结构诊断（整改轮：不静默丢失，SRS §7.4）
+# ---------------------------------------------------------------------------
+
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _count_localname(root: Any, local: str) -> int:
+    return sum(
+        1 for el in root.iter()
+        if isinstance(el.tag, str) and el.tag.endswith("}" + local)
+    )
+
+
+def _related_part_count(document: Any, suffix: str, skip_ids=frozenset({-1, 0})) -> tuple[int, int]:
+    """按 reltype 后缀找 notes part -> (元素数, 非分隔符数)."""
+    for rel in document.part.rels.values():
+        if not rel.reltype.endswith(suffix):
+            continue
+        try:
+            from lxml import etree
+
+            root = etree.fromstring(rel.target_part.blob)
+        except Exception:  # noqa: BLE001 —— part 解析失败按 0 处理
+            return 0, 0
+        elements = [
+            el for el in root.iter()
+            if isinstance(el.tag, str) and el.tag.endswith("}footnote")
+        ]
+        real = [
+            el for el in elements
+            if _int_attr(el, "id", default=-99) not in skip_ids
+        ]
+        return len(elements), len(real)
+    return 0, 0
+
+
+def _int_attr(el: Any, name: str, default: int = -99) -> int:
+    raw = el.get(f"{_W_NS}{name}")
+    try:
+        return int(raw) if raw is not None else default
+    except ValueError:
+        return default
+
+
+def _diagnose_unsupported_structures(document: Any) -> list[str]:
+    """图片/页眉页脚/脚注尾注/批注/文本框计数诊断（不静默丢失）."""
+    warnings: list[str] = []
+    body = document.element.body
+
+    images = _count_localname(body, "blip")
+    if images:
+        warnings.append(
+            f"document contains {images} image(s); image extraction not "
+            "supported yet (diagnosed, not parsed)"
+        )
+    textboxes = _count_localname(body, "txbxContent")
+    if textboxes:
+        warnings.append(
+            f"document contains {textboxes} textbox(es); "
+            "textbox extraction not supported yet (diagnosed, not parsed)"
+        )
+
+    header_texts = 0
+    footer_texts = 0
+    for section in document.sections:
+        for hf in (
+            section.header, section.footer,
+            section.even_page_header, section.even_page_footer,
+            section.first_page_header, section.first_page_footer,
+        ):
+            try:
+                has_text = any(
+                    (p.text or "").strip() for p in hf.paragraphs
+                )
+            except Exception:  # noqa: BLE001 —— 缺 part 的节按无内容处理
+                continue
+            if not has_text:
+                continue
+            if "header" in type(hf).__name__.lower():
+                header_texts += 1
+            else:
+                footer_texts += 1
+    if header_texts:
+        warnings.append(
+            f"document contains {header_texts} header part(s) with text; "
+            "header/footer extraction not supported yet (diagnosed, not parsed)"
+        )
+    if footer_texts:
+        warnings.append(
+            f"document contains {footer_texts} footer part(s) with text; "
+            "footer extraction not supported yet (diagnosed, not parsed)"
+        )
+
+    _, real_footnotes = _related_part_count(document, "/footnotes")
+    if real_footnotes:
+        warnings.append(
+            f"document contains {real_footnotes} footnote(s); footnote "
+            "extraction not supported yet (diagnosed, not parsed)"
+        )
+    comment_count = _related_comment_count(document)
+    if comment_count:
+        warnings.append(
+            f"document contains {comment_count} comment(s); comment "
+            "extraction not supported yet (diagnosed, not parsed)"
+        )
+    return warnings
+
+
+def _related_comment_count(document: Any) -> int:
+    for rel in document.part.rels.values():
+        if rel.reltype.endswith("/comments"):
+            try:
+                from lxml import etree
+
+                root = etree.fromstring(rel.target_part.blob)
+                return _count_localname(root, "comment")
+            except Exception:  # noqa: BLE001
+                return 0
+    return 0
 
 
 def _table_text(
@@ -255,9 +465,14 @@ def _table_text(
 class DocxNormalizer(BaseNativeNormalizer):
     """DOCX backend artifact -> Parse IR：单 section + heading 父链."""
 
-    normalizer_version = "native-docx@1"
+    normalizer_version = "native-docx@2"
     _default_fingerprints = {NATIVE_DOCX_PARSER_ID: NATIVE_DOCX_FINGERPRINT}
-    _element_type_map = {"heading": "heading", "paragraph": "paragraph", "table": "table"}
+    _element_type_map = {
+        "heading": "heading",
+        "paragraph": "paragraph",
+        "list_item": "list_item",
+        "table": "table",
+    }
 
     def _build_containers(self, artifact) -> tuple[Container, ...]:
         # DOCX 无页概念：单一文档级 section，page_number 不伪造（SRS §3.6）。
@@ -275,6 +490,31 @@ class DocxNormalizer(BaseNativeNormalizer):
             text_range=(0, len(block.text)),
             raw_text=block.text or None,
         ),)
+
+    def _make_cell_spans(
+        self, element_id, block, container_id
+    ) -> tuple[EvidenceSpan, ...]:
+        """表格 cell 级 EvidenceSpan（OOXML table/row/col 定位，I-4）."""
+        if block.block_type != "table":
+            return ()
+        structure = block.structure or {}
+        raw_cells = structure.get("cells") or []
+        native = block.native_ref or {}
+        spans: list[EvidenceSpan] = []
+        for k, cell in enumerate(raw_cells):
+            ref: dict[str, Any] = {
+                "table_index": native.get("table_index"),
+                "row_index": int(cell["row_index"]),
+                "column_index": int(cell["column_index"]),
+            }
+            if "in_cell" in native:
+                ref["in_cell"] = native["in_cell"]
+            spans.append(EvidenceSpan(
+                span_id=f"{element_id}-cell-{k:04d}",
+                native_ref=ref,
+                raw_text=str(cell.get("text", "")) or None,
+            ))
+        return tuple(spans)
 
 
 __all__ = [

@@ -196,3 +196,132 @@ def test_malicious_huge_rowspan_clamped() -> None:
     tables = [b for b in artifact.blocks if b.block_type == "table"]
     assert tables[0].structure["rows"] <= 10
     assert tables[0].structure.get("clamped_spans") == 1
+
+
+# ===========================================================================
+# 整改轮（2026-08-17）：嵌套列表 / 链接 / caption / 语义容器 / 面积上限
+# ===========================================================================
+
+
+def test_nested_list_items_are_separate_elements() -> None:
+    """嵌套列表：父 li 直属文本独立，子 li 各自成元素（层级递增）."""
+    html = (
+        "<html><body><ul>"
+        "<li>水果"
+        "<ul><li>苹果</li><li>香蕉</li></ul>"
+        "</li>"
+        "<li>蔬菜</li>"
+        "</ul></body></html>"
+    ).encode("utf-8")
+    artifact = NativeHtmlParser().parse(html, mime="text/html")
+    items = [(b.text, b.level) for b in artifact.blocks if b.block_type == "list_item"]
+    texts = [t for t, _ in items]
+    # 父项文本只含直属文本，不吸收子项
+    assert "水果" in texts and "苹果" not in ("水果",)
+    # 子项独立成块且层级更深
+    assert ("苹果", 2) in items
+    assert ("香蕉", 2) in items
+    assert any(t == "水果" and lvl == 1 for t, lvl in items)
+    assert ("蔬菜", 1) in items
+
+
+def test_links_are_recorded_in_annotations() -> None:
+    from knowledge_mining.mining.parse_adapters.native.native_html import (
+        HtmlNormalizer,
+    )
+
+    html = (
+        b"<html><body><p>See <a href='https://e.x/doc'>the doc</a> now.</p>"
+        b"<a href='https://e.x/bare'>bare</a></body></html>"
+    )
+    doc = HtmlNormalizer().normalize(
+        NativeHtmlParser().parse(html, mime="text/html"),
+        source_raw_hash="77" * 32,
+    )
+    para = next(e for e in doc.elements if "the doc" in e.text)
+    links = para.parser_annotations.get("links")
+    assert links == [{"text": "the doc", "href": "https://e.x/doc"}]
+
+
+def test_figcaption_and_table_caption_become_caption_elements() -> None:
+    html = (
+        "<html><body>"
+        "<figure><img src='f.png' alt='图'><figcaption>图一说明</figcaption></figure>"
+        "<table><caption>表一标题</caption>"
+        "<tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>"
+        "</body></html>".encode("utf-8")
+    )
+    artifact = NativeHtmlParser().parse(html, mime="text/html")
+    kinds = [(b.block_type, b.text) for b in artifact.blocks]
+    assert ("caption", "图一说明") in kinds
+    assert ("caption", "表一标题") in kinds
+
+
+def test_semantic_container_path_recorded() -> None:
+    from knowledge_mining.mining.parse_adapters.native.native_html import (
+        HtmlNormalizer,
+    )
+
+    html = (
+        "<html><body><article><section><h1>标题</h1>"
+        "<p>正文。</p></section></article></body></html>".encode("utf-8")
+    )
+    doc = HtmlNormalizer().normalize(
+        NativeHtmlParser().parse(html, mime="text/html"),
+        source_raw_hash="66" * 32,
+    )
+    para = next(e for e in doc.elements if e.element_type == "paragraph")
+    assert para.metadata.get("semantic_path") == ["article", "section"]
+
+
+def test_rowspan_colspan_area_cap_prevents_memory_dos() -> None:
+    """rowspan=9999 colspan=9999 -> 面积超限截断，occupied 不被撑爆."""
+    import time
+
+    html = (
+        b"<html><body><table>"
+        b"<tr><td rowspan='9999' colspan='9999'>big</td></tr>"
+        b"<tr><td>x</td></tr>"
+        b"</table></body></html>"
+    )
+    start = time.monotonic()
+    artifact = NativeHtmlParser().parse(html, mime="text/html")
+    elapsed = time.monotonic() - start
+    assert elapsed < 5.0, f"area bomb took {elapsed:.2f}s"
+    st = next(
+        b.structure for b in artifact.blocks if b.block_type == "table"
+    )
+    assert st.get("clamped_spans", 0) >= 1
+
+
+def test_images_are_diagnosed() -> None:
+    html = b"<html><body><p>x</p><img src='a.png'><img src='b.png'></body></html>"
+    artifact = NativeHtmlParser().parse(html, mime="text/html")
+    joined = "\n".join(artifact.warnings).lower()
+    assert "image" in joined, f"图片静默丢失: {joined!r}"
+
+
+def test_table_cells_have_independent_spans() -> None:
+    from knowledge_mining.mining.parse_adapters.native.native_html import (
+        HtmlNormalizer,
+    )
+
+    html = (
+        "<html><body><table>"
+        "<tr><th>表头A</th><th>表头B</th></tr>"
+        "<tr><td>a</td><td>b</td></tr></table></body></html>".encode("utf-8")
+    )
+    doc = HtmlNormalizer().normalize(
+        NativeHtmlParser().parse(html, mime="text/html"),
+        source_raw_hash="55" * 32,
+    )
+    table = next(e for e in doc.elements if e.element_type == "table")
+    asset = doc.structured_assets[f"{table.element_id}-table"]
+    span_by_id = {s.span_id: s for s in table.source_spans}
+    seen = set()
+    for cell in asset.cells:
+        assert cell.source_span_id is not None
+        span = span_by_id[cell.source_span_id]
+        assert "xpath" in span.native_ref or "row_index" in span.native_ref
+        assert cell.source_span_id not in seen
+        seen.add(cell.source_span_id)

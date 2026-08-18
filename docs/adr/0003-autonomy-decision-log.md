@@ -270,3 +270,18 @@
   5. 连字防御：char.text 多字符（"fi" ligature）崩溃修复（对抗自审发现）。
 - **已知缺口**：跨页续表（99pt gap 断开成两表，continuation_of 关联留 M4）；p28 仪器表 text 提取丢部分行；图片/公式无内容（云端 VLM 槽位）。
 - **验证**：test_pdf_cjk_lines.py 28 用例 + 全套 538 passed；第二语料（英文编号文档）验证通用；论文双版对照 98%/101%/4张表。
+
+## D-032 ｜ 整改轮（2026-08-17/18）：全格式审计驱动的 M3 地基整改 + M3→M3A 重定义
+- **背景**：用户主程指令——停止对单一样本追加启发式补丁，按 Parser Adapter → BackendParseArtifact → Normalizer → Reconciler → Quality Gate 主线整改；先审计后整改；严格 TDD；跨格式 contract tests；30-50 份 golden corpus；重定义 M3 状态。审计报告：`docs/文档解析平台化-全格式审计与整改-2026-08-17.md`（8 条不变量违规 I-1..I-8 + 逐格式缺陷清单）。
+- **决策与实现**：
+  1. **契约 v1.2**（`contracts/parser_adapter.py`）：`ParseRuleConfig`（frozen，全部 adapter 阈值的单一契约，`config_fingerprint()` 进 `ParseIdentity.rule_config_fingerprint`）；`BackendParseArtifact.to_dict/from_dict`（JSON round-trip，replay 前提）；`effective_pipeline_fingerprint(parser, normalizer, rules, deps, reconciler, ir_schema)`（I-5：任一组成变化必变指纹）。validator 增 `invalid_bbox_order`（I-1 边界校验）。
+  2. **骨架不变量**（`parse_adapters/native/_base.py` + `rendered_text.py`）：表格 Element.text 一律由 TableAsset 经 `render_table_text` 渲染（行\n列\t，I-2/I-3）；`_make_cell_spans` 钩子（I-4：cell 独立 source_span_id，无独立证据时宁缺勿伪造——取消旧的"回落首 span"）；`_extra_assets`/`_element_metadata` 钩子。
+  3. **逐格式**：DOCX numPr 列表 + cell 证据 + 嵌套表（XML 层遍历——lxml 代理 id() 不稳，按 id 去重会偶发漏检，实测 flaky 根因）+ 六类结构计数诊断；XLSX Excel Table→连续区域→used_range 三级识别 + 隐藏态 + 图表诊断；PPTX bbox 角点化 + 逐段落拆分 + 几何带阅读序 + notes/group/picture(FigureAsset+sha256 binary) + chart/SmartArt 诊断 + 标题回退收紧（无占位符+单段+页顶带三条件）；HTML 嵌套列表独立 + links/caption/语义路径 + rowspan×colspan 面积上限 100k（单值 10k 挡不住 9999×9999≈10⁸ 条目，实测修复前 105s）；PDF 跨沟行通栏判定 + digit-leading 仅无 CJK 短行 + dense_frags 限行内字符 + 收缩框与 cell 一致（垂直重叠过滤+幻影空行剔除+紧凑重排）+ text 回退多片段行前置门槛；MD/TXT 图片链接计数诊断。
+  4. **Reconciler（C08 最小，`mining/parse_reconciler/`）**：furniture_typing（自 native_pdf 迁入，IR 级跨页规则——adapter 不再做文档级判定）、caption_binding（caption_of + 资产回填）、table_continuation（相邻页+列数一致+表头 Jaccard≥0.5）、paragraph_continuation（保守 continues_on，不改写文本）；PatchRecord patch log；`reconciler_version` 回写 ParseIdentity。
+  5. **Quality Gate（C09 最小，`mining/parse_quality/`）**：`compute_metrics`（char_coverage/structure_accuracy/table_cell_evidence/table_grid_consistency/evidence_locatability/reading_order_monotonicity/warning_counts）+ `QualityGate.evaluate`（PASS/WARN/FAIL，QualityProfile 阈值可覆写）。
+  6. **shadow 链路**：`_persist_raw_artifact`（artifact_class=backend_raw，内容寻址）+ `renormalize()`（replay 不重跑 parser）+ reconciler/quality_gate 可选注入（决策进投影 metadata）。
+  7. **golden corpus**：`tests/golden_corpus/`（50 份：md7/txt5/docx8/xlsx7/pptx7/html8/pdf8 × 正例19/复杂21/反例4/退化6，确定性构造）+ `tools/golden_benchmark.py`（六指标+决策/警告分布，JSON+MD 报告）+ 阈值守卫测试。基准：结构准确率 0.993、网格一致 1.0、cell 证据 0.944、证据定位 0.898、阅读序 1.0、决策 43P/1W/5F(空)/1拒。
+  8. **M3 → M3A 重定义**：报告改名 `M3A-原生解析fastpath.md` 并声明未达成项（第二真实后端/版本化 Router policy/fallback attempts/Parse Operator——归 M3B/M4）。
+- **执行事故留档**：整改中途一次 `rm -rf` 误删 `knowledge_mining/mining` 包（mkdir 相对路径错误），经 `git checkout` 恢复 HEAD + 上下文重建全部未提交改动（含前轮 v9 未提交增量），三格式/契约/影子全量测试验证恢复完整（652→659 passed）。教训：涉及 rm 的目录操作必须先 pwd + 绝对路径。
+- **依据**：用户整改指令全量（审计先行/不变量/逐格式修复清单/M3 重定义/测试要求）；SRS §4.6-§4.9 主线、§7.4 不伪造、§3.5 指纹、§9.5 replay、§C08/§C09。
+- **影响**：新增 `parse_reconciler/`、`parse_quality/`、`rendered_text.py`、`tests/{parse_reconciler,parse_quality,golden_corpus}/`、`tools/golden_benchmark.py`、审计文档；改 `contracts/{parser_adapter,parse_ir/types,parse_ir/schema}`、7 个 adapter/normalizer、`shadow_parse/service.py`；native_pdf 版本 2.0.0（家具迁出+结构修复）、native_docx/xlsx/pptx 2.0.0、native_html@2/legacy-line@2；测试 661 passed（scoped）。

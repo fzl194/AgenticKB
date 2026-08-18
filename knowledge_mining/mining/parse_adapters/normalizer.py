@@ -48,8 +48,9 @@ from knowledge_mining.mining.parse_adapters.legacy_txt import (
     LEGACY_TXT_FINGERPRINT,
     LEGACY_TXT_PARSER_ID,
 )
+from knowledge_mining.mining.parse_adapters.rendered_text import render_table_text
 
-NORMALIZER_VERSION = "legacy-line@1"
+NORMALIZER_VERSION = "legacy-line@2"
 
 # 单一文档级 section 容器 id（MD/TXT 无页容器，SRS §3.6）。
 DOC_CONTAINER_ID = "c-doc"
@@ -174,21 +175,28 @@ def _build_element_graph(
         element_id = stable_element_id(source_raw_hash, order)
         parent_id = _resolve_parent(heading_stack, block, element_type, element_id)
 
-        elements.append(Element(
-            element_id=element_id,
-            element_type=element_type,
-            order_index=order,
-            text=block.text,
-            normalized_text=block.text.strip(),
-            parent_id=parent_id,
-            source_spans=(_make_span(element_id, block, source_lines),),
-            style=_make_style(block),
-        ))
-        relations.extend(_element_relations(prev_id, parent_id, element_id))
+        asset: TableAsset | None = None
         if element_type == "table":
             asset = _table_asset(element_id, block)
             if asset is not None:
                 assets[asset.table_id] = asset
+        # 整改轮 I-2/I-3：表格 Element.text 是 TableAsset 的统一 rendered
+        # view（跨格式同一序列化），不再是各格式自带文本。
+        text = render_table_text(asset) if asset is not None else block.text
+
+        elements.append(Element(
+            element_id=element_id,
+            element_type=element_type,
+            order_index=order,
+            text=text,
+            normalized_text=text.strip(),
+            parent_id=parent_id,
+            source_spans=(
+                _make_span(element_id, block, source_lines, text=text),
+            ),
+            style=_make_style(block),
+        ))
+        relations.extend(_element_relations(prev_id, parent_id, element_id))
         prev_id = element_id
 
     return elements, relations, assets
@@ -212,7 +220,7 @@ def _resolve_parent(
 
 
 def _make_span(
-    element_id: str, block: BackendBlock, source_lines: list[str]
+    element_id: str, block: BackendBlock, source_lines: list[str], *, text: str | None = None
 ) -> EvidenceSpan:
     """行可回溯 EvidenceSpan：source_locator 行区间 + 原文行 raw_text."""
     locator: dict[str, int] | None = None
@@ -222,11 +230,12 @@ def _make_span(
         end = max(block.line_start + 1, min(block.line_end, len(source_lines)))
         if 0 <= block.line_start < len(source_lines):
             raw_text = "\n".join(source_lines[block.line_start:end])
+    final_text = block.text if text is None else text
     return EvidenceSpan(
         span_id=f"{element_id}-s0",
         source_locator=locator,
-        text_range=(0, len(block.text)),
-        raw_text=raw_text if raw_text is not None else (block.text or None),
+        text_range=(0, len(final_text)),
+        raw_text=raw_text if raw_text is not None else (final_text or None),
     )
 
 

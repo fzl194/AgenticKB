@@ -103,6 +103,26 @@ class LegacyMarkdownParser:
             ) from exc
 
         blocks, warnings = _to_backend_blocks(content_blocks, text)
+        # 图片/链接可见诊断（整改轮 I-7）：不物化但必须可见。
+        # markdown-it 的 image/link_open 是 inline token 的 children。
+        image_count = 0
+        link_count = 0
+        for tok in tokens:
+            for child in tok.children or ():
+                if child.type == "image":
+                    image_count += 1
+                elif child.type == "link_open" and "href" in child.attrs:
+                    link_count += 1
+        if image_count:
+            warnings.append(
+                f"document contains {image_count} image(s); image "
+                "materialization not supported (src preserved, diagnosed)"
+            )
+        if link_count:
+            warnings.append(
+                f"document contains {link_count} link(s); href targets "
+                "recorded in diagnostics only (diagnosed)"
+            )
         return BackendParseArtifact(
             parser_id=LEGACY_MARKDOWN_PARSER_ID,
             parser_version=LEGACY_MARKDOWN_VERSION,

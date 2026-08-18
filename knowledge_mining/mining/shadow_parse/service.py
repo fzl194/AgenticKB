@@ -92,7 +92,16 @@ async def _chunked(payload: bytes) -> AsyncIterator[bytes]:
 
 
 class ShadowParseService:
-    """编排一次影子解析执行（SRS §C08；只进影子链路，不进发布）。"""
+    """编排一次影子解析执行（SRS §C08；只进影子链路，不进发布）。
+
+    整改轮（2026-08-17）扩展主线两环：
+    - **backend raw artifact 持久化**：``BackendParseArtifact`` 序列化落
+      parse bucket（artifact_class=backend_raw），供 normalizer 升级后
+      **replay**（§9.5 "adapter mapping bug" 行——不重跑昂贵 parser）；
+    - **Reconciler / Quality Gate 可选注入**：normalize 后接
+      ``reconciler.reconcile``（文档级规则，C08）与 ``compute_metrics`` +
+      ``quality_gate.evaluate``（C09），决策进投影 metadata。
+    """
 
     def __init__(
         self,
@@ -106,12 +115,16 @@ class ShadowParseService:
         config: Any | None = None,
         bucket_prefix: str | None = None,
         parse_bucket: str | None = None,
+        reconciler: Any | None = None,
+        quality_gate: Any | None = None,
     ) -> None:
         self._store = object_store
         self._parse_runs = parse_runs
         self._storage_objects = storage_objects
         self._parser = parser
         self._normalizer = normalizer
+        self._reconciler = reconciler
+        self._quality_gate = quality_gate
         self._reader = reader or ObjectStoreSourceArtifactReader(
             object_store,
             Path(tempfile.gettempdir()) / "shadow_parse",
@@ -164,8 +177,13 @@ class ShadowParseService:
         run_id = parse_run_id or _new_id("parse")
         started_at = _utcnow()
         try:
-            doc = await self._read_and_parse(frozen)
+            doc, artifact = await self._read_and_parse(frozen)
+            if self._reconciler is not None:
+                outcome = await asyncio.to_thread(self._reconciler.reconcile, doc)
+                doc = getattr(outcome, "document", outcome)
             parse_ir_object_id = await self._persist_ir(doc)
+            await self._persist_raw_artifact(artifact)
+            quality_meta = self._evaluate_quality(doc, frozen)
         except Exception as exc:  # noqa: BLE001 —— 影子运行必须落 FAILED 后透传
             try:
                 await self._record_failure(frozen, run_id, started_at, exc)
@@ -175,7 +193,7 @@ class ShadowParseService:
                 )
             raise
         record = await self._record_success(
-            frozen, run_id, started_at, doc, parse_ir_object_id
+            frozen, run_id, started_at, doc, parse_ir_object_id, quality_meta
         )
         return ShadowParseResult(
             parse_run_id=record.id,
@@ -184,6 +202,29 @@ class ShadowParseService:
             element_count=record.element_count,
             reused=False,
         )
+
+    # -- replay（SRS §9.5 A09） ----------------------------------------------
+
+    async def renormalize(
+        self,
+        artifact: Any,
+        *,
+        source_raw_hash: str,
+    ) -> ParsedDocument:
+        """从 backend raw artifact 重新 normalize（不重跑 parser）.
+
+        §9.5 "adapter mapping bug" 恢复行：normalizer 升级后用持久化的
+        raw artifact 重放转换，不重复调用（昂贵的）parser/云 API。
+        """
+        doc = await asyncio.to_thread(
+            self._normalizer.normalize,
+            artifact,
+            source_raw_hash=source_raw_hash,
+        )
+        if self._reconciler is not None:
+            outcome = await asyncio.to_thread(self._reconciler.reconcile, doc)
+            doc = getattr(outcome, "document", outcome)
+        return doc
 
     # -- 读取 + 解析 --------------------------------------------------------
 
@@ -201,7 +242,9 @@ class ShadowParseService:
             await self._storage_objects.mark_verified(record.id, _utcnow())
         return available
 
-    async def _read_and_parse(self, frozen: FrozenInput) -> ParsedDocument:
+    async def _read_and_parse(
+        self, frozen: FrozenInput
+    ) -> tuple[ParsedDocument, Any]:
         """流式读冻结对象（sha256 增量校验）、严格解码、parse + normalize。
 
         - parse 是同步 CPU 工作，经 ``asyncio.to_thread`` 下放（D-021 惯例），
@@ -209,17 +252,43 @@ class ShadowParseService:
         - normalize **不传 parse_run_id**：IR 制品字节必须对同一输入完全确定，
           否则内容寻址去重（D-002 / §2.2 幂等）永远 miss；run 归属只记录在
           ``asset_parse_runs`` 投影行，不进制品。
+        - 整改轮：返回 (IR, backend artifact)——artifact 随后持久化供 replay。
         """
         chunks: list[bytes] = []
         async for chunk in self._reader.open_stream(frozen):
             chunks.append(chunk)
         data = b"".join(chunks)
         artifact = await asyncio.to_thread(self._parser.parse, data, mime=frozen.mime)
-        return await asyncio.to_thread(
+        doc = await asyncio.to_thread(
             self._normalizer.normalize,
             artifact,
             source_raw_hash=frozen.source_raw_hash,
         )
+        return doc, artifact
+
+    def _evaluate_quality(
+        self, doc: ParsedDocument, frozen: FrozenInput
+    ) -> dict[str, Any]:
+        """质量门禁评估（C09）；未注入 gate 时返回空（影子观测不阻断）。"""
+        if self._quality_gate is None:
+            return {}
+        from knowledge_mining.mining.parse_quality import compute_metrics
+
+        metrics = compute_metrics(doc, source_text=None)
+        decision = self._quality_gate.evaluate(metrics)
+        return {
+            "quality_decision": decision.decision,
+            "quality_issues": [
+                {"code": i.code, "message": i.message}
+                for i in decision.issues
+            ],
+            "quality_metrics": {
+                "element_count": metrics.element_count,
+                "evidence_locatability": metrics.evidence_locatability,
+                "table_cell_evidence": metrics.table_cell_evidence,
+                "reading_order_monotonicity": metrics.reading_order_monotonicity,
+            },
+        }
 
     # -- 制品落存（parse bucket + 对象注册） ---------------------------------
 
@@ -278,6 +347,58 @@ class ShadowParseService:
         )
         return record.id
 
+    async def _persist_raw_artifact(self, artifact: Any) -> str | None:
+        """backend raw artifact JSON 落 parse bucket（整改轮，§9.5 replay 原料）.
+
+        ``BackendParseArtifact.to_dict`` 序列化（契约 v1.2）；key 内容寻址
+        （同 artifact 字节同 key）。文本格式的 ``raw_output``（源文本）体积
+        可观但同受内容寻址去重保护，保留完整以便升级重放。
+        """
+        payload = json.dumps(
+            artifact.to_dict(), ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")
+        sha = hashlib.sha256(payload).hexdigest()
+        key = build_object_key("backend_raw", sha)
+        bucket = self._parse_bucket_name
+        location = ObjectLocation(bucket=bucket, object_key=key)
+
+        existing = await self._storage_objects.find_by_location(bucket, key, None)
+        if existing is not None and await self._store.head_exists(location):
+            await self._storage_objects.mark_verified(existing.id, _utcnow())
+            return existing.id
+
+        put = await self._store.put_stream(
+            location,
+            _chunked(payload),
+            PutOptions(
+                artifact_class="backend_raw",
+                mime="application/json",
+                expected_sha256=sha,
+                metadata={"parser_id": artifact.parser_id},
+            ),
+        )
+        if existing is not None:
+            await self._storage_objects.mark_verified(existing.id, _utcnow())
+            return existing.id
+        record = await self._storage_objects.register(
+            StorageObjectRecord(
+                id=_new_id("so"),
+                provider=self._provider(),
+                bucket=bucket,
+                object_key=key,
+                object_version_id=put.version_id,
+                sha256=put.sha256,
+                size=put.size,
+                mime="application/json",
+                artifact_class="backend_raw",
+                state="AVAILABLE",
+                etag=put.etag,
+                created_at=_utcnow(),
+                last_verified_at=_utcnow(),
+            )
+        )
+        return record.id
+
     def _provider(self) -> str:
         """从对象存储适配器读 provider 标识（Fake/Minio 均暴露 ``provider``）。
 
@@ -300,6 +421,7 @@ class ShadowParseService:
         started_at: str,
         doc: ParsedDocument,
         parse_ir_object_id: str,
+        quality_meta: dict[str, Any] | None = None,
     ) -> ParseRunRecord:
         record = ParseRunRecord(
             id=run_id,
@@ -317,7 +439,7 @@ class ShadowParseService:
             relation_count=len(doc.relations),
             started_at=started_at,
             finished_at=_utcnow(),
-            metadata_json=self._run_metadata(doc),
+            metadata_json=self._run_metadata(doc, quality_meta or {}),
         )
         return await self._parse_runs.upsert(record)
 
@@ -346,7 +468,11 @@ class ShadowParseService:
 
     # -- 元数据 ---------------------------------------------------------------
 
-    def _run_metadata(self, doc: ParsedDocument) -> str:
+    def _run_metadata(
+        self,
+        doc: ParsedDocument,
+        quality_meta: dict[str, Any] | None = None,
+    ) -> str:
         descriptor = self._parser.descriptor
         return json.dumps(
             {
@@ -355,6 +481,7 @@ class ShadowParseService:
                 "parser_version": descriptor.version,
                 "schema_version": doc.schema_version,
                 "warnings": list(doc.diagnostics.warnings),
+                **(quality_meta or {}),
             },
             ensure_ascii=False,
             sort_keys=True,

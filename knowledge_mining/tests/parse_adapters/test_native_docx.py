@@ -165,7 +165,7 @@ def test_full_ir_chain_containers_relations_and_parents(
     # fingerprint
     assert doc.source_identity.parser_fingerprint == NATIVE_DOCX_FINGERPRINT
     assert doc.source_identity.parser_fingerprint == (
-        "native_docx@1.0.0#python-docx-1.2.0"
+        "native_docx@2.0.0#python-docx-1.2.0"
     )
 
 
@@ -249,3 +249,142 @@ def test_rectangular_merge_row_span_exact() -> None:
     assert origins, "merge origin missing"
     assert origins[0]["row_span"] == 3, origins[0]
     assert origins[0]["column_span"] == 2, origins[0]
+
+
+# ===========================================================================
+# 整改轮（2026-08-17）：列表语义 / 单元格证据 / 六类结构诊断
+# ===========================================================================
+
+
+def _docx_with_lists() -> bytes:
+    """编号列表（两级）+ 普通段落."""
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("导语。")
+    p1 = doc.add_paragraph("一级项甲", style="List Number")
+    p1.paragraph_format.left_indent = None
+    p2 = doc.add_paragraph("一级项乙", style="List Number")
+    sub = doc.add_paragraph("二级子项", style="List Bullet 2")
+    doc.add_paragraph("结尾段。")
+    buf = io.BytesIO(); doc.save(buf)
+    return buf.getvalue()
+
+
+def _set_numpr(paragraph, ilvl: int, num_id: int = 1) -> None:
+    """直接注入 w:numPr（style 不一定能带编号属性）."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    pPr = paragraph._p.get_or_add_pPr()
+    numPr = OxmlElement("w:numPr")
+    ilvl_el = OxmlElement("w:ilvl"); ilvl_el.set(qn("w:val"), str(ilvl))
+    numid_el = OxmlElement("w:numId"); numid_el.set(qn("w:val"), str(num_id))
+    numPr.append(ilvl_el); numPr.append(numid_el)
+    pPr.append(numPr)
+
+
+def test_numbered_paragraphs_become_list_items_with_level() -> None:
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("普通段。")
+    top = doc.add_paragraph("顶层项")
+    _set_numpr(top, 0)
+    nested = doc.add_paragraph("嵌套项")
+    _set_numpr(nested, 1)
+    buf = io.BytesIO(); doc.save(buf)
+
+    artifact = NativeDocxParser().parse(buf.getvalue(), mime=DOCX_MIME)
+    kinds = [(b.block_type, b.level) for b in artifact.blocks]
+    assert ("paragraph", None) in kinds
+    assert ("list_item", 1) in kinds  # ilvl 0 -> level 1
+    assert ("list_item", 2) in kinds  # ilvl 1 -> level 2
+
+
+def test_table_cells_have_independent_native_evidence() -> None:
+    parser = NativeDocxParser()
+    doc = DocxNormalizer().normalize(
+        parser.parse(_build_docx_bytes(), mime=DOCX_MIME),
+        source_raw_hash="cd" * 32,
+    )
+    table = next(e for e in doc.elements if e.element_type == "table")
+    asset = doc.structured_assets[f"{table.element_id}-table"]
+    span_by_id = {s.span_id: s for s in table.source_spans}
+    seen = set()
+    for cell in asset.cells:
+        if not cell.text:
+            continue
+        assert cell.source_span_id is not None
+        span = span_by_id[cell.source_span_id]
+        # 独立证据：native_ref 带 OOXML 单元格定位
+        assert "row_index" in span.native_ref and "column_index" in span.native_ref
+        assert cell.source_span_id not in seen
+        seen.add(cell.source_span_id)
+
+
+def _docx_with_unsupported_structures() -> bytes:
+    """页眉 + 脚注 + 文本框 + 图片的文档（六类结构的代表集）."""
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from PIL import Image
+
+    doc = Document()
+    doc.add_paragraph("正文段。")
+    # 页眉文本
+    header = doc.sections[0].header
+    header.paragraphs[0].text = "页眉文字"
+    # 图片（inline）
+    img = io.BytesIO()
+    Image.new("RGB", (2, 2), (0, 128, 255)).save(img, format="PNG")
+    doc.add_picture(img, width=None)
+    # 文本框（w:p 内嵌 txbxContent）
+    p = doc.add_paragraph()
+    run = p.add_run()
+    txbx = OxmlElement("w:pict")
+    txbx_content = OxmlElement("w:txbxContent")
+    inner_p = OxmlElement("w:p")
+    inner_r = OxmlElement("w:r")
+    inner_t = OxmlElement("w:t")
+    inner_t.text = "文本框内容"
+    inner_r.append(inner_t); inner_p.append(inner_r)
+    txbx_content.append(inner_p); txbx.append(txbx_content)
+    run._r.append(txbx)
+    # 脚注（document part footer 引用较繁琐——用 sectPr 前注记即可，
+    # 本测试以 header/footnote parts 存在性为诊断对象）
+    buf = io.BytesIO(); doc.save(buf)
+    return buf.getvalue()
+
+
+def test_unsupported_structures_are_diagnosed_not_silent() -> None:
+    artifact = NativeDocxParser().parse(
+        _docx_with_unsupported_structures(), mime=DOCX_MIME
+    )
+    joined = "\n".join(artifact.warnings).lower()
+    assert "header" in joined, f"页眉静默丢失: {joined!r}"
+    assert "image" in joined, f"图片静默丢失: {joined!r}"
+    assert "textbox" in joined, f"文本框静默丢失: {joined!r}"
+
+
+def test_nested_table_extracted_as_separate_block() -> None:
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("含嵌套表格：")
+    outer = doc.add_table(rows=2, cols=2)
+    outer.cell(0, 0).text = "外层A"
+    outer.cell(0, 1).text = "外层B"
+    outer.cell(1, 0).text = "宿主格"
+    outer.cell(1, 1).text = "外层D"
+    inner = outer.cell(1, 0).add_table(rows=1, cols=2)
+    inner.cell(0, 0).text = "内层1"
+    inner.cell(0, 1).text = "内层2"
+    buf = io.BytesIO(); doc.save(buf)
+
+    artifact = NativeDocxParser().parse(buf.getvalue(), mime=DOCX_MIME)
+    tables = [b for b in artifact.blocks if b.block_type == "table"]
+    assert len(tables) == 2, f"嵌套表丢失: {[b.text for b in artifact.blocks]}"
+    inner_blocks = [t for t in tables if "内层1" in t.text]
+    assert inner_blocks, "内层表格未独立成块"
+    assert inner_blocks[0].native_ref.get("in_cell") is not None

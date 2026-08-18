@@ -288,7 +288,9 @@ async def test_happy_path_persists_ir_and_projection(tmp_path, harness):
     # IR 可经 from_dict 重建（round-trip 契约）。
     assert ParsedDocument.from_dict(ir).elements[0].element_id == "e1"
 
-    assert store.put_count == 1  # 仅 1 次 parse_ir put_stream（source seeding 走 put_bytes 不计数）
+    # 整改轮：2 次 put —— parse_ir + backend_raw（replay 原料，§9.5）
+    # （source seeding 走 put_bytes 不计数）
+    assert store.put_count == 2
 
 
 async def _read_object(store: FakeObjectStore, bucket: str, key: str) -> bytes:
@@ -433,3 +435,93 @@ async def test_invalid_utf8_records_failed_and_raises(harness):
     assert record.status == "FAILED"
     assert record.parse_ir_storage_object_id is None
     assert record.error_message is not None
+
+
+# ===========================================================================
+# 整改轮（2026-08-17）：backend raw artifact 持久化 + replay + Reconciler
+# ===========================================================================
+
+
+async def test_backend_raw_artifact_persisted_and_replayable(harness):
+    """run() 落 backend_raw 制品；renormalize 不重跑 parser 即可重建等价 IR."""
+    import json as _json
+
+    from knowledge_mining.mining.contracts.parser_adapter import (
+        BackendParseArtifact,
+    )
+    from knowledge_mining.mining.contracts.storage.types import ObjectLocation
+
+    store, parse_runs, storage_objects, parser = harness
+    data = "第一段落内容。\n第二段落内容。\n".encode("utf-8")
+    frozen = _frozen(data)
+    await _seed_source(store, frozen, data)
+    calls = {"parse": 0}
+    orig_parse = parser.parse
+
+    def _counting_parse(data, *, mime):
+        calls["parse"] += 1
+        return orig_parse(data, mime=mime)
+
+    parser.parse = _counting_parse
+    service = _service(store, parse_runs, storage_objects, parser)
+    result = await service.run(frozen)
+    assert calls["parse"] == 1
+
+    # backend_raw 制品存在且注册（artifact_class 检索）
+    raw_records = [
+        r for r in storage_objects._by_id.values()
+        if r.artifact_class == "backend_raw"
+    ]
+    assert raw_records, "backend_raw 制品未持久化"
+    record = raw_records[0]
+
+    # 回读 raw artifact 并重放 normalize（parser 不再被调用）
+    stream = store.get_stream(ObjectLocation(
+        bucket=record.bucket, object_key=record.object_key,
+    ))
+    payload = b""
+    async for chunk in stream:
+        payload += chunk
+    artifact = BackendParseArtifact.from_dict(_json.loads(payload))
+    assert artifact.parser_id == parser.descriptor.parser_id
+
+    before = calls["parse"]
+    replayed = await service.renormalize(
+        artifact, source_raw_hash=frozen.source_raw_hash
+    )
+    assert calls["parse"] == before  # replay 不重跑 parser（SRS §9.5/A09）
+    assert len(replayed.elements) == result.element_count
+
+
+async def test_reconciler_and_quality_gate_wired(harness):
+    """注入 reconciler + quality gate：重定型进 IR、决策进 metadata."""
+    import json as _json
+
+    from knowledge_mining.mining.parse_reconciler import StructuralReconciler
+    from knowledge_mining.mining.parse_quality import QualityGate
+
+    store, parse_runs, storage_objects, parser = harness
+    data = "第一段落内容。\n第二段落内容。\n".encode("utf-8")
+    frozen = _frozen(data)
+    await _seed_source(store, frozen, data)
+    service = ShadowParseService(
+        object_store=store,
+        parse_runs=parse_runs,
+        storage_objects=storage_objects,
+        parser=parser,
+        normalizer=StubNormalizer(),
+        bucket_prefix="testp-",
+        reconciler=StructuralReconciler(),
+        quality_gate=QualityGate(),
+    )
+    result = await service.run(frozen)
+    assert result.status == "SUCCEEDED"
+
+    row = await parse_runs.find_by_document_hash(
+        frozen.document_id,
+        frozen.source_raw_hash,
+        parser.descriptor.parser_fingerprint,
+    )
+    meta = _json.loads(row.metadata_json)
+    assert "quality_decision" in meta, meta
+    assert meta["quality_decision"] in ("PASS", "WARN", "FAIL")

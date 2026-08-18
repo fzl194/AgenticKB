@@ -151,6 +151,7 @@ def validate(parsed: ParsedDocument) -> ValidationResult:
     issues.extend(_check_referential_integrity(parsed))
     issues.extend(_check_confidence_ranges(parsed))
     issues.extend(_check_evidence_spans_nonempty(parsed))
+    issues.extend(_check_bbox_order(parsed))
 
     errors = [i for i in issues if i.level == "error"]
     return ValidationResult(
@@ -333,6 +334,64 @@ def _span_has_locator(span: EvidenceSpan) -> bool:
         span.native_ref is not None,
         span.raw_text is not None,
     ))
+
+
+def _check_bbox_order(doc: ParsedDocument) -> list[ValidationIssue]:
+    """bbox 统一 ``(x0, top, x1, bottom)`` 且必须有序（x0<=x1, top<=bottom）.
+
+    跨格式不变量 I-1（用户整改指令）：PPTX 曾把 width/height 放进后两个
+    分量；validator 在边界上拒绝乱序/退化的 bbox 声明（零宽/零高合法，
+    如单字符行）。
+    """
+    issues: list[ValidationIssue] = []
+
+    def _check(bbox: Any, path: str) -> None:
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            issues.append(ValidationIssue(
+                level="error",
+                code="invalid_bbox_order",
+                message=f"bbox at {path} is not a 4-tuple: {bbox!r}",
+                path=path,
+            ))
+            return
+        x0, top, x1, bottom = bbox
+        try:
+            if float(x0) > float(x1) or float(top) > float(bottom):
+                issues.append(ValidationIssue(
+                    level="error",
+                    code="invalid_bbox_order",
+                    message=(
+                        f"bbox {bbox!r} at {path} violates "
+                        "(x0, top, x1, bottom) ordering"
+                    ),
+                    path=path,
+                ))
+        except (TypeError, ValueError):
+            issues.append(ValidationIssue(
+                level="error",
+                code="invalid_bbox_order",
+                message=f"bbox at {path} has non-numeric components: {bbox!r}",
+                path=path,
+            ))
+
+    for e in doc.elements:
+        for span in e.source_spans:
+            if span.visual_region and "bbox" in span.visual_region:
+                _check(
+                    span.visual_region["bbox"],
+                    f"elements[{e.element_id}].source_spans[{span.span_id}]"
+                    ".visual_region.bbox",
+                )
+    for aid, asset in doc.structured_assets.items():
+        if hasattr(asset, "region") and asset.region and "bbox" in asset.region:
+            _check(asset.region["bbox"], f"structured_assets[{aid}].region.bbox")
+        if hasattr(asset, "visual_region") and asset.visual_region \
+                and "bbox" in asset.visual_region:
+            _check(
+                asset.visual_region["bbox"],
+                f"structured_assets[{aid}].visual_region.bbox",
+            )
+    return issues
 
 
 # ---------------------------------------------------------------------------

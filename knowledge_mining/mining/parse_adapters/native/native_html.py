@@ -57,7 +57,16 @@ _LIST_ROOT_TAGS = _LIST_TAGS | {"dl"}
 # 命中即产块且不再向下递归的标签。
 _BLOCK_TAGS = frozenset(_HEADING_TAGS) | {
     "p", "li", "pre", "code", "table", "img", "title",
+    "figcaption", "caption",  # 整改轮：图注/表题独立成 caption 块
 }
+# 语义容器（整改轮）：不产块，路径记录进块 structure["semantic_path"]。
+_SEMANTIC_TAGS = frozenset({
+    "article", "section", "nav", "main", "aside",
+    "header", "footer",
+})
+#: rowspan×colspan 面积上限（整改轮）：单值 10k 上限挡不住
+#: 9999×9999 的组合（~10⁸ occupied 条目，实测 DoS）。
+_MAX_SPAN_AREA = 100_000
 
 # charset 声明嗅探（仅用于决定是否强制 UTF-8，解码本身仍由库完成）。
 _HAS_ENCODING_DECL_RE = re.compile(
@@ -92,12 +101,24 @@ class NativeHtmlParser:
         root = _parse_dom(data)
         tree = root.getroottree()
         blocks: list[BackendBlock] = []
-        _walk(root, tree, list_depth=0, blocks=blocks)
+        _walk(root, tree, list_depth=0, semantic_path=[], blocks=blocks)
+        warnings: list[str] = []
+        image_count = sum(
+            1 for b in blocks if b.block_type == "figure"
+            and (b.structure or {}).get("src") is not None
+        )
+        if image_count:
+            warnings.append(
+                f"document contains {image_count} image(s); image "
+                "materialization not supported (src preserved in structure, "
+                "diagnosed)"
+            )
         return BackendParseArtifact(
             parser_id=NATIVE_HTML_PARSER_ID,
             parser_version=NATIVE_HTML_VERSION,
             mime=mime.lower(),
             blocks=tuple(blocks),
+            warnings=tuple(warnings),
         )
 
 
@@ -131,29 +152,93 @@ def _parse_dom(data: bytes) -> Any:
 # ---------------------------------------------------------------------------
 
 def _walk(
-    element: Any, tree: Any, *, list_depth: int, blocks: list[BackendBlock]
+    element: Any,
+    tree: Any,
+    *,
+    list_depth: int,
+    semantic_path: list[str],
+    blocks: list[BackendBlock],
 ) -> None:
-    """文档序深度优先：命中块标签产块；容器标签继续递归."""
+    """文档序深度优先：命中块标签产块；容器标签继续递归.
+
+    整改轮：``li`` 产块用**直属文本**（子列表文本不再被父项吸收），
+    然后继续递归子列表使子项独立成块；语义容器路径随递归传递。
+    """
     tag = element.tag
     if not isinstance(tag, str):  # 注释 / PI 等无 tag 节点
         return
-    if tag in _BLOCK_TAGS:
-        block = _element_block(element, tree, list_depth)
+    if tag == "li":
+        block = _element_block(element, tree, list_depth, semantic_path)
         if block is not None:
             blocks.append(block)
+        # 深度递增只由列表根标签（ul/ol/dl）负责——li 的直属子级沿用
+        # 当前深度，嵌套 ul 会自然 +1（否则层级双重递增）。
+        for child in element.iterchildren():
+            _walk(
+                child, tree, list_depth=list_depth,
+                semantic_path=semantic_path, blocks=blocks,
+            )
+        return
+    if tag in _BLOCK_TAGS:
+        block = _element_block(element, tree, list_depth, semantic_path)
+        if block is not None:
+            blocks.append(block)
+        if tag == "table":
+            # table 是块标签不再递归，但直属 <caption> 必须独立成块
+            for child in element.iterchildren():
+                if isinstance(child.tag, str) and child.tag == "caption":
+                    cap = _element_block(
+                        child, tree, list_depth, semantic_path
+                    )
+                    if cap is not None:
+                        blocks.append(cap)
         return
     child_depth = (
         list_depth + 1 if tag in _LIST_ROOT_TAGS else list_depth
     )
+    child_path = [*semantic_path, tag] if tag in _SEMANTIC_TAGS else semantic_path
     for child in element.iterchildren():
-        _walk(child, tree, list_depth=child_depth, blocks=blocks)
+        _walk(
+            child, tree, list_depth=child_depth,
+            semantic_path=child_path, blocks=blocks,
+        )
+
+
+def _direct_text_of(element: Any) -> str:
+    """元素直属文本：跳过嵌套列表子树（整改轮，嵌套列表独立成块）."""
+    parts: list[str] = []
+
+    def _collect(node: Any) -> None:
+        for child in node.iterchildren():
+            ctag = child.tag
+            if not isinstance(ctag, str):
+                continue
+            if ctag in _LIST_ROOT_TAGS:
+                continue  # 子列表文本归子项
+            if ctag in _BLOCK_TAGS:
+                parts.append("".join(child.itertext()))
+                continue
+            if child.text:
+                parts.append(child.text)
+            _collect(child)
+            if child.tail:
+                parts.append(child.tail)
+
+    if element.text:
+        parts.append(element.text)
+    _collect(element)
+    return "".join(parts).strip()
 
 
 def _element_block(
-    element: Any, tree: Any, list_depth: int
+    element: Any,
+    tree: Any,
+    list_depth: int,
+    semantic_path: list[str] | None = None,
 ) -> BackendBlock | None:
     """单个块级元素 -> BackendBlock（native_ref=xpath）."""
     tag = element.tag
+    semantic_path = semantic_path or []
     native_ref = {"xpath": tree.getpath(element)}
     if tag in _HEADING_TAGS:
         return BackendBlock(
@@ -161,28 +246,46 @@ def _element_block(
             text=_text_of(element),
             level=_HEADING_TAGS[tag],
             native_ref=native_ref,
+            structure=_common_structure(element, semantic_path),
         )
     if tag == "li":
         return BackendBlock(
             block_type="list_item",
-            text=_text_of(element),
+            text=_direct_text_of(element),
             level=max(1, list_depth),
             native_ref=native_ref,
+            structure=_common_structure(element, semantic_path),
         )
     if tag == "img":
         structure = {
             "src": element.get("src", ""),
             "alt": element.get("alt", ""),
         }
+        if semantic_path:
+            structure["semantic_path"] = semantic_path
         return BackendBlock(
             block_type="figure", text="", structure=structure,
             native_ref=native_ref,
+        )
+    if tag in ("figcaption", "caption"):
+        text = _text_of(element)
+        if not text:
+            return None
+        structure = _common_structure(element, semantic_path)
+        structure["caption_target"] = (
+            "figure" if tag == "figcaption" else "table"
+        )
+        return BackendBlock(
+            block_type="caption", text=text,
+            native_ref=native_ref, structure=structure,
         )
     if tag == "table":
         rows, cols, cells, clamped = _table_grid(element)
         if rows == 0:
             return None
         structure = {"rows": rows, "cols": cols, "cells": cells}
+        if semantic_path:
+            structure["semantic_path"] = semantic_path
         if clamped:
             # 不可信 span 声明被上限截断（§7.4 可见性，评审 HIGH-2）
             structure["clamped_spans"] = clamped
@@ -199,8 +302,34 @@ def _element_block(
         "code" if tag in ("pre", "code") else "paragraph"
     )
     return BackendBlock(
-        block_type=block_type, text=text, native_ref=native_ref
+        block_type=block_type, text=text, native_ref=native_ref,
+        structure=_common_structure(element, semantic_path),
     )
+
+
+def _common_structure(element: Any, semantic_path: list[str]) -> dict[str, Any]:
+    """块的公共 structure：语义容器路径 + 块内链接（整改轮）."""
+    structure: dict[str, Any] = {}
+    if semantic_path:
+        structure["semantic_path"] = semantic_path
+    links = _links_of(element)
+    if links:
+        structure["links"] = links
+    return structure
+
+
+def _links_of(element: Any) -> list[dict[str, str]]:
+    """块内 <a href> 收集：[{text, href}]（链接不静默丢弃）."""
+    out: list[dict[str, str]] = []
+    for a in element.iter("a"):
+        href = a.get("href")
+        if not href:
+            continue
+        out.append({
+            "text": "".join(a.itertext()).strip(),
+            "href": href,
+        })
+    return out
 
 
 def _text_of(element: Any) -> str:
@@ -231,10 +360,12 @@ def _nearest_table_within(element: Any, stop_at: Any) -> Any:
 def _table_grid(
     table: Any
 ) -> tuple[int, int, list[dict[str, Any]], int]:
-    """tr/td 直读 + rowspan/colspan 展开 -> (rows, cols, cells).
+    """tr/td 直读 + rowspan/colspan 展开 -> (rows, cols, cells, clamped).
 
     逻辑行号跟随 ``<tr>`` 顺序（rowspan 溢出行只做占位，不挤占后续
     ``<tr>``）；被合并覆盖的位置不产 cell；is_header = th 或首行约定。
+    整改轮：``rowspan*colspan`` **乘积**面积上限——单值 10k 上限挡不住
+    9999×9999 组合（~10⁸ occupied 条目，实测内存 DoS）。
     """
     origin_cells: list[dict[str, Any]] = []
     occupied: dict[tuple[int, int], Any] = {}
@@ -258,6 +389,10 @@ def _table_grid(
             col_span, col_clamped = _span_attr(td, "colspan")
             if row_clamped or col_clamped:
                 clamped += 1
+            elif row_span * col_span > _MAX_SPAN_AREA:
+                # 面积炸弹截断：按未合并处理（整改轮）
+                clamped += 1
+                row_span = col_span = 1
             cell = {
                 "row_index": r,
                 "column_index": c,
@@ -265,6 +400,7 @@ def _table_grid(
                 "row_span": row_span,
                 "column_span": col_span,
                 "is_header": td.tag == "th" or r == 0,
+                "evidence_index": len(origin_cells),
             }
             origin_cells.append(cell)
             for rr in range(r, r + row_span):
@@ -309,7 +445,7 @@ def _span_attr(td: Any, name: str) -> tuple[int, bool]:
 class HtmlNormalizer(BaseNativeNormalizer):
     """HTML backend artifact -> Parse IR：dom_document 容器 + heading 链."""
 
-    normalizer_version = "native-html@1"
+    normalizer_version = "native-html@2"
     _default_fingerprints = {NATIVE_HTML_PARSER_ID: NATIVE_HTML_FINGERPRINT}
     _element_type_map = {
         "title": "title",
@@ -319,6 +455,7 @@ class HtmlNormalizer(BaseNativeNormalizer):
         "code": "code",
         "table": "table",
         "figure": "figure",
+        "caption": "caption",
     }
 
     def _build_containers(self, artifact) -> tuple[Container, ...]:
@@ -337,6 +474,33 @@ class HtmlNormalizer(BaseNativeNormalizer):
             text_range=(0, len(block.text)),
             raw_text=block.text or None,
         ),)
+
+    def _make_cell_spans(
+        self, element_id, block, container_id
+    ) -> tuple[EvidenceSpan, ...]:
+        """表格 cell 级 EvidenceSpan（表 xpath + row/col 定位，I-4）."""
+        if block.block_type != "table":
+            return ()
+        structure = block.structure or {}
+        raw_cells = structure.get("cells") or []
+        native = dict(block.native_ref or {})
+        spans: list[EvidenceSpan] = []
+        for k, cell in enumerate(raw_cells):
+            ref = dict(native)
+            ref["row_index"] = int(cell["row_index"])
+            ref["column_index"] = int(cell["column_index"])
+            spans.append(EvidenceSpan(
+                span_id=f"{element_id}-cell-{k:04d}",
+                native_ref=ref,
+                raw_text=str(cell.get("text", "")) or None,
+            ))
+        return tuple(spans)
+
+    def _element_metadata(self, block) -> dict[str, Any]:
+        """semantic_path 从 structure 提升到元素 metadata（整改轮）."""
+        structure = block.structure or {}
+        path = structure.get("semantic_path")
+        return {"semantic_path": list(path)} if path else {}
 
 
 __all__ = [

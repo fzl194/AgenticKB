@@ -73,32 +73,16 @@ class TestHeadingLevels:
 
 
 class TestHeaderFooterAnnotation:
-    def test_repeated_line_marked_page_header(self):
-        from knowledge_mining.mining.parse_adapters.native_pdf import (
-            classify_furniture,
-        )
-        # 跨 6 页完全相同的长行 -> page_header；其余不变
-        lines = [
-            {"text": "硕士学位论文某复合催化剂研究", "pages": {0, 1, 2, 3, 4, 5}},
-            {"text": "正常正文一句话。", "pages": {0, 1}},
-        ]
-        verdict = classify_furniture(lines, page_count=73)
-        assert verdict[0] == "page_header"
-        assert verdict[1] is None
+    """家具标注已迁至 Structural Reconciler（IR 级，整改轮）——
+    断言保留在此以验证迁移后 adapter 不再做文档级家具判定，端到端
+    家具行为在 tests/parse_reconciler/test_reconciler.py 覆盖。"""
 
-    def test_pure_number_short_line_is_page_number(self):
-        from knowledge_mining.mining.parse_adapters.native_pdf import (
-            classify_furniture,
-        )
-        lines = [
-            {"text": "17", "pages": {16}},
-            {"text": "VI", "pages": {5}},
-            {"text": "2023 年数据", "pages": {6}},
-        ]
-        verdict = classify_furniture(lines, page_count=73)
-        assert verdict[0] == "page_number"
-        assert verdict[1] == "page_number"
-        assert verdict[2] is None  # 含年份数字的长行不是页码
+    def test_adapter_no_longer_types_furniture(self):
+        """adapter 产出的块不再预分家具类型（职责迁出）。"""
+        from knowledge_mining.mining.parse_adapters import native_pdf
+
+        assert not hasattr(native_pdf, "classify_furniture")
+        assert not hasattr(native_pdf, "_annotate_furniture")
 
 
 def _line(text, x0, top, x1, bottom, size=12.0):
@@ -241,20 +225,30 @@ class TestHeadingContinuation:
 
 
 class TestTableDoesNotSwallowHeadings:
-    """表格 bbox 吞标题防御（通用：heading 行不属表格，顶边收缩）."""
+    """表格 bbox 吞标题防御（通用：heading 行不属表格，顶边收缩）.
+
+    整改轮：``_shrink_table_below_headings`` 死代码已删除，行为由
+    ``shrink_bbox_to_data_core``（数据核心收缩）承担——断言迁移到
+    新函数：标题行（单片段）在上、数据行（多片段）在下时，顶边
+    收缩到数据核心首行。"""
 
     def test_heading_row_excluded_and_bbox_shrunk(self):
         from knowledge_mining.mining.parse_adapters.native_pdf import (
-            _shrink_table_below_headings,
+            shrink_bbox_to_data_core,
         )
-        table = type("T", (), {})()
-        table.bbox = (79, 83, 524, 400)  # 顶边渗入标题区
-        lines = [
-            {"text": "第二章 实验试剂", "bbox": (79, 90, 300, 104)},
-            {"text": "试剂名称", "bbox": (79, 130, 160, 144)},
+        region_lines = [
+            {"text": "第二章 实验试剂", "bbox": (79, 90, 300, 104),
+             "_chars": []},
+            {"text": "试剂名称", "bbox": (79, 130, 160, 144),
+             "_chars": []},
         ]
-        out = _shrink_table_below_headings(table, lines)
-        assert out.bbox[1] > 104  # 顶边压到标题行之下
+        # 标题行单片段、数据行多片段：用 _chars 提供片段信号
+        region_lines[1]["_chars"] = [
+            {"x0": 79, "x1": 100, "text": "试剂", "top": 130},
+            {"x0": 130, "x1": 160, "text": "名称", "top": 130},
+        ]
+        out = shrink_bbox_to_data_core((79, 83, 524, 400), region_lines)
+        assert out[1] >= 130  # 顶边压到数据核心首行（标题行不在表内）
 
 
 class TestLigatureSafety:
@@ -353,3 +347,36 @@ class TestFragmentBlockClustering:
         assert len(blocks) == 2
         assert len(blocks[0]) == 3
         assert blocks[0][0]["text"].startswith("表头")
+
+
+class TestTwoColumnSplit:
+    """双栏切分（通用：栏间空白带检测）."""
+
+    def test_column_gap_detected_and_split(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            detect_column_split,
+        )
+        # 左栏 x0≈79-300，右栏 x0≈312-533，中缝 300-312
+        lines = [
+            {"text": "left col line", "bbox": (79, 100, 295, 112)},
+            {"text": "left col 2", "bbox": (79, 120, 290, 132)},
+            {"text": "right col line", "bbox": (315, 100, 530, 112)},
+            {"text": "right col 2", "bbox": (318, 120, 525, 132)},
+            # 通栏行（跨两栏）
+            {"text": "full width title", "bbox": (79, 60, 530, 74)},
+        ]
+        result = detect_column_split(lines, page_width=612, min_lines=4)
+        assert result is not None
+        boundary, fullwidth = result
+        assert 295 < boundary < 315
+        assert len(fullwidth) == 1  # 标题识别为通栏
+
+    def test_single_column_returns_none(self):
+        from knowledge_mining.mining.parse_adapters.native_pdf import (
+            detect_column_split,
+        )
+        lines = [
+            {"text": "only left", "bbox": (79, 100, 500, 112)},
+            {"text": "still left", "bbox": (79, 120, 490, 132)},
+        ]
+        assert detect_column_split(lines, page_width=612) is None

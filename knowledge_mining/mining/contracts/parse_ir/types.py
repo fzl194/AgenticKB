@@ -275,6 +275,7 @@ class ParseIdentity:
     normalizer_version: str | None = None
     reconciler_version: str | None = None
     dependency_fingerprint: str | None = None
+    rule_config_fingerprint: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +638,7 @@ def _parsed_document_to_dict(doc: ParsedDocument) -> dict[str, Any]:
             "normalizer_version": doc.source_identity.normalizer_version,
             "reconciler_version": doc.source_identity.reconciler_version,
             "dependency_fingerprint": doc.source_identity.dependency_fingerprint,
+            "rule_config_fingerprint": doc.source_identity.rule_config_fingerprint,
         },
     }
     if doc.document_snapshot_id is not None:
@@ -686,6 +688,7 @@ def _parsed_document_from_dict(data: dict[str, Any]) -> ParsedDocument:
             normalizer_version=si.get("normalizer_version"),
             reconciler_version=si.get("reconciler_version"),
             dependency_fingerprint=si.get("dependency_fingerprint"),
+            rule_config_fingerprint=si.get("rule_config_fingerprint"),
         ),
         containers=tuple(_container_from_dict(c) for c in data.get("containers", [])),
         elements=tuple(_element_from_dict(e) for e in data.get("elements", [])),

@@ -45,6 +45,7 @@ from knowledge_mining.mining.parse_adapters.native_pdf import (
     NATIVE_PDF_FINGERPRINT,
     NATIVE_PDF_PARSER_ID,
 )
+from knowledge_mining.mining.parse_adapters.rendered_text import render_table_text
 
 PDF_NORMALIZER_VERSION = "pdf-native@1"
 
@@ -185,15 +186,27 @@ def _build_element_graph(
         )
         page_index = _page_index(block)
 
+        cell_spans = _make_cell_spans(element_id, block, page_index)
+        asset: TableAsset | None = None
+        if element_type == "table":
+            asset = _pdf_table_asset(element_id, block, page_index, cell_spans)
+            if asset is not None:
+                assets[asset.table_id] = asset
+        # 整改轮 I-2/I-3：表格 Element.text 是 TableAsset 的统一 rendered
+        # view；PDF 无行号语义，不伪造 source_locator。
+        text = render_table_text(asset) if asset is not None else block.text
+
         elements.append(Element(
             element_id=element_id,
             element_type=element_type,
             order_index=len(elements),
-            text=block.text,
-            normalized_text=block.text.strip(),
+            text=text,
+            normalized_text=text.strip(),
             parent_id=parent_id,
             page_span_ids=(_container_id(page_index),),
-            source_spans=(_make_span(element_id, block, page_index),),
+            source_spans=(
+                _make_span(element_id, block, page_index), *cell_spans,
+            ),
             style=_make_style(block),
             confidence=_make_confidence(block),
             parser_annotations=_make_annotations(block),
@@ -201,10 +214,6 @@ def _build_element_graph(
         relations.extend(_element_relations(
             prev_by_page.get(page_index), parent_id, element_id
         ))
-        if element_type == "table":
-            asset = _pdf_table_asset(element_id, block, page_index)
-            if asset is not None:
-                assets[asset.table_id] = asset
         prev_by_page[page_index] = element_id
 
     return elements, relations, assets
@@ -251,6 +260,39 @@ def _make_span(
         visual_region=visual_region,
         raw_text=block.text or None,
     )
+
+
+def _make_cell_spans(
+    element_id: str, block: BackendBlock, page_index: int
+) -> tuple[EvidenceSpan, ...]:
+    """表格 cell 级 EvidenceSpan（每 cell 自身 bbox，整改轮 I-4）.
+
+    pdfplumber 的 rows[i].cells[j] 提供每格坐标——与 structure["cells"]
+    的 ``bbox``/``evidence_index`` 对齐。
+    """
+    if block.block_type != "table":
+        return ()
+    structure = block.structure or {}
+    raw_cells = structure.get("cells") or []
+    spans: list[EvidenceSpan] = []
+    for k, cell in enumerate(raw_cells):
+        bbox = cell.get("bbox")
+        visual = None
+        if bbox:
+            visual = {
+                "bbox": [float(v) for v in bbox],
+                "page_index": page_index,
+            }
+        spans.append(EvidenceSpan(
+            span_id=f"{element_id}-cell-{k:04d}",
+            page_id=_container_id(page_index) if page_index >= 0 else None,
+            visual_region=visual,
+            native_ref={"page": page_index, "cell": [
+                int(cell["row_index"]), int(cell["column_index"]),
+            ]},
+            raw_text=str(cell.get("text", "")) or None,
+        ))
+    return tuple(spans)
 
 
 def _make_style(block: BackendBlock) -> dict[str, object]:
@@ -304,18 +346,28 @@ def _element_relations(
 
 
 def _pdf_table_asset(
-    element_id: str, block: BackendBlock, page_index: int
+    element_id: str,
+    block: BackendBlock,
+    page_index: int,
+    cell_spans: tuple[EvidenceSpan, ...] = (),
 ) -> TableAsset | None:
     """table 块 structure（rows/cols/cells 含 span）-> TableAsset.
 
     首行 ``is_header=True`` 为映射约定：confidence.type 降权并在
-    provenance 注明；``continuation_of`` 留空（跨页延续是 M4 职责）。
+    provenance 注明；``continuation_of`` 由 Reconciler 回填（不伪造）。
+    cell 级 ``source_span_id`` 经 ``evidence_index`` 关联（整改轮 I-4）。
     """
     structure = block.structure or {}
     raw_cells = structure.get("cells") or []
     rows = int(structure.get("rows") or 0)
     cols = int(structure.get("cols") or 0)
     if not raw_cells or rows <= 0 or cols <= 0:
+        return None
+
+    def _cell_span_id(c: dict[str, Any]) -> str | None:
+        idx = c.get("evidence_index")
+        if isinstance(idx, int) and 0 <= idx < len(cell_spans):
+            return cell_spans[idx].span_id
         return None
 
     cells = tuple(
@@ -326,6 +378,7 @@ def _pdf_table_asset(
             row_span=int(c.get("row_span", 1)),
             column_span=int(c.get("column_span", 1)),
             is_header=int(c["row_index"]) == 0,
+            source_span_id=_cell_span_id(c),
         )
         for c in raw_cells
     )
@@ -337,7 +390,7 @@ def _pdf_table_asset(
         columns=cols,
         cells=cells,
         header_regions=((0, 0),) if has_header else (),
-        continuation_of=None,  # M4 Reconciler 职责，不伪造
+        continuation_of=None,  # Reconciler 职责，不伪造
         confidence=Confidence(
             type=TABLE_HEADER_CONVENTION_CONFIDENCE,
             source=PDF_NORMALIZER_VERSION,

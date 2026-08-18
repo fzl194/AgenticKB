@@ -1,4 +1,10 @@
-# 里程碑 M3：多格式原生解析（纯代码混合路线）—— 交付报告
+# 里程碑 M3A：多格式原生解析 fast-path（纯代码混合路线）—— 交付报告
+
+> **⚠️ 2026-08-17 整改轮状态声明**：本里程碑原名 "M3"，经全格式审计后
+> **重定义为 M3A（原生解析 fast-path）**，不构成 SRS §14 原规划 M3
+> （"至少 native/Docling 两条 route"）的完成。未达成项见文末 §M3 缺口。
+> 本轮整改内容（跨格式 IR 不变量 / 逐格式修复 / Reconciler / Quality
+> Gate / raw replay / golden corpus）见审计文档与 ADR-0003 D-032。
 
 > 日期：2026-08-17
 > 分支：`feat/doc-parse-platform-m0`
@@ -108,3 +114,47 @@ cd knowledge_mining && python -m pytest tests/parse_adapters/ tests/file_inspect
 - Snapshot 正式提交（WP9）：影子制品转正 + SUPERSEDED 语义
 - 云端 OCR/VLM 槽位实现（用户提供模型配置后）
 - Docling 真实接入（如未来需要复杂版面保真增强）
+
+---
+
+## 整改轮（2026-08-17/18）：M3 → M3A 重定义与地基整改
+
+全格式审计（`docs/文档解析平台化-全格式审计与整改-2026-08-17.md`）发现
+8 条跨格式不变量违规与逐格式结构缺陷，按用户指令整改：
+
+### 修复汇总
+
+| 领域 | 内容 |
+|---|---|
+| 契约 v1.2 | `ParseRuleConfig`（阈值指纹）+ `BackendParseArtifact.to_dict/from_dict`（持久化/replay 前提）+ `effective_pipeline_fingerprint()` + bbox 顺序校验（`invalid_bbox_order`） |
+| 不变量 I-1..I-8 | 跨格式 contract tests 统一断言（bbox 角点、表格 Element.text 统一渲染且可由 TableAsset 重算、cell 独立 source_span_id、指纹敏感性、replay 等价、结构诊断不静默、类型不泄漏） |
+| DOCX | w:numPr 列表语义（list_item 层级）；cell 级 OOXML 证据；嵌套表 XML 层抽取；图片/页眉页脚/脚注/批注/文本框计数诊断 |
+| XLSX | Excel Table → 连续数据区域 → used_range 三级识别（不再整 Sheet 一张表）；隐藏行列注记；图表/图片诊断；公式/展示值双读保持 |
+| PPTX | bbox 改 (x0,top,x1,bottom)；text_frame 逐段落拆分（bullet→list_item）；几何带阅读序（不再等同 XML 序）；notes 保留；group 递归；picture→FigureAsset+binary（sha256）；chart/SmartArt 诊断 |
+| HTML | 嵌套列表独立成元素（父项不再吞子项文本）；links 进 annotations；figcaption/caption→caption 元素；语义容器路径；rowspan×colspan **面积上限**（防 10⁸ occupied DoS，实测修复前 105s） |
+| PDF | 双栏跨栏粘连（跨沟行才当通栏锚）；数字开头真标题误杀（"3D Printing…"）；跨栏同带标题误杀（dense_frags 只用行内字符）；表格 bbox/cell 一致（收缩框过滤+紧凑重排+cell bbox 证据）；纯散文页不再进 text 表格回退；家具规则迁出 |
+| MD/TXT | 图片/链接计数诊断；TXT 无 token 切片（守卫固化）；退化输入用例 |
+| Reconciler（C08 最小） | furniture_typing（迁入）、caption_binding、table_continuation、paragraph_continuation；patch log；reconciler_version 回写 |
+| Quality Gate（C09 最小） | 六类指标（字符覆盖率/结构准确率/表格完整率/证据可定位率/阅读序/warning 分布）+ PASS/WARN/FAIL |
+| shadow 链路 | backend raw artifact 持久化（artifact_class=backend_raw）+ `renormalize()` replay（不重跑 parser，§9.5/A09）；reconciler/quality_gate 可选注入 |
+| golden corpus | 50 份（7 格式 × 正例/反例/复杂/退化）+ `tools/golden_benchmark.py` + 阈值守卫测试 |
+
+### 基准结果（50 份）
+
+```text
+字符覆盖率 1.000 | 结构准确率 0.993 | 表格 cell 证据 0.944 | 网格一致性 1.000
+证据可定位率 0.898 | 阅读序单调性 1.000
+决策分布：PASS 43 / WARN 1 / FAIL 5（全部为退化空样本）/ PARSE_FAILED 1（负例）
+```
+
+### M3 缺口（原规划 M3 未达成项——不得以"已预留"冒充"已支持"）
+
+1. **无第二真实后端**：只有 native fast-path 七条 route；Docling/云端
+   parser 未接入（cloud_vlm 仍是 license!=ok 的占位槽位）；
+2. **Router policy 未版本化**：路由规则内嵌代码，无版本化 policy 配置；
+3. **无 fallback attempts**：单 primary 失败即终态，无 Parse Plan 回退链；
+4. **无 Parse Operator（WP7）**：完整 Parse Run 状态机/attempt 事件/
+   超时取消未实现（影子链路仍为 SUCCEEDED/FAILED 两态）；
+5. ~~backend raw replay~~（本轮已补）；~~golden corpus benchmark~~（本轮已补）。
+
+以上 1-4 归 M3B/M4。

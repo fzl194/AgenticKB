@@ -259,7 +259,7 @@ def test_parse_encrypted_pdf_raises_encrypted(parser: NativePdfParser) -> None:
 def test_descriptor_identity(parser: NativePdfParser) -> None:
     d = parser.descriptor
     assert d.parser_id == "native_pdf"
-    assert d.parser_fingerprint == "native_pdf@1.0.0#pdfplumber-0.11.9"
+    assert d.parser_fingerprint == "native_pdf@2.0.0#pdfplumber-0.11.9"
     assert d.supported_mimes == frozenset({"application/pdf"})
     assert {"pages", "tables", "coordinates"} <= d.capabilities
 

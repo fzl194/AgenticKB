@@ -9,7 +9,7 @@
 
 ## 一句话现状
 
-**M0 契约冻结 + M1 文件地基 + M2 Legacy 影子解析 + M3 多格式原生解析已完成**。M3 起进入"真正解析文档"阶段（纯代码混合路线，用户拍板）：Inspector → Router → **7 条 route**（MD/TXT/DOCX/XLSX/PPTX/HTML/PDF，全部工业级成熟库零新增依赖）→ Parse IR（页容器/表格网格/坐标证据/标题树）→ MinIO+PG 影子链路，真实环境 e2e 全绿、发布表零污染。云端 OCR/VLM 槽位已预留（用户配置模型即插即用）。下一站 M4：质量门禁 + Snapshot 正式提交。
+**M0 契约冻结 + M1 文件地基 + M2 Legacy 影子解析 + M3A 原生解析 fast-path（已整改）**。7 条 route（MD/TXT/DOCX/XLSX/PPTX/HTML/PDF）+ 跨格式 IR 不变量契约 + Reconciler + Quality Gate + raw replay + 50 份 golden corpus 基准（六类指标）。**注意：原规划 M3（真实第二后端/版本化 Router policy/fallback attempts/Parse Operator）未达成，现为 M3B/M4 范围**——不得以"已预留"冒充"已支持"。
 
 ## 完成里程碑
 
@@ -18,7 +18,7 @@
 | **M0** | 契约冻结（ADR + Parse IR v0.1 + Object Store Port + DDL + 状态机） | [M0-契约冻结.md](./M0-契约冻结.md) | 211 |
 | **M1** | MinIO 文件管理地基（adapter + 文件管理 + 冻结输入 + 迁移 + 真实环境接通） | [M1-文件地基.md](./M1-文件地基.md) | +158（合计 369） |
 | **M2** | Legacy Shadow Parse（Parser Adapter SDK + MD/TXT 适配器 + 影子写入） | [M2-Legacy影子解析.md](./M2-Legacy影子解析.md) | +45 |
-| **M3** | 多格式原生解析（Inspector + Router + 5 原生适配器 + 云端槽位） | [M3-多格式原生解析.md](./M3-多格式原生解析.md) | +88（合计 517） |
+| **M3A** | 原生解析 fast-path + 整改轮（不变量契约/Reconciler/Quality Gate/replay/golden corpus） | [M3A-原生解析fastpath.md](./M3A-原生解析fastpath.md) | +88 → 整改轮后 scoped 659（见下） |
 
 提交链（分支 `feat/doc-parse-platform-m0`）：
 ```

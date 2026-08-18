@@ -167,7 +167,7 @@ def test_cell_native_ref_evidence_links(parser, normalizer, xlsx_bytes) -> None:
     el, asset = _sheet_table(doc, "Summary")
     span_by_cell = {
         s.native_ref["cell"]: s for s in el.source_spans
-        if s.native_ref is not None
+        if s.native_ref is not None and "cell" in s.native_ref
     }
     assert span_by_cell["B3"].native_ref == {"sheet": "Summary", "cell": "B3"}
     # TableCell.source_span_id -> 元素上声明的 EvidenceSpan
@@ -199,7 +199,7 @@ def test_ir_chain_relations_and_fingerprint(parser, normalizer, xlsx_bytes) -> N
 
     assert doc.source_identity.parser_fingerprint == NATIVE_XLSX_FINGERPRINT
     assert doc.source_identity.parser_fingerprint == (
-        "native_xlsx@1.0.0#openpyxl-3.1.5"
+        "native_xlsx@2.0.0#openpyxl-3.1.5"
     )
 
 
@@ -233,6 +233,167 @@ def test_malicious_sparse_grid_clamped() -> None:
     assert elapsed < 5.0, f"parse took {elapsed:.2f}s (DoS surface open)"
     tables = [b for b in artifact.blocks if b.block_type == "table"]
     assert tables, "sheet lost entirely"
-    assert tables[0].structure["rows"] <= 10_000
-    assert tables[0].structure["cols"] <= 10_000
-    assert tables[0].structure.get("clamped_geometry", {}).get("grid") is True
+    # 整改轮新语义：稀疏远端格独立成 1x1 区域，任何表都不再撑大网格
+    for t in tables:
+        assert t.structure["rows"] <= 10_000
+        assert t.structure["cols"] <= 10_000
+    assert all(
+        t.structure["rows"] * t.structure["cols"] <= 4 for t in tables
+    ), "稀疏格不应产生巨型网格（区域切分应闭环 DoS 面）"
+
+
+# ===========================================================================
+# 整改轮（2026-08-17）：区域识别 / 隐藏态 / 图表诊断 / 统一表格文本
+# ===========================================================================
+
+
+def _xlsx(*sheets):
+    """快捷构造：每参为 (title, {A1: value}) -> bytes."""
+    import io
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    first = True
+    for title, cells in sheets:
+        ws = wb.active if first else wb.create_sheet()
+        first = False
+        ws.title = title
+        for ref, v in cells.items():
+            ws[ref] = v
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _parse_xlsx(data):
+    from knowledge_mining.mining.parse_adapters.native.native_xlsx import (
+        NativeXlsxParser,
+    )
+
+    return NativeXlsxParser().parse(data, mime=XLSX_MIME)
+
+
+def test_excel_table_region_preferred_over_used_range():
+    """命名 Excel Table 存在时：只产该区域，origin=excel_table."""
+    import io
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "列A"; ws["B1"] = "列B"
+    ws["A2"] = "a"; ws["B2"] = "b"
+    ws["E5"] = "散点备注"  # 表外杂散内容：不应混入语义表
+    from openpyxl.worksheet.table import Table
+    ws.add_table(Table(displayName="数据表", ref="A1:B2"))
+    buf = io.BytesIO(); wb.save(buf)
+
+    artifact = _parse_xlsx(buf.getvalue())
+    tables = [b for b in artifact.blocks if b.block_type == "table"]
+    assert len(tables) == 1
+    st = tables[0].structure
+    assert st["rows"] == 2 and st["cols"] == 2
+    assert st["region_origin"].startswith("excel_table:")
+    texts = [c["text"] for c in st["cells"]]
+    assert "散点备注" not in texts
+
+
+def test_multiple_contiguous_regions_become_separate_tables():
+    """空行/空列隔开的两块数据 -> 两个语义表，互不混入."""
+    data = _xlsx(
+        ("S", {
+            "A1": "名", "B1": "值", "A2": "x", "B2": "1",
+            # 空两行 + 错列的第二块
+            "C5": "备注", "D5": "说明", "C6": "n1", "D6": "d1",
+        }),
+    )
+    artifact = _parse_xlsx(data)
+    tables = [b for b in artifact.blocks if b.block_type == "table"]
+    assert len(tables) == 2
+    first = {c["text"] for c in tables[0].structure["cells"]}
+    second = {c["text"] for c in tables[1].structure["cells"]}
+    assert first == {"名", "值", "x", "1"}
+    assert second == {"备注", "说明", "n1", "d1"}
+    assert all(t.structure["region_origin"] == "contiguous_region" for t in tables)
+
+
+def test_single_block_sheet_degrades_to_used_range_origin():
+    data = _xlsx(("S", {"A1": "h1", "B1": "h2", "A2": "1", "B2": "2"}))
+    artifact = _parse_xlsx(data)
+    tables = [b for b in artifact.blocks if b.block_type == "table"]
+    assert len(tables) == 1
+    assert tables[0].structure["region_origin"] == "used_range"
+    assert tables[0].structure.get("header_convention") == "first_row"
+
+
+def test_hidden_rows_and_columns_are_visible_in_structure():
+    import io
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "h"; ws["A2"] = "x"; ws["A3"] = "secret"; ws["A4"] = "y"
+    ws.row_dimensions[3].hidden = True
+    buf = io.BytesIO(); wb.save(buf)
+
+    artifact = _parse_xlsx(buf.getvalue())
+    st = artifact.blocks[0].structure
+    assert st.get("hidden_rows") == [2]  # region 相对索引
+
+
+def test_charts_and_images_are_diagnosed_not_silent():
+    import io
+    from openpyxl import Workbook
+    from openpyxl.chart import BarChart, Reference
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "k"; ws["B1"] = "v"
+    ws["A2"] = "a"; ws["B2"] = "1"
+    chart = BarChart()
+    chart.add_data(Reference(ws, min_col=2, min_row=1, max_row=2))
+    ws.add_chart(chart, "D2")
+    buf = io.BytesIO(); wb.save(buf)
+
+    artifact = _parse_xlsx(buf.getvalue())
+    joined = "\n".join(artifact.warnings)
+    assert "chart" in joined.lower(), f"图表静默丢失: {joined!r}"
+
+
+def test_table_element_text_is_rendered():
+    """Element.text 非空且含表头（统一 rendered view）."""
+    from knowledge_mining.mining.parse_adapters.native.native_xlsx import (
+        NativeXlsxParser, XlsxNormalizer,
+    )
+
+    data = _xlsx(("S", {"A1": "列A", "B1": "列B", "A2": "a", "B2": "b"}))
+    parser = NativeXlsxParser()
+    doc = XlsxNormalizer().normalize(
+        parser.parse(data, mime=XLSX_MIME), source_raw_hash="ff" * 32
+    )
+    tables = [e for e in doc.elements if e.element_type == "table"]
+    assert tables
+    assert "列A" in tables[0].text
+    assert "a" in tables[0].text
+
+
+def test_cell_spans_use_absolute_a1_within_region():
+    """区域不从 A1 起时，cell 证据的 A1 坐标必须是绝对坐标."""
+    from knowledge_mining.mining.parse_adapters.native.native_xlsx import (
+        NativeXlsxParser, XlsxNormalizer,
+    )
+
+    data = _xlsx(("S", {"C5": "h1", "D5": "h2", "C6": "a", "D6": "b"}))
+    doc = XlsxNormalizer().normalize(
+        NativeXlsxParser().parse(data, mime=XLSX_MIME), source_raw_hash="ee" * 32
+    )
+    table = next(e for e in doc.elements if e.element_type == "table")
+    span_ids = {s.span_id: s for s in table.source_spans}
+    asset = doc.structured_assets[f"{table.element_id}-table"]
+    coords = set()
+    for cell in asset.cells:
+        span = span_ids[cell.source_span_id]
+        coords.add(span.native_ref["cell"])
+    assert coords == {"C5", "D5", "C6", "D6"}

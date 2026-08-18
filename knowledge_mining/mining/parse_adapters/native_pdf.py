@@ -1,29 +1,25 @@
-"""Native PDF parser adapter（M3, SRS §C06 / §4.6, ADR-0003 D-028A）.
+"""Native PDF parser adapter（M3, SRS §C06 / §4.6, ADR-0003 D-028A；
+2026-08-17 整改轮：结构性缺陷修复 + 文档级规则迁出）.
 
 核心理念：pdfplumber（pdfminer.six 之上）自带表格网格提取、字符/行级
 坐标与字体信息，本模块**只做映射，不写解析算法**：
 
-- ``page.extract_words(use_text_flow=False, keep_blank_chars=False,
-  extra_attrs=["size"])`` 的 words 按纵坐标聚类成 textline（top 容差），
-  每行产一个 paragraph/heading 块；heading 判定是**映射启发式**：行字号
-  （word size 中位数）> 1.15 × 该页字符字号众数且行长较短 -> heading。
-  该规则置信度有限，标注在 structure（``heading_rule`` /
-  ``type_confidence``），由 Normalizer 落到 ``confidence.type < 0.7``，
-  **不冒充高置信**（SRS §7.4）。
-- ``page.find_tables()`` + ``table.rows[i].cells[j]`` 坐标网格 +
-  ``table.extract()`` -> table 块：相同 bbox 的相邻网格位置即合并单元格，
-  由坐标网格推 row_span/col_span（映射逻辑，非解析算法）。表格区域内的
-  words 跳过，避免重复正文。
-- 页眉页脚判定留 TODO（M4 Reconciler 职责），本适配器不做。
-- 加密 PDF：pdfplumber 打开抛 ``PdfminerException``（args[0] 为 pdfminer
-  的 ``PDFPasswordIncorrect``）-> 包 :class:`EncryptedDocument`（code
-  ``encrypted_document``）；其余第三方异常统一包
-  :class:`ParserAdapterError`，不得穿越适配层（SRS §C06）。
+- ``page.chars`` 直接聚行（CJK-aware 拼接，D-030），行/段/表产块；
+  heading 判定是字号档位 + 编号模式（D-031 验收链），置信度如实降权
+  （SRS §7.4）。
+- ``find_tables`` 三层策略 + 片段聚类第四层（D-031）；
+  **数据核心收缩**后 bbox 与 cell 内容一致（整改轮 P-4）。
+- 双栏阅读序：跨沟行才当通栏锚，其余按中心归栏（整改轮 P-1）。
+- 标题防御：数字前缀噪声只拦无 CJK 短行（P-2）；片段计数只用行内
+  字符（P-3）。
+- 家具标注（跨页重复/页码）**已迁至 Structural Reconciler**——adapter
+  只做页内规则（用户指令：跨元素/跨页规则不进 adapter）。
+- 加密 PDF：pdfplumber 打开抛 ``PdfminerException`` -> 包
+  :class:`EncryptedDocument`；其余第三方异常统一包
+  :class:`ParserAdapterError`（SRS §C06）。
 - 无文本层（整页无字符）-> 该页产一个 ``warning`` 块记录，不伪造内容。
 """
 from __future__ import annotations
-
-from dataclasses import replace
 
 from collections import Counter
 from io import BytesIO
@@ -51,7 +47,7 @@ class EncryptedDocument(ParserAdapterError):
 
 
 NATIVE_PDF_PARSER_ID = "native_pdf"
-NATIVE_PDF_VERSION = "1.0.0"
+NATIVE_PDF_VERSION = "2.0.0"
 NATIVE_PDF_FINGERPRINT = (
     f"{NATIVE_PDF_PARSER_ID}@{NATIVE_PDF_VERSION}"
     f"#pdfplumber-{pdfplumber.__version__}"
@@ -63,15 +59,16 @@ HEADING_SIZE_RATIO = 1.15
 HEADING_MAX_LINE_CHARS = 60
 HEADING_TYPE_CONFIDENCE = 0.6
 
+# 图注前缀（题注不是标题，通用规范形态）。
+import re as _re_mod
+_CAPTION_PREFIX = _re_mod.compile(
+    r"^\s*(Fig(ure)?\.?\s*\d|图\s*\d[-−—–.]|Table\s*\d|表\s*\d[-−—–.])"
+)
+
 # 行聚类纵向容差（pt）。取 6pt：覆盖正文行距的同时吸收上下标
 # （CO2 的下标 "2" top 偏移约 4-5pt，3pt 容差会把它拆成独立"行"，
 # 真实论文验收发现 274 处碎片）。
 LINE_TOP_TOLERANCE = 6.0
-
-# 页眉页脚判定阈值（映射层家具标注，真实论文验收修复）：
-# - 跨页完全重复 ≥3 页的长行 -> page_header/page_footer；
-# - 纯数字/罗马数字短行 -> page_number。
-_FURNITURE_REPEAT_PAGES = 3
 
 # 表格识别策略（真实论文验收三轮修正）：
 # - 主策略 MIXED：横线切行 + 文本对齐切列——三线表有横线无竖线，
@@ -146,7 +143,8 @@ class NativePdfParser:
                     blocks.extend(produced)
                     warnings.extend(page_warnings)
                     page_sizes.append((float(page.width), float(page.height)))
-                _annotate_furniture(blocks)
+                # 家具标注（跨页重复/页码）已迁至 Structural Reconciler
+                # （IR 级文档规则，整改轮用户指令：adapter 不再膨胀）。
             except Exception as exc:
                 # 中段损坏（如 pdfminer MalformedPDFException 在第 N 页）
                 # 也归一，不裸抛第三方异常（§C06，评审 MED）。
@@ -164,7 +162,7 @@ class NativePdfParser:
             parser_version=NATIVE_PDF_VERSION,
             mime=mime.lower(),
             blocks=tuple(blocks),
-            raw_output="",  # 二进制格式无解码原文，replay 直接重跑 parse
+            raw_output="",  # 二进制格式无解码原文；replay 走 artifact 序列化（v1.2）
             warnings=tuple(warnings),
             usage=usage,
         )
@@ -209,8 +207,8 @@ def _page_to_blocks(
     # 按行片段数（列对齐信号）求收缩框。pdfplumber Table.bbox 只读且
     # crop 重查会丢行——收缩结果走旁路表：``_table_block`` 以收缩框
     # 报告 bbox，正文过滤（table_boxes）也用收缩框，使标题/正文行
-    # 不再被当作表内内容剔除；表格行列数据仍用原 extract（顶部偶带
-    # 一行页眉文本，由家具标注兜底）。
+    # 不再被当作表内内容剔除；整改轮 P-4 起，cell 内容也按收缩框
+    # 过滤并紧凑重排（bbox 与 cell 覆盖一致）。
     shrink_overrides: dict[int, tuple] = {}
     for ti, table in enumerate(tables):
         bx = tuple(table.bbox)
@@ -249,19 +247,90 @@ def _page_to_blocks(
     lines = group_chars_into_lines(
         [c for c in page.chars if not _in_any_box(c, table_boxes)]
     )
+    # 双栏阅读序重排（验收 v8 + 整改轮 P-1）：跨沟通栏行作锚，
+    # 栏内行按中心归栏、先左后右。
+    lines = reorder_columns(lines, page_width=float(page.width))
     heading_lines: list[dict[str, Any]] = []
     body_lines: list[dict[str, Any]] = []
     for ln in lines:
         size = float(ln.get("size") or 0.0)
+        # 页面字号纯度门（验收 v9）：字号众数占页内字符 <50% 时
+        # （Proof 稿/图密集页），字号启发式不可靠——禁用，仅编号模式。
+        modal_ratio = _modal_size_ratio(page.chars)
         by_size = (
             modal_size > 0
+            and modal_ratio >= 0.50
             and size > HEADING_SIZE_RATIO * modal_size
             and len(ln["text"]) <= HEADING_MAX_LINE_CHARS
         )
         # 编号标题（验收 v3，通用规则非定制）：与正文同字号的
         # "第X章 …"/"1.2.3 …" 是中文学术/技术文档的通行标题形态，
         # 字号启发式天然盲区；两个信号任一命中即为 heading。
-        by_pattern = numbered_heading_level(ln["text"]) is not None
+        # 微缩字防御（验收 v9 收尾）：图内坐标轴标签（1.75-2.5pt，proof
+        # 缩放）的 "0.4 nile" 形似点分编号——但真标题字号不可能 <60%
+        # 正文。字号下限一票否决两个信号。
+        size_floor_ok = size >= 0.60 * modal_size if modal_size > 0 else True
+        by_pattern_precheck = (
+            numbered_heading_level(ln["text"]) is not None and size_floor_ok
+        )
+        by_pattern = by_pattern_precheck
+        # 图区/图注防御（验收 v9，通用）：图内刻度文字（"0.6 de …"轴刻度）
+        # 字号常大于正文被误判标题；图注行（"Fig. N" / "图 N-" / "Table N"
+        # 开头）是题注不是标题。
+        is_caption = bool(_CAPTION_PREFIX.match(ln["text"]))
+        # 整改轮 P-3：片段数只统计**行内**字符（x 落在行 bbox 内）——
+        # 此前用全页同 top 带字符，双栏页左栏标题会因右栏正文被判
+        # dense_frags 误杀。
+        dense_frags = _line_segments(
+            [
+                c for c in page.chars
+                if ln["bbox"][1] <= c["top"] <= ln["bbox"][3]
+                and ln["bbox"][0] - 1 <= c["x0"]
+                and c["x1"] <= ln["bbox"][2] + 1
+            ]
+        ) >= 4
+        # 文本质量门（验收 v9）：标题须有"词性内容"——字母词 >=2 个
+        # （含 CJK 计 1 词）。纯数字/符号串（公式、坐标刻度、图例数值）
+        # 不是标题。
+        word_count = len(_re_mod.findall(r"[A-Za-z]{2,}", ln["text"]))
+        cjk = _re_mod.search(r"[一-鿿]", ln["text"]) is not None
+        # 竖排标签粘连检测：x 拆分残余把多个竖排字母粘成"伪词"（如
+        # "namshyvritll"），特征是长词中元音占比异常低（<20%）。
+        gibberish = any(
+            len(w) >= 6 and sum(c in "aeiouAEIOU" for c in w) / len(w) < 0.2
+            for w in _re_mod.findall(r"[A-Za-z]{4,}", ln["text"])
+        )
+        # 竖排轴标签残余（验收 v9 收尾 + 整改轮 P-2 收紧）："0.4 nile" /
+        # "0.1 itci"——数字前缀 + 单个短乱序词的**短行**。真标题形态
+        # （"3D Printing Technology"/含 CJK）有多个词或 CJK 内容，不受
+        # 此防御影响（整改轮 P-2 误杀修复）。
+        digit_leading_noise = (
+            bool(_re_mod.match(r"^[\d.\s-]+[A-Za-z]", ln["text"].strip()))
+            and not by_pattern_precheck
+            and not cjk
+            and word_count <= 1
+            and len(ln["text"].strip()) <= 12
+        )
+        text_is_wordy = (
+            word_count >= 2 or (word_count >= 1 and cjk)
+        ) and not gibberish and not digit_leading_noise
+        # 句子形态防御（验收 v9 + 整改轮 P-2）：小写开头不是标题。
+        # 数字开头不再并入小写判定（"3D 打印…"/"5G 网络…"是真标题，
+        # 噪声形态由上方 digit_leading_noise 的无 CJK 条件精确拦截）。
+        starts_lower = bool(
+            _re_mod.match(r"^[a-z]", ln["text"].strip())
+        )
+        ends_period = ln["text"].rstrip().endswith((".", "。", ";", "；"))
+        # 缺字符号（cid:N）密集的行是公式/特殊字体重排区，不是标题
+        cid_heavy = ln["text"].count("(cid:") >= 1
+        # 注意优先级：by_pattern（编号标题）是精确信号——句式/词性防御
+        # 只约束 by_size（字号启发式），不否决编号命中（否则"1.1 研究
+        # 背景"被数字开头防御误伤，验收 v9 回归发现）。
+        if (is_caption or dense_frags or not text_is_wordy
+                or starts_lower or ends_period or cid_heavy):
+            by_size = False
+        if is_caption or dense_frags or cid_heavy:
+            by_pattern = False
         if by_size or by_pattern:
             enriched = dict(ln)
             if by_pattern and not by_size:
@@ -276,8 +345,6 @@ def _page_to_blocks(
     paragraphs = group_lines_into_paragraphs(
         body_lines, intra_gap_threshold=_paragraph_gap_threshold(body_lines)
     )
-    # 注：早期"_shrink_table_below_headings"已被数据核心收缩
-    # （shrink_bbox_to_data_core，旁路 bbox_override）取代并移除接线。
     text_blocks = [
         _line_block(ln, modal_size, container_ref, doc_heading_sizes)
         for ln in [*heading_lines, *paragraphs]
@@ -285,42 +352,6 @@ def _page_to_blocks(
 
     ordered = _sort_by_top(text_blocks + table_blocks)
     return ordered, []
-
-
-def _annotate_furniture(blocks: list[BackendBlock]) -> None:
-    """文档级家具标注（真实论文验收修复）：页眉/页码改块类型.
-
-    跨页重复文本按 :func:`classify_furniture` 判定；被标注的块改
-    ``page_header``/``page_number`` 类型（Normalizer 会映射为对应
-    element_type，下游可按类型过滤而不丢内容）。只改类型与注记，
-    不删除任何块（去重是 M4 Reconciler 职责）。
-    """
-    from collections import defaultdict
-
-    seen: dict[str, set[int]] = defaultdict(set)
-    for block in blocks:
-        text = (block.text or "").strip()
-        if text and block.container_ref:
-            index = block.container_ref.get("index")
-            if isinstance(index, int):
-                seen[text].add(index)
-
-    entries = [
-        {"text": text, "pages": pages} for text, pages in seen.items()
-    ]
-    verdicts = classify_furniture(entries, page_count=len(seen))
-    by_text = {
-        entry["text"]: verdict
-        for entry, verdict in zip(entries, verdicts)
-    }
-    for i, block in enumerate(blocks):
-        furniture = by_text.get((block.text or "").strip())
-        if furniture is not None and block.block_type in ("paragraph", "heading"):
-            structure = dict(block.structure)
-            structure["furniture"] = True
-            blocks[i] = replace(
-                block, block_type=furniture, structure=structure
-            )
 
 
 def _paragraph_gap_threshold(lines: list[dict[str, Any]]) -> float:
@@ -349,6 +380,10 @@ def _find_tables_with_fallback(page: Any) -> list[Any]:
     按文本对齐推断，能覆盖该形态（真实论文验收发现，p28 三线表）。
     text 策略对稀疏正文有误报（单列文本被当表），故回退结果必须
     ≥2 行且 ≥2 列才接受；两次都失败（异常）返回空。
+
+    整改轮 P-2 附带：text 回退（第 3/4 层）只在页面存在**多片段行**
+    （列对齐信号）时启用——纯散文页（每行单片段）不进 text 回退，
+    否则词距会被切成 2 列假表（"3D|Printing" 形态）。
     """
     # 三层策略（验收三轮修正）：默认（全线条线框表，最可靠）→
     # mixed（横线切行+文本切列，三线表）→ text（无横线表，误报高，
@@ -364,6 +399,8 @@ def _find_tables_with_fallback(page: Any) -> list[Any]:
                 return accepted
         except Exception:  # noqa: BLE001
             continue
+    if not _page_has_multifragment_lines(page):
+        return []  # 无列对齐信号：text 回退只会产假表
     accepted = []
     try:
         for table in page.find_tables(TABLE_SETTINGS_TEXT):
@@ -380,6 +417,31 @@ def _find_tables_with_fallback(page: Any) -> list[Any]:
         return _tables_from_fragment_blocks(page)
     except Exception:  # noqa: BLE001
         return []
+
+
+def _page_has_multifragment_lines(page: Any) -> bool:
+    """页面是否存在多片段行（列对齐信号，text 回退的前置门槛）.
+
+    按**原始 top 带**计算（v8 的 x 拆分会把同 top 的列内容拆成独立
+    行，逐行判定永远只见 1 片段）——同 top 带的全部字符一起做片段数。
+    """
+    try:
+        visible = [
+            c for c in page.chars if (c.get("text") or "").strip()
+        ]
+        visible.sort(key=lambda c: (c["top"], c["x0"]))
+        row: list[dict[str, Any]] = []
+        anchor: float | None = None
+        for ch in visible:
+            if anchor is None or abs(ch["top"] - anchor) > LINE_TOP_TOLERANCE:
+                if _line_segments(row) >= 2:
+                    return True
+                row = []
+                anchor = ch["top"]
+            row.append(ch)
+        return _line_segments(row) >= 2
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _tables_from_fragment_blocks(page: Any) -> list[Any]:
@@ -422,6 +484,92 @@ def _line_segments(line_chars: list[dict[str, Any]], gap: float = 20.0) -> int:
         else:
             frags.append([c["x0"], c["x1"]])
     return len(frags)
+
+
+def detect_column_split(
+    lines: list[dict[str, Any]],
+    page_width: float,
+    min_lines: int = 8,
+) -> tuple[float, list[dict[str, Any]]] | None:
+    """双栏检测（通用，验收 v8 + 整改轮 P-1）：(栏边界 x, 通栏行) 或 None.
+
+    判定：以页宽中点做严格二分建立左缘带/右缘带，两带有稳定间隙
+    （>=15pt）即为双栏。**通栏行收紧为"跨沟行"**（x0 < 左缘 且
+    x1 > 右缘）——左栏略过中线但未跨沟的长行不再被误判通栏锚（整改轮
+    P-1：误锚会把右栏内容插到左栏中间）。其余越线行按中心归栏。
+    """
+    if len(lines) < min_lines:
+        return None
+    mid = page_width / 2
+    strict_left = [ln for ln in lines if ln["bbox"][2] <= mid + 10]
+    strict_right = [ln for ln in lines if ln["bbox"][0] >= mid - 10]
+    if len(strict_left) < max(2, min_lines // 2) or len(strict_right) < max(
+        2, min_lines // 2
+    ):
+        return None
+    if len(strict_left) + len(strict_right) < 0.5 * len(lines):
+        return None
+    left_edge = max(ln["bbox"][2] for ln in strict_left)
+    right_edge = min(ln["bbox"][0] for ln in strict_right)
+    if right_edge - left_edge < 15:
+        return None
+    fullwidth = []
+    for ln in lines:
+        if ln in strict_left or ln in strict_right:
+            continue
+        x0, _, x1, _ = ln["bbox"]
+        if x0 < left_edge and x1 > right_edge:
+            fullwidth.append(ln)  # 真跨沟：通栏锚
+    return (left_edge + right_edge) / 2, fullwidth
+
+
+def reorder_columns(
+    lines: list[dict[str, Any]], page_width: float
+) -> list[dict[str, Any]]:
+    """双栏阅读序重排：跨沟通栏行按 top 原位，栏内行先左后右.
+
+    栏归属按行**中心点**（整改轮 P-1）：中心 < 边界归左栏（覆盖左栏
+    长行越过中线的情形），>= 边界归右栏。无双栏结构时原样返回。
+    """
+    detected = detect_column_split(lines, page_width)
+    if detected is None:
+        return lines
+    boundary, fullwidth = detected
+    anchors = sorted(fullwidth, key=lambda ln: ln["bbox"][1])
+    left = [
+        ln for ln in lines
+        if ln not in fullwidth
+        and (ln["bbox"][0] + ln["bbox"][2]) / 2 < boundary
+    ]
+    right = [
+        ln for ln in lines
+        if ln not in fullwidth
+        and (ln["bbox"][0] + ln["bbox"][2]) / 2 >= boundary
+    ]
+    out: list[dict[str, Any]] = []
+    anchor_tops = [a["bbox"][1] for a in anchors]
+    # 锚点把页面分成带；带内先左后右
+    bands = []
+    prev_top = 0.0
+    for at in anchor_tops + [float("inf")]:
+        bands.append((prev_top, at))
+        prev_top = at
+    for lo, hi in bands:
+        band_anchors = [
+            a for a in anchors if lo <= a["bbox"][1] < hi
+        ]
+        band_left = [
+            ln for ln in left if lo <= ln["bbox"][1] < hi
+        ]
+        band_right = [
+            ln for ln in right if lo <= ln["bbox"][1] < hi
+        ]
+        out.extend(
+            sorted(band_anchors, key=lambda ln: ln["bbox"][1])
+        )
+        out.extend(sorted(band_left, key=lambda ln: ln["bbox"][1]))
+        out.extend(sorted(band_right, key=lambda ln: ln["bbox"][1]))
+    return out
 
 
 def cluster_fragment_lines(
@@ -583,8 +731,6 @@ def _is_plausible_table(table: Any, page: Any) -> bool:
         return True
     except Exception:  # noqa: BLE001 —— 单表判定失败按不成立处理
         return False
-    except Exception:  # noqa: BLE001 —— 表格识别失败不阻断整页解析
-        return []
 
 
 def _no_text_layer_block(container_ref: dict[str, Any]) -> BackendBlock:
@@ -595,6 +741,14 @@ def _no_text_layer_block(container_ref: dict[str, Any]) -> BackendBlock:
         container_ref=container_ref,
         structure={"reason": "no_text_layer"},
     )
+
+
+def _modal_size_ratio(chars: list[dict[str, Any]]) -> float:
+    """页内字号众数的字符占比（纯度）。Proof 稿/图密集页 <0.5。"""
+    if not chars:
+        return 0.0
+    counter = Counter(round(float(c.get("size") or 0.0), 1) for c in chars)
+    return counter.most_common(1)[0][1] / len(chars)
 
 
 def _modal_char_size(chars: list[dict[str, Any]]) -> float:
@@ -637,13 +791,29 @@ def group_chars_into_lines(
     # 纯空白字符不参与行文本（extract_words 原本就会丢弃；保留会带来
     # 行首/行中杂散空格），间距由 x0/x1 计算不需要它们。
     visible = [c for c in chars if (c.get("text") or "").strip()]
-    lines: list[list[dict[str, Any]]] = []
+    raw_lines: list[list[dict[str, Any]]] = []
     anchor: float | None = None
     for ch in sorted(visible, key=lambda c: (c["top"], c["x0"])):
         if anchor is None or abs(ch["top"] - anchor) > LINE_TOP_TOLERANCE:
-            lines.append([])
+            raw_lines.append([])
             anchor = ch["top"]
-        lines[-1].append(ch)
+        raw_lines[-1].append(ch)
+    # x 断点拆分（验收 v8，通用）：同一 top 的字符若出现大 x 间隙
+    # （> 栏间隙阈值），说明横跨了版面元素——左右双栏同行、行号与
+    # 正文、表格外列——拆成独立段，避免阅读序左右粘连。
+    lines: list[list[dict[str, Any]]] = []
+    for row in raw_lines:
+        row.sort(key=lambda c: c["x0"])
+        seg: list[dict[str, Any]] = [row[0]]
+        for c in row[1:]:
+            gap = c["x0"] - seg[-1]["x1"]
+            size = max(float(c.get("size") or 0.0), 1.0)
+            if gap > max(25.0, 2.0 * size):
+                lines.append(seg)
+                seg = [c]
+            else:
+                seg.append(c)
+        lines.append(seg)
 
     out: list[dict[str, Any]] = []
     for line_chars in lines:
@@ -695,40 +865,8 @@ def _join_line_text(line_chars: list[dict[str, Any]]) -> str:
     return "".join(parts)
 
 
-_ROMAN = {"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
-          "xi", "xii", "xiii", "xiv", "xv"}
-
-
-def classify_furniture(
-    lines: list[dict[str, Any]], page_count: int
-) -> list[str | None]:
-    """行级家具标注（页眉/页脚/页码），纯函数。
-
-    输入行 dict 带 ``text`` 与 ``pages``（该文本出现的页集合）：
-    - 跨 ≥3 页完全相同且长度 >12 的行 -> ``page_header``（页码 ≤6 字符
-      单独分类，>12 字符的跨页重复不可能是正文；不区分上下，
-      位置由调用方 bbox 补充，本函数只按重复性判定）；
-    - 纯数字 / 罗马数字的短行（≤6 字符）-> ``page_number``；
-    - 其余 -> None（正常内容）。
-
-    只标注不删除（SRS §4.8：页眉页脚去重是 Reconciler 职责；适配层
-    先把可判定的家具标出来，M4 可直接消费）。
-    """
-    verdicts: list[str | None] = []
-    for line in lines:
-        text = (line.get("text") or "").strip()
-        pages = line.get("pages") or set()
-        if len(text) > 12 and len(pages) >= _FURNITURE_REPEAT_PAGES:
-            verdicts.append("page_header")
-            continue
-        compact = text.replace(" ", "")
-        if len(compact) <= 6 and (
-            compact.isdigit() or compact.lower() in _ROMAN
-        ):
-            verdicts.append("page_number")
-            continue
-        verdicts.append(None)
-    return verdicts
+#: 家具判定已整体迁至 ``mining/parse_reconciler``（IR 级文档规则，
+#: 整改轮用户指令：跨页/跨元素规则不再放在 adapter）。
 
 
 def heading_levels_for(
@@ -810,31 +948,19 @@ def merge_heading_runs(
     return out
 
 
-def _shrink_table_below_headings(table: Any, heading_lines: list[dict[str, Any]]) -> Any:
-    """表格 bbox 顶边收缩：heading 行不属表格（通用防御，验收 v4）.
-
-    pdfplumber 的 mixed 策略有时把标题/页眉行圈进表格首行（"第二章…"
-    被吞）。规则：若 heading 行与表格 bbox 相交，表格顶边下压到这些行
-    的下沿——标题永远不属于表格，这是文档语义而非文档特定。
-    """
-    bx = list(table.bbox)
-    for line in heading_lines:
-        lb = line["bbox"]
-        # 相交判定（heading 行与表格顶带重叠）
-        if bx[0] < lb[2] and lb[0] < bx[2] and lb[1] < bx[3] and lb[3] > bx[1]:
-            if lb[3] > bx[1]:
-                bx[1] = max(bx[1], lb[3])
-    table.bbox = tuple(bx)
-    return table
+# 注：``_shrink_table_below_headings``（验收 v4）已死代码化——被数据核心
+# 收缩（shrink_bbox_to_data_core + bbox_override 旁路）取代，整改轮删除。
 
 
 def numbered_heading_level(text: str) -> int | None:
-    """中文文档编号标题模式 -> 层级（纯映射规则，验收 v3）.
+    """中文文档编号标题模式 -> 层级（纯映射规则，验收 v3 + 整改轮 P-2）.
 
     - ``第X章 …``（X 为中文数字，支持组合如"十二"）-> level 1；
-    - ``1.2 …`` / ``1.2.3 …`` / ``2.3.1.4 …``（1-4 级点分编号 + 空格 +
-      标题文字，且标题文字不以标点结尾）-> 编号段数 + 1；
-    - 其余 -> None（普通句子/年份/表号"表 2-2"等不匹配）。
+    - ``1.2 …`` / ``1.2.3 …``（1-4 级点分编号 + 空格 + 标题文字）->
+      编号段数 + 1。**纯拉丁标题必须以大写开头**（整改轮：拦截
+      "0.4 nile" 类轴刻度被编号模式误升标题；真实英文标题首字母
+      大写是排版惯例）；
+    - 其余 -> None。
     """
     import re
 
@@ -848,11 +974,14 @@ def numbered_heading_level(text: str) -> int | None:
         if len(digits) == 2 and digits[0] == "十" and digits[1] in _CN_NUM:
             return 1
         return None
-    m2 = re.match(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s+(\S[^。；，！？]{1,40})$", s)
+    m2 = re.match(
+        r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s+([一-鿿A-Za-z][^。；，！？]{1,40})$",
+        s,
+    )
     if m2:
-        # 排除"表 2-2""图 1-1"类引用（开头不是数字已被正则排除）；
-        # 排除句尾是标点的普通句（正则已限）；年份如 "2023 年" 不带点分段
-        # "1.2"(1个点)->2、"1.2.2"(2个点)->3：层级=点数+1
+        title = m2.group(2)
+        if not _re_mod.search(r"[一-鿿]", title) and not title[0].isupper():
+            return None  # 纯拉丁小写开头：轴刻度/杂讯（整改轮 P-2）
         return m2.group(1).count(".") + 1
     return None
 
@@ -982,9 +1111,10 @@ def _table_block(
     """pdfplumber Table -> table 块（cells 坐标网格推 span）.
 
     ``bbox_override``：数据核心收缩框（pdfplumber Table.bbox 只读，
-    收缩结果经旁路传入；行列数据保持原 extract）。
+    收缩结果经旁路传入）。整改轮 P-4：**cell 内容与收缩框一致**——
+    中心落在收缩框外的网格组被剔除，行列号紧凑重排。
     """
-    structure = _table_structure(table)
+    structure = _table_structure(table, core=bbox_override)
     box = bbox_override or tuple(float(v) for v in table.bbox)
     return BackendBlock(
         block_type="table",
@@ -996,16 +1126,20 @@ def _table_block(
     )
 
 
-def _table_structure(table: Any) -> dict[str, Any]:
+def _table_structure(
+    table: Any, core: tuple | None = None
+) -> dict[str, Any]:
     """rows[i].cells[j] 坐标网格 + extract() 文本 -> 行列/单元格/span.
 
     pdfplumber 中合并单元格表现为多个网格位置共享同一 bbox，且
     ``extract()`` 在被覆盖位置返回 None；相同 bbox 的网格位置分组合并
     为一个逻辑单元格，span 由该组在网格上的行列延展推出。
+
+    整改轮 P-4：``core``（收缩框）给出时，组与框无实质垂直重叠的 cell
+    剔除，行列号按保留网格紧凑重排——报告的 bbox 与 cell 内容覆盖一致。
+    每 cell 携带自身 bbox（供 cell 级 EvidenceSpan）与 ``evidence_index``。
     """
     rows = list(table.rows)
-    n_rows = len(rows)
-    n_cols = max((len(r.cells) for r in rows), default=0)
     text_grid = table.extract() or []
 
     groups: dict[tuple[float, ...], list[tuple[int, int]]] = {}
@@ -1015,24 +1149,72 @@ def _table_structure(table: Any) -> dict[str, Any]:
                 continue
             groups.setdefault(tuple(float(v) for v in bbox), []).append((i, j))
 
+    kept: list[tuple[tuple[float, ...], list[tuple[int, int]]]] = []
+    for group_bbox, positions in groups.items():
+        if core is not None:
+            # 垂直重叠判定（整改轮 P-4 修正）：收缩顶边取的是字符 top，
+            # 而单元格 bbox 向上含行距/框线 padding——首数据行 cell 会
+            # 略高于收缩线。用"有实质重叠"（>2pt）代替中心点在框内。
+            overlap = (
+                group_bbox[3] > core[1] + 2
+                and group_bbox[1] < core[3] - 2
+                and group_bbox[2] > core[0]
+                and group_bbox[0] < core[2]
+            )
+            if not overlap:
+                continue  # 收缩框外：与报告 bbox 不一致，剔除（P-4）
+        kept.append((group_bbox, positions))
+
+    if not kept:
+        return {"rows": 0, "cols": 0, "cells": []}
+
+    # 幻影空行/空列剔除（整改轮 P-4 附带）：text 策略按文本行切 row，
+    # 字号差异的行间空洞会成为"整行全空"的幻影组——剔除整行全空的
+    # 组合（真实稀疏表的空格总有同行非空邻居，不受影响）。
+    def _text_at(i0: int, j0: int) -> str:
+        if i0 < len(text_grid) and j0 < len(text_grid[i0]):
+            return str(text_grid[i0][j0] or "").strip()
+        return ""
+
+    kept = [
+        (group_bbox, positions)
+        for group_bbox, positions in kept
+        if _text_at(
+            min(i for i, _ in positions), min(j for _, j in positions)
+        )
+    ]
+    if not kept:
+        return {"rows": 0, "cols": 0, "cells": []}
+
+    # 紧凑重排行列号（被剔除的行/列不留空洞）
+    kept_rows = sorted({i for _, positions in kept for i, _ in positions})
+    kept_cols = sorted({j for _, positions in kept for _, j in positions})
+    row_map = {i: new for new, i in enumerate(kept_rows)}
+    col_map = {j: new for new, j in enumerate(kept_cols)}
+
     cells: list[dict[str, Any]] = []
-    for positions in groups.values():
+    for k, (group_bbox, positions) in enumerate(kept):
         i0 = min(i for i, _ in positions)
         j0 = min(j for _, j in positions)
         row_span = max(i for i, _ in positions) - i0 + 1
         col_span = max(j for _, j in positions) - j0 + 1
-        raw = ""
-        if i0 < len(text_grid) and j0 < len(text_grid[i0]):
-            raw = text_grid[i0][j0] or ""
         cells.append({
-            "row_index": i0,
-            "column_index": j0,
+            "row_index": row_map[i0],
+            "column_index": col_map[j0],
             "row_span": row_span,
             "column_span": col_span,
-            "text": str(raw),
+            "text": _text_at(i0, j0),
+            "bbox": [group_bbox[0], group_bbox[1], group_bbox[2], group_bbox[3]],
+            "evidence_index": k,
         })
     cells.sort(key=lambda c: (c["row_index"], c["column_index"]))
-    return {"rows": n_rows, "cols": n_cols, "cells": cells}
+    for k, cell in enumerate(cells):
+        cell["evidence_index"] = k  # 排序后重编证据索引
+    return {
+        "rows": len(kept_rows),
+        "cols": len(kept_cols),
+        "cells": cells,
+    }
 
 
 def _table_text(structure: dict[str, Any]) -> str:

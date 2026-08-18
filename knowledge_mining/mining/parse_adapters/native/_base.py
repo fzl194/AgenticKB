@@ -6,18 +6,24 @@
 - 逐元素 next_in_reading_order；
 - ``stable_element_id(scope=source_raw_hash, order_index)`` 纯位置 id；
 - structure 驱动的 TableAsset 构建（cells 网格 + span + 首行 is_header 约定，
-  cell 可用 ``evidence_index`` 关联到元素级 EvidenceSpan）；
+  cell 可用 ``evidence_index`` 关联到 cell 级 EvidenceSpan）；
 - 产出后强制 ``parse_ir.validate``，error-level issue -> raise ValueError
   （normalization failure 不可进入质量门禁，SRS §4.7）。
 
-差异点（容器构造、span 构造、容器归属）以钩子方法下放到子类：
-``_build_containers`` / ``_container_id_for`` / ``_make_spans`` /
-``_element_type_for`` / ``_table_asset``。
-M2 的 ``LegacyLineNormalizer`` 保持不动（纪律：不修改 M2 既有文件）。
+整改轮（2026-08-17）新增骨架级不变量：
+- 表格 Element.text 一律由 TableAsset 经 ``render_table_text`` 渲染
+  （事实源 -> rendered view，I-2/I-3）；
+- cell 级 EvidenceSpan 钩子（``_make_cell_spans``，I-4）；
+- ``rule_config`` 注入 ``ParseIdentity.rule_config_fingerprint``
+  （阈值变化 -> 指纹变化，I-5）；
+- ``_extra_assets`` / ``_element_metadata`` 钩子（figure 资产 / 语义元数据）。
+
+差异点（容器构造、span 构造、容器归属）以钩子方法下放到子类。
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 from knowledge_mining.mining.contracts.parse_ir import (
     PARSE_IR_SCHEMA_VERSION,
@@ -37,7 +43,9 @@ from knowledge_mining.mining.contracts.parse_ir import (
 from knowledge_mining.mining.contracts.parser_adapter import (
     BackendBlock,
     BackendParseArtifact,
+    ParseRuleConfig,
 )
+from knowledge_mining.mining.parse_adapters.rendered_text import render_table_text
 
 
 class BaseNativeNormalizer:
@@ -49,13 +57,19 @@ class BaseNativeNormalizer:
     _default_fingerprints: dict[str, str] = {}
     #: 子类可覆盖：backend block_type -> element_type 映射表。
     _element_type_map: dict[str, str] = {}
+    #: 子类可覆盖：默认规则配置（快照进 rule_config_fingerprint）。
+    default_rule_config: ParseRuleConfig = ParseRuleConfig()
 
     def __init__(
-        self, *, parser_fingerprints: Mapping[str, str] | None = None
+        self,
+        *,
+        parser_fingerprints: Mapping[str, str] | None = None,
+        rule_config: ParseRuleConfig | None = None,
     ) -> None:
         merged = dict(self._default_fingerprints)
         merged.update(parser_fingerprints or {})
         self._fingerprints = merged
+        self.rule_config = rule_config or self.default_rule_config
 
     # -- 模板方法 ---------------------------------------------------------
 
@@ -68,7 +82,7 @@ class BaseNativeNormalizer:
     ) -> ParsedDocument:
         warnings = list(artifact.warnings)
         containers = self._build_containers(artifact)
-        elements, relations, assets = self._build_element_graph(
+        elements, relations, assets, binaries = self._build_element_graph(
             artifact.blocks, source_raw_hash, containers, warnings
         )
         doc = ParsedDocument(
@@ -80,11 +94,13 @@ class BaseNativeNormalizer:
                     f"{artifact.parser_id}@{artifact.parser_version}",
                 ),
                 normalizer_version=self.normalizer_version,
+                rule_config_fingerprint=self.rule_config.config_fingerprint(),
             ),
             containers=containers,
             elements=tuple(elements),
             relations=tuple(relations),
             structured_assets=assets,
+            binary_assets=binaries,
             diagnostics=Diagnostics(
                 parser_name=artifact.parser_id,
                 parser_version=artifact.parser_version,
@@ -114,11 +130,14 @@ class BaseNativeNormalizer:
         source_raw_hash: str,
         containers: tuple[Container, ...],
         warnings: list[str],
-    ) -> tuple[list[Element], list[Relation], dict[str, TableAsset]]:
+    ) -> tuple[
+        list[Element], list[Relation], dict[str, TableAsset], dict[str, Any]
+    ]:
         """逐块编译 element 图：类型映射 -> stable id -> parent 链 -> span."""
         elements: list[Element] = []
         relations: list[Relation] = []
         assets: dict[str, TableAsset] = {}
+        binaries: dict[str, Any] = {}
         heading_stack: list[tuple[int, str]] = []
         prev_id: str | None = None
         last_container: str | None = None
@@ -139,28 +158,45 @@ class BaseNativeNormalizer:
                 heading_stack, block, element_type, element_id
             )
             spans = self._make_spans(element_id, block, container_id)
+            cell_spans = self._make_cell_spans(element_id, block, container_id)
+
+            asset: TableAsset | None = None
+            if element_type == "table":
+                asset = self._table_asset(element_id, block, cell_spans, container_id)
+                if asset is not None:
+                    assets[asset.table_id] = asset
+            text = render_table_text(asset) if asset is not None else block.text
+
+            extra = self._extra_assets(element_id, block, container_id)
+            extra_asset = extra.get("asset")
+            if extra_asset is not None:
+                asset_id = getattr(
+                    extra_asset, "figure_id", None
+                ) or getattr(extra_asset, "formula_id", None)
+                if asset_id:
+                    assets[asset_id] = extra_asset
+            binary_pair = extra.get("binary")
+            if binary_pair is not None:
+                binaries[binary_pair[0]] = binary_pair[1]
 
             elements.append(Element(
                 element_id=element_id,
                 element_type=element_type,
                 order_index=order,
-                text=block.text,
-                normalized_text=block.text.strip(),
+                text=text,
+                normalized_text=text.strip(),
                 parent_id=parent_id,
                 page_span_ids=(container_id,) if container_id else (),
-                source_spans=spans,
+                source_spans=(*spans, *cell_spans),
                 style=_make_style(block),
                 parser_annotations=_filtered_annotations(block),
                 confidence=Confidence(source="native"),
+                metadata=self._element_metadata(block),
             ))
             relations.extend(_element_relations(prev_id, parent_id, element_id))
-            if element_type == "table":
-                asset = self._table_asset(element_id, block, spans, container_id)
-                if asset is not None:
-                    assets[asset.table_id] = asset
             prev_id = element_id
 
-        return elements, relations, assets
+        return elements, relations, assets, binaries
 
     # -- 钩子（子类实现 / 覆盖） ------------------------------------------
 
@@ -185,8 +221,40 @@ class BaseNativeNormalizer:
         block: BackendBlock,
         container_id: str | None,
     ) -> tuple[EvidenceSpan, ...]:
-        """构造该元素的 EvidenceSpan 序列（子类必须实现）。"""
+        """构造该元素的元素级 EvidenceSpan（子类必须实现）。"""
         raise NotImplementedError
+
+    def _make_cell_spans(
+        self,
+        element_id: str,
+        block: BackendBlock,
+        container_id: str | None,
+    ) -> tuple[EvidenceSpan, ...]:
+        """构造表格单元格级 EvidenceSpan（与 structure["cells"] 顺序对齐）.
+
+        不变量 I-4：能取得原生单元格位置的格式（DOCX/PPTX/HTML/PDF 坐标
+        或索引）必须逐 cell 产 span，cell 的 ``evidence_index`` 指向本序列。
+        非表格块 / 无法定位时返回空 tuple（不伪造）。
+        """
+        return ()
+
+    def _extra_assets(
+        self,
+        element_id: str,
+        block: BackendBlock,
+        container_id: str | None,
+    ) -> dict[str, Any]:
+        """元素级额外结构化资产钩子（figure/formula 等）.
+
+        返回 dict 可含：
+        - ``"asset"``：FigureAsset/FormulaAsset（按其 id 收进 structured_assets）；
+        - ``"binary"``：``(binary_id, meta)`` 元组（收进 binary_assets）。
+        """
+        return {}
+
+    def _element_metadata(self, block: BackendBlock) -> dict[str, Any]:
+        """元素级 metadata 钩子（默认空；子类可提升 structure 字段）."""
+        return {}
 
     def _element_type_for(
         self, block: BackendBlock, warnings: list[str]
@@ -203,10 +271,14 @@ class BaseNativeNormalizer:
         self,
         element_id: str,
         block: BackendBlock,
-        spans: tuple[EvidenceSpan, ...],
+        cell_spans: tuple[EvidenceSpan, ...],
         container_id: str | None,
     ) -> TableAsset | None:
-        """structure 网格 -> TableAsset；cell 可用 evidence_index 关联 span."""
+        """structure 网格 -> TableAsset；cell 经 evidence_index 关联 cell span.
+
+        不变量 I-4：不再回落到元素级 span——无独立 cell 证据时
+        ``source_span_id`` 保持 None（宁缺勿伪造，SRS §7.4）。
+        """
         structure = block.structure or {}
         rows = structure.get("rows")
         cols = structure.get("cols")
@@ -224,7 +296,7 @@ class BaseNativeNormalizer:
                 column_span=int(c.get("column_span", 1)),
                 formula=c.get("formula"),
                 is_header=bool(c.get("is_header")),
-                source_span_id=_cell_span_id(c, spans),
+                source_span_id=_cell_span_id(c, cell_spans),
             )
             for c in raw_cells
         )
@@ -240,15 +312,13 @@ class BaseNativeNormalizer:
 
 
 def _cell_span_id(
-    cell: dict, spans: tuple[EvidenceSpan, ...]
+    cell: dict, cell_spans: tuple[EvidenceSpan, ...]
 ) -> str | None:
-    """cell["evidence_index"] -> span id；无索引时回退首个 span."""
-    if not spans:
-        return None
+    """cell["evidence_index"] -> cell 级 span id；无索引/越界 -> None."""
     idx = cell.get("evidence_index")
-    if isinstance(idx, int) and 0 <= idx < len(spans):
-        return spans[idx].span_id
-    return spans[0].span_id
+    if isinstance(idx, int) and 0 <= idx < len(cell_spans):
+        return cell_spans[idx].span_id
+    return None
 
 
 # ---------------------------------------------------------------------------

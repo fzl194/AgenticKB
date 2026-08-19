@@ -66,3 +66,24 @@ def get_document_lifecycle_service(
         upload_root=_upload_config().upload_root_path,
         channel=channel,
     )
+
+
+def get_parse_result_service(request: Request) -> "ParseResultReadService":
+    """M5 结构化数据只读视图（组件由组合根放 app.state，未接线时 503）."""
+    from knowledge_mining.mining.snapshot_store.read_service import (
+        ParseResultReadService,
+    )
+    from fastapi import HTTPException
+
+    state = getattr(request.app.state, "parse_result_components", None)
+    if state is None:
+        raise HTTPException(
+            status_code=503,
+            detail="parse-result view not configured on this deployment",
+        )
+    return ParseResultReadService(
+        snapshots=state["snapshots"],
+        storage_objects=state["storage_objects"],
+        object_store=state["object_store"],
+        segment_store=state["segment_store"],
+    )

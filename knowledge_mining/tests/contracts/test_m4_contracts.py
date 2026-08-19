@@ -240,6 +240,9 @@ def test_snapshot_repository_protocol_shape() -> None:
         async def find_by_fingerprint(self, domain, fingerprint):  # noqa: ANN001
             return None
 
+        async def latest_for_document(self, document_id, domain):  # noqa: ANN001
+            return None
+
         async def mark_lifecycle(self, snapshot_id, lifecycle_status):  # noqa: ANN001
             raise NotImplementedError
 

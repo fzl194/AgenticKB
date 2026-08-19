@@ -174,6 +174,15 @@ class SnapshotRepository(Protocol):
         """幂等探针：按 ``(domain, snapshot_fingerprint)`` 查行."""
         ...
 
+    async def latest_for_document(
+        self, document_id: str, domain: str
+    ) -> tuple[SnapshotRecord, SnapshotSourceLink] | None:
+        """该文档最新 READY 新链快照及其来源 link（读视图/复核用）.
+
+        无新链快照（文档未走新链更新知识）返回 None。
+        """
+        ...
+
     async def mark_lifecycle(
         self, snapshot_id: str, lifecycle_status: str
     ) -> SnapshotRecord:

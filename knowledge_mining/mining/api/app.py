@@ -23,6 +23,7 @@ from knowledge_mining.mining.infra.pg_schema import ensure_primary_schema
 from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.api.routes.health import router as health_router
 from knowledge_mining.mining.api.routes.runs import router as runs_router
+from knowledge_mining.mining.api.routes.parse_result import router as parse_result_router
 from knowledge_mining.mining.api.routes.knowledge import router as knowledge_router
 from knowledge_mining.mining.api.routes.config import router as config_router
 from knowledge_mining.mining.api.routes.builds import router as builds_router
@@ -159,6 +160,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(runs_router)
+    app.include_router(parse_result_router)
     app.include_router(knowledge_router)
     app.include_router(config_router)
     app.include_router(builds_router)

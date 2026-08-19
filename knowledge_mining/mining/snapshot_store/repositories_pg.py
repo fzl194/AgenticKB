@@ -181,6 +181,41 @@ class PgSnapshotRepository:
             row = await cur.fetchone()
             return _snapshot_from_row(dict(row)) if row else None
 
+    async def latest_for_document(
+        self, document_id: str, domain: str
+    ) -> tuple[SnapshotRecord, SnapshotSourceLink] | None:
+        from knowledge_mining.mining.contracts.snapshot_store import (
+            SnapshotSourceLink,
+        )
+
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT snapshots.*, links.source_storage_object_id AS _src_obj,
+                          links.source_content_revision AS _src_rev,
+                          links.title AS _link_title
+                   FROM asset_document_snapshots AS snapshots
+                   JOIN asset_document_snapshot_links AS links
+                     ON links.document_snapshot_id = snapshots.id
+                   WHERE links.document_id = %s AND snapshots.domain = %s
+                     AND snapshots.lifecycle_status = 'READY'
+                     AND snapshots.snapshot_fingerprint IS NOT NULL
+                   ORDER BY snapshots.created_at DESC
+                   LIMIT 1""",
+                [document_id, domain],
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        link = SnapshotSourceLink(
+            id="", document_id=document_id,
+            document_snapshot_id=data["id"],
+            source_storage_object_id=data.get("_src_obj") or "",
+            source_content_revision=int(data.get("_src_rev") or 0),
+            title=data.get("_link_title"),
+        )
+        return _snapshot_from_row(data), link
+
     async def mark_lifecycle(
         self, snapshot_id: str, lifecycle_status: str
     ) -> SnapshotRecord:

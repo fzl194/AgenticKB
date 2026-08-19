@@ -54,6 +54,22 @@ class MemorySnapshotRepository:
         rid = self._by_fp.get((domain, fingerprint))
         return self._by_id[rid] if rid else None
 
+    async def latest_for_document(
+        self, document_id: str, domain: str
+    ) -> tuple[SnapshotRecord, SnapshotSourceLink] | None:
+        candidates = [
+            (snap, link) for link in self._links.values()
+            if link.document_id == document_id
+            for snap in [self._by_id.get(link.document_snapshot_id)]
+            if snap is not None
+            and snap.domain == domain
+            and snap.lifecycle_status == "READY"
+            and snap.snapshot_fingerprint
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda pair: pair[0].created_at)
+
     async def mark_lifecycle(
         self, snapshot_id: str, lifecycle_status: str
     ) -> SnapshotRecord:

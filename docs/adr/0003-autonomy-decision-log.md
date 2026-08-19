@@ -300,3 +300,16 @@
 - **验证**：scoped 全量 701 passed/9 skipped（整改轮 661 → +40）；真实环境 e2e 五场景（转正/重放新快照 parser 零调用/垃圾 FAILED/过期 SUPERSEDED/发布表零污染+哨兵隔离）两轮幂等全绿；golden corpus 50 份端到端转正验收（6 空坏样本零快照）。
 - **依据**：SRS §14 M4、§2.2（幂等/fallback 留原因）、§4.9（五值决策+预算）、§4.10（pre-commit revision check）、§8.3A（快照唯一性演进）、§9.2/§9.4/§9.5；ADR-0003 D-015（显式枚举）、D-022（Protocol 分层）、D-032（影子包路径怪癖——e2e 脚本 sys.path 必须仓库根置顶）。
 - **影响**：新增 `mining/parse_operator/`、`mining/snapshot_store/`、`contracts/{parse_plan,snapshot_store}.py`、`tests/{parse_operator,snapshot_store}/`、`tests/contracts/test_m4_*.py`、`tests/parse_quality/test_gate_decisions.py`、`tests/shadow_parse/test_parse_run_lifecycle.py`、`tests/golden_corpus/test_corpus_commit.py`、`databases/asset_core/schemas/010_m4_parse_run_state_machine{,_postgresql}.sql`、`var/e2e/_e2e_m4_quality_gated.py`、`docs/文档解析平台化-里程碑报告/M4-质量门控解析资产.md`；改 `contracts/state_machines.py`、`shadow_parse/{contracts,repositories_memory,repositories_pg,service}.py`、`parse_quality/{gate,metrics}.py`、`infra/pg_schema.py`（010 挂链）、009 双方言（索引降级）。
+
+## D-034 ｜ M5 切片编译：兼容投影白名单收敛 / A08 重切闭环 / 只读视图
+- **背景**：用户选 B（按计划 M5），并新增两项需求：①范式构建器对固定头部（解析+切片）的形态拍板——采用「骨架锁定 + 参数开放」（每条知识线必须有解析事实，不可删；参数档位可调——SegmentPolicy 即该面板的契约层）；②解析结果前端可视化必须契合系统（弃离线工具形态）。
+- **决策与实现**：
+  1. **兼容投影白名单收敛**：asset_raw_segments 的 block_type 有 CHECK 白名单 + 下游 enrich 按类型分支。新链类型（table_row/figure/list_item/quote…）在投影层映射到 legacy 词表（table_row→table、figure→image、quote→blockquote），行/图细节保留在 structure_json——DB 约束与下游 switch 零改动。PgSegmentStore.list 读回经逆映射，block_type 呈投影值（e2e 断言以 structure_json.table_header 判定行切片）。
+  2. **token 口径**：字符近似（CJK 1 字≈1 token），策略阈值语义为字符上限；不引 tokenizer 依赖。结构边界优先，token 只是上限（§3.7）。
+  3. **纯标题节独立成段**：标题文本本身是可检索内容（pptx-group 语料驱动）；实现注意空缓冲 flush 不得吞掉待定节标题（首版 bug，测试抓住）。
+  4. **纯图样本 0 切片不伪造**：无可索引内容（无 caption 无文本）时允许 0 切片；golden 断言按「有文本期望的语料才要求非空」数据驱动。
+  5. **A08 重切闭环**：commit 接受 compiler_fingerprint（进 snapshot_fingerprint）；SnapshotRecompileService 复用 IR 产新快照（质量结论沿用旧快照 + recompiled_from issue），旧快照/旧切片保留。
+  6. **只读视图**：latest_for_document（快照+link 出生证明）加进 SnapshotRepository Protocol（M4 契约测试 fake 同步补方法）；GET /api/knowledge/documents/{id}/parse-result + kb-ui「结构化数据」页签（404=未走新链，显示引导）。
+- **验证**：scoped 713 passed/9 skipped（M4 后 +12）；真实环境 e2e 三场景（编译落库含行切片带表头/只读视图/A08 重切新旧并存）全绿；kb-ui vue-tsc 0 错 + vitest 155 通过。
+- **依据**：SRS §4.12/§C11/§3.10/§5.3/§8.2/§8.3/§2.3/§A08；用户 M5 前需求讨论（骨架+参数、系统契合可视化）。
+- **影响**：新增 `contracts/segment_compiler.py`、`segment_compiler/{compiler,projection,service,repositories_memory,repositories_pg}.py`、`snapshot_store/read_service.py`、`api/routes/parse_result.py`、011 DDL 双方言、`tests/{segment_compiler,golden_corpus/test_corpus_segments,contracts/test_m5_ddl,snapshot_store/test_read_service}`、kb-ui（mining.ts + KbDocPreviewView 结构化数据页签）、`var/e2e/_e2e_m5_segments.py`；改 `snapshot_store/{service,repositories_memory,repositories_pg}`、`contracts/snapshot_store.py`、`api/{deps,app}.py`、`infra/pg_schema.py`（011 挂链）。

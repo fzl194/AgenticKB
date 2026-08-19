@@ -27,6 +27,12 @@ export function useMiningApi() {
       return data
     },
 
+    // M5 结构化数据（文档最新知识快照的大纲/元素/表格/切片/出生证明）
+    async getParseResult(docId: string): Promise<ParseResult> {
+      const { data } = await client.get(`/api/knowledge/documents/${docId}/parse-result`)
+      return data
+    },
+
     // Runs
     async getRuns(domain: string, params?: { status?: string; limit?: number }): Promise<MiningRun[]> {
       const { data } = await client.get('/api/runs', { params: { ...params, domain } })
@@ -401,4 +407,59 @@ export function useMiningApi() {
       return data
     },
   }
+}
+
+
+/** M5 结构化数据视图（/api/knowledge/documents/{id}/parse-result）. */
+export interface ParseResultOutlineNode {
+  element_id: string
+  level: number
+  title: string
+}
+
+export interface ParseResultElement {
+  element_id: string
+  element_type: string
+  text: string
+  order_index: number
+  containers: string[]
+  has_evidence: boolean
+}
+
+export interface ParseResultTable {
+  table_id: string
+  rows: number
+  columns: number
+  header: string[]
+  preview: string[][]
+}
+
+export interface ParseResultSegment {
+  segment_index: number
+  block_type: string
+  heading_chain: { level: number; title: string }[]
+  text: string
+  element_ids: string[]
+}
+
+export interface ParseResult {
+  snapshot: {
+    id: string
+    title: string | null
+    mime_type: string
+    quality_status: string
+    lifecycle_status: string
+    parser_fingerprint: string | null
+    compiler_fingerprint: string | null
+    snapshot_fingerprint: string
+    created_by_run_id: string | null
+    created_at: string
+    source_storage_object_id: string | null
+    source_content_revision: number | null
+  }
+  outline: ParseResultOutlineNode[]
+  elements: ParseResultElement[]
+  tables: ParseResultTable[]
+  segments: { count: number; items: ParseResultSegment[] }
+  diagnostics: { warnings: string[]; containers: number; relations: number }
 }

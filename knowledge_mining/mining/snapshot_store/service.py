@@ -90,12 +90,15 @@ class SnapshotCommitService:
         domain: str,
         title: str | None = None,
         snapshot_id: str | None = None,
+        compiler_fingerprint: str | None = None,
     ) -> SnapshotCommitResult:
         """转正一次质量合格（PASS/WARN）的解析执行.
 
         - FAIL/REPAIR/FALLBACK 决策直接拒绝（REPAIR/FALLBACK 是编排层的
           继续动作，不是可提交结论）；
-        - 任何前置校验失败都在写仓储前抛出（不产生半成品快照）。
+        - 任何前置校验失败都在写仓储前抛出（不产生半成品快照）；
+        - ``compiler_fingerprint``（A08）：切片策略变化 → 传入新指纹产
+          **新快照**（复用 IR，不重新解析）；解析即转正时为 None。
         """
         if quality_decision.decision not in ("PASS", "WARN"):
             raise ValueError(
@@ -124,6 +127,7 @@ class SnapshotCommitService:
             domain=domain,
             source_raw_hash=frozen.source_raw_hash,
             effective_pipeline_fingerprint=pipeline_fp,
+            compiler_fingerprint=compiler_fingerprint,
         )
         snapshot = SnapshotRecord(
             id=snapshot_id or _new_id("snap"),
@@ -136,6 +140,7 @@ class SnapshotCommitService:
             parse_ir_storage_object_id=parse_ir_storage_object_id,
             parse_ir_schema_version=document.schema_version,
             parser_fingerprint=identity.parser_fingerprint,
+            compiler_fingerprint=compiler_fingerprint,
             quality_status=quality_decision.decision,
             created_by_run_id=run_id,
             created_at=_utcnow(),

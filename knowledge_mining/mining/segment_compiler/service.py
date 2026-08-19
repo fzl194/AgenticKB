@@ -154,9 +154,79 @@ async def _compile_offthread(
     return await asyncio.to_thread(compile_segments, doc, policy)
 
 
+class SnapshotRecompileService:
+    """A08 重切服务（SRS §4.12：切片策略升级 → 复用 IR 产新快照）.
+
+    流程：旧快照 → 读回其 Parse IR（不重新解析/OCR/云调用）→ 以新
+    compiler_fingerprint 提交**新快照**（旧快照原样保留，历史可追溯）→
+    在新快照下编译切片。质量结论沿用旧快照（解析产物未变），附加
+    ``recompiled_from`` 可见性 issue。
+    """
+
+    def __init__(
+        self,
+        *,
+        snapshots: Any,
+        commit_service: Any,
+        compile_service: "SegmentCompileService",
+    ) -> None:
+        self._snapshots = snapshots
+        self._commit = commit_service
+        self._compiler = compile_service
+
+    async def recompile(
+        self,
+        source_snapshot_id: str,
+        *,
+        frozen: Any,
+        domain: str,
+        policy: SegmentPolicy | None = None,
+        title: str | None = None,
+    ) -> tuple[Any, SegmentCompileResult]:
+        from knowledge_mining.mining.parse_quality.gate import (
+            QualityDecision,
+            QualityIssue,
+        )
+
+        policy = policy or SegmentPolicy()
+        old = await self._snapshots.get(source_snapshot_id)
+        if old is None:
+            raise KeyError(f"unknown snapshot id: {source_snapshot_id!r}")
+        document = await self._compiler._load_ir(old.parse_ir_storage_object_id)
+        fp = compiler_fingerprint(policy)
+        committed = await self._commit.commit(
+            frozen=frozen,
+            document=document,
+            parse_ir_storage_object_id=old.parse_ir_storage_object_id,
+            quality_decision=QualityDecision(
+                decision=old.quality_status,
+                issues=(QualityIssue(
+                    code="recompiled_from",
+                    message=(
+                        f"segments recompiled from snapshot "
+                        f"{source_snapshot_id!r} with policy {fp!r}; parse "
+                        f"IR reused (A08)"
+                    ),
+                ),),
+            ),
+            run_id=f"recompile-{source_snapshot_id[:12]}",
+            domain=domain,
+            title=title or old.title,
+            compiler_fingerprint=fp,
+        )
+        compiled = await self._compiler.compile(
+            committed.snapshot.id,
+            parse_ir_storage_object_id=old.parse_ir_storage_object_id,
+            document_key=frozen.original_filename or committed.snapshot.id,
+            policy=policy,
+        )
+        return committed.snapshot, compiled
+
+
 __all__ = [
     "COMPILER_VERSION",
     "SegmentCompileResult",
     "SegmentCompileService",
     "SegmentStore",
+    "SnapshotRecompileService",
 ]

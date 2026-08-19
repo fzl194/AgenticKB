@@ -348,3 +348,31 @@ async def test_commit_fingerprint_sensitive_to_parser(tmp_path) -> None:
     assert b.created is True
 
 
+
+
+async def test_commit_accepts_compiler_fingerprint(tmp_path) -> None:
+    """A08：切片策略指纹进快照身份——compiler 变化 → 新快照."""
+    from knowledge_mining.mining.snapshot_store.repositories_memory import (
+        MemorySnapshotRepository,
+    )
+
+    objects = MemoryStorageObjectRepository()
+    store = FakeObjectStore(str(tmp_path / "objects"))
+    await _register_ir_object(store, objects, "so_ir")
+    service = _service(MemorySnapshotRepository(), objects, store)
+
+    a = await service.commit(
+        frozen=_frozen(), document=_doc(),
+        parse_ir_storage_object_id="so_ir",
+        quality_decision=_decision(), run_id="r1", domain="default",
+    )
+    b = await service.commit(
+        frozen=_frozen(), document=_doc(),
+        parse_ir_storage_object_id="so_ir",
+        quality_decision=_decision(), run_id="r2", domain="default",
+        compiler_fingerprint="segc-abc123",
+    )
+    assert b.created is True  # 不同 compiler 指纹 → 新快照
+    assert b.snapshot.compiler_fingerprint == "segc-abc123"
+    assert a.snapshot.compiler_fingerprint is None
+    assert a.snapshot.snapshot_fingerprint != b.snapshot.snapshot_fingerprint

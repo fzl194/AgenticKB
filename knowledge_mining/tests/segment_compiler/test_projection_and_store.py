@@ -220,3 +220,82 @@ async def test_compile_service_projection_roundtrip(tmp_path) -> None:
         rsd = to_raw_segment_data(seg, document_key="a.pdf")
         assert isinstance(rsd, RawSegmentData)
         assert rsd.section_path or seg.heading_chain == ()
+
+
+def _frozen():
+    from knowledge_mining.mining.frozen_input.contracts import FrozenInput
+
+    return FrozenInput(
+        document_id="doc1", source_storage_object_id="so_src",
+        source_raw_hash="raw-1", source_content_revision=3,
+        mime="application/pdf", size=100, original_filename="a.pdf",
+        captured_at="2026-08-19T00:00:00+00:00", provider="minio",
+        bucket="agentickb-dev-source", object_key="v1/ab/cd/src-1",
+        object_version_id=None,
+    )
+
+
+def _decision():
+    from knowledge_mining.mining.parse_quality.gate import QualityDecision
+
+    return QualityDecision(decision="PASS")
+
+
+async def test_recompile_reuses_ir_and_creates_new_snapshot(tmp_path) -> None:
+    """A08：切片策略升级 → 复用 IR 产新快照并重切；旧快照原样保留."""
+    from knowledge_mining.mining.snapshot_store.repositories_memory import (
+        MemorySnapshotRepository,
+    )
+    from knowledge_mining.mining.snapshot_store.service import (
+        SnapshotCommitService,
+    )
+    from knowledge_mining.mining.segment_compiler.repositories_memory import (
+        MemorySegmentStore,
+    )
+    from knowledge_mining.mining.segment_compiler.service import (
+        SnapshotRecompileService,
+    )
+
+    store = FakeObjectStore(str(tmp_path / "objects"))
+    objects = MemoryStorageObjectRepository()
+    ir_id = await _seed_ir(store, objects)
+    snapshots = MemorySnapshotRepository()
+
+    async def _no_stale(frozen) -> None:  # noqa: ANN001
+        return None
+
+    commit = SnapshotCommitService(
+        snapshots=snapshots, stale_checker=_no_stale,
+        storage_objects=objects, object_store=store,
+    )
+    seg_store = MemorySegmentStore()
+    first = await commit.commit(
+        frozen=_frozen(), document=_doc(),
+        parse_ir_storage_object_id=ir_id,
+        quality_decision=_decision(), run_id="r1", domain="default",
+    )
+
+    from knowledge_mining.mining.segment_compiler.service import (
+        SegmentCompileService,
+    )
+
+    recompiler = SnapshotRecompileService(
+        snapshots=snapshots, commit_service=commit,
+        compile_service=SegmentCompileService(
+            object_store=store, storage_objects=objects,
+            segment_store=seg_store,
+        ),
+    )
+    new_snap, compile_result = await recompiler.recompile(
+        first.snapshot.id, frozen=_frozen(), domain="default",
+        policy=SegmentPolicy(table_view="whole"),
+    )
+    assert new_snap.id != first.snapshot.id
+    assert new_snap.compiler_fingerprint == compile_result.compiler_fingerprint
+    # 旧快照原样保留（历史可追溯）
+    old = await snapshots.get(first.snapshot.id)
+    assert old is not None and old.lifecycle_status == "READY"
+    assert old.compiler_fingerprint is None
+    # 新快照下有切片；旧快照 id 下没有
+    assert await seg_store.list_for_snapshot(new_snap.id)
+    assert not await seg_store.list_for_snapshot(first.snapshot.id)

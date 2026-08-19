@@ -57,6 +57,10 @@ _SHADOW_PARSE_DDL = (
 _M4_PARSE_RUN_STATE_DDL = (
     _REPO_ROOT / "databases" / "asset_core" / "schemas" / "010_m4_parse_run_state_machine_postgresql.sql"
 )
+# M5 切片编译落库：asset_raw_segments 增列 + element links 表；依赖 001。
+_M5_SEGMENT_LINKS_DDL = (
+    _REPO_ROOT / "databases" / "asset_core" / "schemas" / "011_m5_segment_links_postgresql.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -137,6 +141,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _SHADOW_PARSE_DDL,
         # M4 状态机扩列 + attempt 事件：依赖 009 的 asset_parse_runs。
         _M4_PARSE_RUN_STATE_DDL,
+        # M5 切片落库：asset_raw_segments 增列 + links 表。
+        _M5_SEGMENT_LINKS_DDL,
     )
 
 

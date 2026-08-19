@@ -22,6 +22,19 @@ import re
 from knowledge_mining.mining.contracts.models import RawSegmentData
 from knowledge_mining.mining.contracts.segment_compiler import CompiledSegment
 
+#: 新链切片类型 -> legacy block_type 白名单映射（asset_raw_segments 有
+#: CHECK 约束 + 下游 enrich 按类型分支——投影层收敛词表，不改 DB/下游）。
+_BLOCK_TYPE_PROJECTION = {
+    "table_row": "table",      # structure_json 保留 row 细节
+    "figure": "image",         # structure_json 保留 caption
+    "list_item": "list",
+    "quote": "blockquote",
+    "caption": "paragraph",
+    "toc_entry": "paragraph",
+    "reference": "paragraph",
+    "footnote": "paragraph",
+}
+
 
 def to_raw_segment_data(
     segment: CompiledSegment, *, document_key: str
@@ -44,7 +57,9 @@ def to_raw_segment_data(
     return RawSegmentData(
         document_key=document_key,
         segment_index=segment.segment_index,
-        block_type=segment.block_type,
+        block_type=_BLOCK_TYPE_PROJECTION.get(
+            segment.block_type, segment.block_type
+        ),
         section_path=section_path,
         section_title=segment.heading_chain[-1][1] if segment.heading_chain else None,
         raw_text=raw_text,

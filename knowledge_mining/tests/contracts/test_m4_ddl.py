@@ -30,8 +30,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCHEMA_DIR = _REPO_ROOT / "databases" / "asset_core" / "schemas"
 
 
-def _load_full_sqlite_chain() -> sqlite3.Connection:
-    """001.sqlite + 008 + 009 + 010（复用 test_storage_ddl 的降级加载策略）.
+def _load_full_sqlite_chain(*extra: str) -> sqlite3.Connection:
+    """001.sqlite + 008 + 009 + 010 (+extra)（复用 test_storage_ddl 的降级加载策略）.
 
     SQLite 不认 ``ADD COLUMN IF NOT EXISTS``（PG 扩展）——分类回放：
     CREATE TABLE 先行、ADD COLUMN 经存在性守卫降级、INDEX 最后（D-019）。
@@ -48,6 +48,7 @@ def _load_full_sqlite_chain() -> sqlite3.Connection:
         "008_object_storage_foundation.sql",
         "009_shadow_parse_runs.sql",
         "010_m4_parse_run_state_machine.sql",
+        *extra,
     ):
         raw = _strip_comments(
             (_SCHEMA_DIR / name).read_text(encoding="utf-8")

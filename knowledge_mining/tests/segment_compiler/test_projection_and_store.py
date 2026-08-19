@@ -79,7 +79,9 @@ def test_to_raw_segment_data_projection() -> None:
     )
     assert rsd.document_key == "manual.pdf"
     assert rsd.segment_index == 0
-    assert rsd.block_type == "table_row"
+    # 新链类型收敛到 legacy 白名单（DB CHECK + 下游分支安全），
+    # 行细节保留在 structure_json。
+    assert rsd.block_type == "table"
     assert rsd.raw_text == "A-101\t风扇停转"
     assert rsd.section_title == "硬件告警"  # 最内层标题
     assert [n["title"] for n in rsd.section_path] == ["告警处理", "硬件告警"]

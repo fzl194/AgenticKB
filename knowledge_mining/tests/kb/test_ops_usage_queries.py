@@ -130,14 +130,21 @@ async def test_summary_empty_window_gives_zero_not_none(qlog):
 
 
 async def test_summary_uses_p95_not_average(qlog, async_pool):
-    """一堆快查询 + 一条慢的：平均值会被稀释，P95 必须把尾巴顶起来。"""
-    for _ in range(19):
+    """一堆快查询 + 一小撮慢的：平均值被稀释，P95 必须把尾巴顶起来。
+
+    ⚠️ 慢请求占比必须**大于 5%**，否则这条用例证明不了任何事：percentile_cont 是
+    插值型有序集聚合，慢的恰好占 5% 时 P95 正好落在快慢交界上被插值抹平。
+    18+2 的分布（10% 慢）算下来 avg=509ms 而 P95=5000ms，差出一个数量级——
+    换成 19+1（5% 慢）两个数都是 259.5ms，断言会失败。
+    """
+    for _ in range(18):
         await _log(async_pool, duration_ms=10)
-    await _log(async_pool, duration_ms=5000)
+    for _ in range(2):
+        await _log(async_pool, duration_ms=5000)
 
     s = await qlog.summary(domain=DOMAIN, days=7)
-    assert s["avg_duration_ms"] < 500          # 平均被拉平
-    assert s["p95_duration_ms"] > 1000         # P95 看得见那条尾巴
+    assert s["avg_duration_ms"] < 1000         # 平均被拉平，看着"还行"
+    assert s["p95_duration_ms"] >= 4000        # P95 暴露那条尾巴
 
 
 async def test_summary_respects_the_window(qlog, async_pool):

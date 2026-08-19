@@ -275,6 +275,33 @@ describe('概览页（统计仪表盘）', () => {
     expect(wrapper.html()).not.toContain('/mining/run-1')  // 已删除的旧路由形状
   })
 
+  it('域未就绪时说明原因，而不是永远停在骨架屏', async () => {
+    // 域列表没到 / 拉取失败 —— 以前这里直接 return 且 loading 初值是 true，
+    // 页面会永久显示骨架，既不报错也不给空状态。
+    setDomain('')
+
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).toContain('知识域尚未就绪')
+    expect(kbApi.getOverview).not.toHaveBeenCalled()
+    // 不能顺带渲染出「还没有知识库」——那是把"没查过"说成"没有内容"
+    expect(wrapper.text()).not.toContain('还没有知识库')
+    expect(wrapper.find('.dash__skeleton').exists()).toBe(false)
+  })
+
+  it('域随后到位时自动恢复', async () => {
+    setDomain('')
+    const { wrapper } = await mountDash()
+    expect(wrapper.text()).toContain('知识域尚未就绪')
+
+    setDomain('cloud_core_network')
+    await flushPromises()
+
+    expect(kbApi.getOverview).toHaveBeenCalledWith('cloud_core_network')
+    expect(wrapper.text()).not.toContain('知识域尚未就绪')
+    expect(wrapper.text()).toContain('知识库概况')
+  })
+
   // ── 运维区块（admin-only）────────────────────────────────────────────
 
   it('member 看不到运维区块，也不发那个请求', async () => {

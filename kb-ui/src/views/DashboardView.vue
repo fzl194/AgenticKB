@@ -1,5 +1,19 @@
 <template>
   <div class="dash">
+    <!--
+      域未就绪时**只渲染这一条**，不往下走：下面每个区块都会各自显示"还没有知识库"
+      之类的空状态，而真相是根本没查过——把"没有数据"说成"没有内容"是最容易误导人的
+      那种错。
+    -->
+    <section v-if="!domainReady" class="dash__block">
+      <div class="dash__notice">
+        <strong>知识域尚未就绪</strong>
+        <span>当前没有可用的知识域，无法加载统计。请检查域配置或稍后重试。</span>
+        <el-button text type="primary" size="small" @click="load">重试</el-button>
+      </div>
+    </section>
+
+    <template v-else>
     <!-- ── 区块 1：汇总数字 ──────────────────────────────────────────── -->
     <section class="dash__block">
       <div class="dash__block-head">
@@ -125,7 +139,7 @@
           v-else-if="kbBars.length"
           :data="kbBars"
           horizontal
-          :height="barHeight(kbBars.length)"
+          :height="barChartHeight(kbBars.length)"
         />
         <p v-else class="dash__muted">还没有文档</p>
       </section>
@@ -139,7 +153,7 @@
           v-else-if="unitBars.length"
           :data="unitBars"
           horizontal
-          :height="barHeight(unitBars.length)"
+          :height="barChartHeight(unitBars.length)"
         />
         <p v-else class="dash__muted">还没有挖掘出检索单元</p>
       </section>
@@ -213,6 +227,7 @@
       </div>
       <EmptyState v-else text="还没有挖掘记录" />
     </section>
+    </template>
   </div>
 </template>
 
@@ -225,8 +240,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useKbApi } from '@/api/kb'
 import { useOpsApi } from '@/api/ops'
 import {
-  TOP_KB_BAR_LIMIT, documentStatusSlices, kbDocumentBars, pendingTasks,
-  trendSeries, trendTotals, unitTypeBars, visibleKbCards,
+  TOP_KB_BAR_LIMIT, barChartHeight, documentStatusSlices, kbDocumentBars,
+  pendingTasks, trendSeries, trendTotals, unitTypeBars, visibleKbCards,
 } from '@/utils/dashboard'
 import { runStatusLabel } from '@/utils/runStatus'
 import type { KbOverviewItem, KbOverviewRun, KbStats } from '@/types/kb'
@@ -265,6 +280,8 @@ const recentRuns = ref<KbOverviewRun[]>([])
 const stats = ref<KbStats | null>(null)
 const opsUsage = ref<OpsUsage | null>(null)
 const loading = ref(true)
+/** 初值 true：首帧还没跑过 load，此时该显示骨架屏而不是"域未就绪"提示。 */
+const domainReady = ref(true)
 /**
  * 三个数据源各记各的错。共用一个 error 的话，统计接口挂了会把知识库卡片和最近挖掘
  * 一起变成「加载失败」——那两块的数据其实好好地在手里。
@@ -304,11 +321,6 @@ const tiles = computed(() => {
   ]
 })
 
-/** 横向柱：每根 28px + 上下留白。固定高度会让 2 根柱子的图和 8 根的一样高。 */
-function barHeight(count: number): string {
-  return `${Math.max(140, count * 28 + 40)}px`
-}
-
 /**
  * 切域竞态守卫。`alive` 只挡 unmount，挡不住切域——组件还活着，只是数据属于
  * 上一个域了。两个请求共用一个 generation：它们同批发出、同批作废。
@@ -322,7 +334,15 @@ let generation = 0
 async function load() {
   const gen = ++generation
   const domain = domainStore.currentDomain
-  if (!domain) return
+  if (!domain) {
+    // 域尚未就绪（域列表还没到，或压根拉取失败）。
+    // 以前这里直接 return，而 loading 初值是 true —— 域一直不来就**永远停在骨架屏**，
+    // 既不报错也不给空状态，看起来像页面卡死。域到位时 watch 会再次触发 load。
+    domainReady.value = false
+    loading.value = false
+    return
+  }
+  domainReady.value = true
   loading.value = true
   overviewError.value = false
   statsError.value = false
@@ -459,6 +479,21 @@ watch(() => domainStore.currentDomain, load)
   padding: 24px 0;
   text-align: center;
 }
+
+.dash__notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--kb-accent-soft);
+  border-radius: var(--kb-radius-sm);
+  font-size: 13px;
+  color: var(--kb-text-tertiary);
+  line-height: 1.6;
+}
+
+.dash__notice strong { color: var(--kb-text-primary); }
 
 .dash__block-error {
   display: flex;

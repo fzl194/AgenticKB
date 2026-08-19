@@ -10,11 +10,13 @@ import { enableAutoUnmount, mount, flushPromises } from '@vue/test-utils'
 const miningApi = vi.hoisted(() => ({ getStats: vi.fn(), getHealth: vi.fn() }))
 const servingApi = vi.hoisted(() => ({ getHealth: vi.fn() }))
 const llmApi = vi.hoisted(() => ({ getHealth: vi.fn() }))
+const opsApi = vi.hoisted(() => ({ getUsage: vi.fn() }))
 const domainRef = vi.hoisted(() => ({ current: null as { value: string } | null }))
 
 vi.mock('@/api/mining', () => ({ useMiningApi: () => miningApi }))
 vi.mock('@/api/serving', () => ({ useServingApi: () => servingApi }))
 vi.mock('@/api/llm', () => ({ useLlmApi: () => llmApi }))
+vi.mock('@/api/ops', () => ({ useOpsApi: () => opsApi }))
 vi.mock('@/stores/domain', async () => {
   const { ref } = await import('vue')
   domainRef.current = ref('cloud_core_network')
@@ -24,9 +26,12 @@ vi.mock('@/stores/domain', async () => {
     }),
   }
 })
-// PieChart 依赖 echarts 的真实布局，这里只关心它渲不渲染
+// 图表依赖 echarts 的真实布局，这里只关心渲不渲染
 vi.mock('@/components/charts/PieChart.vue', () => ({
   default: { name: 'PieChart', template: '<div class="pie-stub" />' },
+}))
+vi.mock('@/components/charts/BarChart.vue', () => ({
+  default: { name: 'BarChart', template: '<div class="bar-stub" />' },
 }))
 
 import SystemStatusTab from '@/components/settings/SystemStatusTab.vue'
@@ -45,6 +50,27 @@ function stats(over: Record<string, unknown> = {}) {
   }
 }
 
+function usage(over: Record<string, unknown> = {}) {
+  return {
+    available: true,
+    days: 7,
+    trend_days: 30,
+    summary: {
+      queries: 100, no_result: 7, no_result_rate: 0.07,
+      p95_duration_ms: 412, avg_duration_ms: 180, active_paradigms: 2,
+    },
+    no_result_queries: [
+      { query_text: 'SMF 会话建立超时', count: 12, last_at: '2026-08-18T01:00:00Z' },
+    ],
+    top_queries: [{ query_text: '5GC 计费接口', count: 30, no_result: 2 }],
+    paradigms: [{ paradigm_id: 'p-1', calls: 80, no_result: 3, p95_duration_ms: 300 }],
+    trend: [{ date: '2026-08-18', queries: 10, no_result: 1 }],
+    intents: { lookup: 60 },
+    channels: { mcp: 100 },
+    ...over,
+  }
+}
+
 async function mountTab() {
   const wrapper = mount(SystemStatusTab)
   await flushPromises()
@@ -58,6 +84,7 @@ describe('系统状态 tab', () => {
     miningApi.getHealth.mockResolvedValue({ status: 'healthy', version: '3.0.0' })
     servingApi.getHealth.mockResolvedValue({ status: 'UP' })
     llmApi.getHealth.mockResolvedValue({ status: 'ok' })
+    opsApi.getUsage.mockResolvedValue(usage())
     miningApi.getStats.mockResolvedValue(stats())
   })
 
@@ -77,8 +104,14 @@ describe('系统状态 tab', () => {
     const wrapper = await mountTab()
 
     expect(wrapper.text()).toContain('该域无发布语料')
-    // 统计卡整组不渲染——0 在这里没有意义
-    expect(wrapper.findAllComponents({ name: 'StatsCard' })).toHaveLength(0)
+    // 知识资产那一组统计卡不渲染——0 在这个口径下没有意义。
+    // 只能按 label 判，不能数全页 StatsCard：检索使用分析那一段也有 5 张，
+    // 它是另一个口径（全域检索流量），不受有没有 release 影响。
+    const labels = wrapper.findAllComponents({ name: 'StatsCard' })
+      .map(c => c.props('label'))
+    expect(labels).not.toContain('快照')
+    expect(labels).not.toContain('段落')
+    expect(labels).toContain('检索次数')      // 使用分析那组照常在
   })
 
   it('有 release 但内容为空时，0 是真的 0，照常渲染', async () => {
@@ -133,5 +166,47 @@ describe('系统状态 tab', () => {
     const wrapper = await mountTab()
 
     expect(wrapper.text()).toContain('加载失败')
+  })
+
+  // ── 检索使用分析 ────────────────────────────────────────────────────
+
+  it('给出比概览页更全的明细：零结果清单 / 范式表 / 热门查询 / 双分布图', async () => {
+    const wrapper = await mountTab()
+    const text = wrapper.text()
+
+    expect(text).toContain('答不上来的问题')
+    expect(text).toContain('SMF 会话建立超时')     // 全量清单（概览页只给前 5）
+    expect(text).toContain('各检索范式')
+    expect(text).toContain('热门查询')
+    expect(text).toContain('5GC 计费接口')
+    expect(text).toContain('查询意图分布')
+    expect(text).toContain('接入渠道分布')
+    expect(wrapper.findAll('.bar-stub').length).toBe(2)   // 意图 + 渠道
+  })
+
+  it('平均延迟与 P95 并排给出——两者差距就是长尾的严重程度', async () => {
+    const wrapper = await mountTab()
+
+    expect(wrapper.text()).toContain('P95 延迟')
+    expect(wrapper.text()).toContain('平均延迟')
+  })
+
+  it('serving 没产出过日志时说明原因，而不是画一排 0', async () => {
+    opsApi.getUsage.mockResolvedValue(usage({ available: false }))
+
+    const wrapper = await mountTab()
+
+    expect(wrapper.text()).toContain('尚未产生检索日志')
+    expect(wrapper.text()).not.toContain('各检索范式')
+  })
+
+  it('使用分析挂掉不牵连服务状态与知识资产', async () => {
+    opsApi.getUsage.mockRejectedValue(new Error('boom'))
+
+    const wrapper = await mountTab()
+
+    // 服务状态那三张卡还在
+    expect(wrapper.findAllComponents({ name: 'ServiceHealthCard' })).toHaveLength(3)
+    expect(wrapper.text()).toContain('知识资产')
   })
 })

@@ -54,18 +54,25 @@
           <p v-else class="sys-status__muted">窗口内没有检索调用</p>
         </div>
 
+        <!--
+          概览页只列前 5 条，这里给后端返回的全量。这是整块数据里最有行动价值的一段：
+          零结果率说明「有缺口」，这份清单说明「缺口在哪、该补什么」。
+        -->
+        <div class="sys-status__chart">
+          <h4 class="sys-status__subtitle">
+            答不上来的问题
+            <span class="sys-status__hint">用户输入原文，仅管理员可见</span>
+          </h4>
+          <QueryList v-if="noResultItems.length" :items="noResultItems" />
+          <p v-else class="sys-status__muted">窗口内没有零结果查询</p>
+        </div>
+
         <div class="sys-status__chart">
           <h4 class="sys-status__subtitle">
             热门查询
             <span class="sys-status__hint">用户输入原文，仅管理员可见</span>
           </h4>
-          <ul v-if="usage.top_queries.length" class="qlist">
-            <li v-for="q in usage.top_queries" :key="q.query_text" class="qlist__row">
-              <span class="qlist__text" :title="q.query_text">{{ q.query_text }}</span>
-              <span class="qlist__count">{{ q.count }} 次</span>
-              <span v-if="q.no_result" class="qlist__warn">{{ q.no_result }} 次无结果</span>
-            </li>
-          </ul>
+          <QueryList v-if="topQueryItems.length" :items="topQueryItems" />
           <p v-else class="sys-status__muted">窗口内没有查询</p>
         </div>
 
@@ -76,7 +83,7 @@
               v-if="intentBars.length"
               :data="intentBars"
               horizontal
-              :height="`${Math.max(140, intentBars.length * 28 + 40)}px`"
+              :height="barChartHeight(intentBars.length)"
             />
             <p v-else class="sys-status__muted">无数据</p>
           </div>
@@ -86,7 +93,7 @@
               v-if="channelBars.length"
               :data="channelBars"
               horizontal
-              :height="`${Math.max(140, channelBars.length * 28 + 40)}px`"
+              :height="barChartHeight(channelBars.length)"
             />
             <p v-else class="sys-status__muted">无数据</p>
           </div>
@@ -173,12 +180,15 @@ import { useServingApi } from '@/api/serving'
 import { useLlmApi } from '@/api/llm'
 import { useOpsApi } from '@/api/ops'
 import { breakdownBars, formatMs, formatRate, paradigmLabel } from '@/utils/opsStats'
+import { barChartHeight } from '@/utils/dashboard'
 import type { HealthStatus, KnowledgeStats } from '@/types'
 import type { OpsUsage } from '@/types/ops'
 import StatsCard from '@/components/common/StatsCard.vue'
 import ServiceHealthCard from '@/components/common/ServiceHealthCard.vue'
 import PieChart from '@/components/charts/PieChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
+import QueryList from '@/components/dashboard/QueryList.vue'
+import type { QueryListItem } from '@/components/dashboard/QueryList.vue'
 
 type Health = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
 
@@ -199,6 +209,31 @@ const usageError = ref(false)
 
 const intentBars = computed(() => breakdownBars(usage.value?.intents))
 const channelBars = computed(() => breakdownBars(usage.value?.channels))
+
+/** 「最近一次被问到」只给到日，精确到分秒对补知识这个动作没有帮助。 */
+function formatDay(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('zh-CN')
+}
+
+// 两份清单共用 QueryList，差别只在注记：零结果给"最近被问到"的日期，热门查询给
+// "N 次无结果"（染成警告色——问得多又答不上的那几条优先级最高）。
+const noResultItems = computed<QueryListItem[]>(
+  () => (usage.value?.no_result_queries ?? []).map(q => ({
+    text: q.query_text,
+    count: q.count,
+    note: q.last_at ? formatDay(q.last_at) : undefined,
+  })),
+)
+
+const topQueryItems = computed<QueryListItem[]>(
+  () => (usage.value?.top_queries ?? []).map(q => ({
+    text: q.query_text,
+    count: q.count,
+    note: q.no_result ? `${q.no_result} 次无结果` : undefined,
+    noteTone: 'warn' as const,
+  })),
+)
 
 const services = ref([
   { key: 'mining', name: '挖掘服务', icon: '⚙', status: 'unknown' as Health, detail: '' },
@@ -451,41 +486,4 @@ watch(() => domainStore.currentDomain, loadAll)
   font-weight: 500;
 }
 
-/* ── 查询清单 ── */
-.qlist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.qlist__row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 7px 4px;
-  font-size: 13px;
-  border-bottom: 1px solid var(--kb-border-light);
-}
-
-.qlist__row:last-child { border-bottom: none; }
-
-.qlist__text {
-  flex: 1;
-  color: var(--kb-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.qlist__count {
-  color: var(--kb-text-tertiary);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-
-.qlist__warn {
-  color: var(--kb-warning);
-  font-size: 12px;
-  flex-shrink: 0;
-}
 </style>

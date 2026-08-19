@@ -62,12 +62,7 @@
           答不上来的问题
           <span class="ops__hint">来自检索日志的用户输入原文，仅管理员可见</span>
         </h4>
-        <ul v-if="usage.no_result_queries.length" class="qlist">
-          <li v-for="q in topNoResult" :key="q.query_text" class="qlist__row">
-            <span class="qlist__text" :title="q.query_text">{{ q.query_text }}</span>
-            <span class="qlist__count">{{ q.count }} 次</span>
-          </li>
-        </ul>
+        <QueryList v-if="topNoResult.length" :items="topNoResult" />
         <p v-else class="ops__muted">窗口内没有零结果查询</p>
       </div>
 
@@ -88,7 +83,7 @@
             v-if="paradigmData.length"
             :data="paradigmData"
             horizontal
-            :height="barHeight(paradigmData.length)"
+            :height="barChartHeight(paradigmData.length)"
           />
           <p v-else class="ops__muted">窗口内没有范式调用</p>
         </div>
@@ -102,10 +97,13 @@ import { computed } from 'vue'
 import {
   formatMs, formatRate, paradigmBars, shouldAlertNoResult, usageTrendSeries,
 } from '@/utils/opsStats'
+import { barChartHeight } from '@/utils/dashboard'
 import type { OpsUsage } from '@/types/ops'
+import type { QueryListItem } from '@/components/dashboard/QueryList.vue'
 import StatsCard from '@/components/common/StatsCard.vue'
 import BarChart from '@/components/charts/BarChart.vue'
 import LineChart from '@/components/charts/LineChart.vue'
+import QueryList from '@/components/dashboard/QueryList.vue'
 
 const props = withDefaults(defineProps<{
   usage: OpsUsage | null
@@ -118,16 +116,14 @@ defineEmits<{ detail: []; retry: [] }>()
 /** 首页只列前 5 条；完整清单在 设置→系统状态。 */
 const DASHBOARD_NO_RESULT_LIMIT = 5
 
-const topNoResult = computed(
-  () => (props.usage?.no_result_queries ?? []).slice(0, DASHBOARD_NO_RESULT_LIMIT),
+const topNoResult = computed<QueryListItem[]>(
+  () => (props.usage?.no_result_queries ?? [])
+    .slice(0, DASHBOARD_NO_RESULT_LIMIT)
+    .map(q => ({ text: q.query_text, count: q.count })),
 )
 const trend = computed(() => usageTrendSeries(props.usage))
 const paradigmData = computed(() => paradigmBars(props.usage?.paradigms))
 const alertNoResult = computed(() => shouldAlertNoResult(props.usage))
-
-function barHeight(count: number): string {
-  return `${Math.max(140, count * 28 + 40)}px`
-}
 </script>
 
 <style scoped>
@@ -211,38 +207,6 @@ function barHeight(count: number): string {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 16px;
-}
-
-/* ── 查询清单 ── */
-.qlist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.qlist__row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 7px 4px;
-  font-size: 13px;
-  border-bottom: 1px solid var(--kb-border-light);
-}
-
-.qlist__row:last-child { border-bottom: none; }
-
-.qlist__text {
-  flex: 1;
-  color: var(--kb-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.qlist__count {
-  color: var(--kb-text-tertiary);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
 }
 
 .ops__muted {

@@ -11,6 +11,8 @@ D-006 / D-022，与 file_management / shadow_parse 的 memory 仓储同风格）
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from knowledge_mining.mining.contracts.snapshot_store import (
     SnapshotCommitResult,
     SnapshotRecord,
@@ -35,6 +37,12 @@ class MemorySnapshotRepository:
         existing_id = self._by_fp.get(fp_key)
         if existing_id is not None:
             existing = self._by_id[existing_id]
+            # 对抗评审 CRITICAL-1：同内容不同文档共享指纹时，复用快照但
+            # 必须补写该文档的 link——且 link 必须指向**既有**快照 id
+            # （service 层构造 link 时用的是新构造的 snapshot.id）。
+            self._links[link.id] = replace(
+                link, document_snapshot_id=existing.id
+            )
             return SnapshotCommitResult(
                 snapshot=existing,
                 created=False,
@@ -68,7 +76,8 @@ class MemorySnapshotRepository:
         ]
         if not candidates:
             return None
-        return max(candidates, key=lambda pair: pair[0].created_at)
+        # 对抗评审 MED-4：tie-break 加 id，避免同时间戳排序不稳定。
+        return max(candidates, key=lambda pair: (pair[0].created_at, pair[0].id))
 
     async def mark_lifecycle(
         self, snapshot_id: str, lifecycle_status: str

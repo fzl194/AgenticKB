@@ -84,6 +84,7 @@ class DocumentParseService:
         commit_service: SnapshotCommitService,
         quality_gate: QualityGate | None = None,
         reconciler: Any | None = None,
+        snapshots: Any | None = None,
         bucket_prefix: str | None = None,
         parse_bucket: str | None = None,
     ) -> None:
@@ -95,6 +96,7 @@ class DocumentParseService:
         self._commit = commit_service
         self._gate = quality_gate or QualityGate()
         self._reconciler = reconciler
+        self._snapshots = snapshots  # 探针校验快照 lifecycle（可缺省）
         if not bucket_prefix and not parse_bucket:
             raise ValueError(
                 "DocumentParseService requires a bucket prefix "
@@ -128,6 +130,7 @@ class DocumentParseService:
             existing is not None
             and existing.status == "SUCCEEDED"
             and existing.snapshot_id
+            and await self._snapshot_reusable(existing.snapshot_id)
         ):
             return existing
 
@@ -337,6 +340,15 @@ class DocumentParseService:
 
     # -- 内部 ---------------------------------------------------------------
 
+    async def _snapshot_reusable(self, snapshot_id: str) -> bool:
+        """对抗评审 MED-1：探针复用前校验快照仍 READY（REVOKED/
+        DEPRECATED 不复用，落入完整重跑）。未注入 snapshots 时保守放行
+        （M2 兼容）。"""
+        if self._snapshots is None:
+            return True
+        snap = await self._snapshots.get(snapshot_id)
+        return snap is not None and snap.lifecycle_status == "READY"
+
     def _shadow_for(self, parser_id: str) -> ShadowParseService:
         """为一次尝试组装 ShadowParseService（共享存储/仓储，换 parser）."""
         parser, normalizer = self._resolver(parser_id)
@@ -412,6 +424,17 @@ class DocumentParseService:
                     f"frozen input stale: document revision moved "
                     f"{stale.frozen_revision} -> {stale.current_revision} "
                     f"during parse; snapshot suppressed"
+                ),
+                finished_at=_utcnow(),
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001 —— 提交期基础设施异常不得卡死 Run
+            # 对抗评审 HIGH-1：DB 断连/对象缺失等非预期异常 → 终态 FAILED
+            # （§9.2 终态保证；卡 EVALUATING 无法自愈）。
+            await self._advance(
+                rid, "FAILED",
+                error_message=(
+                    f"snapshot commit failed: {type(exc).__name__}: {exc}"
                 ),
                 finished_at=_utcnow(),
             )

@@ -104,12 +104,16 @@ def compile_segments(
 
         if etype == "table":
             flush()
-            segments.extend(_emit_table(element, assets, caption_of, policy))
+            segments.extend(_emit_table(
+                element, assets, caption_of, policy, tuple(stack)
+            ))
             continue
 
         if etype == "figure":
             flush()
-            seg = _emit_figure(element, caption_of, policy)
+            seg = _emit_figure(
+                element, caption_of, policy, tuple(stack)
+            )
             if seg is not None:
                 segments.append(seg)
             continue
@@ -122,8 +126,12 @@ def compile_segments(
         text = element.text.strip()
         if not text:
             continue
-        # 合并判断：同链 + 开关 + 上限内。
-        current_len = sum(len(e.text) for e in buffer)
+        # 合并判断：同链 + 开关 + 上限内（对抗评审 HIGH-4：与产出一致，
+        # 用 strip 后长度；标题并入首段的长度一并计入）。
+        current_len = sum(len(t.strip()) for t in
+                          (e.text for e in buffer)) + (
+            len(buffer_heading_text) if buffer_heading_text else 0
+        )
         if (
             buffer
             and policy.merge_adjacent_paragraphs
@@ -136,9 +144,24 @@ def compile_segments(
             if len(text) <= policy.max_tokens:
                 buffer.append(element)
             else:
-                segments.extend(
-                    _emit_split(element, tuple(stack), policy)
-                )
+                # 对抗评审 HIGH-1：二分切片继承待定标题——注入首片正文，
+                # 并清掉挂起标题（防循环末尾 flush 产出错位的重复标题段）。
+                leading = buffer_heading_text
+                parts = _emit_split(element, tuple(stack), policy)
+                if leading and parts:
+                    first_text = parts[0].raw_text
+                    parts[0] = CompiledSegment(
+                        segment_index=-1,
+                        block_type=parts[0].block_type,
+                        raw_text=f"{leading}\n{first_text}",
+                        heading_chain=parts[0].heading_chain,
+                        element_ids=parts[0].element_ids,
+                        links=parts[0].links,
+                        metadata=parts[0].metadata,
+                    )
+                segments.extend(parts)
+                buffer_heading_text = None
+                buffer_heading_el = None
 
     flush()
     return tuple(
@@ -205,12 +228,9 @@ def _emit_merged(
     if leading_heading and parts and not parts[0].startswith(leading_heading):
         parts[0] = f"{leading_heading}\n{parts[0]}"
     raw_text = "\n".join(parts)
-    block_type = elements[0].element_type if elements[0].element_type in (
-        _TEXTUAL_TYPES
-    ) else elements[0].element_type
     return [CompiledSegment(
         segment_index=-1,  # 占位，由外层重编号
-        block_type=block_type,
+        block_type=elements[0].element_type,
         raw_text=raw_text,
         heading_chain=chain,
         element_ids=tuple(e.element_id for e in elements),
@@ -246,6 +266,7 @@ def _emit_table(
     assets: dict,
     caption_of: dict[str, str],
     policy: SegmentPolicy,
+    chain: tuple[tuple[int, str], ...] = (),
 ) -> list[CompiledSegment]:
     asset = assets.get(f"{element.element_id}-table")
     caption = caption_of.get(element.element_id, "")
@@ -254,7 +275,7 @@ def _emit_table(
         segment_index=-1,
         block_type=_TABLE_WHOLE,
         raw_text=element.text,
-        heading_chain=(),
+        heading_chain=chain,
         element_ids=(element.element_id,),
         links=(base_link,),
         metadata={
@@ -283,7 +304,7 @@ def _emit_table(
             segment_index=-1,
             block_type=_TABLE_ROW,
             raw_text="\t".join(c.text for c in cells),
-            heading_chain=(),
+            heading_chain=chain,
             element_ids=(element.element_id,),
             links=(SegmentElementLink(
                 element_id=element.element_id,
@@ -314,7 +335,10 @@ def _header_of(asset: TableAsset) -> tuple[list[str], set[int]]:
 
 
 def _emit_figure(
-    element: Element, caption_of: dict[str, str], policy: SegmentPolicy
+    element: Element,
+    caption_of: dict[str, str],
+    policy: SegmentPolicy,
+    chain: tuple[tuple[int, str], ...] = (),
 ) -> CompiledSegment | None:
     if not policy.include_figure_captions:
         return None
@@ -326,7 +350,7 @@ def _emit_figure(
         segment_index=-1,
         block_type="figure",
         raw_text=raw,
-        heading_chain=(),
+        heading_chain=chain,
         element_ids=(element.element_id,),
         links=(_link(element),),
         metadata={"figure_caption": caption},

@@ -35,6 +35,12 @@ _BLOCK_TYPE_PROJECTION = {
     "footnote": "paragraph",
 }
 
+#: legacy asset_raw_segments.block_type CHECK 白名单（002 DDL）。
+_LEGACY_BLOCK_TYPES = frozenset({
+    "paragraph", "heading", "table", "list", "code", "blockquote",
+    "html_table", "raw_html", "image", "unknown",
+})
+
 
 def to_raw_segment_data(
     segment: CompiledSegment, *, document_key: str
@@ -57,8 +63,12 @@ def to_raw_segment_data(
     return RawSegmentData(
         document_key=document_key,
         segment_index=segment.segment_index,
+        # 对抗评审 HIGH-3：未知类型回落 unknown——白名单闭合，杜绝
+        # INSERT 击穿 DB CHECK 导致整快照编译失败。
         block_type=_BLOCK_TYPE_PROJECTION.get(
-            segment.block_type, segment.block_type
+            segment.block_type,
+            segment.block_type
+            if segment.block_type in _LEGACY_BLOCK_TYPES else "unknown",
         ),
         section_path=section_path,
         section_title=segment.heading_chain[-1][1] if segment.heading_chain else None,

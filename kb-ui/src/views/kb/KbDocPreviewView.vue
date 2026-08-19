@@ -72,7 +72,7 @@
           <div v-else-if="parseError" class="doc-preview__state">
             <el-icon :size="32"><WarningFilled /></el-icon>
             <p>{{ parseError }}</p>
-            <p class="doc-preview__sub">触发「更新知识」后，这里会展示解析出的标题树、表格网格与切片。</p>
+            <el-button v-if="parseRetryable" size="small" @click="loadParseResult">重试</el-button>
           </div>
 
           <template v-else-if="parseResult">
@@ -92,7 +92,7 @@
                 </div>
                 <div class="doc-preview__meta-item">
                   <span class="doc-preview__meta-label">元素 / 容器 / 关系</span>
-                  <span>{{ parseResult.elements.length }} / {{ parseResult.diagnostics.containers }} / {{ parseResult.diagnostics.relations }}</span>
+                  <span>{{ parseResult.elements.count }} / {{ parseResult.diagnostics.containers }} / {{ parseResult.diagnostics.relations }}</span>
                 </div>
                 <div class="doc-preview__meta-item">
                   <span class="doc-preview__meta-label">切片数</span>
@@ -338,12 +338,22 @@ function tableRows(t: { preview: string[][] }): string[][] {
 async function loadParseResult() {
   parseResult.value = null
   parseError.value = ''
+  parseRetryable.value = false
   parseLoading.value = true
   try {
     parseResult.value = await miningApi.getParseResult(props.docId)
   } catch (e) {
-    const detail = await apiErrorDetail(e)
-    parseError.value = /404|not found/i.test(detail) ? '该文档还没有新链解析结果。' : detail
+    // 对抗评审 HIGH-1：按 HTTP 状态码分支（文案正则永远匹配不到后端
+    // detail）；404 = 未走新链（引导），503 = 未接线，其余原样展示。
+    const status = (e as { response?: { status?: number } })?.response?.status
+    parseRetryable.value = status !== 404 && status !== 503
+    if (status === 404) {
+      parseError.value = '该文档还没有新链解析结果。触发「更新知识」后，这里会展示解析出的标题树、表格网格与切片。'
+    } else if (status === 503) {
+      parseError.value = '结构化数据视图未在本部署启用。'
+    } else {
+      parseError.value = await apiErrorDetail(e)
+    }
   } finally {
     parseLoading.value = false
   }

@@ -16,7 +16,7 @@ ALTER TABLE asset_raw_segments ADD COLUMN IF NOT EXISTS compiler_fingerprint TEX
 
 CREATE TABLE IF NOT EXISTS asset_segment_element_links (
     id                  TEXT PRIMARY KEY,
-    document_snapshot_id TEXT NOT NULL,
+    document_snapshot_id TEXT NOT NULL REFERENCES asset_document_snapshots(id) ON DELETE CASCADE,
     segment_index       INTEGER NOT NULL,
     element_id          TEXT NOT NULL,
     evidence_span_ids   TEXT NOT NULL DEFAULT '[]',   -- JSON array of span ids
@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS asset_segment_element_links (
 
 CREATE INDEX IF NOT EXISTS idx_asset_segment_links_snapshot
     ON asset_segment_element_links(document_snapshot_id, segment_index);
+
+-- 对抗评审 MEDIUM-8：重复编译/重放不得产生重复 link 行。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_segment_links_row
+    ON asset_segment_element_links(
+        document_snapshot_id, segment_index, element_id, char_start);
 
 CREATE INDEX IF NOT EXISTS idx_asset_segment_links_element
     ON asset_segment_element_links(document_snapshot_id, element_id);

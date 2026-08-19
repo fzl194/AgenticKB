@@ -37,6 +37,12 @@ def test_segment_links_table_and_column() -> None:
         "id", "document_snapshot_id", "segment_index", "element_id",
         "evidence_span_ids", "char_start", "char_end", "metadata_json",
     } <= cols
+    # FK（对抗评审 MEDIUM-8）生效：先插父快照行。
+    conn.execute(
+        "INSERT INTO asset_document_snapshots (id, domain,"
+        " normalized_content_hash, raw_content_hash, mime_type, created_at)"
+        " VALUES ('snap1', 'd', 'nh', 'rh', 'other', 't')"
+    )
     conn.execute(
         "INSERT INTO asset_segment_element_links (id, document_snapshot_id,"
         " segment_index, element_id, evidence_span_ids)"

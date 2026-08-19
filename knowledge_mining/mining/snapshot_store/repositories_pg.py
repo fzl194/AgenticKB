@@ -122,14 +122,34 @@ class PgSnapshotRepository:
                 stored = _snapshot_from_row(dict(row))
                 await self._insert_link(conn, link)
                 return SnapshotCommitResult(snapshot=stored, created=True)
-            existing = await self.find_by_fingerprint(
-                snapshot.domain, snapshot.snapshot_fingerprint
+            # 指纹命中复用：SELECT 必须在同一连接上执行（对抗评审：持
+            # 连接再取第二连接，pool min_size=1 时自锁死）；且必须补写该
+            # 文档的 link（同内容不同文档共享指纹场景，CRITICAL-1）。
+            cur = await conn.execute(
+                """SELECT * FROM asset_document_snapshots
+                   WHERE domain = %s AND snapshot_fingerprint = %s""",
+                [snapshot.domain, snapshot.snapshot_fingerprint],
             )
-            assert existing is not None, (
+            row = await cur.fetchone()
+            assert row is not None, (
                 "conflict on fingerprint must imply an existing row"
             )
+            existing_row = _snapshot_from_row(dict(row))
+            # link 必须指向既有快照（service 层构造时用的是新 snapshot.id）。
+            await self._insert_link(
+                conn,
+                SnapshotSourceLink(
+                    id=link.id, document_id=link.document_id,
+                    document_snapshot_id=existing_row.id,
+                    source_storage_object_id=link.source_storage_object_id,
+                    source_content_revision=link.source_content_revision,
+                    title=link.title, linked_at=link.linked_at,
+                    source_uri=link.source_uri,
+                    relative_path=link.relative_path,
+                ),
+            )
             return SnapshotCommitResult(
-                snapshot=existing, created=False,
+                snapshot=existing_row, created=False,
                 reused_reason="fingerprint_hit",
             )
 
@@ -199,7 +219,8 @@ class PgSnapshotRepository:
                    WHERE links.document_id = %s AND snapshots.domain = %s
                      AND snapshots.lifecycle_status = 'READY'
                      AND snapshots.snapshot_fingerprint IS NOT NULL
-                   ORDER BY snapshots.created_at DESC
+                   ORDER BY snapshots.created_at DESC,
+                            links.linked_at DESC, snapshots.id DESC
                    LIMIT 1""",
                 [document_id, domain],
             )

@@ -79,20 +79,30 @@ class ParseResultReadService:
                 for e in doc.elements
                 if e.element_type in ("heading", "title")
             ],
-            "elements": [
-                {
-                    "element_id": e.element_id,
-                    "element_type": e.element_type,
-                    "text": e.text[:_PREVIEW_CHARS],
-                    "order_index": e.order_index,
-                    "containers": list(e.page_span_ids),
-                    "has_evidence": bool(e.source_spans),
-                }
-                for e in doc.elements
-                if e.element_type not in (
-                    "page_header", "page_footer", "page_number",
-                )
-            ],
+            # 对抗评审 HIGH-2：elements 与 segments 同样限界（count/items），
+            # 防大文档无界响应。
+            "elements": {
+                "count": sum(
+                    1 for e in doc.elements
+                    if e.element_type not in (
+                        "page_header", "page_footer", "page_number",
+                    )
+                ),
+                "items": [
+                    {
+                        "element_id": e.element_id,
+                        "element_type": e.element_type,
+                        "text": e.text[:_PREVIEW_CHARS],
+                        "order_index": e.order_index,
+                        "containers": list(e.page_span_ids),
+                        "has_evidence": bool(e.source_spans),
+                    }
+                    for e in doc.elements
+                    if e.element_type not in (
+                        "page_header", "page_footer", "page_number",
+                    )
+                ][:500],
+            },
             "tables": [
                 _table_summary(a)
                 for a in doc.structured_assets.values()

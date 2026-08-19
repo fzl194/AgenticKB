@@ -430,3 +430,31 @@ async def test_a09_replay_from_raw_artifact_without_parser(harness) -> None:
     assert harness.parsers["good"].parse_calls == before_calls
     events = await harness.attempts.list_by_run(replay_run.id)
     assert events[0].attempt_kind == "replay"
+
+
+async def test_commit_infrastructure_failure_fails_run_not_stuck(harness) -> None:
+    """HIGH-1（对抗评审）：提交期基础设施异常（非 stale）必须落终态
+    FAILED，不得永久卡 EVALUATING。"""
+    service = harness.make_service()
+    frozen = _frozen()
+    await harness.seed_source(frozen, "line one\nline two\n".encode())
+    # 破坏提交依赖：IR 制品注册行不存在 → commit 抛 StorageObjectMissing。
+    harness._stale = None
+    from knowledge_mining.mining.snapshot_store.service import (
+        SnapshotCommitService as _SCS,
+    )
+    orig_verify = _SCS._verify_ir_object if hasattr(_SCS, "_verify_ir_object") else None
+
+    class _BrokenCommit:
+        async def commit(self, **kwargs):  # noqa: ANN003
+            raise RuntimeError("db connection lost")
+
+        def mark_lifecycle(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise NotImplementedError
+
+    svc = harness.make_service()
+    svc._commit = _BrokenCommit()
+    run = await svc.execute(frozen, _plan("good"), domain="default")
+    assert run.status == "FAILED", run.status
+    assert "db connection lost" in (run.error_message or "")
+    assert run.snapshot_id is None

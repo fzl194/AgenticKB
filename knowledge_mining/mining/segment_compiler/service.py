@@ -122,9 +122,19 @@ class SegmentCompileService:
         async for chunk in self._store.get_stream(location):
             chunks.append(chunk)
         payload = b"".join(chunks)
-        if hashlib_hex(record.sha256) and (
-            hashlib_hex(record.sha256) != _sha256(payload)
-        ):
+        # 对抗评审 MEDIUM-6：注册行的 sha256 非法（非 64 hex）本身即记录
+        # 损坏——按完整性事故处理，不得静默跳过校验。
+        recorded = record.sha256
+        if not (isinstance(recorded, str) and len(recorded) == 64):
+            from knowledge_mining.mining.contracts.storage.errors import (
+                StorageObjectCorrupt,
+            )
+
+            raise StorageObjectCorrupt(
+                f"parse IR object {storage_object_id!r} has invalid "
+                f"registered sha256; registry row corrupted"
+            )
+        if recorded != _sha256(payload):
             from knowledge_mining.mining.contracts.storage.errors import (
                 StorageObjectCorrupt,
             )
@@ -192,6 +202,12 @@ class SnapshotRecompileService:
         old = await self._snapshots.get(source_snapshot_id)
         if old is None:
             raise KeyError(f"unknown snapshot id: {source_snapshot_id!r}")
+        if old.quality_status not in ("PASS", "WARN"):
+            # 对抗评审 MEDIUM-6：FAIL 源快照防御性拒绝（正常不可能入库）。
+            raise ValueError(
+                f"source snapshot {source_snapshot_id!r} has illegal "
+                f"quality_status {old.quality_status!r}; refusing recompile"
+            )
         document = await self._compiler._load_ir(old.parse_ir_storage_object_id)
         fp = compiler_fingerprint(policy)
         committed = await self._commit.commit(

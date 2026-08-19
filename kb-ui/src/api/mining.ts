@@ -458,7 +458,7 @@ export interface ParseResult {
     source_content_revision: number | null
   }
   outline: ParseResultOutlineNode[]
-  elements: ParseResultElement[]
+  elements: { count: number; items: ParseResultElement[] }
   tables: ParseResultTable[]
   segments: { count: number; items: ParseResultSegment[] }
   diagnostics: { warnings: string[]; containers: number; relations: number }

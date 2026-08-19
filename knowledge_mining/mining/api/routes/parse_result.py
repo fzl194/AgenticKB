@@ -22,9 +22,21 @@ async def get_parse_result(
 
     404 = 文档尚未走新链更新知识（无新链快照）——前端显示引导而非报错。
     """
-    result = await service.get_parse_result(
-        domain=require_domain(domain), document_id=document_id,
+    from knowledge_mining.mining.contracts.storage.errors import (
+        StorageObjectMissing,
     )
+
+    try:
+        result = await service.get_parse_result(
+            domain=require_domain(domain), document_id=document_id,
+        )
+    except StorageObjectMissing:
+        # 对抗评审 MEDIUM-1：快照在而 IR 制品缺失 = 完整性事故 → 统一 404
+        # （对照 document_lifecycle 的资源缺失语义，不抛裸 500）。
+        raise HTTPException(
+            status_code=404,
+            detail="parsed snapshot artifact is missing",
+        ) from None
     if result is None:
         raise HTTPException(
             status_code=404,

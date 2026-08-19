@@ -376,3 +376,46 @@ async def test_commit_accepts_compiler_fingerprint(tmp_path) -> None:
     assert b.snapshot.compiler_fingerprint == "segc-abc123"
     assert a.snapshot.compiler_fingerprint is None
     assert a.snapshot.snapshot_fingerprint != b.snapshot.snapshot_fingerprint
+
+
+async def test_same_content_second_document_still_gets_link(tmp_path) -> None:
+    """CRITICAL-1（对抗评审）：同内容不同文档共享指纹时，第二个文档的
+    link 也必须写入——否则 latest_for_document(B) 永远 None。"""
+    from knowledge_mining.mining.snapshot_store.repositories_memory import (
+        MemorySnapshotRepository,
+    )
+
+    objects = MemoryStorageObjectRepository()
+    store = FakeObjectStore(str(tmp_path / "objects"))
+    await _register_ir_object(store, objects, "so_ir")
+    snaps = MemorySnapshotRepository()
+    service = _service(snaps, objects, store)
+
+    a = await service.commit(
+        frozen=_frozen(), document=_doc(),
+        parse_ir_storage_object_id="so_ir",
+        quality_decision=_decision(), run_id="r1", domain="default",
+    )
+    assert a.created is True
+    # 文档 B：相同内容（同 raw hash/管线）→ 指纹命中复用，但 link 必须补写。
+    frozen_b = _frozen()
+    frozen_b = type(frozen_b)(
+        document_id="doc2",
+        source_storage_object_id=frozen_b.source_storage_object_id,
+        source_raw_hash=frozen_b.source_raw_hash,
+        source_content_revision=frozen_b.source_content_revision,
+        mime=frozen_b.mime, size=frozen_b.size,
+        original_filename=frozen_b.original_filename,
+        captured_at=frozen_b.captured_at, provider=frozen_b.provider,
+        bucket=frozen_b.bucket, object_key=frozen_b.object_key,
+        object_version_id=frozen_b.object_version_id,
+    )
+    b = await service.commit(
+        frozen=frozen_b, document=_doc(),
+        parse_ir_storage_object_id="so_ir",
+        quality_decision=_decision(), run_id="r2", domain="default",
+    )
+    assert b.created is False
+    assert b.snapshot.id == a.snapshot.id
+    found = await snaps.latest_for_document("doc2", "default")
+    assert found is not None, "second document must have a link row"

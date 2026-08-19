@@ -41,17 +41,30 @@ class PgSegmentStore:
         document_key: str,
     ) -> int:
         async with self._pool.connection() as conn:
-            # 替换语义：先删旧切片与 links（legacy db.py:741 惯例）。
-            await conn.execute(
+            # 对抗评审 MEDIUM-5：显式事务包裹删除+插入——中途失败不得留下
+            # 空快照（旧切片已删、新切片未写全）。
+            async with conn.transaction():
+                await self._replace_in_txn(
+                    conn, snapshot_id, segments, compiler_fingerprint,
+                    document_key=document_key,
+                )
+        return len(segments)
+
+    async def _replace_in_txn(
+        self, conn, snapshot_id, segments, compiler_fingerprint, *,
+        document_key,
+    ) -> None:
+        # 替换语义：先删旧切片与 links（legacy db.py:741 惯例）。
+        await conn.execute(
                 "DELETE FROM asset_segment_element_links "
                 "WHERE document_snapshot_id = %s",
                 [snapshot_id],
-            )
-            await conn.execute(
+        )
+        await conn.execute(
                 "DELETE FROM asset_raw_segments WHERE document_snapshot_id = %s",
                 [snapshot_id],
-            )
-            for seg in segments:
+        )
+        for seg in segments:
                 rsd = to_raw_segment_data(seg, document_key=document_key)
                 await conn.execute(
                     """INSERT INTO asset_raw_segments (
@@ -94,7 +107,6 @@ class PgSegmentStore:
                             "{}",
                         ],
                     )
-        return len(segments)
 
     async def list_for_snapshot(
         self, snapshot_id: str

@@ -79,8 +79,10 @@ async def test_read_service_returns_structured_view(tmp_path) -> None:
     assert result["snapshot"]["quality_status"] in ("PASS", "WARN")
     assert result["snapshot"]["source_content_revision"] == 3  # 出生证明
     assert [o["title"] for o in result["outline"]] == ["章一"]
-    types = {e["element_type"] for e in result["elements"]}
+    # 对抗评审 HIGH-2 修复后 elements 为 {count, items} 限界结构。
+    types = {e["element_type"] for e in result["elements"]["items"]}
     assert "heading" in types and "paragraph" in types
+    assert result["elements"]["count"] >= len(result["elements"]["items"])
     assert result["segments"]["count"] >= 1
     assert result["segments"]["items"][0]["block_type"]
 

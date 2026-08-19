@@ -313,3 +313,23 @@
 - **验证**：scoped 713 passed/9 skipped（M4 后 +12）；真实环境 e2e 三场景（编译落库含行切片带表头/只读视图/A08 重切新旧并存）全绿；kb-ui vue-tsc 0 错 + vitest 155 通过。
 - **依据**：SRS §4.12/§C11/§3.10/§5.3/§8.2/§8.3/§2.3/§A08；用户 M5 前需求讨论（骨架+参数、系统契合可视化）。
 - **影响**：新增 `contracts/segment_compiler.py`、`segment_compiler/{compiler,projection,service,repositories_memory,repositories_pg}.py`、`snapshot_store/read_service.py`、`api/routes/parse_result.py`、011 DDL 双方言、`tests/{segment_compiler,golden_corpus/test_corpus_segments,contracts/test_m5_ddl,snapshot_store/test_read_service}`、kb-ui（mining.ts + KbDocPreviewView 结构化数据页签）、`var/e2e/_e2e_m5_segments.py`；改 `snapshot_store/{service,repositories_memory,repositories_pg}`、`contracts/snapshot_store.py`、`api/{deps,app}.py`、`infra/pg_schema.py`（011 挂链）。
+
+## D-035 ｜ M4/M5 对抗评审整改（用户指令「注意对抗评审」）
+- **背景**：三路并行恶意评审（编排/转正层、切片编译层、只读 API+前端）。共 3 CRITICAL 候选 + 10 HIGH + 10 MEDIUM，甄别后修复 16 项、留档 6 项。
+- **已修复**（全部带回归测试或 e2e 复跑验证）：
+  1. **CRITICAL（转正层）**：同内容不同文档共享指纹时，复用分支不补写 link 且 link 指向新构造快照 id → 第二文档永远查不到快照。修复：memory/PG 复用分支均补写 link 并重定向到既有快照 id；PG 同时修复持连接取第二连接的自锁（min_size=1 死锁）。
+  2. **Run 卡死（编排层 HIGH）**：提交期基础设施异常（DB 断连等）穿透 → Run 永久卡 EVALUATING。修复：`_commit_or_supersede` 兜底 except → 终态 FAILED。
+  3. **探针校验（MED）**：快照被 REVOKED/DEPRECATED 后仍被幂等探针复用。修复：`_snapshot_reusable` 前置校验 lifecycle（注入 snapshots 可选依赖）。
+  4. **排序稳定（MED）**：latest_for_document 字符串时间戳排序 + 同秒无 tie-break。修复：memory 加 id tie-break；PG ORDER BY 加 linked_at/id。
+  5. **编译器 4 项 HIGH**：超长段落紧跟标题的序错位+重复标题段（二分切片继承待定标题并清挂起）；表格/图切片标题链恒空（传入 stack）；block_type 白名单不闭合（未知回落 unknown，杜绝 INSERT 击穿 DB CHECK）；合并上限口径失真（strip 长度 + 标题计入）。
+  6. **切片落库 3 项**：PgSegmentStore 显式事务包裹删除+插入（防空快照）；IR sha256 非法记录按完整性事故拒绝（不再静默跳过）；recompile 源快照 FAIL 防御性拒绝。
+  7. **011 DDL**：links 表补 FK（ON DELETE CASCADE）+ 行级唯一索引（防重复编译产生重复 link）。
+  8. **只读 API+前端 3 项**：404 判定改 HTTP 状态码（原正则匹配不到后端 detail，引导文案永不生效）；elements 限界 {count, items[:500]}（防大文档无界响应）；IR 制品缺失统一 404（不抛裸 500）+ 前端重试按钮。
+- **留档未修（M6 已知缺口，按影响排序）**：
+  1. parse-result 端点与 download 同样只有 require_domain，无 KB 成员可见性裁剪（存量模式，非新链特有）——M6 统一接入 serving 侧 KbAccessService 式校验。
+  2. Run 级并发互斥（同输入并发双跑产生重复 Run/双倍解析费用）——需 advisory lock 或部分唯一索引。
+  3. storage_objects register 的 find→put→register 竞态（同对象双注册）——需 (bucket,object_key) 唯一索引 + ON CONFLICT。
+  4. raw artifact 全量驻内存（超大文本格式 replay 内存峰值 3-4 倍）。
+  5. M2 upsert 与 M4 set_status 共享 Run 行命名空间，理论上可覆写审计。
+  6. min_tokens 契约参数未参与编译行为（改值只会触发无谓重切）——要么实现小片段合并，要么从指纹剔除。
+- **验证**：scoped 全量 **715 passed/9 skipped**；真实环境 e2e 三场景复跑全绿；kb-ui vue-tsc 0 错 + vitest 155 通过。

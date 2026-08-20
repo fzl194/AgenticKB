@@ -6,6 +6,8 @@ from .graph import EdgeDef, NodeDef, OutputDef, WorkflowGraph
 _POSITIONS = {
     "input_ingest": (40, 260),
     "parse_segment": (280, 260),
+    "document_parse": (180, 260),
+    "segment_compile": (380, 260),
     "enrich": (520, 80),
     "discourse_line": (760, 80),
     "contextual_retrieval_enrich": (1000, 80),
@@ -77,12 +79,18 @@ def _connect_chain(types: tuple[str, ...], slot: str) -> list[EdgeDef]:
     ]
 
 
-def _template(template_name: str) -> WorkflowGraph:
+def _template(
+    template_name: str,
+    *,
+    parse_ops: tuple[str, ...] = ("parse_segment",),
+    schema_version: str = "1.0",
+) -> WorkflowGraph:
+    """构建一套范式模板；v2 传入解析双算子与 schemaVersion（SRS §10.2）."""
     discourse_branch, entity_branch, includes_ontology_induction = (
         _TEMPLATE_BRANCHES[template_name]
     )
 
-    types = ["input_ingest", "parse_segment"]
+    types = ["input_ingest", *parse_ops]
     types.extend(discourse_branch)
     types.extend(entity_branch)
     types.append("asset_persist")
@@ -94,12 +102,17 @@ def _template(template_name: str) -> WorkflowGraph:
     types.append("mining_finalize")
 
     edges = [
-        EdgeDef("input_ingest", "rawFiles", "parse_segment", "rawFiles"),
-        EdgeDef("parse_segment", "documents", "asset_persist", "documents"),
+        EdgeDef("input_ingest", "rawFiles", parse_ops[0], "rawFiles"),
+        EdgeDef(parse_ops[-1], "documents", "asset_persist", "documents"),
     ]
+    if len(parse_ops) > 1:
+        for upstream, downstream in zip(parse_ops, parse_ops[1:]):
+            edges.append(
+                EdgeDef(upstream, "documents", downstream, "documents")
+            )
     if discourse_branch:
         edges.append(
-            EdgeDef("parse_segment", "documents", discourse_branch[0], "documents")
+            EdgeDef(parse_ops[-1], "documents", discourse_branch[0], "documents")
         )
         edges.extend(_connect_chain(discourse_branch, "documents"))
         edges.append(
@@ -112,7 +125,7 @@ def _template(template_name: str) -> WorkflowGraph:
         )
     if entity_branch:
         edges.append(
-            EdgeDef("parse_segment", "documents", entity_branch[0], "documents")
+            EdgeDef(parse_ops[-1], "documents", entity_branch[0], "documents")
         )
         edges.extend(_connect_chain(entity_branch, "documents"))
         edges.append(
@@ -132,6 +145,7 @@ def _template(template_name: str) -> WorkflowGraph:
     edges.extend(_connect_chain(tuple(global_chain), "finalizeInput"))
 
     return WorkflowGraph(
+        schema_version=schema_version,
         nodes=tuple(_node(operator_type) for operator_type in types),
         edges=tuple(edges),
         output=OutputDef("mining_finalize", "result"),
@@ -142,7 +156,20 @@ _BUILTIN_TEMPLATES = {
     name: _template(name)
     for name in _TEMPLATE_BRANCHES
 }
+_BUILTIN_TEMPLATES_V2 = {
+    name: _template(
+        name,
+        parse_ops=("document_parse", "segment_compile"),
+        schema_version="2.0",
+    )
+    for name in _TEMPLATE_BRANCHES
+}
 
 
 def builtin_templates() -> dict[str, WorkflowGraph]:
     return dict(_BUILTIN_TEMPLATES)
+
+
+def builtin_templates_v2() -> dict[str, WorkflowGraph]:
+    """v2 范式模板：解析与切片显式分离（SRS §10.2/A11；历史 manifest 不改写）."""
+    return dict(_BUILTIN_TEMPLATES_V2)

@@ -207,9 +207,53 @@ class FinalizeOptions(OperatorOptions):
     )
 
 
+class DocumentParseOptions(OperatorOptions):
+    """document_parse 参数（SRS §10.2：只表达解析策略；M6/R5 档位）."""
+
+    quality_profile: Literal["default", "strict", "lenient"] = Field(
+        "default",
+        alias="qualityProfile",
+        title="质量档位",
+        description="strict 提高入库门槛，lenient 放宽为尽量入库。",
+    )
+    max_backend_attempts: int = Field(
+        3,
+        alias="maxBackendAttempts",
+        title="后端尝试预算",
+        ge=1,
+        le=5,
+        description="主解析失败后自动切换备用的总次数上限。",
+    )
+
+
+class SegmentCompileOptions(OperatorOptions):
+    """segment_compile 参数（SRS §10.2：只表达分段策略；M6/R2 档位）.
+
+    字段与 SegmentPolicy 一一对应（handler 层映射）。
+    """
+
+    max_tokens: int = Field(512, alias="maxTokens", title="切片上限", ge=64)
+    min_tokens: int = Field(64, alias="minTokens", title="切片下限", ge=1)
+    merge_adjacent_paragraphs: bool = Field(
+        True, alias="mergeAdjacentParagraphs", title="合并同章节相邻段",
+    )
+    inject_heading_context: bool = Field(
+        True, alias="injectHeadingContext", title="注入章节路径",
+    )
+    table_view: Literal["whole", "rows", "both"] = Field(
+        "rows", alias="tableView", title="表格视图",
+        description="整表 / 逐行（行带表头）/ 两者。",
+    )
+    include_figure_captions: bool = Field(
+        True, alias="includeFigureCaptions", title="图题编译",
+    )
+
+
 OPTIONS_BY_OPERATOR: dict[str, type[OperatorOptions]] = {
     "input_ingest": EmptyOptions,
     "parse_segment": ParseSegmentOptions,
+    "document_parse": DocumentParseOptions,
+    "segment_compile": SegmentCompileOptions,
     "enrich": EnrichOptions,
     "discourse_line": DiscourseOptions,
     "contextual_retrieval_enrich": EmptyOptions,

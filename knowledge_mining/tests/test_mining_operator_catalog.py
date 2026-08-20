@@ -16,6 +16,8 @@ from knowledge_mining.mining.workflow.templates import builtin_templates
 APPROVED_OPERATOR_TYPES = {
     "input_ingest",
     "parse_segment",
+    "document_parse",
+    "segment_compile",
     "enrich",
     "discourse_line",
     "contextual_retrieval_enrich",
@@ -33,12 +35,15 @@ APPROVED_OPERATOR_TYPES = {
 }
 
 
-def test_catalog_exposes_exactly_the_approved_16_operators() -> None:
+def test_catalog_exposes_exactly_the_approved_18_operators() -> None:
     catalog = builtin_catalog()
     assert set(catalog) == APPROVED_OPERATOR_TYPES
     assert {
         key for key, value in catalog.items() if value.edit_policy is EditPolicy.FIXED
-    } == {"input_ingest", "parse_segment", "asset_persist", "mining_finalize"}
+    } == {
+            "input_ingest", "parse_segment", "document_parse",
+            "segment_compile", "asset_persist", "mining_finalize",
+        }
     assert {
         key
         for key, value in catalog.items()
@@ -82,7 +87,7 @@ def test_every_operator_schema_comes_from_its_typed_option_model() -> None:
         model.model_validate(model().model_dump(by_alias=True))
 
 
-def test_all_seven_templates_are_global_and_full_contains_all_16_nodes() -> None:
+def test_all_seven_templates_are_global_and_full_contains_all_operators() -> None:
     templates = builtin_templates()
     assert set(templates) == {
         "minimal",
@@ -93,9 +98,10 @@ def test_all_seven_templates_are_global_and_full_contains_all_16_nodes() -> None
         "ontology_only",
         "full",
     }
+    # v1 模板仍用一体算子（新算子属 v2 模板，见 test_m6_workflow_operators）
     assert {
         node.operator_type for node in templates["full"].nodes
-    } == APPROVED_OPERATOR_TYPES
+    } == APPROVED_OPERATOR_TYPES - {"document_parse", "segment_compile"}
     assert all(
         '"domain"' not in json.dumps(graph.to_dict()).lower()
         for graph in templates.values()
@@ -164,5 +170,5 @@ def test_catalog_and_template_results_cannot_mutate_the_singletons() -> None:
     templates = builtin_templates()
     catalog.pop("input_ingest")
     templates.pop("full")
-    assert len(builtin_catalog()) == 16
+    assert len(builtin_catalog()) == 18
     assert "full" in builtin_templates()

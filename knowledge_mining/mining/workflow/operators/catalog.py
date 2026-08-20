@@ -13,13 +13,19 @@ from ..core import (
 from .options import OPTIONS_BY_OPERATOR
 
 
-_FIXED_TYPES = {"input_ingest", "parse_segment", "asset_persist", "mining_finalize"}
+# v2 固定骨架新增解析双算子（SRS §10.2）；parse_segment 保留供 v1。
+_FIXED_TYPES = {
+    "input_ingest", "parse_segment", "document_parse", "segment_compile",
+    "asset_persist", "mining_finalize",
+}
 _PROTECTED_TYPES = {"entity_review_gate", "ontology_review_gate", "graph_write"}
 
 
 _SPECS = (
     ("input_ingest", "input", {"input_spec"}, {"raw_files"}, "FAIL_FAST"),
     ("parse_segment", "document", {"raw_files"}, {"parsed_segments"}, "SKIP_DOCUMENT"),
+    ("document_parse", "document", {"raw_files"}, {"parsed_documents"}, "SKIP_DOCUMENT"),
+    ("segment_compile", "document", {"parsed_documents"}, {"parsed_segments"}, "SKIP_DOCUMENT"),
     ("enrich", "document", {"parsed_segments"}, {"semantic_enrichment"}, "FALLBACK"),
     ("discourse_line", "document", {"parsed_segments"}, {"discourse_relations"}, "SKIP_WITH_EMPTY"),
     ("contextual_retrieval_enrich", "document", {"parsed_segments"}, {"retrieval_context"}, "FALLBACK"),
@@ -39,7 +45,9 @@ _SPECS = (
 
 _LABELS = {
     "input_ingest": ("输入发现", "发现输入文件并初始化运行批次。", "input"),
-    "parse_segment": ("解析与切分", "解析文档结构并生成基础分段。", "document"),
+    "parse_segment": ("解析与切分（v1 兼容）", "旧版解析与切分一体算子；v2 范式请使用解析与切片。", "document"),
+    "document_parse": ("文档解析", "冻结输入并产出结构化解析结果（标题树/表格/证据定位），质量门控后形成知识快照。", "document"),
+    "segment_compile": ("切片编译", "从知识快照按策略编译检索切片（表格行带表头、章节路径注入）。", "document"),
     "enrich": ("语义增强", "补充段落语义角色和内容判断。", "document"),
     "discourse_line": ("篇章关系抽取", "抽取段落之间的篇章关系。", "discourse"),
     "contextual_retrieval_enrich": ("上下文检索增强", "生成分段检索背景。", "discourse"),
@@ -72,6 +80,14 @@ def _slots(operator_type: str) -> tuple[tuple[SlotDecl, ...], tuple[SlotDecl, ..
             (SlotDecl("rawFiles", SlotType.RAW_FILE_BATCH),),
             (_document_slot(),),
         )
+    if operator_type == "document_parse":
+        return (
+            (SlotDecl("rawFiles", SlotType.RAW_FILE_BATCH),),
+            (_document_slot(),),
+        )
+    if operator_type == "segment_compile":
+        slot = _document_slot()
+        return ((slot,), (slot,))
     if operator_type == "asset_persist":
         return (
             (

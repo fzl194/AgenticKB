@@ -18,7 +18,11 @@ def test_domain_schema_never_contains_global_control_store() -> None:
     names = [path.name for path in paths]
     assert "005_mining_workflow_runtime.sql" in names
     assert "001_mining_workflow_postgresql.sql" not in names
-    assert paths[-1].name == "001_ontology_concept_postgresql.sql"
+    # 本体表必须晚于其依赖（asset/runtime）；链尾为后续里程碑的增量
+    # DDL（009 影子解析/010 状态机/011 切片落库，见 ADR-0003）。
+    assert names.index("001_ontology_concept_postgresql.sql") > names.index(
+        "005_mining_workflow_runtime.sql"
+    )
 
 
 def test_compatibility_initializer_delegates_to_primary(monkeypatch) -> None:

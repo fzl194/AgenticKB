@@ -26,11 +26,12 @@ class TraceConnection:
 
     async def execute(self, sql, params):
         normalized = " ".join(sql.split())
-        if "SELECT id, domain, status FROM mining_runs" in normalized:
+        if "SELECT id, domain, status, kb_id FROM mining_runs" in normalized:
             return Cursor(row={
                 "id": self.run["id"],
                 "domain": self.run["domain"],
                 "status": self.run["status"],
+                "kb_id": self.run.get("kb_id"),
             })
         if "FROM mining_runs WHERE id = %s" in normalized:
             return Cursor(row=dict(self.run))

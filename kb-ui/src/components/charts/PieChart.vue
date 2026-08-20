@@ -64,22 +64,31 @@ function render() {
   })
 }
 
+/**
+ * 具名处理函数，好让 onUnmounted 能摘掉它。
+ *
+ * 原来是在 setup 顶层挂一个内联箭头（`window.addEventListener('resize', () => ...)`），
+ * 既没保留引用也从不移除 —— 每挂载一次就多一个永不回收的监听器。概览页一屏就有
+ * 好几个图表实例，来回切页面按实例数累积。
+ */
+function handleResize() {
+  chart?.resize()
+}
+
 onMounted(() => {
   if (chartRef.value) {
     chart = echarts.init(chartRef.value)
     render()
   }
+  // 放进 onMounted 而不是 setup 顶层：服务端渲染时不会执行，也就不必再判 window 是否存在
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
   chart?.dispose()
   chart = null
 })
 
 watch(() => props.data, render, { deep: true })
-
-// Resize on window resize
-if (typeof window !== 'undefined') {
-  window.addEventListener('resize', () => chart?.resize())
-}
 </script>

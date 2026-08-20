@@ -14,7 +14,13 @@
           <el-icon><Search /></el-icon>
         </template>
       </el-input>
-      <el-button type="primary" size="large" @click="handleSearch" :loading="searching">
+      <el-button
+        type="primary"
+        size="large"
+        @click="handleSearch"
+        :loading="searching"
+        :disabled="!canSearch"
+      >
         检索
       </el-button>
     </div>
@@ -22,7 +28,7 @@
     <!-- Domain & Options -->
     <div class="search-view__options">
       <label class="search-view__option">
-        <span class="search-view__option-label">知识库</span>
+        <span class="search-view__option-label">范围</span>
         <el-select
           v-model="selectedKbIds"
           multiple
@@ -31,10 +37,21 @@
           clearable
           filterable
           size="small"
-          :loading="kbsLoading"
-          placeholder="全部（当前生效发布）"
+          :loading="scopeLoading"
+          placeholder="请选择检索范围"
           class="search-view__kb-select"
+          @change="onScopeChange"
         >
+          <!-- 只在该域真有 active release 时出现：纯 KB 部署下它是个不存在的范围 -->
+          <el-option
+            v-if="hasActiveRelease"
+            :key="DOMAIN_RELEASE_SCOPE"
+            label="域级生效发布"
+            :value="DOMAIN_RELEASE_SCOPE"
+          >
+            <span>域级生效发布</span>
+            <span class="search-view__kb-meta">含未归属知识库的历史语料</span>
+          </el-option>
           <el-option
             v-for="kb in kbs"
             :key="kb.id"
@@ -42,7 +59,7 @@
             :value="kb.id"
           >
             <span>{{ kb.name }}</span>
-            <span class="search-view__kb-meta">{{ kb.document_count }} 篇</span>
+            <span class="search-view__kb-meta">{{ kb.status_counts.total }} 篇</span>
           </el-option>
         </el-select>
       </label>
@@ -50,7 +67,17 @@
         <el-switch v-model="debugMode" size="small" />
         <span>Debug 模式</span>
       </label>
-      <span v-if="selectedKbIds.length" class="search-view__option-hint">
+      <span v-if="scopeError" class="search-view__option-warn">
+        {{ scopeError }}
+        <el-button text type="primary" size="small" @click="loadScope">重试</el-button>
+      </span>
+      <span v-else-if="!canSearch" class="search-view__option-warn">
+        {{ kbs.length ? '请至少选择一个知识库' : '你还没有可检索的知识库' }}
+      </span>
+      <span v-else-if="isDomainReleaseScope" class="search-view__option-hint">
+        检索该域当前生效发布的语料
+      </span>
+      <span v-else class="search-view__option-hint">
         仅检索所选知识库已挖掘的内容
       </span>
     </div>
@@ -171,14 +198,23 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useServingApi } from '@/api/serving'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
+import {
+  DOMAIN_RELEASE_SCOPE,
+  canSearchWithScope,
+  defaultScopeSelection,
+  reconcileScopeSelection,
+  resolveRequestKbIds,
+  scopeFromQuery,
+} from '@/utils/searchScope'
 import type { FullTextResult, SearchContextItem, SearchResult } from '@/types'
-import type { KbSummary } from '@/types/kb'
+import type { KbOverviewItem } from '@/types/kb'
 import EvidenceCard from '@/components/search/EvidenceCard.vue'
 import FullTextDrawer from '@/components/search/FullTextDrawer.vue'
 import PipelineTrace from '@/components/search/PipelineTrace.vue'
@@ -188,13 +224,18 @@ const domainStore = useDomainStore()
 const servingApi = useServingApi()
 const kbApi = useKbApi()
 
+const route = useRoute()
 const query = ref('')
 const searching = ref(false)
 const searchedOnce = ref(false)
 const searchError = ref('')
-const kbs = ref<KbSummary[]>([])
-const kbsLoading = ref(false)
+const kbs = ref<KbOverviewItem[]>([])
+const scopeLoading = ref(false)
+const scopeError = ref('')
+const hasActiveRelease = ref(false)
 const selectedKbIds = ref<string[]>([])
+/** reconcileScopeSelection 需要"改动前"的选择才能判断哪边该让位。 */
+let previousScope: string[] = []
 const result = ref<SearchResult | null>(null)
 const activeTab = ref('evidence')
 const debugMode = ref(true)
@@ -206,38 +247,79 @@ const fullTextLoading = ref(false)
 const fullTextError = ref('')
 const fullTextResult = ref<FullTextResult | null>(null)
 
-/** 知识库列表按域取。列表本身已按 X-KB-User 过滤，所以选择器里只会出现可检索的库。 */
-async function loadKbs() {
+const isDomainReleaseScope = computed(() =>
+  selectedKbIds.value.includes(DOMAIN_RELEASE_SCOPE))
+const canSearch = computed(() => canSearchWithScope(selectedKbIds.value))
+
+/**
+ * 取检索范围。走 overview 而不是 listKbs：还需要 has_active_release 才能决定
+ * 要不要给出「域级发布」这个选项（列表本身已按身份过滤，只会出现可检索的库）。
+ */
+async function loadScope({ fromQuery = false } = {}) {
   const domain = domainStore.currentDomain
   if (!domain) return
-  kbsLoading.value = true
+  scopeLoading.value = true
+  scopeError.value = ''
   try {
-    kbs.value = await kbApi.listKbs(domain)
+    const overview = await kbApi.getOverview(domain)
+    kbs.value = overview.kbs
+    hasActiveRelease.value = overview.has_active_release
+    // 默认全选 —— 留空会被 serving.ts 省掉 kbIds 键，
+    // 后端转而去找域级 active release，而 KB 挖掘永不产生 release。
+    // URL 上的 kbIds 只在首次进入时作数：它描述的是那一次跳转的范围，切域后
+    // 那些 id 属于旧域、已经没有意义（照抄过去也会被过滤掉，但别依赖那个副作用）。
+    setScope(fromQuery
+      ? scopeFromQuery(route.query.kbIds as string | string[] | undefined, overview.kbs)
+      : defaultScopeSelection(overview.kbs))
   } catch (e) {
-    // 取不到列表不该挡住检索——退化成「只能全域检索」。
-    console.error('Failed to load knowledge bases:', e)
+    // 取不到范围就没法检索了。以前这里静默退化成"全域检索"，而那条路径在纯 KB
+    // 部署下必然报 no_active_release——把配置/网络问题伪装成"没有数据"。
+    console.error('Failed to load search scope:', e)
     kbs.value = []
+    hasActiveRelease.value = false
+    setScope([])
+    scopeError.value = '检索范围加载失败'
   } finally {
-    kbsLoading.value = false
+    scopeLoading.value = false
   }
 }
 
-onMounted(loadKbs)
+function setScope(next: string[]) {
+  selectedKbIds.value = next
+  previousScope = [...next]
+}
 
-// 切域后旧域的 kb_id 一律失效（后端按 domain 过滤，留着必然 404），清空选择再重取。
+/** 强制「域级发布」与具体知识库互斥（规则与理由见 utils/searchScope.ts）。 */
+function onScopeChange(next: string[]) {
+  setScope(reconcileScopeSelection(previousScope, next))
+}
+
+onMounted(async () => {
+  const q = route.query.q
+  if (typeof q === 'string' && q.trim()) query.value = q
+  await loadScope({ fromQuery: true })
+  // 带 ?q= 进来（首页搜索框跳转）时直接出结果，不用再点一次
+  if (query.value.trim() && canSearch.value) await handleSearch()
+})
+
+// 切域后旧域的 kb_id 一律失效（后端按 domain 过滤，留着必然 404 kb_not_found），
+// 重取范围并重新全选。
 watch(() => domainStore.currentDomain, () => {
-  selectedKbIds.value = []
-  loadKbs()
+  setScope([])
+  loadScope()
 })
 
 async function handleSearch() {
   if (!query.value.trim()) return
+  // 范围为空时不发请求：空 kbIds 会被 serving.ts 省掉键 → 域级 release 分支，
+  // 那正是 D8。按钮已 disabled，这里再挡一道（回车也走这个函数）。
+  if (!canSearch.value) return
   searching.value = true
   searchedOnce.value = true
   searchError.value = ''
   try {
     const domain = domainStore.currentDomain
-    const kbIds = [...selectedKbIds.value]
+    const kbIds = resolveRequestKbIds(selectedKbIds.value)
     result.value = await servingApi.search(query.value, {
       domain,
       debug: debugMode.value,
@@ -355,6 +437,15 @@ async function searchErrorMessage(e: unknown): Promise<string> {
 .search-view__option-hint {
   font-size: 12px;
   color: var(--kb-text-tertiary);
+}
+
+/* 范围为空 / 加载失败：检索按钮已 disabled，这里说清为什么 */
+.search-view__option-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--kb-warning);
 }
 
 .search-view__error {

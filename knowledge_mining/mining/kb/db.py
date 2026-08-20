@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -47,14 +47,41 @@ _STATUS_CASE_SQL = """CASE
     ELSE 'uploaded'
 END"""
 
-_STATUS_JOIN_SQL = """
+# 同一套派生，**去掉 release 两档**。给概览统计用：published/withdrawn 要靠
+# _RELEASE_JOIN_SQL 的两次 release⋈snapshot EXISTS（每文档两次），而纯 KB 部署
+# （publish=False，永不产 release）下这两档恒为 0 —— 为一对恒零的桶付全域文档的
+# 扫描代价不值得。域里确实有 active release 时才切回完整版（见 stats_document_status）。
+_STATUS_CASE_NO_RELEASE_SQL = """CASE
+    WHEN rs.rd_status = 'failed' THEN 'failed'
+    WHEN rs.rd_status = 'committed' THEN 'mined'
+    WHEN rs.rd_status IN ('pending', 'processing') THEN 'mining'
+    ELSE 'uploaded'
+END"""
+
+
+# ⚠️ document_key 不是全局唯一的：build_document_key() 产的是 doc:/{相对路径}，**不含
+# kb_id**（全局唯一的是 storage_path）。只按 document_key 关联 mining_run_documents，
+# 两个 KB 各有一个根目录 spec.pdf 时状态会互相串味——A 库挖失败，B 库那篇也显示 failed。
+# 所以经 run 补上归属维度：
+#   mr.kb_id IS NOT DISTINCT FROM d.kb_id  ——「NULL = NULL」要成立：legacy 文档
+#       （kb_id 为 NULL）该由 legacy 域级 run 决定状态，普通 = 比较会把它判成 NULL 而漏掉
+#   mr.domain = d.domain                   —— 同一文件在两个域各挖一次时再隔一层
+_RUN_DOC_JOIN_SQL = """
 LEFT JOIN LATERAL (
     SELECT r.status AS rd_status
     FROM mining_run_documents r
+    JOIN mining_runs mr ON mr.id = r.run_id
     WHERE r.document_key = d.document_key
+      AND mr.domain = d.domain
+      AND mr.kb_id IS NOT DISTINCT FROM d.kb_id
     ORDER BY r.finished_at DESC NULLS LAST, r.started_at DESC NULLS LAST, r.id DESC
     LIMIT 1
-) rs ON TRUE
+) rs ON TRUE"""
+
+# published / withdrawn 两档要查 active release，是这段里最贵的部分（每文档两次
+# release⋈snapshot 的 EXISTS）。单独拆出来，好让只关心「挖没挖成」的调用方（概览页聚合）
+# 不必付这笔钱——它每个用户登录后都要跑一次，admin 还要跑全域文档。
+_RELEASE_JOIN_SQL = """
 LEFT JOIN LATERAL (
     SELECT EXISTS (
         SELECT 1 FROM asset_publish_releases rel
@@ -71,6 +98,9 @@ LEFT JOIN LATERAL (
           AND bs.document_id = d.id AND bs.selection_status = 'removed'
     ) AS removed
 ) rm ON TRUE"""
+
+# 完整派生（六态）= 归属收敛的 run 关联 + release 关联。列表/详情用它。
+_STATUS_JOIN_SQL = _RUN_DOC_JOIN_SQL + _RELEASE_JOIN_SQL
 
 
 class KbDB:
@@ -296,6 +326,260 @@ class KbDB:
                 {"uid": user_id, "dom": domain},
             )
             return [dict(r) for r in await cur.fetchall()]
+
+    async def list_visible_kb_ids(self, *, user_id: str, domain: str) -> list[str]:
+        """域内该用户可见的 KB id 集——list_visible 的轻量版。
+
+        可见性条件与 list_visible / is_visible 逐项一致（admin 全通 / owner / public /
+        任意成员），只是不带 my_role 与 document_count 那个 COUNT 子查询。给「按可见集
+        收窄」这类调用方用（/api/runs 护栏、概览页聚合），它们只要 id 边界。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT kb.id FROM knowledge_bases kb
+                   WHERE kb.domain = %(dom)s AND kb.status = 'active'
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %(uid)s AND u.site_role = 'admin')
+                          OR kb.owner_id = %(uid)s
+                          OR kb.visibility = 'public'
+                          OR EXISTS (SELECT 1 FROM kb_members m
+                                     WHERE m.kb_id = kb.id AND m.user_id = %(uid)s))""",
+                {"uid": user_id, "dom": domain},
+            )
+            return [r["id"] for r in await cur.fetchall()]
+
+    # ------------------------------------------------------------- 概览页聚合
+    # 首页（检索入口 + 我的知识库）一次取齐所需。分成几段独立查询而不是一条巨型 SQL：
+    # 每段的分组维度不同（文档 / run / release），硬拼会互相放大行数。
+
+    async def overview_status_counts(
+        self, *, kb_ids: list[str],
+    ) -> dict[str, dict[str, int]]:
+        """按 KB 统计文档总数 / 挖掘中 / 失败。
+
+        **只回首页真正渲染的三个数**。曾想过回六态齐全，但 published/withdrawn/uploaded/
+        mined 在页面上没有渲染位，而算它们要多挂两条 release⋈snapshot 的 EXISTS
+        （_RELEASE_JOIN_SQL）——这是登录落地页，不值得。所以这里只用 _RUN_DOC_JOIN_SQL。
+        """
+        if not kb_ids:
+            return {}
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""SELECT d.kb_id,
+                           COUNT(*) AS total,
+                           COUNT(*) FILTER (
+                               WHERE rs.rd_status IN ('pending', 'processing')
+                           ) AS mining,
+                           COUNT(*) FILTER (WHERE rs.rd_status = 'failed') AS failed
+                    FROM asset_documents d
+                    {_RUN_DOC_JOIN_SQL}
+                    WHERE d.kb_id = ANY(%s)
+                    GROUP BY d.kb_id""",
+                [kb_ids],
+            )
+            return {
+                r["kb_id"]: {
+                    "total": r["total"], "mining": r["mining"], "failed": r["failed"],
+                }
+                for r in await cur.fetchall()
+            }
+
+    async def overview_run_rollup(self, *, kb_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """按 KB 汇总 run：最近一次成功挖掘时间 + 最新一条待人审 run。
+
+        `last_mined_at` 只认 `completed`：这个字段在卡片上是「最近一次成功产出知识」，
+        把 failed/cancelled 算进去会让一个反复失败的库看起来很新鲜。
+        两项合成一次扫描——都是按 kb_id 分组的 mining_runs 聚合，没有理由查两遍。
+        """
+        if not kb_ids:
+            return {}
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT kb_id,
+                          MAX(finished_at) FILTER (WHERE status = 'completed')
+                              AS last_mined_at,
+                          (ARRAY_AGG(id ORDER BY started_at DESC)
+                              FILTER (WHERE status = 'awaiting_review'))[1]
+                              AS awaiting_review_run_id
+                   FROM mining_runs
+                   WHERE kb_id = ANY(%s)
+                   GROUP BY kb_id""",
+                [kb_ids],
+            )
+            return {r["kb_id"]: dict(r) for r in await cur.fetchall()}
+
+    async def overview_recent_runs(
+        self, *, kb_ids: list[str], limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """跨 KB 的最近挖掘记录。**kb_id 必须回传**——前端要用它拼 /kb/{kbId}/run/{runId}，
+        缺了前端只能拼出已删除的 /mining/{runId}，点击进空白页。"""
+        if not kb_ids:
+            return []
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT r.id, r.kb_id, kb.name AS kb_name, r.status,
+                          r.total_documents, r.new_count, r.updated_count,
+                          r.started_at, r.finished_at
+                   FROM mining_runs r
+                   JOIN knowledge_bases kb ON kb.id = r.kb_id
+                   WHERE r.kb_id = ANY(%s)
+                   ORDER BY r.started_at DESC
+                   LIMIT %s""",
+                [kb_ids, limit],
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def has_active_release(self, *, domain: str) -> bool:
+        """该域有无域级 active release —— 决定检索范围选择器是否呈现「域级发布」项。
+
+        KB 挖掘 publish=False 永不产 release，纯 KB 部署下恒为 False；此时把那个选项
+        摆出来只会让人选中后撞 no_active_release。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT EXISTS (
+                       SELECT 1 FROM asset_publish_releases
+                       WHERE domain = %s AND status = 'active'
+                   ) AS present""",
+                [domain],
+            )
+            row = await cur.fetchone()
+            return bool(row and row["present"])
+
+    # ------------------------------------------------------------- 概览页统计
+    # 概览页的数字与图表（GET /api/kb/stats）。全部按调用方**可见的 kb_ids** 收敛 ——
+    # 传进来的 id 列表由路由用 list_visible 算好，这一层不再重复判权限。
+    #
+    # 「当前知识」的口径统一是 _CURRENT_SNAPSHOT_CTE：每个文档取它最近一次进入
+    # validated/published build 的快照。不能对 asset_* 表直接 COUNT —— 每次重挖都会
+    # 产生一份新快照，累计计数会把「挖了 3 遍的 10 篇文档」显示成 30 篇的知识量。
+
+    _STATUS_KEYS = ("uploaded", "mining", "mined", "published", "withdrawn", "failed")
+
+    # 每文档一行的「当前快照」。DISTINCT ON 取 build 最新的那条；selection_status
+    # 'removed'（撤回）不算当前知识。与 get_document_knowledge 的单文档口径一致。
+    _CURRENT_SNAPSHOT_CTE = """
+WITH cur AS (
+    SELECT DISTINCT ON (bs.document_id) bs.document_snapshot_id
+    FROM asset_build_document_snapshots bs
+    JOIN asset_builds b ON b.id = bs.build_id
+    WHERE b.kb_id = ANY(%(kb)s)
+      AND bs.selection_status = 'active'
+      AND b.status IN ('validated', 'published')
+    ORDER BY bs.document_id, b.created_at DESC
+)"""
+
+    async def stats_document_status(
+        self, *, kb_ids: list[str], with_release: bool = False,
+    ) -> dict[str, int]:
+        """文档状态分布（六个键恒存在，无数据给 0）。
+
+        with_release=False（默认）时 published/withdrawn 恒为 0 —— 不是「没有」，是这一
+        口径在纯 KB 部署下不适用。路由按 has_active_release 决定是否开启完整派生。
+        """
+        counts = dict.fromkeys(self._STATUS_KEYS, 0)
+        if not kb_ids:
+            return counts
+        case_sql = _STATUS_CASE_SQL if with_release else _STATUS_CASE_NO_RELEASE_SQL
+        join_sql = _STATUS_JOIN_SQL if with_release else _RUN_DOC_JOIN_SQL
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""SELECT {case_sql} AS status, COUNT(*) AS c
+                    FROM asset_documents d
+                    {join_sql}
+                    WHERE d.kb_id = ANY(%s)
+                    GROUP BY 1""",
+                [kb_ids],
+            )
+            for row in await cur.fetchall():
+                if row["status"] in counts:
+                    counts[row["status"]] = int(row["c"])
+        return counts
+
+    async def stats_assets(self, *, kb_ids: list[str]) -> dict[str, int]:
+        """当前知识的资产量：快照 / 切片 / 检索单元 / 实体提及 / 切片关系。
+
+        四个 COUNT 共用一个 CTE 扫描，而不是四次独立查询 —— 定位当前快照集本身是这段
+        里最贵的部分，没有理由付四遍。
+        """
+        empty = {
+            "snapshots": 0, "segments": 0, "retrieval_units": 0,
+            "entity_mentions": 0, "relations": 0,
+        }
+        if not kb_ids:
+            return empty
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""{self._CURRENT_SNAPSHOT_CTE}
+                    SELECT
+                      (SELECT COUNT(*) FROM cur) AS snapshots,
+                      (SELECT COUNT(*) FROM asset_raw_segments s
+                         JOIN cur ON cur.document_snapshot_id = s.document_snapshot_id)
+                        AS segments,
+                      (SELECT COUNT(*) FROM asset_retrieval_units u
+                         JOIN cur ON cur.document_snapshot_id = u.document_snapshot_id)
+                        AS retrieval_units,
+                      (SELECT COUNT(*) FROM asset_segment_entity_mentions m
+                         JOIN cur ON cur.document_snapshot_id = m.document_snapshot_id)
+                        AS entity_mentions,
+                      (SELECT COUNT(*) FROM asset_raw_segment_relations r
+                         JOIN cur ON cur.document_snapshot_id = r.document_snapshot_id)
+                        AS relations""",
+                {"kb": kb_ids},
+            )
+            row = await cur.fetchone()
+            return {k: int(row[k]) for k in empty} if row else empty
+
+    async def stats_retrieval_unit_types(self, *, kb_ids: list[str]) -> dict[str, int]:
+        """检索单元类型分布（只回非零的类型；前端按拿到的键渲染，不假定全集）。"""
+        if not kb_ids:
+            return {}
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""{self._CURRENT_SNAPSHOT_CTE}
+                    SELECT u.unit_type, COUNT(*) AS c
+                    FROM asset_retrieval_units u
+                    JOIN cur ON cur.document_snapshot_id = u.document_snapshot_id
+                    GROUP BY u.unit_type
+                    ORDER BY c DESC""",
+                {"kb": kb_ids},
+            )
+            return {r["unit_type"]: int(r["c"]) for r in await cur.fetchall()}
+
+    async def stats_mining_trend(
+        self, *, kb_ids: list[str], days: int = 30,
+    ) -> list[dict[str, Any]]:
+        """近 N 天每日挖掘量。**空天补零**，前端直接照数组画折线。
+
+        缺的那些天必须由后端补：折线图跳过没有数据的日期会把「三周没挖」画成一段平缓
+        上升，读起来像一直在产出。
+        `started_at` 是 ISO-8601 UTC 文本，前 10 位即日期、字典序即时序，故可直接比较。
+        """
+        today = datetime.now(timezone.utc).date()
+        buckets = {
+            (today - timedelta(days=i)).isoformat(): {"runs": 0, "completed": 0, "documents": 0}
+            for i in range(days)
+        }
+        if kb_ids:
+            since = (today - timedelta(days=days - 1)).isoformat()
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(
+                    """SELECT substring(started_at from 1 for 10) AS day,
+                              COUNT(*) AS runs,
+                              COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+                              COALESCE(SUM(committed_count), 0) AS documents
+                       FROM mining_runs
+                       WHERE kb_id = ANY(%s) AND started_at >= %s
+                       GROUP BY 1""",
+                    [kb_ids, since],
+                )
+                for row in await cur.fetchall():
+                    bucket = buckets.get(row["day"])
+                    if bucket is not None:
+                        bucket["runs"] = int(row["runs"])
+                        bucket["completed"] = int(row["completed"])
+                        bucket["documents"] = int(row["documents"])
+        return [{"date": d, **buckets[d]} for d in sorted(buckets)]
 
     # 允许 PATCH 更新的列白名单。值可为 None → 显式清空（SET NULL）。
     _KB_UPDATABLE_COLUMNS = {"name", "description", "visibility", "mining_workflow_id"}

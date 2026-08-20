@@ -60,7 +60,7 @@ const ALL_NAV = [
   { path: '/', label: '概览', icon: Monitor, requiresAdmin: false },
   { path: '/kb', label: '知识库', icon: Files, requiresAdmin: false },
   { path: '/mining/workflows', label: '挖掘范式', icon: Management, requiresAdmin: true },
-  { path: '/search', label: '检索测试', icon: Search, requiresAdmin: false },
+  { path: '/search', label: '检索', icon: Search, requiresAdmin: false },
   { path: '/paradigm', label: '检索范式', icon: Connection, requiresAdmin: true },
   { path: '/entities', label: '实体图谱', icon: Connection, requiresAdmin: true },
   { path: '/ontology', label: '本体版本', icon: Collection, requiresAdmin: true },

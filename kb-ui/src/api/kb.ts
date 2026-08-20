@@ -8,7 +8,8 @@
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
-  KbRunRecord, KbSummary, KbUpdateBody, KbUserCandidate, DocumentKnowledge,
+  KbOverview, KbRunRecord, KbStats, KbSummary, KbUpdateBody, KbUserCandidate,
+  DocumentKnowledge,
 } from '@/types/kb'
 
 export function useKbApi() {
@@ -19,6 +20,30 @@ export function useKbApi() {
     async listKbs(domain: string): Promise<KbSummary[]> {
       const { data } = await client.get('/api/kb', { params: { domain } })
       return extractItems<KbSummary>(data)
+    },
+
+    /**
+     * 概览页 / 检索范围一次取齐：可见知识库全集 + 每库状态摘要 + 跨库最近挖掘 +
+     * 该域有无 active release。
+     *
+     * 是聚合端点而不是几个小接口：一个授权点、一次往返、各区块数据同源同时刻。
+     * 检索页也用它——它需要 has_active_release 才能决定要不要给出「域级发布」这个范围。
+     */
+    async getOverview(domain: string): Promise<KbOverview> {
+      const { data } = await client.get('/api/kb/overview', { params: { domain } })
+      return extractOne<KbOverview>(data)
+    },
+
+    /**
+     * 概览页的统计数字与图表数据（文档状态分布 / 知识资产量 / 检索单元类型 / 挖掘趋势），
+     * 口径为当前用户在本域可见的全部知识库。
+     *
+     * 与 getOverview 分开而不是并进一个端点：overview 是检索页的热路径（只要 KB 列表），
+     * stats 要扫 asset_* 四张表和 30 天 run。合并会让检索页白付统计的代价。
+     */
+    async getStats(domain: string): Promise<KbStats> {
+      const { data } = await client.get('/api/kb/stats', { params: { domain } })
+      return extractOne<KbStats>(data)
     },
 
     async createKb(body: KbCreateBody): Promise<KbDetail> {

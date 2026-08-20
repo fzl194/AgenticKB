@@ -46,11 +46,24 @@ function render() {
       : { type: 'value', axisLabel: { color: '#94a3b8', fontSize: 11 }, splitLine: { lineStyle: { color: '#f1f5f9' } } },
     series: [{
       type: 'bar',
-      data: values.map((v, i) => ({ value: v, itemStyle: { color: colors[i], borderRadius: [4, 4, 0, 0] } })),
+      // 圆角只加在「数据端」，贴基线的那头保持直角——两头都圆会让短柱看起来像胶囊，
+      // 读不出它是从 0 长出来的。横向条的数据端在右，纵向条在上。
+      data: values.map((v, i) => ({
+        value: v,
+        itemStyle: {
+          color: colors[i],
+          borderRadius: props.horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0],
+        },
+      })),
       barWidth: '50%',
       barMaxWidth: 40,
     }],
   })
+}
+
+/** 具名处理函数，好让 onUnmounted 能摘掉它（原来是内联箭头，永不回收）。 */
+function handleResize() {
+  chart?.resize()
 }
 
 onMounted(() => {
@@ -58,16 +71,14 @@ onMounted(() => {
     chart = echarts.init(chartRef.value)
     render()
   }
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
   chart?.dispose()
   chart = null
 })
 
 watch(() => props.data, render, { deep: true })
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('resize', () => chart?.resize())
-}
 </script>

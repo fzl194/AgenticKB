@@ -68,22 +68,64 @@ def get_document_lifecycle_service(
     )
 
 
-def get_parse_result_service(request: Request) -> "ParseResultReadService":
-    """M5 结构化数据只读视图（组件由组合根放 app.state，未接线时 503）."""
+def get_parse_result_service(
+    request: Request, domain: str = Query(...)
+) -> "ParseResultReadService":
+    """M5/M6 结构化数据只读视图（按 domain 懒构造并缓存到 app.state）.
+
+    优先消费显式组合根（app.state.parse_result_components，测试注入用）；
+    缺省用 domain_pools + 对象存储配置自行装配——生产开箱可用。
+    """
+    from fastapi import HTTPException
+
+    from knowledge_mining.mining.api.domain_scope import require_domain
     from knowledge_mining.mining.snapshot_store.read_service import (
         ParseResultReadService,
     )
-    from fastapi import HTTPException
 
-    state = getattr(request.app.state, "parse_result_components", None)
-    if state is None:
+    explicit = getattr(request.app.state, "parse_result_components", None)
+    if explicit is not None:
+        return ParseResultReadService(
+            snapshots=explicit["snapshots"],
+            storage_objects=explicit["storage_objects"],
+            object_store=explicit["object_store"],
+            segment_store=explicit["segment_store"],
+        )
+    scope = require_domain(domain or "")
+    cache = getattr(request.app.state, "parse_result_services", None)
+    if cache is None:
+        cache = {}
+        request.app.state.parse_result_services = cache
+    if scope in cache:
+        return cache[scope]
+    try:
+        pool = request.app.state.domain_pools.async_pool(scope)
+    except Exception as exc:  # noqa: BLE001 —— 域未注册等配置错误
         raise HTTPException(
             status_code=503,
-            detail="parse-result view not configured on this deployment",
-        )
-    return ParseResultReadService(
-        snapshots=state["snapshots"],
-        storage_objects=state["storage_objects"],
-        object_store=state["object_store"],
-        segment_store=state["segment_store"],
+            detail=f"parse-result view unavailable for domain {scope!r}",
+        ) from exc
+    from knowledge_mining.mining.infra.object_store.config import (
+        ObjectStoreConfig,
     )
+    from knowledge_mining.mining.infra.object_store.factory import (
+        make_object_store,
+    )
+    from knowledge_mining.mining.segment_compiler.repositories_pg import (
+        PgSegmentStore,
+    )
+    from knowledge_mining.mining.file_management.repositories_pg import (
+        PgStorageObjectRepository,
+    )
+    from knowledge_mining.mining.snapshot_store.repositories_pg import (
+        PgSnapshotRepository,
+    )
+
+    service = ParseResultReadService(
+        snapshots=PgSnapshotRepository(pool),
+        storage_objects=PgStorageObjectRepository(pool),
+        object_store=make_object_store(ObjectStoreConfig.from_control_plane()),
+        segment_store=PgSegmentStore(pool),
+    )
+    cache[scope] = service
+    return service

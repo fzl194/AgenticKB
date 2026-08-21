@@ -9,7 +9,7 @@
 
 ## 一句话现状
 
-**M0 契约冻结 + M1 文件地基 + M2 影子解析 + M3A 原生解析（已整改）+ M4 质量门控转正 + M5 切片编译**。解析链路已闭环到"成品入库"：质量门禁五值决策（PASS/WARN/REPAIR/FALLBACK/FAIL）+ 尝试预算 + 后端回退编排 + attempt 审计；PASS/WARN 转正为不可变 Document Snapshot（真表 + 出生证明 + 幂等指纹）；过期输入 SUPERSEDED 不发布；backend raw 重放升级产新快照（A09）。**仍属 M3B 未达成**：真实第二后端（Docling/云 OCR）、Router policy 版本化——fallback 编排机制已建成并测试，真备胎待用户配置模型。
+**M0 契约冻结 + M1 文件地基 + M2 影子解析 + M3A 原生解析（已整改）+ M4 质量门控转正 + M5 切片编译 + M6 工作流接入**。解析链路已闭环到"成品入库"：质量门禁五值决策（PASS/WARN/REPAIR/FALLBACK/FAIL）+ 尝试预算 + 后端回退编排 + attempt 审计；PASS/WARN 转正为不可变 Document Snapshot（真表 + 出生证明 + 幂等指纹）；过期输入 SUPERSEDED 不发布；backend raw 重放升级产新快照（A09）。**仍属 M3B 未达成**：真实第二后端（Docling/云 OCR）、Router policy 版本化——fallback 编排机制已建成并测试，真备胎待用户配置模型。
 
 ## 完成里程碑
 
@@ -21,6 +21,7 @@
 | **M3A** | 原生解析 fast-path + 整改轮（不变量契约/Reconciler/Quality Gate/replay/golden corpus） | [M3A-原生解析fastpath.md](./M3A-原生解析fastpath.md) | +88 → 整改轮后 scoped 659（见下） |
 | **M4** | 质量门控解析资产（五值决策/预算回退/attempt 审计/快照转正/SUPERSEDED/A09 重放） | [M4-质量门控解析资产.md](./M4-质量门控解析资产.md) | +40 → scoped 701；真实环境 e2e 五场景 |
 | **M5** | 切片编译（结构化切片+标题链/表格行带表头/证据映射/兼容投影/A08 重切/前端结构化数据页） | [M5-切片编译.md](./M5-切片编译.md) | +12 → scoped 713；真实环境 e2e 三场景 |
+| **M6** | 工作流接入（document_parse/segment_compile 算子化、版本感知骨架、同步门面+组合根、真库 e2e） | [M6-工作流接入.md](./M6-工作流接入.md) | +23；真实环境 e2e 三场景 |
 
 提交链（分支 `feat/doc-parse-platform-m0`）：
 ```
@@ -72,7 +73,7 @@ databases/asset_core/schemas/008_*  对象存储 6 新表 + 3 表扩展（双 sq
 
 - `docs/adr/0001` SRS §15.1 十一条已锁定地基决策（固化）
 - `docs/adr/0002` §15 六个阻塞决策 O1-O6（自主采纳）
-- `docs/adr/0003` 自主决策日志 **D-001 ~ D-034**（每条带 SRS 依据）
+- `docs/adr/0003` 自主决策日志 **D-001 ~ D-036**（每条带 SRS 依据）
 
 两条值得关注的「字面偏离 SRS 但符合 SRS 原则」的决策：
 - **D-020**：ObjectStorePort 改 location 寻址（SRS §C00 未规定寻址键；按 S3 模型补全，使 MinIO adapter 不需自带注册表）。
@@ -110,14 +111,14 @@ python -m pytest knowledge_mining/tests/{contracts,infra,file_management,frozen_
 | app 启动依赖注入接线 | M1 收尾 | factory+service 就绪，接 service.py 配置加载 |
 | 真实文档人工验收 | M3 收尾 | 用户提供 2-3 份真实业务文档验证保真效果 |
 | 云端 OCR/VLM 槽位实现 | 按需 | 用户提供模型配置后接入（扫描件解析） |
-| **M6 工作流接入** | 下一里程碑 | WP11/WP12：document_parse+segment_compile 算子接入、旧算子兼容包装、范式构建器锁定头部+参数面板、Build 选择新快照 |
+| **M6 收尾** | 后续 | 范式构建器前端头部面板（R7）、v2 模板投产灰度、在线发布切换开关 |
 | M3B（真实第二后端/Router 版本化） | 按需 | fallback 编排已就绪，待用户提供模型配置 |
 | M6-M7 | 后续 | Workflow 切换/Build 复现/Knowledge Access/Legacy 退役评估 |
 
 ## 文件位置速查
 
 - 决策：`docs/adr/`（0001/0002/0003）
-- 报告：`docs/文档解析平台化-里程碑报告/`（本文件 + M0 + M1 + M2 + M3A + M4 + M5）
+- 报告：`docs/文档解析平台化-里程碑报告/`（本文件 + M0~M6）
 - 契约代码：`knowledge_mining/mining/contracts/{parse_ir,storage}/`、`contracts/{file_management,state_machines,parser_adapter}.py`
 - 实现代码：`knowledge_mining/mining/{infra/object_store,file_management,frozen_input,file_migration,parse_adapters,shadow_parse}/`
 - DDL：`databases/asset_core/schemas/008_…`、`009_…`、`010_…`、`011_m5_segment_links{,_postgresql}.sql`

@@ -349,7 +349,7 @@ def document_parse_handler(
     if outcome is None:
         return OperatorResult(state, frozenset(), OperatorStatus.SKIPPED)
     parsed = ParsedViaNewChain(
-        run_id=outcome.run_id,
+        run_id=getattr(outcome, "run_id", None) or outcome.id,
         snapshot_id=getattr(outcome, "snapshot_id", None),
         parse_ir_storage_object_id=getattr(
             outcome, "parse_ir_storage_object_id", None
@@ -410,7 +410,7 @@ def segment_compile_handler(
     from knowledge_mining.mining.segment_compiler.projection import (
         to_raw_segment_data,
     )
-    from knowledge_mining.mining.pipeline import DocumentContext
+    from knowledge_mining.mining.pipeline import DocumentContext  # noqa: F401
 
     document_key = getattr(
         getattr(parsed.raw_file, "document_key", None), "document_key", None

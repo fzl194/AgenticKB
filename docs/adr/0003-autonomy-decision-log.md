@@ -333,3 +333,16 @@
   5. M2 upsert 与 M4 set_status 共享 Run 行命名空间，理论上可覆写审计。
   6. min_tokens 契约参数未参与编译行为（改值只会触发无谓重切）——要么实现小片段合并，要么从指纹剔除。
 - **验证**：scoped 全量 **715 passed/9 skipped**；真实环境 e2e 三场景复跑全绿；kb-ui vue-tsc 0 错 + vitest 155 通过。
+
+## D-036 ｜ M6 工作流接入：版本感知骨架 / 同步门面 / 不混跑原则
+- **背景**：M6 将新解析链路接入挖掘工作流（SRS §10.2/§10.3）。用户前期拍板：固定头部=骨架锁定+参数开放；v1 历史任务必须继续可跑。
+- **决策与实现**：
+  1. **替换式演进 + 版本感知骨架**：catalog 同时注册 parse_segment（v1 兼容）与 document_parse/segment_compile（v2）；编译器按 manifest schemaVersion 选择固定骨架集合（v2 不再要求 parse_segment，v1 不要求新算子）——历史 manifest 不改写（§10.3），七套范式模板参数化生成 v2 版。
+  2. **不混跑原则**：v2 骨架下 document_parse 组件未接线→显式 FAILED（不静默回落旧解析）；文档无新链对象（storage_path 旧形态/对象未注册）→ SKIP——保证 v2 产出的每条知识线都有快照与证据链，避免新旧解析结果在同一 Run 内混杂。
+  3. **同步门面桥接**：workflow handler 是同步调用、M4/M5 服务是 async（仓储契约）——`_run_sync` 双环境桥接（无 loop 直接 asyncio.run；在 loop 线程退一次性线程池）。门面从 storage_objects **注册行**取真实 bucket/key 构造冻结输入（首版按 sha 推算 key 曾导致 bucket 不匹配，e2e 抓住后修正——对象位置以注册行为准，不猜测）。
+  4. **组合根双形态**：build_new_chain_services 传 pool 即 PG/MinIO 生产组件，缺省 memory/Fake——单测与真库 e2e 共用同一装配代码。
+  5. **参数档位即算子 options**：DocumentParseOptions（质量档/后端预算）与 SegmentCompileOptions（六字段与 SegmentPolicy 一一对应）注册进 OPTIONS_BY_OPERATOR——范式构建器面板直接消费 json schema 校验。
+  6. Run 终态非 SUCCEEDED 时门面抛错（含 error_message）→ handler 归一算子失败——失败原因在任务运行记录可见，不留静默 SKIP。
+- **验证**：M6 新增 23 用例 + 既有工作流套件零回归（合计 152 passed）；真实环境 e2e 三场景（handler 驱动真解析转正/切片真表落库行带表头/旧链文档 SKIP）全绿且清理彻底。
+- **未达成如实留档**：范式构建器前端锁定头部+参数面板（R7）、v2 模板投产灰度、在线发布切换开关——见 M6 报告 §5。
+- **影响**：新增 `workflow/new_chain_services.py`、`tests/test_m6_{workflow_operators,handlers,facades,workflow_e2e}.py`、`var/e2e/_e2e_m6_workflow.py`、M6 报告；改 `workflow/operators/{catalog,options}.py`、`workflow/compiler.py`（FIXED_TYPES 版本化）、`workflow/templates.py`（参数化+v2）、`workflow/handlers/document.py`（双 handler）；既有 catalog/schema 测试同步（算子 16→18）。

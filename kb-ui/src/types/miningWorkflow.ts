@@ -165,6 +165,8 @@ export interface CreateMiningWorkflowRequest {
   name: string
   description?: string
   template_key?: MiningTemplateKey
+  /** 解析链路骨架：2.0 = 解析/切片分离（质量门控+知识快照）；缺省 1.0 传统 */
+  schema_version?: '1.0' | '2.0'
   graph?: MiningWorkflowGraph
   created_by?: string
 }

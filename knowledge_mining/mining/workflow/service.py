@@ -50,6 +50,7 @@ class WorkflowService:
         name: str,
         description: str | None = None,
         template_key: str = "full",
+        schema_version: str = "1.0",
         graph: dict | None = None,
         created_by: str | None = None,
         workflow_id: str | None = None,
@@ -63,8 +64,15 @@ class WorkflowService:
         if await self.repository.get_by_name(normalized_name) is not None:
             raise WorkflowNameConflict(normalized_name)
         if graph is None:
+            from .templates import builtin_templates_v2
+
+            templates = (
+                builtin_templates_v2()
+                if str(schema_version).split(".")[0] >= "2"
+                else builtin_templates()
+            )
             try:
-                draft = builtin_templates()[template_key].to_dict()
+                draft = templates[template_key].to_dict()
             except KeyError as exc:
                 raise ValueError(f"Unknown template: {template_key}") from exc
         else:

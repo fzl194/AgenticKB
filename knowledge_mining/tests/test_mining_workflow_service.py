@@ -409,3 +409,35 @@ async def test_published_options_and_exact_version_resolution(
         await service.resolve_published_version(
             workflow_id=draft_only["id"], workflow_version=None
         )
+
+
+@pytest.mark.asyncio
+async def test_create_with_schema_version_2_uses_split_parse_template(
+    memory_workflow_repo: MemoryWorkflowRepository,
+):
+    """M6：新建工作流可选 v2 骨架（document_parse→segment_compile）."""
+    service = WorkflowService(memory_workflow_repo)
+    created = await service.create(
+        name="v2-chain", template_key="minimal", schema_version="2.0",
+    )
+    draft = created["draft_graph_json"]  # memory repo 保 dict；PG 为 str
+    if isinstance(draft, str):
+        import json as _j
+
+        draft = _j.loads(draft)
+    types = {n["operatorType"] for n in draft["nodes"]}
+    assert "document_parse" in types and "segment_compile" in types
+    assert "parse_segment" not in types
+    assert draft["schemaVersion"] == "2.0"
+    # v1 默认不变
+    v1 = await WorkflowService(
+        MemoryWorkflowRepository()
+    ).create(name="v1-chain", template_key="minimal")
+    v1_draft = v1["draft_graph_json"]
+    if isinstance(v1_draft, str):
+        import json as _j
+
+        v1_draft = _j.loads(v1_draft)
+    v1_types = {n["operatorType"] for n in v1_draft["nodes"]}
+    assert "parse_segment" in v1_types
+    assert "document_parse" not in v1_types

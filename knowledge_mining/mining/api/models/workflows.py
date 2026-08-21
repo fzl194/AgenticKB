@@ -11,6 +11,7 @@ class WorkflowRequest(BaseModel):
 
 class CreateWorkflowRequest(WorkflowRequest):
     name: str = Field(min_length=1, max_length=120)
+    schema_version: str = "1.0"
     description: str | None = None
     template_key: Literal[
         "minimal",

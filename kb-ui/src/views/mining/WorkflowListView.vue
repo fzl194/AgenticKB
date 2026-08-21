@@ -43,12 +43,23 @@
       <el-form label-width="90px">
         <el-form-item label="名称"><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" /></el-form-item>
+        <el-form-item label="解析链路">
+          <el-radio-group v-model="form.schema_version">
+            <el-radio value="2.0">新链路 v2（推荐）</el-radio>
+            <el-radio value="1.0">传统 v1</el-radio>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="模板">
           <el-select v-model="form.template_key" style="width: 100%">
             <el-option v-for="template in templates" :key="template.key" :label="template.label" :value="template.key" />
           </el-select>
         </el-form-item>
-        <p class="workflow-list__template-desc">{{ selectedTemplateDescription }}</p>
+        <p class="workflow-list__template-desc">
+          {{ form.schema_version === '2.0'
+            ? 'v2：文档解析与切片编译分离（质量门控、知识快照、表格行带表头、证据可回原文），两个固定头部算子可在画布中点开调整参数。'
+            : 'v1：传统解析与切分一体算子（历史兼容；既有 Workflow 不受影响）。' }}
+          {{ selectedTemplateDescription }}
+        </p>
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>
@@ -84,8 +95,13 @@ const createVisible = ref(false)
 const copyVisible = ref(false)
 const copySource = ref<MiningWorkflow | null>(null)
 const copyName = ref('')
-const form = ref<{ name: string; description: string; template_key: MiningTemplateKey }>({
-  name: '', description: '', template_key: 'full',
+const form = ref<{
+  name: string
+  description: string
+  template_key: MiningTemplateKey
+  schema_version: '1.0' | '2.0'
+}>({
+  name: '', description: '', template_key: 'full', schema_version: '2.0',
 })
 
 const templates: Array<{ key: MiningTemplateKey; label: string; description: string }> = [
@@ -111,7 +127,9 @@ async function load() {
 }
 
 function openCreate() {
-  form.value = { name: '', description: '', template_key: 'full' }
+  form.value = {
+    name: '', description: '', template_key: 'full', schema_version: '2.0',
+  }
   createVisible.value = true
 }
 
@@ -126,6 +144,7 @@ async function createWorkflow() {
     name,
     description: form.value.description.trim() || undefined,
     template_key: form.value.template_key,
+    schema_version: form.value.schema_version,
   }
   try {
     const workflow = await api.create(payload)

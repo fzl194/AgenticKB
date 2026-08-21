@@ -417,9 +417,11 @@ export function fromVueFlowElements(
   nodes: MiningVueFlowNode[],
   edges: MiningVueFlowEdge[],
   output: MiningWorkflowGraph['output'],
+  /** 画布重建图时保留原骨架版本（v2 = 解析/切片分离）；缺省 1.0 兼容 */
+  schemaVersion: MiningWorkflowGraph['schemaVersion'] = '1.0',
 ): MiningWorkflowGraph {
   return {
-    schemaVersion: '1.0',
+    schemaVersion,
     nodes: nodes.map(node => {
       const result: MiningWorkflowNode = {
         nodeId: node.id,

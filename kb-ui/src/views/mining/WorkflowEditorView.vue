@@ -282,7 +282,10 @@ function applyGraph(value: MiningWorkflowGraph) {
 }
 
 function syncGraphFromFlow() {
-  graph.value = fromVueFlowElements(flowNodes.value, flowEdges.value, graph.value.output)
+  graph.value = fromVueFlowElements(
+    flowNodes.value, flowEdges.value, graph.value.output,
+    graph.value.schemaVersion,
+  )
 }
 
 async function load() {

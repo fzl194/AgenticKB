@@ -441,3 +441,46 @@ async def test_create_with_schema_version_2_uses_split_parse_template(
     v1_types = {n["operatorType"] for n in v1_draft["nodes"]}
     assert "parse_segment" in v1_types
     assert "document_parse" not in v1_types
+
+
+@pytest.mark.asyncio
+async def test_save_draft_self_heals_schema_version_mismatch(
+    memory_workflow_repo: MemoryWorkflowRepository,
+):
+    """旧客户端曾把 v2 图存成 1.0（混合态）→ 编译报缺 parse_segment。
+    save_draft 按固定算子组合自愈版本：v2 算子 → 2.0；parse_segment → 1.0。
+    """
+    import json as _j
+
+    service = WorkflowService(memory_workflow_repo)
+    created = await service.create(
+        name="heal", template_key="minimal", schema_version="2.0",
+    )
+    bad = _j.loads(created["draft_graph_json"]) if isinstance(
+        created["draft_graph_json"], str) else dict(created["draft_graph_json"])
+    bad["schemaVersion"] = "1.0"  # 模拟旧前端污染
+    healed = await service.save_draft(
+        created["id"], graph=bad, expected_revision=created["draft_revision"],
+    )
+    draft = healed["draft_graph_json"]
+    if isinstance(draft, str):
+        draft = _j.loads(draft)
+    assert draft["schemaVersion"] == "2.0"
+    types = {n["operatorType"] for n in draft["nodes"]}
+    assert "document_parse" in types
+    # v1 图同样自愈
+    v1_repo = MemoryWorkflowRepository()
+    v1 = await WorkflowService(v1_repo).create(
+        name="heal-v1", template_key="minimal",
+    )
+    v1g = v1["draft_graph_json"]
+    if isinstance(v1g, str):
+        v1g = _j.loads(v1g)
+    v1g["schemaVersion"] = "2.0"  # 反向污染
+    healed_v1 = await WorkflowService(v1_repo).save_draft(
+        v1["id"], graph=v1g, expected_revision=v1["draft_revision"],
+    )
+    d1 = healed_v1["draft_graph_json"]
+    if isinstance(d1, str):
+        d1 = _j.loads(d1)
+    assert d1["schemaVersion"] == "1.0"

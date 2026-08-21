@@ -10,7 +10,93 @@ from .compiler import WorkflowCompileException, WorkflowCompiler
 from .graph import WorkflowGraph
 from .operators.catalog import builtin_catalog
 from .paradigms import ORDINARY_WORKFLOW_PARADIGMS
-from .templates import builtin_templates
+from .templates import builtin_templates, builtin_templates_v2
+
+
+_V2_ONLY_OPERATORS = frozenset({"document_parse", "segment_compile"})
+
+
+def _self_heal_schema_version(graph: dict) -> dict:
+    """按固定算子组合纠正 schemaVersion（防旧客户端混合态）.
+
+    背景（2026-08-21 验收发现）：旧前端保存 v2 草稿时把 schemaVersion
+    硬编码回 1.0 → 编译按 v1 固定集合校验而误报缺 parse_segment。v1/v2
+    解析算子互斥且均为 fixed，按图内实际算子推断版本是安全的。
+    """
+    nodes = graph.get("nodes") or []
+    types = {str(n.get("operatorType", "")) for n in nodes}
+    declared = str(graph.get("schemaVersion", "1.0"))
+    if types & _V2_ONLY_OPERATORS:
+        if "parse_segment" in types:
+            raise ValueError(
+                "graph mixes v1 parse_segment with v2 document_parse/"
+                "segment_compile; refusing to guess schema version"
+            )
+        if declared.split(".")[0] < "2":
+            healed = dict(graph)
+            healed["schemaVersion"] = "2.0"
+            return healed
+    elif "parse_segment" in types and declared.split(".")[0] >= "2":
+        healed = dict(graph)
+        healed["schemaVersion"] = "1.0"
+        return healed
+    return graph
+
+
+def _build_initial_draft(
+    *,
+    template_key: str,
+    schema_version: str,
+    graph: dict | None,
+) -> dict:
+    """create 的初始草稿：显式图优先，否则按版本选模板（M6 v2）."""
+    if graph is not None:
+        return WorkflowGraph.from_dict(graph).to_dict()
+    templates = (
+        builtin_templates_v2()
+        if str(schema_version).split(".")[0] >= "2"
+        else builtin_templates()
+    )
+    try:
+        return templates[template_key].to_dict()
+    except KeyError as exc:
+        raise ValueError(f"Unknown template: {template_key}") from exc
+
+
+async def _insert_workflow_record(
+    service: "WorkflowService",
+    *,
+    normalized_name: str,
+    description: str | None,
+    draft: dict,
+    workflow_id: str | None,
+    is_system: bool,
+    is_system_default: bool,
+    created_by: str | None,
+    metadata_json: dict[str, Any] | None,
+) -> dict:
+    record = {
+        "id": workflow_id or uuid.uuid4().hex,
+        "name": normalized_name,
+        "description": description,
+        "status": "active",
+        "draft_graph_json": draft,
+        "draft_revision": 0,
+        "current_version": None,
+        "is_system": is_system,
+        "is_system_default": is_system_default,
+        "created_by": created_by,
+        "updated_by": created_by,
+        "metadata_json": deepcopy(metadata_json or {}),
+    }
+    try:
+        return await service.repository.insert_workflow(record)
+    except UniqueViolation as exc:
+        raise WorkflowNameConflict(normalized_name) from exc
+    except RuntimeError as exc:
+        if "duplicate" in str(exc).lower():
+            raise WorkflowNameConflict(normalized_name) from exc
+        raise
 
 
 _PARADIGM_SEED_METADATA_KEY = "workflowParadigmSeed"
@@ -63,42 +149,18 @@ class WorkflowService:
             raise ValueError("Workflow name is required")
         if await self.repository.get_by_name(normalized_name) is not None:
             raise WorkflowNameConflict(normalized_name)
-        if graph is None:
-            from .templates import builtin_templates_v2
+        draft = _build_initial_draft(
+            template_key=template_key, schema_version=schema_version,
+            graph=graph,
+        )
+        return await _insert_workflow_record(
+            self,
+            normalized_name=normalized_name, description=description,
+            draft=draft, workflow_id=workflow_id, is_system=is_system,
+            is_system_default=is_system_default, created_by=created_by,
+            metadata_json=metadata_json,
+        )
 
-            templates = (
-                builtin_templates_v2()
-                if str(schema_version).split(".")[0] >= "2"
-                else builtin_templates()
-            )
-            try:
-                draft = templates[template_key].to_dict()
-            except KeyError as exc:
-                raise ValueError(f"Unknown template: {template_key}") from exc
-        else:
-            draft = WorkflowGraph.from_dict(graph).to_dict()
-        record = {
-            "id": workflow_id or uuid.uuid4().hex,
-            "name": normalized_name,
-            "description": description,
-            "status": "active",
-            "draft_graph_json": draft,
-            "draft_revision": 0,
-            "current_version": None,
-            "is_system": is_system,
-            "is_system_default": is_system_default,
-            "created_by": created_by,
-            "updated_by": created_by,
-            "metadata_json": deepcopy(metadata_json or {}),
-        }
-        try:
-            return await self.repository.insert_workflow(record)
-        except UniqueViolation as exc:
-            raise WorkflowNameConflict(normalized_name) from exc
-        except RuntimeError as exc:
-            if "duplicate" in str(exc).lower():
-                raise WorkflowNameConflict(normalized_name) from exc
-            raise
 
     async def get(self, workflow_id: str) -> dict:
         workflow = await self.repository.get_workflow(workflow_id)
@@ -118,7 +180,9 @@ class WorkflowService:
         updated_by: str | None = None,
     ) -> dict:
         await self._require_active(workflow_id)
-        normalized_graph = WorkflowGraph.from_dict(graph).to_dict()
+        normalized_graph = WorkflowGraph.from_dict(
+            _self_heal_schema_version(graph)
+        ).to_dict()
         updated = await self.repository.update_draft(
             workflow_id,
             graph=normalized_graph,

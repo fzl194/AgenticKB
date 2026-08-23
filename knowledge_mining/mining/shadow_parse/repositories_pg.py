@@ -45,9 +45,10 @@ _COLUMNS = (
     "started_at, finished_at, metadata_json"
 )
 
-# ON CONFLICT 覆盖列：除 id 与幂等键三列外的全部列。
+# FAILED 行翻转覆盖列（upsert 的 UPDATE 分支）：14 个 SET 占位符，
+# 与调用方参数元组顺序一致（SET 列后跟幂等键三列）。
 _CONFLICT_UPDATE = ", ".join(
-    f"{col} = EXCLUDED.{col}"
+    f"{col} = %s"
     for col in (
         "source_storage_object_id", "source_content_revision", "parser_id",
         "parse_ir_storage_object_id", "parse_ir_schema_version", "element_count",

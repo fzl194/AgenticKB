@@ -30,6 +30,8 @@ def upload_root(tmp_path_factory):
 async def _client(async_pool):
     app = FastAPI()
     app.state.pg_pool = async_pool
+    from knowledge_mining.tests.kb.conftest import attach_object_store
+    attach_object_store(app)
     app.include_router(kb_router)
     app.include_router(docs_router)
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
@@ -140,12 +142,11 @@ async def test_upload_zip_with_nested_xlsx_is_discoverable(async_pool, upload_ro
     ]
     assert documents[0]["document_key"] == "doc:/nested/inventory.xlsx"
 
-    from knowledge_mining.mining.ingestion import ingest_directory
-
-    ingested, _ = ingest_directory(upload_root / kb_id)
-    assert [document.relative_path for document in ingested] == [
-        "nested/inventory.xlsx"
-    ]
+    # 对象存储时代：zip 成员走内容寻址对象（无本地解压目录），
+    # 断言文档行携带对象指针与源哈希（挖掘输入按对象身份解析）。
+    assert documents[0]["storage_object_id"]
+    assert documents[0]["source_raw_hash"]
+    assert documents[0]["content_revision"] == 1
 
 
 async def test_other_user_cannot_access_private_kb_docs(async_pool, upload_root):
@@ -171,12 +172,9 @@ async def test_delete_removes_file_and_identity(async_pool, upload_root):
         doc_id = (await c.post(
             f"/api/kb/{kb_id}/documents", files={"file": ("a.txt", b"x")}, headers=h,
         )).json()["id"]
-        p = upload_root / kb_id / "a.txt"
-        assert p.is_file()  # 上传后磁盘有文件
         r = await c.delete(f"/api/kb/{kb_id}/documents/{doc_id}", headers=h)
         assert r.status_code == 200
         assert r.json() == {"ok": True}
-        assert not p.exists()  # 磁盘文件已删
         # 身份行已删：再 get → 404
         assert (await c.get(f"/api/kb/{kb_id}/documents/{doc_id}", headers=h)).status_code == 404
 

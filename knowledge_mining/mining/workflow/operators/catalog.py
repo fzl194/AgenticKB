@@ -13,9 +13,9 @@ from ..core import (
 from .options import OPTIONS_BY_OPERATOR
 
 
-# v2 固定骨架新增解析双算子（SRS §10.2）；parse_segment 保留供 v1。
+# 唯一生产骨架：解析与切片显式分离。
 _FIXED_TYPES = {
-    "input_ingest", "parse_segment", "document_parse", "segment_compile",
+    "input_ingest", "document_parse", "segment_compile",
     "asset_persist", "mining_finalize",
 }
 _PROTECTED_TYPES = {"entity_review_gate", "ontology_review_gate", "graph_write"}
@@ -23,7 +23,6 @@ _PROTECTED_TYPES = {"entity_review_gate", "ontology_review_gate", "graph_write"}
 
 _SPECS = (
     ("input_ingest", "input", {"input_spec"}, {"raw_files"}, "FAIL_FAST"),
-    ("parse_segment", "document", {"raw_files"}, {"parsed_segments"}, "SKIP_DOCUMENT"),
     ("document_parse", "document", {"raw_files"}, {"parsed_documents"}, "SKIP_DOCUMENT"),
     ("segment_compile", "document", {"parsed_documents"}, {"parsed_segments"}, "SKIP_DOCUMENT"),
     ("enrich", "document", {"parsed_segments"}, {"semantic_enrichment"}, "FALLBACK"),
@@ -45,7 +44,6 @@ _SPECS = (
 
 _LABELS = {
     "input_ingest": ("输入发现", "发现输入文件并初始化运行批次。", "input"),
-    "parse_segment": ("解析与切分（v1 兼容）", "旧版解析与切分一体算子；v2 范式请使用解析与切片。", "document"),
     "document_parse": ("文档解析", "冻结输入并产出结构化解析结果（标题树/表格/证据定位），质量门控后形成知识快照。", "document"),
     "segment_compile": ("切片编译", "从知识快照按策略编译检索切片（表格行带表头、章节路径注入）。", "document"),
     "enrich": ("语义增强", "补充段落语义角色和内容判断。", "document"),
@@ -74,11 +72,6 @@ def _slots(operator_type: str) -> tuple[tuple[SlotDecl, ...], tuple[SlotDecl, ..
         return (
             (SlotDecl("input", SlotType.INPUT_SPEC),),
             (SlotDecl("rawFiles", SlotType.RAW_FILE_BATCH),),
-        )
-    if operator_type == "parse_segment":
-        return (
-            (SlotDecl("rawFiles", SlotType.RAW_FILE_BATCH),),
-            (_document_slot(),),
         )
     if operator_type == "document_parse":
         return (

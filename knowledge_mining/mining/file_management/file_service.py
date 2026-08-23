@@ -250,6 +250,7 @@ class FileManagementService:
         """Return a single document (current storage_object/raw_hash/size/mime)."""
         return await self._resolve_view(await self._require_row(document_id))
 
+
     async def download_url(
         self,
         document_id: str,

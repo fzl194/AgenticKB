@@ -23,7 +23,6 @@ from knowledge_mining.mining.infra.pg_schema import ensure_primary_schema
 from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.api.routes.health import router as health_router
 from knowledge_mining.mining.api.routes.runs import router as runs_router
-from knowledge_mining.mining.api.routes.parse_result import router as parse_result_router
 from knowledge_mining.mining.api.routes.knowledge import router as knowledge_router
 from knowledge_mining.mining.api.routes.config import router as config_router
 from knowledge_mining.mining.api.routes.builds import router as builds_router
@@ -101,8 +100,24 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.warning("storage config fetch skipped: %s", exc)
 
+    # KB uploads are object-store-only.  Build one adapter at the composition
+    # root so request handlers cannot silently fall back to local disk.
+    from knowledge_mining.mining.infra.object_store.config import ObjectStoreConfig
+    from knowledge_mining.mining.infra.object_store.factory import make_object_store
+
+    object_store_config = ObjectStoreConfig.from_control_plane()
+    app.state.object_store = make_object_store(object_store_config)
+    app.state.object_store_config = object_store_config
+
+
     workflow_repo = GlobalWorkflowRepository(pool)
     app.state.workflow_service = WorkflowService(workflow_repo)
+    upgraded_workflows = await app.state.workflow_service.upgrade_active_workflows_to_v2()
+    if upgraded_workflows:
+        logger.info(
+            "Upgraded %d persisted workflow(s) to v2: %s",
+            len(upgraded_workflows), ", ".join(upgraded_workflows),
+        )
     await app.state.workflow_service.ensure_workflow_library()
 
     # Domain-specific async/sync pools are opened lazily by API dependencies.
@@ -160,7 +175,6 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(runs_router)
-    app.include_router(parse_result_router)
     app.include_router(knowledge_router)
     app.include_router(config_router)
     app.include_router(builds_router)

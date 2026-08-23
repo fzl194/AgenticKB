@@ -47,11 +47,11 @@ def test_manifest_serializes_frozen_plan_and_parameter_hashes() -> None:
     manifest = _full_plan().to_manifest(workflow_id="wf", workflow_version=7)
     assert manifest["workflowId"] == "wf"
     assert manifest["workflowVersion"] == 7
-    assert manifest["schemaVersion"] == "1.0"
+    assert manifest["schemaVersion"] == "2.0"
     assert manifest["catalogVersion"] == "1"
     assert manifest["executionPlan"]["documentOrder"][-1] == "asset_persist"
-    parse = next(node for node in manifest["nodes"] if node["type"] == "parse_segment")
-    assert parse["params"]["maxSegmentTokens"] == 512
+    parse = next(node for node in manifest["nodes"] if node["type"] == "segment_compile")
+    assert parse["params"]["maxTokens"] == 512
     assert parse["paramsHash"] == value_hash(parse["params"])
     assert "domain" not in canonical_json(manifest).lower()
 

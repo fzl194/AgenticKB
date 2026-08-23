@@ -202,27 +202,42 @@ class PgSnapshotRepository:
             return _snapshot_from_row(dict(row)) if row else None
 
     async def latest_for_document(
-        self, document_id: str, domain: str
+        self, document_id: str, domain: str, *,
+        source_storage_object_id: str | None = None,
+        source_content_revision: int | None = None,
     ) -> tuple[SnapshotRecord, SnapshotSourceLink] | None:
         from knowledge_mining.mining.contracts.snapshot_store import (
             SnapshotSourceLink,
         )
 
+        # 按需拼条件而非 `%s IS NULL OR ...`：None 参数无法推断类型
+        # （psycopg IndeterminateDatatype），且常量 OR 会削弱索引利用。
+        conditions = [
+            "links.document_id = %s",
+            "snapshots.domain = %s",
+            "snapshots.lifecycle_status = 'READY'",
+            "snapshots.snapshot_fingerprint IS NOT NULL",
+        ]
+        params: list[Any] = [document_id, domain]
+        if source_storage_object_id is not None:
+            conditions.append("links.source_storage_object_id = %s")
+            params.append(source_storage_object_id)
+        if source_content_revision is not None:
+            conditions.append("links.source_content_revision = %s")
+            params.append(source_content_revision)
+
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """SELECT snapshots.*, links.source_storage_object_id AS _src_obj,
-                          links.source_content_revision AS _src_rev,
-                          links.title AS _link_title
-                   FROM asset_document_snapshots AS snapshots
-                   JOIN asset_document_snapshot_links AS links
-                     ON links.document_snapshot_id = snapshots.id
-                   WHERE links.document_id = %s AND snapshots.domain = %s
-                     AND snapshots.lifecycle_status = 'READY'
-                     AND snapshots.snapshot_fingerprint IS NOT NULL
-                   ORDER BY snapshots.created_at DESC,
-                            links.linked_at DESC, snapshots.id DESC
-                   LIMIT 1""",
-                [document_id, domain],
+                f"""SELECT snapshots.*, links.source_storage_object_id AS _src_obj,
+                           links.source_content_revision AS _src_rev,
+                           links.title AS _link_title
+                    FROM asset_document_snapshots AS snapshots
+                    JOIN asset_document_snapshot_links AS links
+                      ON links.document_snapshot_id = snapshots.id
+                    WHERE {" AND ".join(conditions)}
+                    ORDER BY links.linked_at DESC, snapshots.id DESC
+                    LIMIT 1""",
+                params,
             )
             row = await cur.fetchone()
         if row is None:

@@ -137,9 +137,9 @@ def _parse_facade(operator, documents, objects, *, plan_factory=None):
     )
 
 
-def test_parse_facade_happy_path_returns_outcome():
+def test_parse_facade_happy_path_returns_outcome(tmp_path):
     async def scene():
-        store = FakeObjectStore("facade-objects")
+        store = FakeObjectStore(str(tmp_path / "facade-objects"))
         objects = MemoryStorageObjectRepository()
         documents = MemoryDocumentCurrentContentRepository()
         await _seed(store, objects, documents)
@@ -183,10 +183,10 @@ def test_parse_facade_document_without_object_returns_none():
     assert asyncio.new_event_loop().run_until_complete(scene())
 
 
-def test_parse_facade_failed_run_raises():
+def test_parse_facade_failed_run_raises(tmp_path):
     async def scene():
         documents = MemoryDocumentCurrentContentRepository()
-        store = FakeObjectStore("facade-objects")
+        store = FakeObjectStore(str(tmp_path / "facade-objects"))
         objects = MemoryStorageObjectRepository()
         await _seed(store, objects, documents)
         facade = _parse_facade(
@@ -202,10 +202,10 @@ def test_parse_facade_failed_run_raises():
     assert asyncio.new_event_loop().run_until_complete(scene())
 
 
-def test_parse_facade_maps_budget_params_into_plan():
+def test_parse_facade_maps_budget_params_into_plan(tmp_path):
     async def scene():
         documents = MemoryDocumentCurrentContentRepository()
-        store = FakeObjectStore("facade-objects")
+        store = FakeObjectStore(str(tmp_path / "facade-objects"))
         objects = MemoryStorageObjectRepository()
         await _seed(store, objects, documents)
         operator = _StubOperator()
@@ -279,3 +279,23 @@ def test_build_new_chain_services_returns_sync_facades():
     services = build_new_chain_services(bucket_prefix="test-")
     assert hasattr(services.document_parse_service, "parse_document")
     assert hasattr(services.segment_compile_service, "compile_for_snapshot")
+
+
+def test_build_new_chain_services_uses_pg_repositories_for_sync_worker_pool():
+    """A production worker pool must not silently select memory repositories."""
+    from knowledge_mining.mining.workflow.new_chain_services import (
+        build_new_chain_services,
+    )
+
+    services = build_new_chain_services(
+        bucket_prefix="test-",
+        object_store=object(),
+        sync_pool=object(),
+    )
+
+    assert type(services.document_parse_service._documents).__name__ == (
+        "PgDocumentCurrentContentRepository"
+    )
+    assert type(services.document_parse_service._storage_objects).__name__ == (
+        "PgStorageObjectRepository"
+    )

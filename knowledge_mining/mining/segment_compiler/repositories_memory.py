@@ -52,9 +52,9 @@ class MemorySegmentStore:
         stored = self._by_snapshot.get(snapshot_id)
         return stored.segments if stored else ()
 
-    # -- 测试辅助（非 Protocol 成员） ---------------------------------------
+    # -- 附加读取（服务幂等短路用） -----------------------------------------
 
-    def compiler_fingerprint(self, snapshot_id: str) -> str | None:
+    async def compiler_fingerprint(self, snapshot_id: str) -> str | None:
         stored = self._by_snapshot.get(snapshot_id)
         return stored.compiler_fingerprint if stored else None
 

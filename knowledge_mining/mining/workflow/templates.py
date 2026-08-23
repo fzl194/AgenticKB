@@ -5,7 +5,6 @@ from .graph import EdgeDef, NodeDef, OutputDef, WorkflowGraph
 
 _POSITIONS = {
     "input_ingest": (40, 260),
-    "parse_segment": (280, 260),
     "document_parse": (180, 260),
     "segment_compile": (380, 260),
     "enrich": (520, 80),
@@ -79,13 +78,9 @@ def _connect_chain(types: tuple[str, ...], slot: str) -> list[EdgeDef]:
     ]
 
 
-def _template(
-    template_name: str,
-    *,
-    parse_ops: tuple[str, ...] = ("parse_segment",),
-    schema_version: str = "1.0",
-) -> WorkflowGraph:
-    """构建一套范式模板；v2 传入解析双算子与 schemaVersion（SRS §10.2）."""
+def _template(template_name: str) -> WorkflowGraph:
+    """Build one v2 paradigm with the fixed parse-and-compile head."""
+    parse_ops = ("document_parse", "segment_compile")
     discourse_branch, entity_branch, includes_ontology_induction = (
         _TEMPLATE_BRANCHES[template_name]
     )
@@ -145,25 +140,14 @@ def _template(
     edges.extend(_connect_chain(tuple(global_chain), "finalizeInput"))
 
     return WorkflowGraph(
-        schema_version=schema_version,
+        schema_version="2.0",
         nodes=tuple(_node(operator_type) for operator_type in types),
         edges=tuple(edges),
         output=OutputDef("mining_finalize", "result"),
     )
 
 
-_BUILTIN_TEMPLATES = {
-    name: _template(name)
-    for name in _TEMPLATE_BRANCHES
-}
-_BUILTIN_TEMPLATES_V2 = {
-    name: _template(
-        name,
-        parse_ops=("document_parse", "segment_compile"),
-        schema_version="2.0",
-    )
-    for name in _TEMPLATE_BRANCHES
-}
+_BUILTIN_TEMPLATES = {name: _template(name) for name in _TEMPLATE_BRANCHES}
 
 
 def builtin_templates() -> dict[str, WorkflowGraph]:
@@ -171,5 +155,5 @@ def builtin_templates() -> dict[str, WorkflowGraph]:
 
 
 def builtin_templates_v2() -> dict[str, WorkflowGraph]:
-    """v2 范式模板：解析与切片显式分离（SRS §10.2/A11；历史 manifest 不改写）."""
-    return dict(_BUILTIN_TEMPLATES_V2)
+    """Compatibility import name for the only supported template generation."""
+    return builtin_templates()

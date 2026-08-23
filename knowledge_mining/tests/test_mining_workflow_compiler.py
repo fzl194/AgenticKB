@@ -15,7 +15,7 @@ def test_full_compiles_into_input_document_and_global_zones() -> None:
     assert result.valid is True
     assert result.plan is not None
     assert result.plan.input_order == ("input_ingest",)
-    assert result.plan.document_order[0] == "parse_segment"
+    assert result.plan.document_order[:2] == ("document_parse", "segment_compile")
     assert result.plan.document_order[-1] == "asset_persist"
     assert result.plan.global_order == (
         "entity_review_gate",
@@ -86,7 +86,8 @@ def test_paradigm_templates_have_distinct_review_and_ontology_boundaries() -> No
 
     assert fast_types - {
         "input_ingest",
-        "parse_segment",
+        "document_parse",
+        "segment_compile",
         "asset_persist",
         "mining_finalize",
     } == {"retrieval_unit_build", "embedding"}
@@ -177,7 +178,7 @@ def test_publish_rejects_disabled_or_duplicate_fixed_nodes() -> None:
         minimal,
         nodes=tuple(
             replace(node, disabled=True)
-            if node.operator_type == "parse_segment"
+            if node.operator_type == "document_parse"
             else node
             for node in minimal.nodes
         ),
@@ -186,7 +187,7 @@ def test_publish_rejects_disabled_or_duplicate_fixed_nodes() -> None:
 
     duplicate = replace(
         minimal,
-        nodes=minimal.nodes + (NodeDef("parse-copy", "parse_segment"),),
+        nodes=minimal.nodes + (NodeDef("parse-copy", "document_parse"),),
     )
     assert "duplicate_operator" in {error.kind for error in _compile(duplicate).errors}
 

@@ -287,7 +287,8 @@ class ParsedViaNewChain:
 
     __slots__ = (
         "run_id", "snapshot_id", "parse_ir_storage_object_id",
-        "parser_fingerprint", "quality_status", "raw_file",
+        "parser_fingerprint", "quality_status", "raw_file", "profile",
+        "action", "existing_doc", "document_id",
     )
 
     def __init__(
@@ -299,6 +300,10 @@ class ParsedViaNewChain:
         parser_fingerprint: str | None,
         quality_status: str | None,
         raw_file: Any,
+        profile: Any,
+        action: str | None,
+        existing_doc: dict[str, Any] | None,
+        document_id: str | None,
     ) -> None:
         self.run_id = run_id
         self.snapshot_id = snapshot_id
@@ -306,6 +311,10 @@ class ParsedViaNewChain:
         self.parser_fingerprint = parser_fingerprint
         self.quality_status = quality_status
         self.raw_file = raw_file
+        self.profile = profile
+        self.action = action
+        self.existing_doc = existing_doc
+        self.document_id = document_id
 
 
 def document_parse_handler(
@@ -357,6 +366,10 @@ def document_parse_handler(
         parser_fingerprint=getattr(outcome, "parser_fingerprint", None),
         quality_status=getattr(outcome, "quality_status", None),
         raw_file=raw_file,
+        profile=getattr(ctx, "profile", None),
+        action=getattr(ctx, "action", None),
+        existing_doc=getattr(ctx, "existing_doc", None),
+        document_id=getattr(ctx, "document_id", None),
     )
     return _success(state, parsed, "parsed_documents")
 
@@ -425,9 +438,14 @@ def segment_compile_handler(
     }
     ctx = DocumentContext(
         raw_file=parsed.raw_file,
+        profile=parsed.profile,
         segments=projected,
         seg_ids=seg_ids,
         run_document_id=state.run_document_id,
+        action=parsed.action,
+        existing_doc=parsed.existing_doc,
+        document_id=parsed.document_id,
+        snapshot_id=parsed.snapshot_id,
     )
     return _success(state, ctx, "parsed_segments")
 

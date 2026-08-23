@@ -24,7 +24,7 @@ from knowledge_mining.mining.workflow.runtime import (
     InvalidWorkflowManifest,
     MiningWorkflowRuntime,
 )
-from knowledge_mining.mining.workflow.templates import builtin_templates
+from knowledge_mining.mining.workflow.templates import builtin_templates_v2
 
 
 class RuntimeRepository:
@@ -85,12 +85,12 @@ class RuntimeRepository:
 
 
 def minimal_manifest(*, max_tokens=800):
-    graph = builtin_templates()["minimal"]
+    graph = builtin_templates_v2()["minimal"]
     graph = replace(
         graph,
         nodes=tuple(
-            replace(node, params={"maxSegmentTokens": max_tokens})
-            if node.operator_type == "parse_segment"
+            replace(node, params={"maxTokens": max_tokens})
+            if node.operator_type == "segment_compile"
             else node
             for node in graph.nodes
         ),
@@ -176,7 +176,8 @@ def test_runtime_executes_only_the_frozen_manifest_and_parameters() -> None:
         manifest, registry, calls
     )
     registry.register("input_ingest", "1", input_handler)
-    registry.register("parse_segment", "1", document_handler("parse_segment"))
+    registry.register("document_parse", "1", document_handler("document_parse"))
+    registry.register("segment_compile", "1", document_handler("segment_compile"))
     registry.register("asset_persist", "1", document_handler("asset_persist"))
     registry.register("mining_finalize", "1", finalize_handler)
     context.services.global_workflow_repository = SimpleNamespace(
@@ -187,8 +188,8 @@ def test_runtime_executes_only_the_frozen_manifest_and_parameters() -> None:
 
     result = MiningWorkflowRuntime(context, run_id="run-1").execute()
 
-    parse_call = next(item for item in calls if item[0] == "parse_segment")
-    assert parse_call[1]["maxSegmentTokens"] == 800
+    compile_call = next(item for item in calls if item[0] == "segment_compile")
+    assert compile_call[1]["maxTokens"] == 800
     assert result.status == "completed"
     assert result.capabilities >= {"finalized", "release_published"}
 
@@ -196,7 +197,7 @@ def test_runtime_executes_only_the_frozen_manifest_and_parameters() -> None:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("schemaVersion", "2.0", "schema"),
+        ("schemaVersion", "1.0", "schema"),
         ("catalogVersion", "999", "catalog"),
         ("graphHash", "tampered", "graph hash"),
     ],
@@ -209,7 +210,8 @@ def test_runtime_rejects_tampered_or_unsupported_manifest(field, value, message)
         manifest, registry, []
     )
     registry.register("input_ingest", "1", input_handler)
-    registry.register("parse_segment", "1", document_handler("parse_segment"))
+    registry.register("document_parse", "1", document_handler("document_parse"))
+    registry.register("segment_compile", "1", document_handler("segment_compile"))
     registry.register("asset_persist", "1", document_handler("asset_persist"))
     registry.register("mining_finalize", "1", finalize_handler)
 
@@ -219,8 +221,8 @@ def test_runtime_rejects_tampered_or_unsupported_manifest(field, value, message)
 
 def test_runtime_rejects_parameter_hash_and_missing_exact_handler() -> None:
     manifest = minimal_manifest()
-    parse = next(item for item in manifest["nodes"] if item["type"] == "parse_segment")
-    parse["params"]["maxSegmentTokens"] = 801
+    parse = next(item for item in manifest["nodes"] if item["type"] == "segment_compile")
+    parse["params"]["maxTokens"] = 801
     context, *_ = runtime_context(manifest, HandlerRegistry(), [])
 
     with pytest.raises(InvalidWorkflowManifest, match="parameter hash"):
@@ -246,7 +248,8 @@ def test_safe_run_override_changes_finalize_without_changing_node_hash() -> None
         manifest, registry, calls
     )
     registry.register("input_ingest", "1", input_handler)
-    registry.register("parse_segment", "1", document_handler("parse_segment"))
+    registry.register("document_parse", "1", document_handler("document_parse"))
+    registry.register("segment_compile", "1", document_handler("segment_compile"))
     registry.register("asset_persist", "1", document_handler("asset_persist"))
     registry.register("mining_finalize", "1", finalize_handler)
 
@@ -264,7 +267,8 @@ def test_manual_publish_replays_finalize_after_assets_only_execution() -> None:
         manifest, registry, calls
     )
     registry.register("input_ingest", "1", input_handler)
-    registry.register("parse_segment", "1", document_handler("parse_segment"))
+    registry.register("document_parse", "1", document_handler("document_parse"))
+    registry.register("segment_compile", "1", document_handler("segment_compile"))
     registry.register("asset_persist", "1", document_handler("asset_persist"))
     registry.register("mining_finalize", "1", finalize_handler)
     runtime = MiningWorkflowRuntime(context, run_id="run-1")
@@ -290,7 +294,8 @@ def test_manual_publish_claim_conflict_stops_before_reading_input() -> None:
         manifest, registry, calls
     )
     registry.register("input_ingest", "1", input_handler)
-    registry.register("parse_segment", "1", document_handler("parse_segment"))
+    registry.register("document_parse", "1", document_handler("document_parse"))
+    registry.register("segment_compile", "1", document_handler("segment_compile"))
     registry.register("asset_persist", "1", document_handler("asset_persist"))
     registry.register("mining_finalize", "1", finalize_handler)
     runtime = MiningWorkflowRuntime(context, run_id="run-1")

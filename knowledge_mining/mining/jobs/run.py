@@ -16,6 +16,7 @@ import json
 import logging
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -112,7 +113,6 @@ def _check_cancelled(runtime_db: "MiningRuntimeDB", run_id: str) -> None:
 from knowledge_mining.mining.infra.db import AssetCoreDB, MiningRuntimeDB
 from knowledge_mining.mining.infra.domain_db import (
     ResolvedDomainDatabase,
-    ensure_domain_database_schema,
     resolve_domain_database,
 )
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
@@ -121,6 +121,7 @@ from knowledge_mining.mining.contracts.models import (
     DocumentProfile,
     MiningRunData,
     MiningRunDocumentData,
+    RawFileData,
 )
 from knowledge_mining.mining.runtime import RuntimeTracker
 from knowledge_mining.mining.ingestion import ingest_directory
@@ -137,11 +138,165 @@ from knowledge_mining.mining.pipeline import (
 )
 
 
+@dataclass(frozen=True)
+class _KbObjectRawFileData(RawFileData):
+    """A v2 workflow input backed by a committed storage object.
+
+    ``RawFileData`` remains the compatibility input shape for the document
+    executor.  These fields are deliberately attached to its KB-only subtype:
+    the v2 parse facade consumes the logical document and object identity,
+    while legacy folder runs continue to use the base shape unchanged.
+    """
+
+    document_id: str = ""
+    mime: str = "application/octet-stream"
+    document_key: str = ""
+    existing_doc: dict[str, Any] | None = None
+    storage_object_id: str = ""
+    content_revision: int = 0
+    object_key: str = ""
+    object_version_id: str | None = None
+
+
+_MIME_FILE_TYPES = {
+    "text/markdown": "markdown",
+    "text/plain": "txt",
+    "text/html": "html",
+    "application/pdf": "pdf",
+    "application/msword": "doc",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+}
+
+
+def _object_file_type(document_name: str, mime: str) -> str:
+    """Choose the compatibility parser type without reading object bytes."""
+    from_name = {
+        ".md": "markdown", ".markdown": "markdown", ".txt": "txt",
+        ".html": "html", ".htm": "html", ".pdf": "pdf", ".doc": "doc",
+        ".docx": "docx", ".xls": "xls", ".xlsx": "xlsx",
+    }.get(Path(document_name).suffix.lower())
+    normalized_mime = mime.split(";", 1)[0].strip().lower()
+    return from_name or _MIME_FILE_TYPES.get(normalized_mime, "other")
+
+
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(decoded) if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _kb_object_documents(
+    asset_db: AssetCoreDB,
+    *,
+    kb_id: str,
+    domain: str,
+    document_ids: list[str],
+) -> tuple[list[_KbObjectRawFileData], dict[str, Any]]:
+    """Read the current, committed object identities for one KB run.
+
+    This is intentionally a narrow query on ``asset_documents`` plus its
+    current storage-object pointer.  It neither scans ``input_path`` nor
+    follows legacy ``storage_path`` values: the v2 parser freezes the object
+    identified here before it reads any bytes.
+    """
+    query = """
+        SELECT documents.id, documents.domain, documents.document_key,
+               documents.document_name, documents.document_type,
+               documents.storage_object_id, documents.source_raw_hash,
+               documents.content_revision, documents.metadata_json,
+               documents.directory_path, objects.provider, objects.bucket,
+               objects.object_key, objects.object_version_id, objects.mime,
+               objects.size
+          FROM asset_documents AS documents
+          JOIN asset_storage_objects AS objects
+            ON objects.id = documents.storage_object_id
+         WHERE documents.kb_id = %s
+           AND documents.domain = %s
+           AND documents.deleted_at IS NULL
+           AND objects.state = 'AVAILABLE'
+    """
+    params: list[Any] = [kb_id, domain]
+    if document_ids:
+        query += " AND documents.id = ANY(%s)"
+        params.append(list(document_ids))
+    query += " ORDER BY documents.document_key, documents.id"
+    rows = asset_db._fetchall(query, tuple(params))
+
+    docs: list[_KbObjectRawFileData] = []
+    for row in rows:
+        document_id = str(row["id"])
+        document_key = str(row.get("document_key") or f"doc:/{document_id}")
+        document_name = str(row.get("document_name") or document_id)
+        mime = str(row.get("mime") or "application/octet-stream")
+        object_key = str(row.get("object_key") or "")
+        provider = str(row.get("provider") or "object")
+        bucket = str(row.get("bucket") or "")
+        metadata = _metadata_dict(row.get("metadata_json"))
+        existing_doc = {
+            "id": document_id,
+            "domain": str(row.get("domain") or domain),
+            "document_key": document_key,
+        }
+        metadata.update({
+            "storage_object_id": row.get("storage_object_id"),
+            "content_revision": int(row.get("content_revision") or 0),
+            "mime": mime,
+            "object_key": object_key,
+        })
+        relative_path = document_key.removeprefix("doc:/").lstrip("/")
+        docs.append(_KbObjectRawFileData(
+            file_path=(f"{provider}://{bucket}/{object_key}" if bucket else f"{provider}://{object_key}"),
+            relative_path=relative_path or document_name,
+            file_name=document_name,
+            file_type=_object_file_type(document_name, mime),
+            # v2 document_parse reads the frozen object rather than this
+            # compatibility content field.  Its hash is the object SHA-256.
+            content="",
+            raw_content_hash=str(row.get("source_raw_hash") or ""),
+            normalized_content_hash=str(row.get("source_raw_hash") or ""),
+            file_size=int(row.get("size") or 0),
+            source_uri=(f"{provider}://{bucket}/{object_key}" if bucket else f"{provider}://{object_key}"),
+            source_type="object_storage",
+            document_type=row.get("document_type"),
+            title=metadata.get("title") or document_name,
+            metadata_json=metadata,
+            document_id=document_id,
+            mime=mime,
+            document_key=document_key,
+            existing_doc=existing_doc,
+            storage_object_id=str(row.get("storage_object_id") or ""),
+            content_revision=int(row.get("content_revision") or 0),
+            object_key=object_key,
+            object_version_id=row.get("object_version_id"),
+        ))
+    return docs, {
+        "discovered_documents": len(docs),
+        "parsed_documents": 0,
+        "unparsed_documents": 0,
+        "source": "object_storage",
+        "kb_id": kb_id,
+    }
+
+
 def _create_dbs(
     resolved: ResolvedDomainDatabase,
 ) -> tuple[AssetCoreDB, MiningRuntimeDB]:
-    """Create and open PG-backed adapters for one resolved domain database."""
-    ensure_domain_database_schema(resolved)
+    """Create worker adapters for an already initialized domain database.
+
+    Domain schema initialization is owned by ``DomainPoolManager`` when the
+    API starts/opens a domain pool, or by an explicit migration command.  A
+    worker must only consume that initialized database: running DDL here made
+    every queued job contend for schema locks and could leave runs queued when
+    the initialization connection failed.
+    """
     from psycopg_pool import ConnectionPool
     pool = ConnectionPool(
         resolved.conninfo,
@@ -578,6 +733,33 @@ def _publish_workflow_job(
     return _execute_workflow_job("publish", None, run_id=run_id, **kwargs)
 
 
+def _build_workflow_object_input_services(*, sync_pool: Any) -> Any:
+    """Compose v2 KB services from the control-plane MinIO configuration.
+
+    A workflow job is a production execution path.  It must use registered
+    PostgreSQL repositories and the configured MinIO store; the memory/fake
+    defaults in ``build_new_chain_services`` are deliberately test-only and
+    are never selected from here.
+    """
+    from knowledge_mining.mining.infra.object_store.config import ObjectStoreConfig
+    from knowledge_mining.mining.infra.object_store.factory import make_object_store
+    from knowledge_mining.mining.workflow.new_chain_services import (
+        build_new_chain_services,
+    )
+
+    config = ObjectStoreConfig.from_control_plane()
+    if config.provider != "minio":
+        raise RuntimeError(
+            "KB workflow object input requires object_store.provider='minio'; "
+            f"got {config.provider!r}"
+        )
+    return build_new_chain_services(
+        bucket_prefix=config.bucket_prefix,
+        object_store=make_object_store(config),
+        sync_pool=sync_pool,
+    )
+
+
 class _WorkflowJobServices:
     def __init__(
         self,
@@ -675,6 +857,19 @@ class _WorkflowJobServices:
         self.document_persist_lock = None
         self.initial_global_capabilities = frozenset()
         self._compat = SimpleNamespace()
+        # Bound lazily only when this Run declares KB object input.  Legacy
+        # folder runs retain their existing pipeline and never instantiate a
+        # v2 object-store service graph.
+        self.document_parse_service = None
+        self.segment_compile_service = None
+        self._object_input_services_ready = False
+
+    @property
+    def domain(self) -> str:
+        """v2 解析/切片 handler 透传的运行域——快照必须与文档/批次同域落库，
+        否则 finalize 的 link 校验（documents/snapshots/batches 三表 domain
+        联查）会以 domain_mismatch 拒绝。"""
+        return self.profile.domain_id
 
     def input_ingest(self, input_spec: Any, runtime: Any):
         del input_spec, runtime
@@ -739,20 +934,38 @@ class _WorkflowJobServices:
                 self.run_id, self.profile.domain_id, "ingest"
             ):
                 return ()
-        docs, ingest_summary = ingest_directory(
-            self.input_path, self.batch_params
-        )
-        # 选择性挖掘：metadata_json.document_ids 非空时只挖所选文档子集。
-        # 按 storage_path（落盘绝对位置，全库唯一）过滤：ingest 出的 doc 按
-        # input_path/relative_path 复算位置后匹配。未在所选集合内的文档直接剔除，
-        # 不进 mining_run_documents、不产 snapshot——整库增量退化为子集增量。
         run_meta = run_data.get("metadata_json")
         if isinstance(run_meta, str):
             run_meta = json.loads(run_meta)
         run_meta = run_meta or {}
         force_redo = bool(run_meta.get("force_redo"))
-        selected_ids = run_meta.get("document_ids") or []
-        if selected_ids:
+        raw_selected_ids = run_meta.get("document_ids") or []
+        selected_ids = (
+            [str(value) for value in raw_selected_ids]
+            if isinstance(raw_selected_ids, (list, tuple, set))
+            else []
+        )
+        kb_id = run_meta.get("kb_id")
+        is_kb_object_input = isinstance(kb_id, str) and bool(kb_id)
+        if is_kb_object_input:
+            self._ensure_object_input_services()
+            # v2 KB runs are bound to document identities and current object
+            # pointers.  Never derive their input from a worker-local folder:
+            # document_parse freezes this exact object before parsing it.
+            docs, ingest_summary = _kb_object_documents(
+                self.asset_db,
+                kb_id=kb_id,
+                domain=self.profile.domain_id,
+                document_ids=selected_ids,
+            )
+        else:
+            docs, ingest_summary = ingest_directory(
+                self.input_path, self.batch_params
+            )
+        # Legacy selective mining still translates selected IDs to local
+        # storage paths.  KB object input has already been filtered in the
+        # identity query above and must not inspect input_path.
+        if selected_ids and not is_kb_object_input:
             selected_paths = set(self.asset_db.get_document_storage_paths_by_ids(
                 domain=self.profile.domain_id, document_ids=selected_ids,
             ))
@@ -794,7 +1007,11 @@ class _WorkflowJobServices:
         }
         states = []
         for doc in docs:
-            doc_key = f"doc:/{doc.relative_path}"
+            doc_key = (
+                getattr(doc, "document_key", None)
+                if is_kb_object_input
+                else None
+            ) or f"doc:/{doc.relative_path}"
             planned = preflight_items.get((doc.relative_path, doc.raw_content_hash))
             lifecycle = None
             if planned is not None:
@@ -867,19 +1084,27 @@ class _WorkflowJobServices:
                 lifecycle_action = "UPDATE" if lifecycle else "NEW"
                 action = lifecycle_action
             else:
-                # G1 身份/位置分离：按 storage_path（含 <kb_id> 前缀、全库唯一）查身份，
-                # 而非 document_key。文件移动后位置变、document_key 冻结不变仍能命中同一身份。
-                storage_path = str(Path(self.input_path) / doc.relative_path)
-                lifecycle = self.asset_db.get_document_lifecycle_state(
-                    domain=self.profile.domain_id,
-                    channel=self.channel,
-                    storage_path=storage_path,
-                    normalized_content_hash=doc.normalized_content_hash,
-                )
-                lifecycle_action = decide_document_lifecycle_action(
-                    lifecycle,
-                    normalized_content_hash=doc.normalized_content_hash,
-                )
+                if is_kb_object_input:
+                    # The logical document has already been resolved by its
+                    # KB-scoped object identity.  Do not fall back to the
+                    # legacy storage_path lifecycle lookup (which implicitly
+                    # ties workers to an upload directory).
+                    lifecycle = getattr(doc, "existing_doc", None)
+                    lifecycle_action = "UPDATE"
+                else:
+                    # G1 身份/位置分离：按 storage_path（含 <kb_id> 前缀、全库唯一）查身份，
+                    # 而非 document_key。文件移动后位置变、document_key 冻结不变仍能命中同一身份。
+                    storage_path = str(Path(self.input_path) / doc.relative_path)
+                    lifecycle = self.asset_db.get_document_lifecycle_state(
+                        domain=self.profile.domain_id,
+                        channel=self.channel,
+                        storage_path=storage_path,
+                        normalized_content_hash=doc.normalized_content_hash,
+                    )
+                    lifecycle_action = decide_document_lifecycle_action(
+                        lifecycle,
+                        normalized_content_hash=doc.normalized_content_hash,
+                    )
                 # force_redo：无视内容哈希去重，强制重跑（含 LLM 阶段）。先清空旧 snapshot 的派生
                 # 资产——否则 persist_document_assets 见已有切片会跳过持久化、旧单元（如 table_row）
                 # 也会按 unit_key upsert 残留。清空后 lifecycle 走 UPDATE 自然重生。
@@ -969,7 +1194,9 @@ class _WorkflowJobServices:
                 title=doc.title,
             )
             existing_doc = None
-            if lifecycle:
+            if is_kb_object_input:
+                existing_doc = dict(getattr(doc, "existing_doc", None) or {}) or None
+            elif lifecycle:
                 existing_doc = {
                     "id": lifecycle["document_id"],
                     "domain": lifecycle["document_domain"],
@@ -984,6 +1211,7 @@ class _WorkflowJobServices:
                     run_document_id=run_document_id,
                     action=action,
                     existing_doc=existing_doc,
+                    document_id=getattr(doc, "document_id", None),
                 ),
             ))
         if self.action == "execute":
@@ -995,6 +1223,17 @@ class _WorkflowJobServices:
             )
         self.runtime_db.commit()
         return tuple(states)
+
+    def _ensure_object_input_services(self) -> None:
+        """Bind production v2 parse/segment services exactly once per job."""
+        if self._object_input_services_ready:
+            return
+        services = _build_workflow_object_input_services(
+            sync_pool=self.asset_db.pool,
+        )
+        self.document_parse_service = services.document_parse_service
+        self.segment_compile_service = services.segment_compile_service
+        self._object_input_services_ready = True
 
 
 def _execute_workflow_job(

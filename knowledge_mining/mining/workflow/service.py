@@ -10,37 +10,21 @@ from .compiler import WorkflowCompileException, WorkflowCompiler
 from .graph import WorkflowGraph
 from .operators.catalog import builtin_catalog
 from .paradigms import ORDINARY_WORKFLOW_PARADIGMS
-from .templates import builtin_templates, builtin_templates_v2
-
-
-_V2_ONLY_OPERATORS = frozenset({"document_parse", "segment_compile"})
+from .templates import builtin_templates
+from .v2_migration import upgrade_graph_to_v2
 
 
 def _self_heal_schema_version(graph: dict) -> dict:
-    """按固定算子组合纠正 schemaVersion（防旧客户端混合态）.
-
-    背景（2026-08-21 验收发现）：旧前端保存 v2 草稿时把 schemaVersion
-    硬编码回 1.0 → 编译按 v1 固定集合校验而误报缺 parse_segment。v1/v2
-    解析算子互斥且均为 fixed，按图内实际算子推断版本是安全的。
-    """
+    """Normalize the only supported persisted workflow schema."""
     nodes = graph.get("nodes") or []
     types = {str(n.get("operatorType", "")) for n in nodes}
-    declared = str(graph.get("schemaVersion", "1.0"))
-    if types & _V2_ONLY_OPERATORS:
-        if "parse_segment" in types:
-            raise ValueError(
-                "graph mixes v1 parse_segment with v2 document_parse/"
-                "segment_compile; refusing to guess schema version"
-            )
-        if declared.split(".")[0] < "2":
-            healed = dict(graph)
-            healed["schemaVersion"] = "2.0"
-            return healed
-    elif "parse_segment" in types and declared.split(".")[0] >= "2":
-        healed = dict(graph)
-        healed["schemaVersion"] = "1.0"
-        return healed
-    return graph
+    if "parse_segment" in types:
+        raise ValueError(
+            "legacy parse_segment is not supported; migrate the workflow to v2"
+        )
+    normalized = dict(graph)
+    normalized["schemaVersion"] = "2.0"
+    return normalized
 
 
 def _build_initial_draft(
@@ -52,11 +36,9 @@ def _build_initial_draft(
     """create 的初始草稿：显式图优先，否则按版本选模板（M6 v2）."""
     if graph is not None:
         return WorkflowGraph.from_dict(graph).to_dict()
-    templates = (
-        builtin_templates_v2()
-        if str(schema_version).split(".")[0] >= "2"
-        else builtin_templates()
-    )
+    if str(schema_version) != "2.0":
+        raise ValueError("Only workflow schema_version '2.0' is supported")
+    templates = builtin_templates()
     try:
         return templates[template_key].to_dict()
     except KeyError as exc:
@@ -136,7 +118,7 @@ class WorkflowService:
         name: str,
         description: str | None = None,
         template_key: str = "full",
-        schema_version: str = "1.0",
+        schema_version: str = "2.0",
         graph: dict | None = None,
         created_by: str | None = None,
         workflow_id: str | None = None,
@@ -170,6 +152,41 @@ class WorkflowService:
 
     async def list(self, *, include_archived: bool = False) -> list[dict]:
         return await self.repository.list_workflows(include_archived=include_archived)
+
+    async def upgrade_active_workflows_to_v2(
+        self, *, updated_by: str = "v2-rollout"
+    ) -> list[str]:
+        """Upgrade every active persisted paradigm and publish its v2 version.
+
+        Workflow identity and prior versions remain intact for audit, but only
+        the newly published v2 version is selected by future runs.  The method
+        is idempotent: already-v2 drafts are left untouched.
+        """
+        upgraded_ids: list[str] = []
+        for workflow in await self.repository.list_workflows(
+            include_archived=False
+        ):
+            upgraded_graph = upgrade_graph_to_v2(
+                dict(workflow["draft_graph_json"])
+            )
+            if upgraded_graph == workflow["draft_graph_json"]:
+                continue
+            updated = await self.repository.update_draft(
+                workflow["id"],
+                graph=upgraded_graph,
+                expected_revision=workflow["draft_revision"],
+                updated_by=updated_by,
+            )
+            if updated is None:
+                raise DraftRevisionConflict(workflow["id"])
+            await self.publish(
+                workflow["id"],
+                expected_revision=updated["draft_revision"],
+                release_notes="统一升级至 v2 解析与切片范式",
+                created_by=updated_by,
+            )
+            upgraded_ids.append(workflow["id"])
+        return upgraded_ids
 
     async def save_draft(
         self,

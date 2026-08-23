@@ -36,6 +36,8 @@ async def _client(async_pool):
     from knowledge_mining.mining.infra.pg_config import MiningDbConfig
     app = FastAPI()
     app.state.pg_pool = async_pool
+    from knowledge_mining.tests.kb.conftest import attach_object_store
+    attach_object_store(app)
     app.state.db_config = MiningDbConfig()
 
     # mine_kb 走 workflow 引擎，依赖 app.state.domain_pools + workflow_run_binder。

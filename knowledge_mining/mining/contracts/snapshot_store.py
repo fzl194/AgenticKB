@@ -175,7 +175,12 @@ class SnapshotRepository(Protocol):
         ...
 
     async def latest_for_document(
-        self, document_id: str, domain: str
+        self,
+        document_id: str,
+        domain: str,
+        *,
+        source_storage_object_id: str | None = None,
+        source_content_revision: int | None = None,
     ) -> tuple[SnapshotRecord, SnapshotSourceLink] | None:
         """该文档最新 READY 新链快照及其来源 link（读视图/复核用）.
 

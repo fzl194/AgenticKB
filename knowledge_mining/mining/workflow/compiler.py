@@ -13,9 +13,6 @@ from .normalizer import WorkflowNormalizer, required_protected_types
 from .operators.options import OPTIONS_BY_OPERATOR
 
 
-# 固定骨架按 manifest schemaVersion 感知（SRS §10.2/§10.3）：
-# v1（历史 manifest）：解析与切分一体；v2：解析与切片显式分离。
-FIXED_TYPES_V1 = {"input_ingest", "parse_segment", "asset_persist", "mining_finalize"}
 FIXED_TYPES_V2 = {
     "input_ingest", "document_parse", "segment_compile",
     "asset_persist", "mining_finalize",
@@ -23,11 +20,8 @@ FIXED_TYPES_V2 = {
 
 
 def _fixed_types_for(schema_version: str) -> set[str]:
-    try:
-        major = int(str(schema_version).split(".")[0])
-    except (ValueError, TypeError):
-        major = 1
-    return FIXED_TYPES_V2 if major >= 2 else FIXED_TYPES_V1
+    del schema_version
+    return FIXED_TYPES_V2
 DEPENDENCIES = {
     "embedding": {"retrieval_unit_build"},
     "entity_resolve": {"entity_extract"},
@@ -116,10 +110,15 @@ class WorkflowCompiler:
         *,
         mode: Literal["draft", "publish"] = "draft",
     ) -> CompileResult:
-        normalized = self._normalizer.normalize(graph)
         errors: list[CompileError] = []
         if mode not in {"draft", "publish"}:
             return CompileResult((CompileError("invalid_mode", f"Unknown mode: {mode}"),))
+        if graph.schema_version != "2.0":
+            return CompileResult((CompileError(
+                "unsupported_schema_version",
+                "Only workflow schemaVersion 2.0 is supported",
+            ),))
+        normalized = self._normalizer.normalize(graph)
         if not normalized.nodes:
             errors.append(CompileError("empty_graph", "Workflow must contain nodes"))
 

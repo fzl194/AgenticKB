@@ -120,6 +120,27 @@
               />
             </div>
 
+            <div v-if="parseResult.elements.items.length" class="doc-preview__card">
+              <div class="doc-preview__card-title">结构元素（{{ parseResult.elements.count }}）</div>
+              <el-collapse>
+                <el-collapse-item
+                  v-for="element in parseResult.elements.items"
+                  :key="element.element_id"
+                  :name="element.element_id"
+                >
+                  <template #title>
+                    <el-tag size="small" effect="plain">{{ element.element_type }}</el-tag>
+                    <span class="doc-preview__element-title">{{ element.text || '空元素' }}</span>
+                  </template>
+                  <pre class="doc-preview__seg-text">{{ element.text }}</pre>
+                  <p v-if="element.has_evidence" class="doc-preview__muted">已保留来源定位</p>
+                </el-collapse-item>
+              </el-collapse>
+              <p v-if="parseResult.elements.count > parseResult.elements.items.length" class="doc-preview__muted">
+                当前仅展示前 {{ parseResult.elements.items.length }} 个元素。
+              </p>
+            </div>
+
             <!-- 表格 -->
             <div v-if="parseResult.tables.length" class="doc-preview__card">
               <div class="doc-preview__card-title">表格（{{ parseResult.tables.length }}）</div>
@@ -160,6 +181,13 @@
                   <pre class="doc-preview__seg-text">{{ seg.text }}</pre>
                 </el-collapse-item>
               </el-collapse>
+            </div>
+
+            <div v-if="parseResult.diagnostics.warnings.length" class="doc-preview__card">
+              <div class="doc-preview__card-title">解析诊断</div>
+              <ul class="doc-preview__diagnostics">
+                <li v-for="warning in parseResult.diagnostics.warnings" :key="warning">{{ warning }}</li>
+              </ul>
             </div>
           </template>
         </div>
@@ -282,7 +310,7 @@ import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useKbApi } from '@/api/kb'
-import { useMiningApi, type ParseResult } from '@/api/mining'
+import type { ParseResult } from '@/api/mining'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
@@ -294,7 +322,6 @@ const PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 const props = defineProps<{ kbId: string; docId: string }>()
 const router = useRouter()
 const kbApi = useKbApi()
-const miningApi = useMiningApi()
 
 const doc = ref<KbDocument | null>(null)
 const loading = ref(false)
@@ -316,6 +343,7 @@ const activeTab = ref<'preview' | 'structured' | 'segments' | 'units' | 'mention
 const parseResult = ref<ParseResult | null>(null)
 const parseLoading = ref(false)
 const parseError = ref('')
+const parseRetryable = ref(false)
 
 const outlineTree = computed(() => {
   type Node = { title: string; children: Node[] }
@@ -341,7 +369,7 @@ async function loadParseResult() {
   parseRetryable.value = false
   parseLoading.value = true
   try {
-    parseResult.value = await miningApi.getParseResult(props.docId)
+    parseResult.value = await kbApi.getDocumentParseResult(props.kbId, props.docId)
   } catch (e) {
     // 对抗评审 HIGH-1：按 HTTP 状态码分支（文案正则永远匹配不到后端
     // detail）；404 = 未走新链（引导），503 = 未接线，其余原样展示。
@@ -401,6 +429,9 @@ function resetKnowledge() {
   relations.value = []
   knowledgeMined.value = false
   activeTab.value = 'preview'
+  parseResult.value = null
+  parseError.value = ''
+  parseRetryable.value = false
 }
 
 async function load() {
@@ -518,6 +549,8 @@ onUnmounted(cleanup)
 }
 .doc-preview__state p { margin: 0; font-size: 13px; }
 .doc-preview__sub { font-size: 11.5px; color: var(--kb-text-tertiary); max-width: 420px; }
+.doc-preview__element-title { margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-preview__diagnostics { margin: 0; padding-left: 20px; color: var(--el-color-warning); }
 
 .doc-preview__rich { font-size: 14px; line-height: 1.75; color: var(--kb-text-primary); max-width: 900px; }
 .doc-preview__rich :deep(h1), .doc-preview__rich :deep(h2), .doc-preview__rich :deep(h3) { margin: 1em 0 0.4em; }

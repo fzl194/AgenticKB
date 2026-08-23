@@ -252,7 +252,7 @@ const selectedEditReason = computed(() => selectedDefinition.value
   : '')
 
 function emptyGraph(): MiningWorkflowGraph {
-  return { schemaVersion: '1.0', nodes: [], edges: [], output: { nodeId: '', slot: '' } }
+  return { schemaVersion: '2.0', nodes: [], edges: [], output: { nodeId: '', slot: '' } }
 }
 
 function cloneGraph(value: MiningWorkflowGraph): MiningWorkflowGraph {

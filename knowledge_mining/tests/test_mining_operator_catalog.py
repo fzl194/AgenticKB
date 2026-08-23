@@ -7,7 +7,6 @@ from knowledge_mining.mining.workflow.core import EditPolicy, ErrorPolicy
 from knowledge_mining.mining.workflow.operators.catalog import builtin_catalog
 from knowledge_mining.mining.workflow.operators.options import (
     OPTIONS_BY_OPERATOR,
-    ParseSegmentOptions,
     RetrievalUnitOptions,
 )
 from knowledge_mining.mining.workflow.templates import builtin_templates
@@ -15,7 +14,6 @@ from knowledge_mining.mining.workflow.templates import builtin_templates
 
 APPROVED_OPERATOR_TYPES = {
     "input_ingest",
-    "parse_segment",
     "document_parse",
     "segment_compile",
     "enrich",
@@ -35,14 +33,14 @@ APPROVED_OPERATOR_TYPES = {
 }
 
 
-def test_catalog_exposes_exactly_the_approved_18_operators() -> None:
+def test_catalog_exposes_exactly_the_approved_v2_operators() -> None:
     catalog = builtin_catalog()
     assert set(catalog) == APPROVED_OPERATOR_TYPES
     assert {
         key for key, value in catalog.items() if value.edit_policy is EditPolicy.FIXED
     } == {
-            "input_ingest", "parse_segment", "document_parse",
-            "segment_compile", "asset_persist", "mining_finalize",
+            "input_ingest", "document_parse", "segment_compile",
+            "asset_persist", "mining_finalize",
         }
     assert {
         key
@@ -70,10 +68,6 @@ def test_option_aliases_validate_wire_parameters() -> None:
 def test_option_models_reject_unknown_and_inconsistent_parameters() -> None:
     with pytest.raises(ValidationError):
         RetrievalUnitOptions.model_validate({"unknownOption": True})
-    with pytest.raises(ValidationError):
-        ParseSegmentOptions.model_validate(
-            {"minSegmentTokens": 800, "maxSegmentTokens": 200}
-        )
 
 
 def test_every_operator_schema_comes_from_its_typed_option_model() -> None:
@@ -98,10 +92,9 @@ def test_all_seven_templates_are_global_and_full_contains_all_operators() -> Non
         "ontology_only",
         "full",
     }
-    # v1 模板仍用一体算子（新算子属 v2 模板，见 test_m6_workflow_operators）
     assert {
         node.operator_type for node in templates["full"].nodes
-    } == APPROVED_OPERATOR_TYPES - {"document_parse", "segment_compile"}
+    } == APPROVED_OPERATOR_TYPES
     assert all(
         '"domain"' not in json.dumps(graph.to_dict()).lower()
         for graph in templates.values()
@@ -170,5 +163,5 @@ def test_catalog_and_template_results_cannot_mutate_the_singletons() -> None:
     templates = builtin_templates()
     catalog.pop("input_ingest")
     templates.pop("full")
-    assert len(builtin_catalog()) == 18
+    assert len(builtin_catalog()) == 17
     assert "full" in builtin_templates()

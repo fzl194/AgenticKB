@@ -561,6 +561,49 @@ class KbDB:
             )
             return dict(await cur.fetchone())  # type: ignore[arg-type]
 
+    async def insert_document_from_storage(
+        self, *, domain: str, kb_id: str, document_key: str, document_name: str,
+        storage_object_id: str, source_raw_hash: str,
+        directory_path: str | None = None, document_type: str | None = None,
+        owner_id: str | None = None, file_size: int | None = None,
+        modified_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a KB document that points at an AVAILABLE object-store object.
+
+        ``storage_path`` intentionally remains NULL.  It is a legacy migration
+        field and must not be populated by new uploads: object identity plus
+        the first content revision are committed with the document row.
+        """
+        now = _utcnow()
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """INSERT INTO asset_documents
+                     (id, domain, document_key, document_name, document_type,
+                      metadata_json, created_at, kb_id, directory_path, owner_id,
+                      file_size, modified_at, storage_object_id, source_raw_hash,
+                      content_revision, content_updated_at)
+                   VALUES
+                     (%(id)s, %(dom)s, %(k)s, %(n)s, %(t)s, '{}'::jsonb,
+                      %(now)s, %(kb)s, %(dp)s, %(own)s, %(fs)s, %(ma)s,
+                      %(so)s, %(hash)s, 1, %(now2)s)
+                   RETURNING id, domain, kb_id, document_key, document_name,
+                             document_type, storage_path, directory_path, owner_id,
+                             created_at, file_size, modified_at, storage_object_id,
+                             source_raw_hash, content_revision""",
+                {
+                    "id": _new_id(), "dom": domain, "k": document_key,
+                    "n": document_name, "t": document_type, "now": now,
+                    # created_at 是 TEXT（001 legacy），content_updated_at 是
+                    # TIMESTAMPTZ（008）——同一参数喂两列会触发
+                    # AmbiguousParameter，必须拆成两个绑定参数。
+                    "now2": now,
+                    "kb": kb_id, "dp": directory_path, "own": owner_id,
+                    "fs": file_size, "ma": modified_at,
+                    "so": storage_object_id, "hash": source_raw_hash,
+                },
+            )
+            return dict(await cur.fetchone())  # type: ignore[arg-type]
+
     async def list_documents_in_kb(
         self, *, kb_id: str, directory: str | None = None,
         limit: int = 200, offset: int = 0,
@@ -580,6 +623,7 @@ class KbDB:
                 f"""SELECT d.id, d.domain, d.kb_id, d.document_key, d.document_name,
                            d.document_type, d.storage_path, d.directory_path, d.owner_id,
                            d.created_at, d.file_size, d.modified_at,
+                           d.storage_object_id, d.source_raw_hash, d.content_revision,
                            {_STATUS_CASE_SQL} AS status
                     FROM asset_documents d
                     {_STATUS_JOIN_SQL}
@@ -596,6 +640,7 @@ class KbDB:
                 f"""SELECT d.id, d.domain, d.kb_id, d.document_key, d.document_name,
                            d.document_type, d.storage_path, d.directory_path, d.owner_id,
                            d.metadata_json, d.created_at, d.file_size, d.modified_at,
+                           d.storage_object_id, d.source_raw_hash, d.content_revision,
                            {_STATUS_CASE_SQL} AS status
                     FROM asset_documents d
                     {_STATUS_JOIN_SQL}

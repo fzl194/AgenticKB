@@ -181,7 +181,7 @@ async def test_compile_service_persists_and_replaces(tmp_path) -> None:
     stored = await seg_store.list_for_snapshot("snap_1")
     assert stored and all(s.links for s in stored)
     assert await seg_store.link_count("snap_1") >= len(stored)
-    assert seg_store.compiler_fingerprint("snap_1") == result.compiler_fingerprint
+    assert await seg_store.compiler_fingerprint("snap_1") == result.compiler_fingerprint
 
     # 重切（策略变化）→ 替换旧切片，不叠加（db.py:741 替换语义）。
     result2 = await service.compile(
@@ -192,7 +192,18 @@ async def test_compile_service_persists_and_replaces(tmp_path) -> None:
     stored2 = await seg_store.list_for_snapshot("snap_1")
     assert len(stored2) == result2.segment_count
     assert result2.compiler_fingerprint != result.compiler_fingerprint
-    assert seg_store.compiler_fingerprint("snap_1") == result2.compiler_fingerprint
+    assert await seg_store.compiler_fingerprint("snap_1") == result2.compiler_fingerprint
+
+    # 共享快照幂等：同内容多文档并发编译同一快照——同指纹直接复用，
+    # 不得二次 replace（真库上并发 replace 会在 segment_key 唯一键上相撞）。
+    result3 = await service.compile(
+        "snap_1", parse_ir_storage_object_id=ir_id,
+        document_key="a.pdf",
+        policy=SegmentPolicy(merge_adjacent_paragraphs=False),
+    )
+    assert result3.compiler_fingerprint == result2.compiler_fingerprint
+    stored3 = await seg_store.list_for_snapshot("snap_1")
+    assert stored3 == stored2  # 未被重写，仍是 result2 的产出
 
 
 async def test_compile_service_projection_roundtrip(tmp_path) -> None:

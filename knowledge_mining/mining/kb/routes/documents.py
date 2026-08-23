@@ -7,11 +7,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
+from psycopg.errors import UniqueViolation
 from pydantic import BaseModel
 
 from knowledge_mining.mining.infra.upload_config import UploadConfig
+from knowledge_mining.mining.api.deps import get_parse_result_service
 from knowledge_mining.mining.kb.auth import current_user
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.deps import get_document_service, get_folder_service, get_kb_db
@@ -52,6 +54,34 @@ async def document_knowledge(
     return await kbdb.get_document_knowledge(kb_id, doc_id)
 
 
+@router.get("/{document_id}/parse-result")
+async def document_parse_result(
+    kb_id: str,
+    document_id: str,
+    request: Request,
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+):
+    """Return the current document revision's structured result to KB members."""
+    if not await kbdb.is_visible(kb_id=kb_id, user_id=user["id"]):
+        raise HTTPException(404, "Document not found")
+    document = await kbdb.get_document_identity(document_id)
+    if document is None or document.get("kb_id") != kb_id:
+        raise HTTPException(404, "Document not found")
+    service = await get_parse_result_service(request, domain=document["domain"])
+    from knowledge_mining.mining.contracts.storage.errors import StorageObjectMissing
+
+    try:
+        result = await service.get_parse_result(
+            domain=document["domain"], document_id=document_id,
+        )
+    except StorageObjectMissing:
+        raise HTTPException(409, "Current parsed artifact is unavailable") from None
+    if result is None:
+        raise HTTPException(404, "Current document revision has no structured result")
+    return result
+
+
 @router.post("", status_code=201)
 async def upload_document(
     kb_id: str,
@@ -71,12 +101,18 @@ async def upload_document(
             return {"documents": docs}
         return await svc.upload(
             kb_id=kb_id, owner_id=user["id"], filename=filename, content=content,
-            directory_path=directory, document_type=document_type,
+            directory_path=directory, document_type=document_type, mime=file.content_type,
         )
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+    except UniqueViolation as exc:
+        # KB 内同名文档已存在（uq_asset_documents_kb_key）——幂等冲突给 409，
+        # 而不是把 SQL 异常裸抛成 500。
+        raise HTTPException(
+            409, f"Document named {filename!r} already exists in this KB"
+        ) from None
 
 
 @router.get("")
@@ -130,6 +166,20 @@ async def download_document(
     svc: DocumentService = Depends(get_document_service),
 ):
     try:
+        # 对象存储文档：流式返回对象字节；legacy 本地文档回落文件路径。
+        obj = await svc.download_object(
+            document_id=document_id, user_id=user["id"],
+        )
+        if obj is not None:
+            filename, mime, stream = obj
+            chunks = [chunk async for chunk in stream]
+            from fastapi.responses import Response
+
+            return Response(
+                content=b"".join(chunks),
+                media_type=mime or "application/octet-stream",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
         p = await svc.download_path(document_id=document_id, user_id=user["id"])
         return FileResponse(str(p), filename=p.name)
     except (NotFound, Forbidden) as exc:

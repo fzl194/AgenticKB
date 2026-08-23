@@ -14,72 +14,23 @@ class EmptyOptions(OperatorOptions):
 
 
 class ParseSegmentOptions(OperatorOptions):
+    """Legacy pipeline-internal options retained until its v2 replacement lands.
+
+    This model is intentionally not registered in the v2 operator catalog.
+    """
+
     structural_context_mode: Literal["breadcrumb", "off"] = Field(
-        "breadcrumb",
-        alias="structuralContextMode",
-        title="结构上下文",
-        description="是否保留文档与章节路径。",
+        "breadcrumb", alias="structuralContextMode"
     )
-    merge_small_segments: bool = Field(
-        True,
-        alias="mergeSmallSegments",
-        title="合并同章节小分段",
-    )
-    min_segment_tokens: int = Field(
-        80,
-        ge=1,
-        le=2048,
-        alias="minSegmentTokens",
-        title="最小分段 Token 数",
-    )
-    max_segment_tokens: int = Field(
-        512,
-        ge=1,
-        le=8192,
-        alias="maxSegmentTokens",
-        title="最大分段 Token 数",
-    )
-    absorb_child_orphans: bool = Field(
-        True,
-        alias="absorbChildOrphans",
-        title="子章节孤立段吸收到父章节",
-    )
-    merge_lead_into_child: bool = Field(
-        True,
-        alias="mergeLeadIntoChild",
-        title="父章节引导语合入子章节",
-    )
-    enable_image_caption: bool = Field(
-        False,
-        alias="enableImageCaption",
-        title="启用图片 VLM 图注",
-        description=(
-            "在分段阶段对抽出的图片（PDF/MD/HTML/DOCX 等）调用视觉模型生成图注"
-            "（费用较高）。"
-        ),
-    )
-    image_caption_model: str = Field(
-        "glm-4.5v",
-        alias="imageCaptionModel",
-        title="图注视觉模型",
-        description="llm_service.yaml 里 provider.models 的键名或 API model id。",
-    )
-    max_images_per_doc: int = Field(
-        20,
-        ge=0,
-        le=200,
-        alias="maxImagesPerDoc",
-        title="每文档最多图注数",
-    )
-    fetch_remote_images: bool = Field(
-        False,
-        alias="fetchRemoteImages",
-        title="下载远程图片",
-        description=(
-            "解析 Markdown/HTML 时下载 http(s) 图片到本地后再图注；"
-            "默认跳过远程图以免同步拉网。"
-        ),
-    )
+    merge_small_segments: bool = Field(True, alias="mergeSmallSegments")
+    min_segment_tokens: int = Field(80, ge=1, le=2048, alias="minSegmentTokens")
+    max_segment_tokens: int = Field(512, ge=1, le=8192, alias="maxSegmentTokens")
+    absorb_child_orphans: bool = Field(True, alias="absorbChildOrphans")
+    merge_lead_into_child: bool = Field(True, alias="mergeLeadIntoChild")
+    enable_image_caption: bool = Field(False, alias="enableImageCaption")
+    image_caption_model: str = Field("glm-4.5v", alias="imageCaptionModel")
+    max_images_per_doc: int = Field(20, ge=0, le=200, alias="maxImagesPerDoc")
+    fetch_remote_images: bool = Field(False, alias="fetchRemoteImages")
 
     @model_validator(mode="after")
     def validate_token_range(self) -> "ParseSegmentOptions":
@@ -251,7 +202,6 @@ class SegmentCompileOptions(OperatorOptions):
 
 OPTIONS_BY_OPERATOR: dict[str, type[OperatorOptions]] = {
     "input_ingest": EmptyOptions,
-    "parse_segment": ParseSegmentOptions,
     "document_parse": DocumentParseOptions,
     "segment_compile": SegmentCompileOptions,
     "enrich": EnrichOptions,

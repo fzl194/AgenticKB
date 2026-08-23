@@ -108,6 +108,23 @@ class PgSegmentStore:
                         ],
                     )
 
+    async def compiler_fingerprint(self, snapshot_id: str) -> str | None:
+        """该快照已落库切片的编译指纹（无切片/未编译 → None）.
+
+        SegmentCompileService 幂等短路用：同内容多文档共享同一快照时，
+        并发编译会在唯一键上相撞——指纹一致直接复用已有切片。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT compiler_fingerprint FROM asset_raw_segments
+                   WHERE document_snapshot_id = %s AND compiler_fingerprint IS NOT NULL
+                   LIMIT 1""",
+                [snapshot_id],
+            )
+            row = await cur.fetchone()
+        value = row.get("compiler_fingerprint") if row else None
+        return value if isinstance(value, str) and value else None
+
     async def list_for_snapshot(
         self, snapshot_id: str
     ) -> tuple[CompiledSegment, ...]:

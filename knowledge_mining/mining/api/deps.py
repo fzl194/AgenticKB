@@ -68,7 +68,7 @@ def get_document_lifecycle_service(
     )
 
 
-def get_parse_result_service(
+async def get_parse_result_service(
     request: Request, domain: str = Query(...)
 ) -> "ParseResultReadService":
     """M5/M6 结构化数据只读视图（按 domain 懒构造并缓存到 app.state）.
@@ -99,7 +99,7 @@ def get_parse_result_service(
     if scope in cache:
         return cache[scope]
     try:
-        pool = request.app.state.domain_pools.async_pool(scope)
+        pool = await request.app.state.domain_pools.async_pool(scope)
     except Exception as exc:  # noqa: BLE001 —— 域未注册等配置错误
         raise HTTPException(
             status_code=503,
@@ -115,6 +115,7 @@ def get_parse_result_service(
         PgSegmentStore,
     )
     from knowledge_mining.mining.file_management.repositories_pg import (
+        PgDocumentCurrentContentRepository,
         PgStorageObjectRepository,
     )
     from knowledge_mining.mining.snapshot_store.repositories_pg import (
@@ -126,6 +127,7 @@ def get_parse_result_service(
         storage_objects=PgStorageObjectRepository(pool),
         object_store=make_object_store(ObjectStoreConfig.from_control_plane()),
         segment_store=PgSegmentStore(pool),
+        documents=PgDocumentCurrentContentRepository(pool),
     )
     cache[scope] = service
     return service

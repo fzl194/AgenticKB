@@ -45,6 +45,101 @@ def _as_str(value: Any, default: str = "") -> str:
     return value if isinstance(value, str) and value else default
 
 
+class _SyncPoolAsyncAdapter:
+    """Expose a psycopg synchronous pool through the async repository shape.
+
+    Workflow document handlers execute in worker threads and drive their async
+    services with :func:`asyncio.run`.  The older mining runtime owns a
+    synchronous ``psycopg_pool.ConnectionPool``; creating an unrelated async
+    pool for every handler would lose its lifecycle and connection limits.
+
+    This adapter intentionally performs the database calls synchronously on
+    that worker thread.  It is therefore *not* a general async-pool adapter,
+    but keeps each repository call and repository-local transaction on the
+    same checked-out connection.  Cross-service parse/segment atomicity is
+    still not provided here; that requires the planned single snapshot commit
+    boundary rather than a pool adapter.
+    """
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    def connection(self) -> "_SyncConnectionContext":
+        return _SyncConnectionContext(self._pool.connection())
+
+
+class _SyncConnectionContext:
+    def __init__(self, context: Any) -> None:
+        self._context = context
+        self._connection: Any | None = None
+
+    async def __aenter__(self) -> "_SyncConnectionAdapter":
+        self._connection = self._context.__enter__()
+        return _SyncConnectionAdapter(self._connection)
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self._context.__exit__(exc_type, exc, traceback)
+
+
+class _SyncConnectionAdapter:
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    async def execute(self, query: str, params: Any = None) -> "_SyncCursorAdapter":
+        if params is None:
+            cursor = self._connection.execute(query)
+        else:
+            cursor = self._connection.execute(query, params)
+        return _SyncCursorAdapter(cursor)
+
+    def transaction(self) -> "_SyncTransactionContext":
+        return _SyncTransactionContext(self._connection.transaction())
+
+
+class _SyncCursorAdapter:
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+
+    async def fetchone(self) -> Any:
+        return self._cursor.fetchone()
+
+    async def fetchall(self) -> Any:
+        return self._cursor.fetchall()
+
+
+class _SyncTransactionContext:
+    def __init__(self, context: Any) -> None:
+        self._context = context
+
+    async def __aenter__(self) -> None:
+        self._context.__enter__()
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self._context.__exit__(exc_type, exc, traceback)
+
+
+_MEMORY_OBJECT_ROOT: str | None = None
+
+
+def _memory_object_root() -> str:
+    """Single process-wide scratch root for the default Fake object store.
+
+    Every ``build_new_chain_services`` call without an object store used to
+    leak its own ``mkdtemp`` directory; tests and dev loops now share one
+    root, removed when the process exits.
+    """
+    global _MEMORY_OBJECT_ROOT
+    if _MEMORY_OBJECT_ROOT is None:
+        import atexit
+        import shutil
+        import tempfile
+
+        root = tempfile.mkdtemp(prefix="m6-chain-")
+        atexit.register(shutil.rmtree, root, ignore_errors=True)
+        _MEMORY_OBJECT_ROOT = root
+    return _MEMORY_OBJECT_ROOT
+
+
 @dataclass(frozen=True)
 class _NewChainSettings:
     bucket_prefix: str = "agentickb-"
@@ -233,14 +328,21 @@ def build_new_chain_services(
     snapshots: Any | None = None,
     segment_store: Any | None = None,
     pool: Any | None = None,
+    sync_pool: Any | None = None,
 ) -> NewChainServices:
     """组合根：默认组装 memory 组件（测试/开发）；传入 PG/MinIO 即生产.
 
-    生产接线（真实环境）：传 ``pool``（psycopg AsyncConnectionPool）与
+    生产接线（真实环境）：传 ``pool``（psycopg AsyncConnectionPool）或
+    ``sync_pool``（既有 worker 的 psycopg ConnectionPool）以及
     ``object_store``（MinioObjectStore），其余仓储自动取 PG 实现；
     未提供 pool 时使用 Fake/memory 组件——便于单测与本地链路验证。
     """
-    if pool is not None:
+    if pool is not None and sync_pool is not None:
+        raise ValueError("provide either pool or sync_pool, not both")
+    repository_pool = pool or (
+        _SyncPoolAsyncAdapter(sync_pool) if sync_pool is not None else None
+    )
+    if repository_pool is not None:
         from knowledge_mining.mining.file_management.repositories_pg import (
             PgDocumentCurrentContentRepository,
             PgStorageObjectRepository,
@@ -256,12 +358,12 @@ def build_new_chain_services(
             PgSnapshotRepository,
         )
 
-        storage_objects = storage_objects or PgStorageObjectRepository(pool)
-        documents = documents or PgDocumentCurrentContentRepository(pool)
-        parse_runs = parse_runs or PgParseRunRepository(pool)
-        attempts = attempts or PgParseAttemptRepository(pool)
-        snapshots = snapshots or PgSnapshotRepository(pool)
-        segment_store = segment_store or PgSegmentStore(pool)
+        storage_objects = storage_objects or PgStorageObjectRepository(repository_pool)
+        documents = documents or PgDocumentCurrentContentRepository(repository_pool)
+        parse_runs = parse_runs or PgParseRunRepository(repository_pool)
+        attempts = attempts or PgParseAttemptRepository(repository_pool)
+        snapshots = snapshots or PgSnapshotRepository(repository_pool)
+        segment_store = segment_store or PgSegmentStore(repository_pool)
     else:
         from knowledge_mining.mining.file_management.repositories_memory import (
             MemoryDocumentCurrentContentRepository,
@@ -286,13 +388,11 @@ def build_new_chain_services(
         segment_store = segment_store or MemorySegmentStore()
 
     if object_store is None:
-        import tempfile
-
         from knowledge_mining.mining.infra.object_store.fake import (
             FakeObjectStore,
         )
 
-        object_store = FakeObjectStore(tempfile.mkdtemp(prefix="m6-chain-"))
+        object_store = FakeObjectStore(_memory_object_root())
 
     from knowledge_mining.mining.parse_adapters.factory import resolve_pipeline
     from knowledge_mining.mining.parse_operator.service import (

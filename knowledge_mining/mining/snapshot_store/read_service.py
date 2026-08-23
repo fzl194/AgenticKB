@@ -37,18 +37,29 @@ class ParseResultReadService:
         storage_objects: StorageObjectRepository,
         object_store: ObjectStorePort,
         segment_store: SegmentStore,
+        documents: Any | None = None,
     ) -> None:
         self._snapshots = snapshots
         self._storage_objects = storage_objects
         self._store = object_store
         self._segments = segment_store
+        self._documents = documents
 
     async def get_parse_result(
         self, *, domain: str, document_id: str
     ) -> dict[str, Any] | None:
-        found = await self._snapshots.latest_for_document(
-            document_id, domain
-        )
+        current = await self._documents.get(document_id) if self._documents else None
+        if self._documents is not None and current is None:
+            return None
+        if current is None:
+            found = await self._snapshots.latest_for_document(document_id, domain)
+        else:
+            found = await self._snapshots.latest_for_document(
+                document_id,
+                domain,
+                source_storage_object_id=current.storage_object_id,
+                source_content_revision=current.content_revision,
+            )
         if found is None:
             return None
         snapshot, link = found

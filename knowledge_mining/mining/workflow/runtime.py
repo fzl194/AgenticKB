@@ -27,7 +27,7 @@ class WorkflowRuntimeResult:
 class MiningWorkflowRuntime:
     """Execute one Run exclusively from its Domain-stored frozen Manifest."""
 
-    SUPPORTED_SCHEMA_VERSION = "1.0"
+    SUPPORTED_SCHEMA_VERSION = "2.0"
     SUPPORTED_CATALOG_VERSION = "1"
 
     def __init__(self, context: Any, *, run_id: str) -> None:

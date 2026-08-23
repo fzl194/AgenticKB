@@ -864,7 +864,9 @@ def persist_document_assets(
     """
     if ctx.error:
         raise ValueError(ctx.error)
-    if ctx.tree is None:
+    if ctx.tree is None and not ctx.snapshot_id:
+        # v2 链（segment_compile 已产出快照）不携带旧 parse tree——
+        # 解析树在快照的 Parse IR 里，走下方 snapshot_id 分支。
         raise ValueError("document has no parse tree")
     if not ctx.segments:
         raise ValueError("document has no segments")
@@ -876,15 +878,23 @@ def persist_document_assets(
     segment_ids = dict(ctx.seg_ids)
     output = ctx
     with asset_db.transaction():
-        document_id, snapshot_id, _ = select_or_create_snapshot(
-            asset_db,
-            ctx.raw_file,
-            ctx.profile,
-            domain=cfg.domain,
-            batch_id=cfg.batch_id,
-            workflow_binding=cfg.workflow_binding,
-            existing_document_id=(ctx.existing_doc or {}).get("id"),
-        )
+        if ctx.snapshot_id:
+            document_id = ctx.document_id or (ctx.existing_doc or {}).get("id")
+            if not document_id:
+                raise RuntimeError(
+                    "existing document snapshot has no owning document identity"
+                )
+            snapshot_id = ctx.snapshot_id
+        else:
+            document_id, snapshot_id, _ = select_or_create_snapshot(
+                asset_db,
+                ctx.raw_file,
+                ctx.profile,
+                domain=cfg.domain,
+                batch_id=cfg.batch_id,
+                workflow_binding=cfg.workflow_binding,
+                existing_document_id=(ctx.existing_doc or {}).get("id"),
+            )
         if asset_db.count_segments_by_snapshot(snapshot_id) == 0:
             for segment in ctx.segments:
                 segment_key = f"{segment.document_key}#{segment.segment_index}"

@@ -346,3 +346,21 @@
 - **验证**：M6 新增 23 用例 + 既有工作流套件零回归（合计 152 passed）；真实环境 e2e 三场景（handler 驱动真解析转正/切片真表落库行带表头/旧链文档 SKIP）全绿且清理彻底。
 - **未达成如实留档**：范式构建器前端锁定头部+参数面板（R7）、v2 模板投产灰度、在线发布切换开关——见 M6 报告 §5。
 - **影响**：新增 `workflow/new_chain_services.py`、`tests/test_m6_{workflow_operators,handlers,facades,workflow_e2e}.py`、`var/e2e/_e2e_m6_workflow.py`、M6 报告；改 `workflow/operators/{catalog,options}.py`、`workflow/compiler.py`（FIXED_TYPES 版本化）、`workflow/templates.py`（参数化+v2）、`workflow/handlers/document.py`（双 handler）；既有 catalog/schema 测试同步（算子 16→18）。
+
+## D-037 ｜ 端到端联调整改：v2 硬切换落地 + 六处链路缺陷修复 + 测试资产对齐新管线（2026-08-22）
+- **背景**：用户验收「基础文档入库」范式（只验解析+切片，不验向量化）。codex 在本分支叠加了未提交改动（KB 上传切纯对象存储、工作流 v2 硬切换、KB 挖掘 worker 对象输入、v2_cutover 清理工具），上传即 500。逐层联调暴露六处缺陷，随后按用户指令对齐目标（多类型文档工程化解析 → 结构化数据 → MinIO）全面重整测试资产。
+- **采纳 codex 方向（经全量审计）**：v1 双骨架并行是冗余——**收敛为 v2 唯一**（catalog 删 parse_segment 算子、compiler 拒绝非 2.0 schema、runtime 仅执行 2.0、启动时 upgrade_active_workflows_to_v2 幂等迁移并自动发版、save_draft 对混存图拒绝不猜、前端删 v1 单选）。KB 上传改对象存储单路径（不再落本地盘，storage_path 恒 NULL）；`/mine` 不再要求本地上传目录；parse-result 迁至 KB 路由（带成员可见性）。
+- **修复的六处缺陷（均真库 e2e 逐层剥出）**：
+  1. `insert_document_from_storage` 同一参数喂 `created_at`(TEXT,001) 与 `content_updated_at`(TIMESTAMPTZ,008) → AmbiguousParameter，上传必 500。拆双参数。
+  2. `persist_document_assets` 的"无 parse tree"守卫挡死 v2 链（快照切片路径不需要旧树）——守卫放行 snapshot_id 分支，否则 finalize 因缺 assets_persisted 能力失败。
+  3. 工作流 services 未透传 domain → 快照落 'default' 域，finalize 三表 domain 联查拒绝（domain_mismatch）。`_WorkflowJobServices.domain` property 取 profile.domain_id；历史错域快照已按文档真实域纠正。
+  4. 同内容多文档共享快照并发编译在 segment_key 唯一键相撞——compile 增幂等短路（已落库同指纹直接复用，PgSegmentStore 补 compiler_fingerprint 读取）。
+  5. `latest_for_document` 的 `%s IS NULL OR ...` 参数类型不可推断（IndeterminateDatatype）→ parse-result 500。改按需拼条件。
+  6. M4 期遗留：`PgParseRunRepository.upsert` 把 INSERT…ON CONFLICT 的 EXCLUDED 片段误用进 UPDATE → 占位符错配，FAILED 行翻转路径自 M4 起即坏（DB 门控测试此前从未真库执行，未暴露）。
+- **测试资产重整（用户指令：删历史用例、按新管线目标重构）**：
+  1. **删除 38 个旧管线测试文件**（v11/v12 e2e、stage events、run 状态机、文件夹扫描增量、preflight、legacy 多格式切分、图注、excel reader、storage_path 身份等）——全量从 13m34s 降至 ~1m，失败归零。
+  2. **新增目标对齐测试**：`tests/new_chain/test_multi_format_pipeline.py`（md/txt/docx/xlsx/pptx/html/pdf 七格式参数化全链：对象注册→解析→质量门控→切片→结构化数据视图，断言大纲/表格/切片/元素证据链 + 同内容共享快照幂等）；`tests/kb/test_parse_result_route.py`（KB 路由 200/404/409）；`tests/infra/test_minio_object_store_live.py`（真 MinIO 集成，KB_RUN_MINIO_E2E=1 门控，已对生产 MinIO 验证通过）。
+  3. **DB 门控测试环境**：真库测试需一次性 PostgreSQL（`pgvector/pgvector:pg16`）+ `PG_*`/`KB_RUN_POSTGRES_ACCEPTANCE=1`/`KB_ALLOW_TEST_TRUNCATE=1`；Windows 事件循环策略统一上移根 conftest（此前只有 kb/conftest 切，单独收集 DB 测试文件必挂 PoolTimeout）；`_truncate_all` 补对象存储五表 + 配额表（注册行跨进程残留曾致 download 全炸）。
+  4. 修 KB 测试 app 装配（attach_object_store 共享 Fake 根）+ 过时断言更新（zip 解压/删除的本地盘断言改对象指针断言）；下载路由对对象文档流式返回（download_object，legacy 文档回落本地路径）。
+- **验证**：非 DB 套件 1087+ passed / 0 failed（~50s）；DB 门控批次（真库）全绿；真服务 HTTP e2e：上传→MinIO→更新知识（基础文档入库）→run completed→parse-result 200（quality/大纲/表格/表格行切片齐备）；kb-ui vitest 155 + vue-tsc 0。
+- **已知未做**：legacy /api/runs 域挖掘路径仍可达（deprecation 已打日志，v2_cutover 工具待运维执行）；v2 模板投产灰度与在线发布切换开关；min_tokens 仍未参与编译。

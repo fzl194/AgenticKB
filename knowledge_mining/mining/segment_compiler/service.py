@@ -95,6 +95,17 @@ class SegmentCompileService:
         doc = await self._load_ir(parse_ir_storage_object_id)
         segments = await _compile_offthread(doc, policy)
         fp = compiler_fingerprint(policy)
+        existing_fp = None
+        fingerprint_reader = getattr(self._segments, "compiler_fingerprint", None)
+        if callable(fingerprint_reader):
+            existing_fp = await fingerprint_reader(snapshot_id)
+        if existing_fp == fp:
+            # 同内容多文档共享快照：已有同指纹切片（另一文档刚编译完）——
+            # 复用，避免并发 replace 在唯一键上相撞。
+            return SegmentCompileResult(
+                snapshot_id=snapshot_id, segment_count=len(segments),
+                compiler_fingerprint=fp,
+            )
         count = await self._segments.replace_for_snapshot(
             snapshot_id, segments, fp, document_key=document_key,
         )

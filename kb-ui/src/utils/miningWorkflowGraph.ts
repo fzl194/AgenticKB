@@ -69,7 +69,7 @@ export function canDisableNode(definition: MiningOperatorDef): boolean {
 /**
  * 算子参数的编辑权限与 editPolicy 无关：editPolicy 只管结构（能否删除/移动/禁用），
  * 后端 compiler 对所有算子（含 fixed）一视同仁地校验并接受其参数。因此参数始终可调——
- * 例如 parse_segment（fixed）的分段 token 上下限是最重要的挖掘旋钮。调用方无需再判定。
+ * 固定解析头中的解析和切片参数仍可调整，调用方无需再判定。
  */
 
 export function canReconnectNode(definition: MiningOperatorDef): boolean {
@@ -343,7 +343,7 @@ function stableValue(value: unknown): unknown {
 
 export function stableGraphJson(graph: MiningWorkflowGraph): string {
   const normalized: MiningWorkflowGraph = {
-    schemaVersion: graph.schemaVersion ?? '1.0',
+    schemaVersion: graph.schemaVersion ?? '2.0',
     nodes: [...graph.nodes]
       .sort((left, right) => left.nodeId.localeCompare(right.nodeId))
       .map(node => stableValue(node) as MiningWorkflowNode),
@@ -418,7 +418,7 @@ export function fromVueFlowElements(
   edges: MiningVueFlowEdge[],
   output: MiningWorkflowGraph['output'],
   /** 画布重建图时保留原骨架版本（v2 = 解析/切片分离）；缺省 1.0 兼容 */
-  schemaVersion: MiningWorkflowGraph['schemaVersion'] = '1.0',
+  schemaVersion: MiningWorkflowGraph['schemaVersion'] = '2.0',
 ): MiningWorkflowGraph {
   return {
     schemaVersion,

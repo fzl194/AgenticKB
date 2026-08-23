@@ -38,13 +38,6 @@ def test_catalog_defines_document_parse_and_segment_compile() -> None:
     assert parse.display_name and compile_op.display_name
 
 
-def test_catalog_keeps_parse_segment_for_v1_compatibility() -> None:
-    """SRS §10.3：旧 parse_segment 保留版本 1，历史 manifest 继续可编译."""
-    catalog = builtin_catalog()
-    legacy = catalog["parse_segment"]
-    assert set(legacy.provides) == {"parsed_segments"}
-
-
 # ---------------------------------------------------------------------------
 # 模板 v2 与编译骨架
 # ---------------------------------------------------------------------------
@@ -113,18 +106,6 @@ def test_v2_does_not_require_parse_segment() -> None:
     assert not any(
         "parse_segment" in e.message for e in result.errors
     )
-
-
-def test_v1_templates_still_compile_unchanged() -> None:
-    """v1 历史 manifest 骨架不变：不要求新算子（§10.3 不自动改写）."""
-    from knowledge_mining.mining.workflow.templates import builtin_templates
-
-    for name, graph in builtin_templates().items():
-        result = _compile(graph)
-        assert result.valid is True, name
-        assert not any(
-            "document_parse" in e.message for e in result.errors
-        )
 
 
 def test_v2_order_document_parse_before_segment_compile() -> None:

@@ -98,7 +98,7 @@ def client_for(fake_service: FakeWorkflowService) -> TestClient:
     return TestClient(app)
 
 
-def test_catalog_has_18_global_operators(
+def test_catalog_has_17_v2_global_operators(
     fake_workflow_service: FakeWorkflowService,
 ) -> None:
     response = client_for(fake_workflow_service).get(
@@ -106,7 +106,7 @@ def test_catalog_has_18_global_operators(
     )
 
     assert response.status_code == 200
-    assert len(response.json()["items"]) == 18
+    assert len(response.json()["items"]) == 17
     assert fake_workflow_service.calls == []
 
 

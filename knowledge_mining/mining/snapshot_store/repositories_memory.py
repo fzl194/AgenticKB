@@ -63,7 +63,9 @@ class MemorySnapshotRepository:
         return self._by_id[rid] if rid else None
 
     async def latest_for_document(
-        self, document_id: str, domain: str
+        self, document_id: str, domain: str, *,
+        source_storage_object_id: str | None = None,
+        source_content_revision: int | None = None,
     ) -> tuple[SnapshotRecord, SnapshotSourceLink] | None:
         candidates = [
             (snap, link) for link in self._links.values()
@@ -73,11 +75,15 @@ class MemorySnapshotRepository:
             and snap.domain == domain
             and snap.lifecycle_status == "READY"
             and snap.snapshot_fingerprint
+            and (source_storage_object_id is None
+                 or link.source_storage_object_id == source_storage_object_id)
+            and (source_content_revision is None
+                 or link.source_content_revision == source_content_revision)
         ]
         if not candidates:
             return None
         # 对抗评审 MED-4：tie-break 加 id，避免同时间戳排序不稳定。
-        return max(candidates, key=lambda pair: (pair[0].created_at, pair[0].id))
+        return max(candidates, key=lambda pair: (pair[1].linked_at, pair[0].id))
 
     async def mark_lifecycle(
         self, snapshot_id: str, lifecycle_status: str

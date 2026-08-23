@@ -6,14 +6,25 @@ KB 独占 asset_documents 写（身份 + 文件位置）。mining 读文档产 s
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from psycopg.errors import UniqueViolation
 
 from knowledge_mining.mining.infra.archive_extractor import extract_archive
 from knowledge_mining.mining.infra.upload_config import UploadConfig
+from knowledge_mining.mining.contracts.file_management import (
+    StorageObjectRecord,
+    StorageObjectRepository,
+)
+from knowledge_mining.mining.contracts.storage.port import ObjectStorePort
+from knowledge_mining.mining.contracts.storage.types import ObjectLocation, PutOptions
+from knowledge_mining.mining.infra.object_store.keys import build_object_key
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.services.folder_service import FolderService
 from knowledge_mining.mining.kb.services.kb_service import Forbidden, KbService, NotFound
@@ -33,37 +44,120 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_directory(directory_path: str | None) -> str:
+    """Normalize a user directory path after the traversal guard has run."""
+    return "/".join(
+        part for part in (directory_path or "").split("/") if part not in ("", ".")
+    )
+
+
+async def _bytes_stream(content: bytes) -> AsyncIterator[bytes]:
+    yield content
+
+
 class DocumentService:
-    def __init__(self, db: KbDB, upload_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        db: KbDB,
+        upload_root: Path | None = None,
+        *,
+        object_store: ObjectStorePort | None = None,
+        storage_objects: StorageObjectRepository | None = None,
+        source_bucket: str | None = None,
+    ) -> None:
         self._db = db
         self._svc = KbService(db)
         # 实例化时读 UploadConfig（OS env UPLOAD_ROOT 覆盖 .env）——测试可指向 tmp
         self._upload_root = Path(upload_root) if upload_root else UploadConfig().upload_root_path
         self._folders = FolderService(db, self._upload_root)
+        self._object_store = object_store
+        self._storage_objects = storage_objects
+        self._source_bucket = source_bucket
 
     # ----------------------------------------------------- upload
 
     async def upload(
         self, *, kb_id: str, owner_id: str, filename: str, content: bytes,
         directory_path: str | None = None, document_type: str | None = None,
+        mime: str | None = None,
     ) -> dict[str, Any]:
         kb = await self._db.get_kb(kb_id)
         if kb is None:
             raise NotFound(kb_id)
         await self._svc._assert_write(kb_id, owner_id)  # IDOR 防护：写权限校验（admin/owner/editor）
-        storage_path = build_storage_path(self._upload_root, kb_id, directory_path, filename)
-        storage_path.parent.mkdir(parents=True, exist_ok=True)
-        storage_path.write_bytes(content)
-        size, mtime = _stat_meta(storage_path)
-        doc = await self._db.insert_document_identity(
+        # Preserve the existing traversal validation without writing bytes to
+        # the legacy upload root.  Object keys are content-addressed and never
+        # derive from user-provided names or directory paths.
+        build_storage_path(self._upload_root, kb_id, directory_path, filename)
+        normalized_directory = _normalize_directory(directory_path)
+        normalized_filename = Path(filename).name
+        storage_object = await self._store_source(content=content, mime=mime)
+        doc = await self._db.insert_document_from_storage(
             domain=kb["domain"], kb_id=kb_id,
-            document_key=build_document_key(directory_path, filename),
-            document_name=Path(filename).name, storage_path=str(storage_path),
-            directory_path=directory_path or "", document_type=document_type, owner_id=owner_id,
-            file_size=size, modified_at=mtime,
+            document_key=build_document_key(normalized_directory, normalized_filename),
+            document_name=normalized_filename,
+            storage_object_id=storage_object.id,
+            source_raw_hash=storage_object.sha256,
+            directory_path=normalized_directory, document_type=document_type,
+            owner_id=owner_id, file_size=storage_object.size, modified_at=_utcnow_iso(),
         )
         doc["status"] = "uploaded"
         return doc
+
+    async def _store_source(
+        self, *, content: bytes, mime: str | None,
+    ) -> StorageObjectRecord:
+        """Put bytes at their immutable content-addressed location and register them.
+
+        The object record is only created after ``put_stream`` has verified the
+        expected checksum.  A duplicate upload reuses the existing registry
+        record, so no document can point at an unregistered local file.
+        """
+        if self._object_store is None or self._storage_objects is None or not self._source_bucket:
+            raise RuntimeError("KB object storage is not configured")
+        sha256 = hashlib.sha256(content).hexdigest()
+        object_key = build_object_key("source", sha256)
+        existing = await self._storage_objects.find_by_location(
+            self._source_bucket, object_key, None,
+        )
+        if existing is not None:
+            if (
+                existing.sha256 != sha256
+                or existing.size != len(content)
+                or existing.state != "AVAILABLE"
+            ):
+                raise ValueError("registered storage object does not match upload content")
+            return existing
+        put_result = await self._object_store.put_stream(
+            ObjectLocation(bucket=self._source_bucket, object_key=object_key),
+            _bytes_stream(content),
+            PutOptions(
+                artifact_class="source", mime=mime, expected_sha256=sha256,
+                content_length=len(content),
+            ),
+        )
+        if put_result.sha256 != sha256 or put_result.size != len(content):
+            raise ValueError("object storage verification failed")
+        registered = await self._storage_objects.register(
+            StorageObjectRecord(
+                id=f"obj_{uuid.uuid4().hex}",
+                provider=getattr(self._object_store, "provider", "unknown"),
+                bucket=self._source_bucket, object_key=object_key,
+                # The content-addressed source location is the immutable
+                # identity; do not make dedup depend on optional S3 versioning.
+                object_version_id=None, sha256=sha256,
+                size=put_result.size, mime=mime, etag=put_result.etag,
+                artifact_class="source", state="AVAILABLE", created_at=_utcnow_iso(),
+                last_verified_at=_utcnow_iso(),
+            )
+        )
+        if (
+            registered.sha256 != sha256
+            or registered.size != len(content)
+            or registered.state != "AVAILABLE"
+        ):
+            raise ValueError("registered storage object does not match upload content")
+        return registered
 
     async def upload_zip(
         self, *, kb_id: str, owner_id: str, zip_bytes: bytes, filename: str = "upload.zip",
@@ -72,50 +166,44 @@ class DocumentService:
         if kb is None:
             raise NotFound(kb_id)
         await self._svc._assert_write(kb_id, owner_id)  # IDOR 防护：写权限校验（admin/owner/editor）
-        base = (self._upload_root / kb_id).resolve()
-        base.mkdir(parents=True, exist_ok=True)
-        zip_path = base / filename
-        zip_path.write_bytes(zip_bytes)
-        result = await asyncio.to_thread(extract_archive, zip_path, base)
-        zip_path.unlink(missing_ok=True)
-        if result.error:
-            raise ValueError(f"archive extract failed: {result.error}")
+        # Archive extraction needs a filesystem, but it is only a transient
+        # scratch space.  No extracted path is persisted in asset_documents.
+        with TemporaryDirectory(prefix="agentickb-kb-upload-") as temporary_dir:
+            base = Path(temporary_dir)
+            zip_path = base / Path(filename).name
+            await asyncio.to_thread(zip_path.write_bytes, zip_bytes)
+            result = await asyncio.to_thread(extract_archive, zip_path, base)
+            if result.error:
+                raise ValueError(f"archive extract failed: {result.error}")
 
-        # 先幂等建齐 zip 内子目录对应的 kb_folders（否则 UI 按 folder.path 过滤 → 列表空）
-        dir_paths = {
-            "/".join(Path(rel).parts[:-1])
-            for rel in result.extracted_files
-            if len(Path(rel).parts) > 1
-        }
-        for dp in sorted(dir_paths, key=lambda p: p.count("/")):
-            await self._folders.ensure_folder_path(kb_id=kb_id, path=dp, user_id=owner_id)
+            # 先幂等建齐 zip 内子目录对应的 kb_folders（否则 UI 按 folder.path 过滤 → 列表空）
+            dir_paths = {
+                "/".join(Path(rel).parts[:-1])
+                for rel in result.extracted_files
+                if len(Path(rel).parts) > 1
+            }
+            for dp in sorted(dir_paths, key=lambda p: p.count("/")):
+                await self._folders.ensure_folder_path(kb_id=kb_id, path=dp, user_id=owner_id)
 
-        docs: list[dict[str, Any]] = []
-        for rel in result.extracted_files:
-            full = (base / rel).resolve()
-            if not full.is_file():
-                continue
-            try:
-                full.relative_to(base)
-            except ValueError:
-                continue  # 解压越界，跳过
-            parts = Path(rel).parts
-            directory_path = "/".join(parts[:-1])
-            fn = parts[-1]
-            try:
-                size, mtime = _stat_meta(full)
-                d = await self._db.insert_document_identity(
-                    domain=kb["domain"], kb_id=kb_id,
-                    document_key=build_document_key(directory_path, fn),
-                    document_name=fn, storage_path=str(full),
-                    directory_path=directory_path, owner_id=owner_id,
-                    file_size=size, modified_at=mtime,
-                )
-                d["status"] = "uploaded"
-                docs.append(d)
-            except UniqueViolation:
-                continue  # KB 内同名已存在，跳过
-        return docs
+            docs: list[dict[str, Any]] = []
+            for rel in result.extracted_files:
+                full = (base / rel).resolve()
+                if not full.is_file():
+                    continue
+                try:
+                    full.relative_to(base)
+                except ValueError:
+                    continue  # 解压越界，跳过
+                parts = Path(rel).parts
+                try:
+                    docs.append(await self.upload(
+                        kb_id=kb_id, owner_id=owner_id, filename=parts[-1],
+                        content=await asyncio.to_thread(full.read_bytes),
+                        directory_path="/".join(parts[:-1]),
+                    ))
+                except UniqueViolation:
+                    continue  # KB 内同名已存在，跳过
+            return docs
 
     # ----------------------------------------------------- read / patch
 
@@ -188,6 +276,35 @@ class DocumentService:
         return await self._db.update_document_identity(
             document_id, document_name=document_name, document_type=document_type,
         )
+
+    async def download_object(
+        self, *, document_id: str, user_id: str
+    ) -> tuple[str, str | None, Any] | None:
+        """对象存储文档下载：返回 (文件名, mime, 字节流迭代器)。
+
+        无 ``storage_object_id``（legacy 本地文档）返回 None，调用方回落
+        ``download_path`` 的本地文件路径。
+        """
+        doc = await self._db.get_document_identity(document_id)
+        if doc is None:
+            raise NotFound(document_id)
+        await self._svc._assert_read(doc["kb_id"], user_id)
+        if not doc.get("storage_object_id"):
+            return None
+        if self._object_store is None or self._storage_objects is None:
+            raise RuntimeError("KB object storage is not configured")
+        record = await self._storage_objects.get(doc["storage_object_id"])
+        if record is None or record.state != "AVAILABLE":
+            raise NotFound(document_id)
+        from knowledge_mining.mining.contracts.storage.types import (
+            ObjectLocation,
+        )
+
+        stream = self._object_store.get_stream(ObjectLocation(
+            bucket=record.bucket, object_key=record.object_key,
+            version_id=record.object_version_id,
+        ))
+        return doc.get("document_name") or "document", record.mime, stream
 
     async def download_path(self, *, document_id: str, user_id: str) -> Path:
         doc = await self._db.get_document_identity(document_id)

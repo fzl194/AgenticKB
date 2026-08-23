@@ -65,6 +65,13 @@ class _DomainPools:
         return self.pool
 
 
+class _LegacyEngineConfig:
+    """conftest 全局把提交引擎钉为 workflow；验证 legacy 提交路径的用例显式钉回 legacy."""
+
+    mining_run_submission_engine = "legacy"
+    llm_service_url = "http://localhost:8900"
+
+
 @pytest.mark.asyncio
 async def test_create_run_inserts_real_queued_row_before_thread_start(monkeypatch):
     pool = _Pool()
@@ -80,6 +87,7 @@ async def test_create_run_inserts_real_queued_row_before_thread_start(monkeypatc
             started.append(True)
 
     monkeypatch.setattr(runs.threading, "Thread", FakeThread)
+    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
@@ -185,6 +193,46 @@ class _AssetDB:
 
     def close(self):
         pass
+
+
+def test_create_dbs_does_not_initialize_domain_schema_for_worker_jobs(monkeypatch):
+    """Schema migrations are a startup concern, never a per-job side effect."""
+    schema_initializations = []
+
+    class FakeConnectionPool:
+        check_connection = object()
+
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    import psycopg_pool
+    from knowledge_mining.mining.infra import domain_db
+
+    monkeypatch.setattr(
+        run_job,
+        "ensure_domain_database_schema",
+        lambda resolved: schema_initializations.append(resolved),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        domain_db,
+        "ensure_domain_database_schema",
+        lambda resolved: schema_initializations.append(resolved),
+    )
+    monkeypatch.setattr(psycopg_pool, "ConnectionPool", FakeConnectionPool)
+
+    resolved = run_job.ResolvedDomainDatabase(
+        conninfo="host=localhost dbname=mining_test",
+        pool_min=1,
+        pool_max=2,
+        source="inline",
+    )
+
+    asset_db, runtime_db = run_job._create_dbs(resolved)
+
+    assert schema_initializations == []
+    assert asset_db.pool is runtime_db.pool
 
 
 def _patch_worker(monkeypatch, runtime_db, ingest):
@@ -500,6 +548,7 @@ async def test_queued_insert_failure_releases_lock_and_never_starts_thread(monke
             raise AssertionError("thread must not be constructed")
 
     monkeypatch.setattr(runs.threading, "Thread", Thread)
+    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
         domain_pools=_DomainPools(Pool()), db_config=SimpleNamespace(),
     )))
@@ -537,6 +586,7 @@ async def test_thread_start_failure_marks_same_queued_id_failed_and_releases_loc
             raise RuntimeError("thread unavailable")
 
     monkeypatch.setattr(runs.threading, "Thread", Thread)
+    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
         domain_pools=_DomainPools(Pool()), db_config=SimpleNamespace(),
     )))
@@ -600,6 +650,7 @@ async def test_queued_run_can_be_cancelled_before_worker_enters_ingest(monkeypat
 
     pool = Pool()
     monkeypatch.setattr(runs.threading, "Thread", Thread)
+    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
         domain_pools=_DomainPools(pool), db_config=SimpleNamespace(),
     )))
@@ -639,6 +690,7 @@ async def test_run_mutex_is_per_domain_not_global(monkeypatch):
             pass  # 永不结束 —— 模拟挖掘中，锁保持占用
 
     monkeypatch.setattr(runs.threading, "Thread", FakeThread)
+    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
         domain_pools=_AnyDomainPools(_Pool()), db_config=SimpleNamespace(),
     )))

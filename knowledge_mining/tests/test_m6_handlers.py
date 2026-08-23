@@ -15,6 +15,9 @@ from knowledge_mining.mining.contracts.segment_compiler import (
     CompiledSegment,
     SegmentElementLink,
 )
+from knowledge_mining.mining.contracts.models import DocumentProfile
+from knowledge_mining.mining.pipeline import DocumentContext
+from knowledge_mining.mining.workflow.core import DocumentState
 
 
 def _runtime(**services):
@@ -29,7 +32,8 @@ def _parsed(snapshot_id="snap_1", ir_id="so_ir", raw_file=None):
     return ParsedViaNewChain(
         run_id="parse_1", snapshot_id=snapshot_id,
         parse_ir_storage_object_id=ir_id, parser_fingerprint="fp",
-        quality_status="PASS", raw_file=raw_file,
+        quality_status="PASS", raw_file=raw_file, profile=None, action=None,
+        existing_doc=None, document_id=None,
     )
 
 
@@ -191,6 +195,41 @@ def test_segment_compile_projects_compat_segments_into_context():
     assert row.source_offsets_json["element_links"]
     # 原始 raw_file 透传（后续环节可用）
     assert ctx.raw_file is parsed.raw_file
+
+
+def test_v2_parse_compile_preserves_document_lifecycle_and_snapshot_context():
+    """v2 parse/compile must not discard preflight identity for asset_persist."""
+    from knowledge_mining.mining.workflow.handlers.document import (
+        document_parse_handler,
+        segment_compile_handler,
+    )
+
+    raw = SimpleNamespace(file_type="markdown", document_key="doc.md")
+    source = DocumentContext(
+        raw_file=raw,
+        profile=DocumentProfile(document_key="doc.md", title="source title"),
+        action="UPDATE",
+        existing_doc={"id": "document-existing"},
+        document_id="document-existing",
+        run_document_id="rd-1",
+    )
+    parsed = document_parse_handler(
+        _state(source), {}, _runtime(document_parse_service=_FakeParseService()),
+    )
+
+    result = segment_compile_handler(
+        DocumentState("rd-1", "doc.md", parsed.outputs.context),
+        {},
+        _runtime(segment_compile_service=_FakeCompileService(_segments())),
+    )
+
+    assert result.status.value == "success"
+    context = result.outputs.context
+    assert context.profile is source.profile
+    assert context.action == "UPDATE"
+    assert context.existing_doc == {"id": "document-existing"}
+    assert context.document_id == "document-existing"
+    assert context.snapshot_id == "snap_1"
 
 
 def test_segment_compile_without_service_fails_explicitly():

@@ -169,7 +169,10 @@ def complete_context() -> DocumentContext:
     )
 
 
-def fake_snapshot(db, raw, profile, *, domain, batch_id):
+def fake_snapshot(
+    db, raw, profile, *, domain, batch_id, workflow_binding=None,
+    existing_document_id=None,
+):
     db.rows["snapshot"].append({"document": "document-1", "snapshot": "snapshot-1"})
     return "document-1", "snapshot-1", "link-1"
 
@@ -226,6 +229,42 @@ def test_strict_persist_commits_all_asset_families_together(monkeypatch) -> None
         "evidence",
         "candidates",
     }
+
+
+def test_persist_reuses_v2_snapshot_without_creating_a_second_snapshot(
+    monkeypatch,
+) -> None:
+    asset_db = FakeAssetDB()
+
+    def fail_if_snapshot_is_created(*args, **kwargs):
+        raise AssertionError("v2 snapshot must be reused, not recreated")
+
+    monkeypatch.setattr(
+        "knowledge_mining.mining.pipeline.select_or_create_snapshot",
+        fail_if_snapshot_is_created,
+    )
+    context = complete_context().with_updates(
+        document_id="document-existing",
+        snapshot_id="snapshot-created-by-document-parse",
+    )
+
+    result = persist_document_assets(
+        context,
+        PipelineConfig(domain="odn", asset_db=asset_db, batch_id="batch-1"),
+        strict_embeddings=True,
+    )
+
+    assert result.document_id == "document-existing"
+    assert result.snapshot_id == "snapshot-created-by-document-parse"
+    assert {
+        row["snapshot_id"] for row in asset_db.rows["segments"]
+    } == {"snapshot-created-by-document-parse"}
+    assert {
+        row["document_snapshot_id"] for row in asset_db.rows["retrieval_units"]
+    } == {"snapshot-created-by-document-parse"}
+    assert asset_db.rows["embeddings"][0]["retrieval_unit_id"] == (
+        asset_db.rows["retrieval_units"][0]["unit_id"]
+    )
 
 
 def test_generated_segment_identity_is_reused_by_document_mentions(monkeypatch) -> None:

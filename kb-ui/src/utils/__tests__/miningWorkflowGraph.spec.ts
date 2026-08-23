@@ -34,7 +34,7 @@ function node(nodeId: string, operatorType = nodeId, params: Record<string, unkn
 
 function validGraph(): MiningWorkflowGraph {
   return {
-    schemaVersion: '1.0',
+    schemaVersion: '2.0',
     nodes: [node('source'), node('middle', 'middle', { limit: 2, mode: 'safe' }), node('sink')],
     edges: [
       { fromNode: 'source', fromSlot: 'out', toNode: 'middle', toSlot: 'in' },

@@ -173,6 +173,36 @@ def memory_workflow_repo() -> MemoryWorkflowRepository:
 
 
 @pytest.mark.asyncio
+async def test_upgrade_active_workflows_to_v2_preserves_identity_and_publishes_new_version(
+    memory_workflow_repo: MemoryWorkflowRepository,
+) -> None:
+    service = WorkflowService(memory_workflow_repo)
+    from knowledge_mining.tests.test_workflow_v2_migration import _v1_graph
+
+    created = await memory_workflow_repo.insert_workflow({
+        "id": "existing-v1", "name": "existing-v1", "description": None,
+        "status": "active", "draft_graph_json": _v1_graph(),
+        "draft_revision": 0, "current_version": 1, "is_system": False,
+        "is_system_default": False, "created_by": None, "updated_by": None,
+        "metadata_json": {},
+    })
+
+    upgraded = await service.upgrade_active_workflows_to_v2(
+        updated_by="v2-rollout",
+    )
+
+    assert upgraded == [created["id"]]
+    workflow = await service.get(created["id"])
+    assert workflow["draft_graph_json"]["schemaVersion"] == "2.0"
+    assert workflow["current_version"] == 2
+    published = await service.get_version(created["id"], 2)
+    assert published["schema_version"] == "2.0"
+    assert "parse_segment" not in {
+        node["operatorType"] for node in published["graph_json"]["nodes"]
+    }
+
+
+@pytest.mark.asyncio
 async def test_publish_is_immutable_and_restore_creates_a_new_draft(
     memory_workflow_repo: MemoryWorkflowRepository,
 ) -> None:
@@ -238,7 +268,7 @@ async def test_seed_creates_one_global_full_default_idempotently(
     ]
     assert len(
         (await service.get_version("system-full-baseline", 1))["graph_json"]["nodes"]
-    ) == 16
+        ) == 17
 
 
 @pytest.mark.asyncio
@@ -412,10 +442,10 @@ async def test_published_options_and_exact_version_resolution(
 
 
 @pytest.mark.asyncio
-async def test_create_with_schema_version_2_uses_split_parse_template(
+async def test_create_uses_the_only_supported_v2_parse_template(
     memory_workflow_repo: MemoryWorkflowRepository,
 ):
-    """M6：新建工作流可选 v2 骨架（document_parse→segment_compile）."""
+    """新建范式固定使用 document_parse→segment_compile 骨架。"""
     service = WorkflowService(memory_workflow_repo)
     created = await service.create(
         name="v2-chain", template_key="minimal", schema_version="2.0",
@@ -429,27 +459,13 @@ async def test_create_with_schema_version_2_uses_split_parse_template(
     assert "document_parse" in types and "segment_compile" in types
     assert "parse_segment" not in types
     assert draft["schemaVersion"] == "2.0"
-    # v1 默认不变
-    v1 = await WorkflowService(
-        MemoryWorkflowRepository()
-    ).create(name="v1-chain", template_key="minimal")
-    v1_draft = v1["draft_graph_json"]
-    if isinstance(v1_draft, str):
-        import json as _j
-
-        v1_draft = _j.loads(v1_draft)
-    v1_types = {n["operatorType"] for n in v1_draft["nodes"]}
-    assert "parse_segment" in v1_types
-    assert "document_parse" not in v1_types
 
 
 @pytest.mark.asyncio
 async def test_save_draft_self_heals_schema_version_mismatch(
     memory_workflow_repo: MemoryWorkflowRepository,
 ):
-    """旧客户端曾把 v2 图存成 1.0（混合态）→ 编译报缺 parse_segment。
-    save_draft 按固定算子组合自愈版本：v2 算子 → 2.0；parse_segment → 1.0。
-    """
+    """错误标记版本的 v2 图保存时固定回唯一支持的 2.0。"""
     import json as _j
 
     service = WorkflowService(memory_workflow_repo)
@@ -468,19 +484,3 @@ async def test_save_draft_self_heals_schema_version_mismatch(
     assert draft["schemaVersion"] == "2.0"
     types = {n["operatorType"] for n in draft["nodes"]}
     assert "document_parse" in types
-    # v1 图同样自愈
-    v1_repo = MemoryWorkflowRepository()
-    v1 = await WorkflowService(v1_repo).create(
-        name="heal-v1", template_key="minimal",
-    )
-    v1g = v1["draft_graph_json"]
-    if isinstance(v1g, str):
-        v1g = _j.loads(v1g)
-    v1g["schemaVersion"] = "2.0"  # 反向污染
-    healed_v1 = await WorkflowService(v1_repo).save_draft(
-        v1["id"], graph=v1g, expected_revision=v1["draft_revision"],
-    )
-    d1 = healed_v1["draft_graph_json"]
-    if isinstance(d1, str):
-        d1 = _j.loads(d1)
-    assert d1["schemaVersion"] == "1.0"

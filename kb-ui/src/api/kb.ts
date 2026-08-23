@@ -6,6 +6,7 @@
  * 当前用户身份由 proxyClient 的请求拦截器注入 X-KB-User 头（见 proxyClient.ts）。
  */
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
+import type { ParseResult } from '@/api/mining'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
   KbRunRecord, KbSummary, KbUpdateBody, KbUserCandidate, DocumentKnowledge,
@@ -197,6 +198,11 @@ export function useKbApi() {
     async getDocumentKnowledge(kbId: string, docId: string): Promise<DocumentKnowledge> {
       const { data } = await client.get(`/api/kb/${kbId}/documents/${docId}/knowledge`)
       return extractOne<DocumentKnowledge>(data)
+    },
+
+    async getDocumentParseResult(kbId: string, docId: string): Promise<ParseResult> {
+      const { data } = await client.get(`/api/kb/${kbId}/documents/${docId}/parse-result`)
+      return data as ParseResult
     },
   }
 }

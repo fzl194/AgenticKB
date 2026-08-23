@@ -86,7 +86,11 @@ async def mine_kb(
 
     domain = kb["domain"]
     input_path = str((UploadConfig().upload_root_path / kb_id).resolve())
-    if not Path(input_path).is_dir():
+    # v2 documents are object-store-only and deliberately have no local
+    # upload directory.  ``input_path`` remains a legacy run-record field;
+    # the worker resolves KB documents from their storage-object pointers.
+    documents = await kbdb.list_documents_in_kb(kb_id=kb_id)
+    if not documents:
         raise HTTPException(400, "KB has no uploaded files to mine")
 
     db_config = request.app.state.db_config

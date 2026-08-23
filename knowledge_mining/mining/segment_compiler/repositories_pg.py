@@ -136,7 +136,8 @@ class PgSegmentStore:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT segment_index, block_type, raw_text, section_path,
-                          source_offsets_json, structure_json, token_count
+                          semantic_role, source_offsets_json, structure_json,
+                          token_count
                    FROM asset_raw_segments
                    WHERE document_snapshot_id = %s
                    ORDER BY segment_index""",
@@ -172,6 +173,7 @@ class PgSegmentStore:
                 links=links,
                 metadata=_as_dict(r.get("structure_json")),
                 token_count=r.get("token_count"),
+                semantic_role=str(r.get("semantic_role") or "unknown"),
             ))
         return tuple(out)
 

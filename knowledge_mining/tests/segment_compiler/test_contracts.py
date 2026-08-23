@@ -43,8 +43,8 @@ def test_policy_fingerprint_changes_with_params() -> None:
 
     base = SegmentPolicy().policy_fingerprint()
     assert base
-    assert base != SegmentPolicy(max_tokens=256).policy_fingerprint()
-    assert base != SegmentPolicy(table_view="whole").policy_fingerprint()
+    assert base != SegmentPolicy(max_tokens=1024).policy_fingerprint()
+    assert base != SegmentPolicy(table_view="both").policy_fingerprint()
     assert SegmentPolicy().policy_fingerprint() == base  # 确定性
 
 
@@ -58,7 +58,7 @@ def test_compiler_fingerprint_combines_version_and_policy() -> None:
     fp = compiler_fingerprint(SegmentPolicy())
     assert fp and fp != SegmentPolicy().policy_fingerprint()
     assert COMPILER_VERSION in fp or fp.startswith("segc-")
-    assert compiler_fingerprint(SegmentPolicy(max_tokens=256)) != fp
+    assert compiler_fingerprint(SegmentPolicy(max_tokens=1024)) != fp
 
 
 def test_segment_element_link_shape() -> None:

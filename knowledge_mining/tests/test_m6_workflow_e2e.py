@@ -111,7 +111,9 @@ def test_workflow_chain_parse_then_compile(tmp_path):
 
         compiled = segment_compile_handler(
             _state(parsed.outputs.context),
-            {"tableView": "rows"}, runtime,
+            # both 视图覆盖整表 + 行片两条投影路径；关闭小片合并让段落与
+            # 表格各自独立，保住"paragraph/table 混排投影"断言意图。
+            {"tableView": "both", "mergeAdjacentParagraphs": False}, runtime,
         )
         assert compiled.status.value == "success", compiled.error_message
         ctx = compiled.outputs.context

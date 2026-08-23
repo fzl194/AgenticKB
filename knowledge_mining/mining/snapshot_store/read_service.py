@@ -125,6 +125,12 @@ class ParseResultReadService:
                     {
                         "segment_index": s.segment_index,
                         "block_type": s.block_type,
+                        # v2 语义轴：章节角色（定义/枚举/例子/结论/约束/导航）
+                        # 与表格视图/语义类型——前端展示与下游挖掘的过滤轴。
+                        "semantic_role": s.semantic_role,
+                        "token_count": s.token_count,
+                        "table_kind": s.metadata.get("table_kind"),
+                        "view": s.metadata.get("view"),
                         "heading_chain": [
                             {"level": lv, "title": t} for lv, t in s.heading_chain
                         ],

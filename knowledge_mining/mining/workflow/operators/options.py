@@ -183,8 +183,8 @@ class SegmentCompileOptions(OperatorOptions):
     字段与 SegmentPolicy 一一对应（handler 层映射）。
     """
 
-    max_tokens: int = Field(512, alias="maxTokens", title="切片上限", ge=64)
-    min_tokens: int = Field(64, alias="minTokens", title="切片下限", ge=1)
+    max_tokens: int = Field(2048, alias="maxTokens", title="切片上限", ge=64)
+    min_tokens: int = Field(512, alias="minTokens", title="切片下限", ge=1)
     merge_adjacent_paragraphs: bool = Field(
         True, alias="mergeAdjacentParagraphs", title="合并同章节相邻段",
     )
@@ -192,8 +192,8 @@ class SegmentCompileOptions(OperatorOptions):
         True, alias="injectHeadingContext", title="注入章节路径",
     )
     table_view: Literal["whole", "rows", "both"] = Field(
-        "rows", alias="tableView", title="表格视图",
-        description="整表 / 逐行（行带表头）/ 两者。",
+        "whole", alias="tableView", title="表格视图",
+        description="整表（默认，一表一片）/ 逐行（行自带表头上下文）/ 两者。",
     )
     include_figure_captions: bool = Field(
         True, alias="includeFigureCaptions", title="图题编译",

@@ -147,20 +147,39 @@ def test_single_oversize_element_split_with_char_ranges() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_table_rows_view_whole_plus_rows_with_header_and_caption() -> None:
+def test_table_rows_view_only_rows_with_header_and_caption() -> None:
+    """rows 视图：只产逐行切片（v2 语义修正——不再隐式附带整表）.
+
+    行文本自描述（列名=值），行脱离表头仍有语义（工业界表格切片惯例）。
+    """
     from knowledge_mining.mining.segment_compiler.compiler import compile_segments
 
     segs = compile_segments(_table_doc(), SegmentPolicy(table_view="rows"))
-    whole = [s for s in segs if s.block_type == "table"]
     rows = [s for s in segs if s.block_type == "table_row"]
-    assert len(whole) == 1 and len(rows) == 1  # 1 数据行（表头行不单切）
+    whole = [s for s in segs if s.block_type == "table"]
+    assert len(rows) == 1 and not whole  # 1 数据行（表头行不单切），无整表
     row = rows[0]
     assert row.metadata["table_header"] == ["告警码", "原因"]
     assert row.metadata["table_caption"] == "表 3-1 告警对照"
-    assert "A-101" in row.raw_text and "风扇停转" in row.raw_text
-    # 行切片映射回表格元素与该行 cell 的证据 span。
-    assert row.element_ids == ("t1",)
-    assert set(row.links[0].evidence_span_ids) >= {"s3", "s4"}
+    assert row.metadata["view"] == "row"
+    # 自描述行文本：列名=值。
+    assert "告警码=A-101" in row.raw_text and "原因=风扇停转" in row.raw_text
+    # 行切片映射回表格元素与该行 cell 的证据 span（章节标题小片并入行前缀
+    # 后溯源含标题元素——允许，但表格元素与该行 span 必须在）。
+    assert "t1" in row.element_ids
+    table_link = next(l for l in row.links if l.element_id == "t1")
+    assert set(table_link.evidence_span_ids) >= {"s3", "s4"}
+
+
+def test_table_both_view_whole_plus_rows() -> None:
+    from knowledge_mining.mining.segment_compiler.compiler import compile_segments
+
+    segs = compile_segments(_table_doc(), SegmentPolicy(table_view="both"))
+    whole = [s for s in segs if s.block_type == "table"]
+    rows = [s for s in segs if s.block_type == "table_row"]
+    assert len(whole) == 1 and len(rows) == 1
+    assert whole[0].metadata["view"] == "whole"
+    assert rows[0].metadata["view"] == "row"
 
 
 def test_table_whole_view_only() -> None:

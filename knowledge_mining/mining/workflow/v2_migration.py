@@ -18,6 +18,13 @@ _LEGACY_PARSE = "parse_segment"
 _DOCUMENT_PARSE = "document_parse"
 _SEGMENT_COMPILE = "segment_compile"
 
+#: 切片档位默认值换代（v2 编译器，2026-08）：启动自愈时把"恰好等于
+#: 旧默认值"的 segment_compile 参数刷成新默认（大上下文窗口尺度 +
+#: 表格默认整表）。只改这三个键且只在值等于旧默认时改写——幂等不动
+#: 用户显式选择的其它值。
+_OLD_SEGMENT_DEFAULTS = {"maxTokens": 512, "minTokens": 64, "tableView": "rows"}
+_NEW_SEGMENT_DEFAULTS = {"maxTokens": 2048, "minTokens": 512, "tableView": "whole"}
+
 
 def upgrade_graph_to_v2(graph: dict[str, Any]) -> dict[str, Any]:
     """Return an immutable-style v2 upgrade of one persisted workflow graph.
@@ -38,7 +45,7 @@ def upgrade_graph_to_v2(graph: dict[str, Any]) -> dict[str, Any]:
         )
     if has_v2:
         upgraded["schemaVersion"] = "2.0"
-        return upgraded
+        return _refresh_segment_defaults(upgraded)
     if not has_legacy:
         raise WorkflowV2MigrationError(
             "workflow has no parse operator and cannot become a v2 paradigm"
@@ -102,14 +109,31 @@ def upgrade_graph_to_v2(graph: dict[str, Any]) -> dict[str, Any]:
 
 def _segment_params(legacy: dict[str, Any]) -> dict[str, Any]:
     return {
-        "maxTokens": int(legacy.get("maxSegmentTokens") or 512),
-        "minTokens": int(legacy.get("minSegmentTokens") or 64),
+        "maxTokens": int(legacy.get("maxSegmentTokens") or 2048),
+        "minTokens": int(legacy.get("minSegmentTokens") or 512),
         "mergeAdjacentParagraphs": bool(legacy.get("mergeSmallSegments", True)),
         "injectHeadingContext": legacy.get("structuralContextMode", "breadcrumb")
         != "off",
-        "tableView": "rows",
+        "tableView": "whole",
         "includeFigureCaptions": bool(legacy.get("enableImageCaption", False)),
     }
+
+
+def _refresh_segment_defaults(graph: dict[str, Any]) -> dict[str, Any]:
+    """已 v2 图：segment_compile 参数里等于旧默认值的键刷成新默认.
+
+    幂等固定点：刷成新默认后二次运行不再命中旧默认 → 图不再变化，
+    启动自愈的"图未变则不重发版"判断保持成立。
+    """
+    for node in graph.get("nodes") or ():
+        if node.get("operatorType") != _SEGMENT_COMPILE:
+            continue
+        params = dict(node.get("params") or {})
+        for key, new_value in _NEW_SEGMENT_DEFAULTS.items():
+            if params.get(key) == _OLD_SEGMENT_DEFAULTS[key]:
+                params[key] = new_value
+        node["params"] = params
+    return graph
 
 
 __all__ = ["WorkflowV2MigrationError", "upgrade_graph_to_v2"]

@@ -364,3 +364,18 @@
   4. 修 KB 测试 app 装配（attach_object_store 共享 Fake 根）+ 过时断言更新（zip 解压/删除的本地盘断言改对象指针断言）；下载路由对对象文档流式返回（download_object，legacy 文档回落本地路径）。
 - **验证**：非 DB 套件 1087+ passed / 0 failed（~50s）；DB 门控批次（真库）全绿；真服务 HTTP e2e：上传→MinIO→更新知识（基础文档入库）→run completed→parse-result 200（quality/大纲/表格/表格行切片齐备）；kb-ui vitest 155 + vue-tsc 0。
 - **已知未做**：legacy /api/runs 域挖掘路径仍可达（deprecation 已打日志，v2_cutover 工具待运维执行）；v2 模板投产灰度与在线发布切换开关；min_tokens 仍未参与编译。
+
+## D-038 ｜ 切片策略 v2：表格单视图 + 大窗口档位 + 小片治理 + 语义标注（2026-08-23）
+- **背景**：用户以 test2《改进后三层图谱定义.md》（49KB）验收基础入库，反馈切片"过于稀碎、检索没必要、无法支撑后续 pipeline 挖掘"。全量授权按数据分析→方案确认→实施推进；用户拍板：min=512 / max=2048 / 表格默认整表 / 语义标注一并上；改动边界严格限于切片算子（解析层零改动，其余算子零涉及）。
+- **数据定位（只读审计 new_db + MinIO IR 反事实模拟，脚本 var/analysis/）**：317 片 = 30 整表 + **190 表格行片（内容 100% 重复于整表文本，冗余 10043 tok ≈ 全文 24%）** + 62 片 <32 tok；p50=64 tok。四个根因：`_emit_table` 无条件先发整表再按 rows/both 追加行片（rows≡both，档位名存实亡，默认恰是 rows）；`min_tokens` 从未参与编译；超限 code 按字符硬二分；整表片不受 max 约束（662 tok 原样落库）。
+- **工业界对照（方案依据）**：Unstructured（element 级编译 + Table 永远独立不合并 + combine_text_under_n_chars 小节合并）；LlamaIndex 分层 2048/512/128；OpenAI Vector Stores 默认 800 tok；Dify 插件原子单元保护；RAGFlow md 表格双落库为同类 bug 且 2026-06 官方修复（PR #16143）；表格切片共识=整行分组+每组重复表头前缀。
+- **决策与实现（编译器 segment-compiler@1→@2）**：
+  1. **表格三档语义真正差异化**：`whole`（默认，一表一片，永不与正文合并）/`rows`（只出行，行文本自描述"列名=值"+表名前缀，不再是裸 tab 行）/`both`（双视图，structure_json `view` 字段区分）；**超限整表降级**为表头前缀+完整数据行分组（每组重复表头，不字符硬切）。
+  2. **小片治理生效**：同章节内 <min 的孤立文本片（引导句/无正文标题/切分尾片）并入相邻切片；紧跟表格的引导句并入表格片作前缀（表格身份/元数据不变）；**跨章节不合并**（结构边界优先）；上一节尾段不阻塞下一节引导句（按尾部同章节连续匹配）。
+  3. **长文本切分**：行边界分组（超长单行字符兜底二分）+ 尾片 <min 并入前片；char_range 留痕修正为连续区间覆盖。
+  4. **语义标注（零解析成本）**：`CompiledSegment.semantic_role`（章节标题模式：定义/枚举/例子/结论/约束/导航）+ `table_kind`（表头判别：relation_table/definition_table/generic_table）；投影透传 `RawSegmentData.semantic_role`；PG 读回路径补列；parse-result 负载暴露 semantic_role/token_count/table_kind/view。
+  5. **档位默认值换代**：SegmentPolicy/SegmentCompileOptions/facade 默认 512/64/rows → **2048/512/whole**；已 v2 工作流经启动自愈 `_refresh_segment_defaults` 把"恰好等于旧默认"的 segment_compile 参数刷成新默认（只刷这三个键，幂等固定点，显式非默认值不动）；v1→v2 迁移回退值同步换代。
+  6. **顺手修复存量 bug**：被 caption_of 绑定的表题元素漏跳过（判断方向反了，表题既进表格元数据又漏成自由文本片，v2 小片治理下还会污染并入前缀）。
+- **同文档前后对比（真实 IR 重切实测）**：317 片 → **62 片（-80%）**；30 表全部原子整片；p50 64→355 tok，均 133→518 tok；<32 tok 碎片 62→**0**；角色/表格类型全标注（definition 46/constraint 9/conclusion 3/enumeration 1/navigation 3；definition_table 17/relation_table 3/generic_table 10）。重刷方式：对文档重新触发"更新知识"（编译指纹变化→新快照，A08 复用 IR 不重新解析）。
+- **验证**：segment_compiler 套件 30 passed（新增 test_compiler_v2.py 10 用例覆盖小片治理/表格原子/超限降级/行边界切分/语义标注）；迁移参数刷新 4 用例（含幂等）；m6/manifest/options/golden corpus 断言对齐新默认；全量套件与 DB 门控批次结果见提交说明。
+- **明确不做（范围外留档）**：解析算子零改动（审计健康：结构/层级/单元格级 TableAsset 完整）；contextual retrieval（每片 LLM 上下文前缀）与父子双层检索索引留给向量化阶段；md 列表项粒度恢复（需动解析指纹，性价比低）。

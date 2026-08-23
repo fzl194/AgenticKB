@@ -118,6 +118,9 @@ async def test_corpus_segments_end_to_end(tmp_path) -> None:
             run.snapshot_id,
             parse_ir_storage_object_id=run.parse_ir_storage_object_id,
             document_key=doc.name,
+            # 语料验收显式选 both 视图：同时覆盖整表片与带表头的行片
+            # （生产默认已是 whole——行视图按需启用）。
+            policy=SegmentPolicy(table_view="both"),
         )
         # 纯图无文字样本（如 pptx-picture）允许 0 切片——无可索引内容
         # 不伪造；有文本期望的语料必须编译出切片。

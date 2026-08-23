@@ -51,7 +51,7 @@ def test_manifest_serializes_frozen_plan_and_parameter_hashes() -> None:
     assert manifest["catalogVersion"] == "1"
     assert manifest["executionPlan"]["documentOrder"][-1] == "asset_persist"
     parse = next(node for node in manifest["nodes"] if node["type"] == "segment_compile")
-    assert parse["params"]["maxTokens"] == 512
+    assert parse["params"]["maxTokens"] == 2048
     assert parse["paramsHash"] == value_hash(parse["params"])
     assert "domain" not in canonical_json(manifest).lower()
 

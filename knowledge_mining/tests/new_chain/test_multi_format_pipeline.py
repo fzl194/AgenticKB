@@ -165,11 +165,11 @@ async def test_multi_format_document_to_structured_data(fmt: str, tmp_path):
     )
     assert outcome.parse_ir_storage_object_id, f"{fmt}: Parse IR not stored"
 
-    # 2. 切片编译：rows 档——表格行独立成段
+    # 2. 切片编译：生产默认档（whole 整表 + 大窗口 + 小片治理）
     compiled = services.segment_compile_service.compile_for_snapshot(
         snapshot_id=outcome.snapshot_id,
         parse_ir_storage_object_id=outcome.parse_ir_storage_object_id,
-        params={"tableView": "rows"},
+        params={},
     )
     assert compiled.segment_count >= 1, f"{fmt}: no segments compiled"
 
@@ -192,8 +192,11 @@ async def test_multi_format_document_to_structured_data(fmt: str, tmp_path):
     if fmt in TABLE_FORMATS:
         assert tables, f"{fmt}: table grid missing from structured data"
         assert any(t.get("rows") for t in tables), f"{fmt}: table has no rows"
+        # 整表档：一表一片，语义轴（view/table_kind）随切片暴露。
         table_segs = [s for s in segments if s.get("block_type") == "table"]
-        assert table_segs, f"{fmt}: no table segments (rows view)"
+        assert table_segs, f"{fmt}: no table segments (whole view)"
+        assert all(s.get("view") == "whole" for s in table_segs)
+        assert all(s.get("table_kind") for s in table_segs)
     assert segments, f"{fmt}: segments missing from structured data"
     # 证据链：每条切片都能指回解析元素（element_ids 非空）
     assert all(s.get("element_ids") for s in segments), (

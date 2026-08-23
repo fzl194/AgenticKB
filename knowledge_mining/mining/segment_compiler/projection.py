@@ -10,6 +10,7 @@
 | ``heading_chain`` | ``section_path``（``[{level, title}]``）+ ``section_title``（最内层） |
 | ``links`` | ``source_offsets_json.element_links``（元素 + 证据 span + char_range） |
 | ``metadata`` | ``structure_json``（表格行表头/行号、figure caption 等） |
+| ``semantic_role`` | 同名（章节模式推导的定义/枚举/例子/结论/约束/导航） |
 | 内容哈希 | ``content_hash`` / ``normalized_hash``（sha256） |
 
 设计（ADR-0003 D-001）：纯函数，无 IO。
@@ -72,6 +73,7 @@ def to_raw_segment_data(
         ),
         section_path=section_path,
         section_title=segment.heading_chain[-1][1] if segment.heading_chain else None,
+        semantic_role=segment.semantic_role,
         raw_text=raw_text,
         normalized_text=normalized,
         content_hash=hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),

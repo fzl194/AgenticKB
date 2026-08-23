@@ -276,15 +276,15 @@ class SegmentCompileFacade:
 
             return SimpleNamespace(segments=(), segment_count=0)
         policy = SegmentPolicy(
-            max_tokens=int(params.get("maxTokens", 512)),
-            min_tokens=int(params.get("minTokens", 64)),
+            max_tokens=int(params.get("maxTokens", 2048)),
+            min_tokens=int(params.get("minTokens", 512)),
             merge_adjacent_paragraphs=bool(
                 params.get("mergeAdjacentParagraphs", True)
             ),
             inject_heading_context=bool(
                 params.get("injectHeadingContext", True)
             ),
-            table_view=_as_str(params.get("tableView"), "rows"),
+            table_view=_as_str(params.get("tableView"), "whole"),
             include_figure_captions=bool(
                 params.get("includeFigureCaptions", True)
             ),

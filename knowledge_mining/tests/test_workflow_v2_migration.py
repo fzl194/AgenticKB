@@ -72,6 +72,48 @@ def test_upgrade_graph_is_idempotent_for_v2_graphs() -> None:
     assert upgrade_graph_to_v2(once) == once
 
 
+def test_v2_graph_with_old_segment_defaults_refreshed_to_new() -> None:
+    """已 v2 图烤死的旧默认档位（512/64/rows）→ 新默认（2048/512/whole）.
+
+    启动自愈经 upgrade_active_workflows_to_v2 走本函数；只刷"恰好等于
+    旧默认"的键，用户显式选的其它值（如 700）不动。
+    """
+    from knowledge_mining.mining.workflow.v2_migration import upgrade_graph_to_v2
+
+    once = upgrade_graph_to_v2(_v1_graph())  # maxSegmentTokens=700 保留为 700
+    compile_node = next(
+        n for n in once["nodes"] if n["operatorType"] == "segment_compile"
+    )
+    compile_node["params"] = {
+        "maxTokens": 512, "minTokens": 64, "tableView": "rows",
+        "mergeAdjacentParagraphs": True, "injectHeadingContext": True,
+        "includeFigureCaptions": True,
+    }
+    another = deepcopy(once)
+    another["nodes"] = [
+        {**n, "params": {**n["params"], "maxTokens": 700}}
+        if n["operatorType"] == "segment_compile" else n
+        for n in another["nodes"]
+    ]
+
+    refreshed = upgrade_graph_to_v2(once)
+    params = next(
+        n for n in refreshed["nodes"] if n["operatorType"] == "segment_compile"
+    )["params"]
+    assert params["maxTokens"] == 2048
+    assert params["minTokens"] == 512
+    assert params["tableView"] == "whole"
+
+    # 显式非默认值不动 + 刷新幂等（二次运行不再变化）。
+    kept = upgrade_graph_to_v2(another)
+    kept_params = next(
+        n for n in kept["nodes"] if n["operatorType"] == "segment_compile"
+    )["params"]
+    assert kept_params["maxTokens"] == 700
+    assert kept_params["minTokens"] == 512  # 64 是旧默认，仍刷新
+    assert upgrade_graph_to_v2(refreshed) == refreshed
+
+
 def test_upgrade_graph_rejects_mixed_v1_and_v2_parse_operators() -> None:
     from knowledge_mining.mining.workflow.v2_migration import (
         WorkflowV2MigrationError,

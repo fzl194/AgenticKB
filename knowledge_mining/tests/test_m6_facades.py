@@ -255,7 +255,7 @@ def test_compile_facade_maps_params_to_policy_and_returns_segments():
         )
         result = facade.compile_for_snapshot(
             snapshot_id="snap_1", parse_ir_storage_object_id="so_ir",
-            params={"tableView": "whole", "maxTokens": 256},
+            params={"tableView": "whole", "maxTokens": 256, "minTokens": 64},
         )
         policy = compiler.calls[0]
         assert policy.table_view == "whole"

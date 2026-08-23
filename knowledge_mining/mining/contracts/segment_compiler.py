@@ -28,7 +28,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 #: 编译器版本（切片逻辑变化必须递增——指纹敏感性的组成部分）。
-COMPILER_VERSION = "segment-compiler@1"
+# v2（2026-08）：表格单视图默认（whole）+ min_tokens 合并生效 + 行边界
+# 切分 + 超限表按行分组降级 + semantic_role/table_kind 标注；档位默认
+# max=2048/min=512（大上下文窗口尺度，工业界 800–2048 主流区间）。
+COMPILER_VERSION = "segment-compiler@2"
 
 #: 表格视图词表（范式构建器下拉档位）。
 TABLE_VIEWS = frozenset({"whole", "rows", "both"})
@@ -42,11 +45,11 @@ class SegmentPolicy:
     超上限才在段落间隙二分（SRS §3.7：Element 不按 token 定义）。
     """
 
-    max_tokens: int = 512
-    min_tokens: int = 64
+    max_tokens: int = 2048
+    min_tokens: int = 512
     merge_adjacent_paragraphs: bool = True
     inject_heading_context: bool = True
-    table_view: str = "rows"
+    table_view: str = "whole"
     include_figure_captions: bool = True
 
     def __post_init__(self) -> None:
@@ -104,7 +107,9 @@ class CompiledSegment:
       ``section_path``（检索命中时显示层级路径）；
     - ``links``：到原文元素/证据的映射 → ``source_offsets_json``；
     - ``metadata``：类型化信息（表格行携带表头/行号，figure 携带
-      caption/引用元素）→ ``structure_json``。
+      caption/引用元素）→ ``structure_json``；
+    - ``semantic_role``：章节模式推导的语义角色（v2：定义/枚举/例子/
+      结论/约束/导航），给下游挖掘 pipeline 提供可过滤轴。
     """
 
     segment_index: int
@@ -115,6 +120,7 @@ class CompiledSegment:
     links: tuple[SegmentElementLink, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
     token_count: int | None = None
+    semantic_role: str = "unknown"
 
 
 __all__ = [

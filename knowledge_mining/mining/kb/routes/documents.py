@@ -174,11 +174,19 @@ async def download_document(
             filename, mime, stream = obj
             chunks = [chunk async for chunk in stream]
             from fastapi.responses import Response
+            from urllib.parse import quote
 
+            # HTTP 头只允许 latin-1：中文文件名走 RFC 5987 的 filename*，
+            # 并给不支持它的老客户端一个 ASCII 回落名。
+            ascii_name = filename.encode("ascii", "ignore").decode() or "document"
+            disposition = (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            )
             return Response(
                 content=b"".join(chunks),
                 media_type=mime or "application/octet-stream",
-                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                headers={"Content-Disposition": disposition},
             )
         p = await svc.download_path(document_id=document_id, user_id=user["id"])
         return FileResponse(str(p), filename=p.name)

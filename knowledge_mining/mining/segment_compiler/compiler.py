@@ -21,7 +21,9 @@ graph，不重读原文件（切片策略升级 → 复用 IR 重切，不重新
 4. **小片治理**（``min_tokens`` 生效，v2）：同章节内不足下限的孤立
    文本片（引导句 / 无正文标题 / 切分尾片）并入相邻切片；紧跟表格的
    引导句并入该表格片作前缀（表格身份不变）。表格/图片为原子单元，
-   无论多小不参与合并。
+   无论多小不参与合并。v2.1 唯一例外：整节不足一行的**单行样板章节**
+   （< 48 token）跨章节按文档顺序并入相邻文本片，消除章节边界外的
+   孤立碎片。
 5. **图文**：figure 连同绑定的 caption 编译为独立切片。
 6. **家具过滤**：页眉/页脚/页码不进知识切片（Reconciler 已定型，
    切片层消费结论）。
@@ -64,6 +66,11 @@ _TEXTUAL_TYPES = frozenset({
 
 #: 原子单元：无论多小不与相邻切片合并（工业界表格切片惯例）。
 _ATOMIC_TYPES = frozenset({"table", "table_row", "figure"})
+
+#: 单行章节吸收线（v2.1）：整节正文不足一行的"样板章节"（如
+#: "应用限制\n本特性无应用限制。"）跨章节并入相邻文本片。低于
+#: ``min_tokens`` 但高于此线的节仍有独立检索价值，保持独立。
+_MICRO_ABSORB_TOKENS = 48
 
 _TABLE_WHOLE = "table"
 _TABLE_ROW = "table_row"
@@ -213,6 +220,7 @@ def compile_segments(
     flush()
     if policy.merge_adjacent_paragraphs:
         segments = _enforce_min(segments, policy)
+        segments = _absorb_micro_sections(segments, policy)
     return tuple(
         CompiledSegment(
             segment_index=i,
@@ -678,7 +686,10 @@ def _enforce_min(
                     and len(head_text) + len(seg.raw_text) + 1
                     <= policy.max_tokens
                 ):
-                    # 引导句并入表格：文本前缀，表格身份保留。
+                    # 引导句并入表格：文本前缀，表格身份保留。先保序吐出
+                    # 更早的异章节小片再挂表格（否则小片被甩到表格后，
+                    # 打乱文档顺序——v2.1 修复）。
+                    flush_smalls()
                     out.append(CompiledSegment(
                         segment_index=-1,
                         block_type=seg.block_type,
@@ -692,12 +703,85 @@ def _enforce_min(
                         ) + seg.links,
                         metadata=seg.metadata,
                     ))
-                    flush_smalls()  # 剩余异章节小片保序
                     continue
                 smalls.extend(prefix)  # 超限无法前缀：全部保序
             flush_smalls()
         out.append(seg)
     flush_smalls()
+    return out
+
+
+def _absorb_micro_sections(
+    segments: list[CompiledSegment], policy: SegmentPolicy
+) -> list[CompiledSegment]:
+    """单行章节兜底吸收（v2.1，跨章节合并的**唯一**例外）.
+
+    ``_enforce_min`` 以章节为边界，整节不足 ``min_tokens`` 且与前后
+    均异章节的"单行样板章节"（特性说明类文档成串出现：对系统的
+    影响/应用限制/计费与话单…）会以孤立碎片残留。此 pass 消除它们：
+
+    - 微型文本片（< ``_MICRO_ABSORB_TOKENS``）优先并入**前一个**
+      文本片（宿主身份不变；微型节标题已在其正文中，检索不丢信息）；
+    - 前方无文本宿主（原子片/文档头）时并入**后邻**片作前缀（顺序
+      保持；后邻为表格即"文本前缀 + 表格"形态，表格身份不变）；
+    - 连续微型片先互相累积，再整体并入后邻；
+    - 越 ``max_tokens`` 或无后邻宿主时保序保留。
+    """
+    out: list[CompiledSegment] = []
+    pend: list[CompiledSegment] = []  # 待并入后邻的微型片（前方是原子片）
+
+    def _flush_pend_into(seg: CompiledSegment) -> CompiledSegment:
+        prefix_text = "\n".join(s.raw_text for s in pend)
+        merged = CompiledSegment(
+            segment_index=-1,
+            block_type=seg.block_type,
+            raw_text=f"{prefix_text}\n{seg.raw_text}",
+            heading_chain=seg.heading_chain,
+            element_ids=tuple(
+                eid for s in pend for eid in s.element_ids
+            ) + seg.element_ids,
+            links=tuple(
+                lnk for s in pend for lnk in s.links
+            ) + seg.links,
+            metadata=seg.metadata,
+        )
+        pend.clear()
+        return merged
+
+    for seg in segments:
+        is_atomic = seg.block_type in _ATOMIC_TYPES
+        is_micro = not is_atomic and len(seg.raw_text) < _MICRO_ABSORB_TOKENS
+
+        if pend:
+            if is_micro:
+                pend.append(seg)  # 连续微型片：继续累积
+                continue
+            joined = (
+                sum(len(s.raw_text) for s in pend) + len(pend) + len(seg.raw_text)
+            )
+            if joined <= policy.max_tokens:
+                out.append(_flush_pend_into(seg))
+            else:  # 超限：微型片保序独立
+                out.extend(pend)
+                pend.clear()
+                out.append(seg)
+            continue
+
+        if (
+            is_micro
+            and out
+            and out[-1].block_type not in _ATOMIC_TYPES
+            and len(out[-1].raw_text) + len(seg.raw_text) + 1
+            <= policy.max_tokens
+        ):
+            out[-1] = _merge_into(out[-1], seg)
+            continue
+        if is_micro:
+            pend.append(seg)  # 前方无文本宿主：待并入后邻
+            continue
+        out.append(seg)
+
+    out.extend(pend)  # 尾部微型片无后邻宿主：保序独立
     return out
 
 

@@ -305,3 +305,119 @@ def test_default_policy_is_large_window_whole_table() -> None:
     assert policy.max_tokens == 2048
     assert policy.min_tokens == 512
     assert policy.table_view == "whole"
+
+
+# ---------------------------------------------------------------------------
+# 单行章节兜底吸收（v2.1，跨章节合并的唯一例外）
+# 实盘来源：2026-08-24 GWFD 特性文档（概述.md 等）的单行样板节成串残留
+# ---------------------------------------------------------------------------
+
+
+def test_one_liner_boilerplate_sections_absorbed_into_adjacent_text() -> None:
+    """成串单行样板节（对系统的影响/应用限制）并入前邻正文片，不再孤立."""
+    from knowledge_mining.mining.segment_compiler.compiler import compile_segments
+
+    doc = _doc([
+        _el("h0", "heading", "原理概述", level=1, order=0),
+        _el("p1", "paragraph", "正文内容。" * 30, parent="h0", order=1),
+        _el("h1", "heading", "对系统的影响", level=1, order=2),
+        _el("p2", "paragraph", "本特性对系统无影响。", parent="h1", order=3),
+        _el("h2", "heading", "应用限制", level=1, order=4),
+        _el("p3", "paragraph", "本特性无应用限制。", parent="h2", order=5),
+    ])
+    segs = compile_segments(doc, SegmentPolicy())
+    assert len(segs) == 1  # 两个微型节均并入正文宿主
+    text = segs[0].raw_text
+    assert "本特性对系统无影响。" in text and "本特性无应用限制。" in text
+    # 文档顺序保持：正文 → 影响 → 限制。
+    assert (
+        text.index("正文内容。") < text.index("本特性对系统无影响。")
+        < text.index("本特性无应用限制。")
+    )
+
+
+def test_micro_section_between_table_atoms_joins_next_table_prefix() -> None:
+    """夹在两表之间的微型节（License支持）并入后表前缀，表格身份不变."""
+    from knowledge_mining.mining.segment_compiler.compiler import compile_segments
+
+    doc = _doc([
+        _el("h0", "heading", "与其他特性的交互", level=1, order=0),
+        _el("t1", "table", _table_text(4, 3), parent="h0", order=1),
+        _el("h1", "heading", "License支持", level=1, order=2),
+        _el("p1", "paragraph", "本特性无需获得License许可。", parent="h1", order=3),
+        _el("h2", "heading", "遵循标准", level=1, order=4),
+        _el("t2", "table", _table_text(4, 3), parent="h2", order=5),
+    ], assets={
+        "t1-table": _asset("t1-table", 4, 3),
+        "t2-table": _asset("t2-table", 4, 3),
+    })
+    segs = compile_segments(doc, SegmentPolicy())
+    tables = [s for s in segs if s.block_type == "table"]
+    assert len(tables) == 2
+    assert "License" not in tables[0].raw_text  # 前表不后吸收异章节微型节
+    # 后表以微型节文本为前缀（顺序保持），表格身份/元数据不变。
+    assert tables[1].raw_text.startswith("License支持")
+    assert tables[1].raw_text.endswith(_table_text(4, 3))
+    assert tables[1].metadata["view"] == "whole"
+    # 全文不再有孤立微型文本片（原子片除外）。
+    assert all(
+        len(s.raw_text) >= 48 or s.block_type in ("table", "table_row", "figure")
+        for s in segs
+    )
+
+
+def test_micro_section_at_doc_head_joins_next_section() -> None:
+    """文档开头的微型节（适用NF）并入后邻章节片作前缀."""
+    from knowledge_mining.mining.segment_compiler.compiler import compile_segments
+
+    doc = _doc([
+        _el("h0", "heading", "适用NF", level=1, order=0),
+        _el("p1", "paragraph", "PGW-U、UPF。", parent="h0", order=1),
+        _el("h1", "heading", "定义", level=1, order=2),
+        _el("p2", "paragraph", "两种地址分配方式。" * 20, parent="h1", order=3),
+    ])
+    segs = compile_segments(doc, SegmentPolicy())
+    assert len(segs) == 1
+    assert segs[0].raw_text.startswith("适用NF")  # 顺序保持：微型节在前
+    assert segs[0].block_type == "paragraph"
+
+
+def test_section_above_micro_floor_stays_standalone() -> None:
+    """高于吸收线（48 token）的短节保持独立——仍有独立检索价值."""
+    from knowledge_mining.mining.segment_compiler.compiler import compile_segments
+
+    doc = _doc([
+        _el("h0", "heading", "命令", level=1, order=0),
+        _el("p1", "paragraph", "本特性相关的MML命令说明。" * 14, parent="h0", order=1),
+        _el("h1", "heading", "告警", level=1, order=2),
+        _el("p2", "paragraph", "本特性无相关告警。", parent="h1", order=3),
+        _el("h2", "heading", "测量指标", level=1, order=4),
+        _el("p3", "paragraph",
+            "1914307807 用户平面使用外部IPv4地址当前的会话数目。\n"
+            "1914308021 用户平面指定APN/DNN当前使用外部IPv4地址的会话数目。",
+            parent="h2", order=5),
+    ])
+    segs = compile_segments(doc, SegmentPolicy())
+    # 告警（微型）并入命令片；测量指标（两行指标 > 48）保持独立。
+    assert len(segs) == 2
+    assert "本特性无相关告警。" in segs[0].raw_text
+    assert segs[1].raw_text.startswith("测量指标")
+
+
+def test_micro_absorption_respects_max_tokens() -> None:
+    """前后邻均接近 max_tokens 时微型片保序独立，不越限合并."""
+    from knowledge_mining.mining.segment_compiler.compiler import compile_segments
+
+    body = "长" * 2040
+    doc = _doc([
+        _el("h0", "heading", "前节", level=1, order=0),
+        _el("p1", "paragraph", body, parent="h0", order=1),
+        _el("h1", "heading", "微型节", level=1, order=2),
+        _el("p2", "paragraph", "微型内容。", parent="h1", order=3),
+        _el("h2", "heading", "后节", level=1, order=4),
+        _el("p3", "paragraph", body, parent="h2", order=5),
+    ])
+    segs = compile_segments(doc, SegmentPolicy())
+    assert len(segs) == 3  # 前节 / 微型节（保序独立）/ 后节
+    assert segs[1].raw_text == "微型节\n微型内容。"
+    assert segs[0].raw_text.endswith(body) and segs[2].raw_text.endswith(body)

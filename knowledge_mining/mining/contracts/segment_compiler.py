@@ -31,7 +31,10 @@ from typing import Any
 # v2（2026-08）：表格单视图默认（whole）+ min_tokens 合并生效 + 行边界
 # 切分 + 超限表按行分组降级 + semantic_role/table_kind 标注；档位默认
 # max=2048/min=512（大上下文窗口尺度，工业界 800–2048 主流区间）。
-COMPILER_VERSION = "segment-compiler@2"
+# v2.1（2026-08）：单行章节兜底吸收——整节不足一行（<48 token）的样板
+# 章节（"应用限制\n本特性无应用限制。"类）跨章节并入相邻文本片，消除
+# 章节边界外的孤立碎片（实盘：特性说明类文档单行样板节成串残留）。
+COMPILER_VERSION = "segment-compiler@2.1"
 
 #: 表格视图词表（范式构建器下拉档位）。
 TABLE_VIEWS = frozenset({"whole", "rows", "both"})

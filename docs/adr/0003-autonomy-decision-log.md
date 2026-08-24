@@ -388,3 +388,10 @@
 - **修复 3（测试防线）**：新增 `tests/segment_compiler/test_repositories_pg.py`（DB 门控）：v2 全角色值过真约束 + 替换语义/指纹读回 round trip——补上缺失的防线；迁移测试补空参数形态用例。
 - **范式存储结论（用户问询，代码级核实）**：范式真相源在代码（templates.py 七套图 + paradigms.py 六范式）；启动 `ensure_workflow_library()` 按名引种缺失项并发布"初始范式版本"（空库冷启动自动初始化，已有测试覆盖六范式+幂等）；发布即冻结——run 执行已发布 manifest，代码模板后续演进靠自愈迁移同步（本 D 修复 2 即该机制的一环）。
 - **验证**：迁移/切片本地 35 passed；全量套件（含 DB 真库批次，测试库经 ensure_schema 自动吃到 012）结果见提交说明；真库约束已实际加宽（BEFORE/AFTER 已核）。
+
+## D-040 ｜ 大文件解析期间池化连接被网络静默回收 —— 全链路 TCP keepalive（2026-08-24）
+- **事故**：D-039 修复验证通过（自愈 7 范式重发版 v2、旧 md 强挖成功）后，用户新上传 14.4MB 论文 PDF 再失败：`document_parse failed: snapshot commit failed: server closed the connection unexpectedly`。
+- **诊断（时间线实锤）**：解析 attempt 12:06:43→12:11:18（4 分 35 秒，期间 PG 零流量）；attempt 收尾写入用的活连接成功；紧接着 commit 拿到池内**闲置 5 分钟以上**的另一条连接——已被网络路径（云上 NAT/端口转发，典型 240s 空闲回收）静默掐死。**PG 服务自 4-29 未重启**（postmaster 启动时间核实），非服务端故障。此前所有用例均为小文件秒级解析、连接从不空闲，故本地/测试环境（同机容器毫秒级往返）永远暴露不了。
+- **修复**：全链路连接串注入 TCP keepalive（`keepalives=1, idle=30, interval=10, count=3`——30s 探活使连接永不进入 NAT 空闲判定窗口）：① `MiningDbConfig.conninfo/maintenance_conninfo`（API 主池、schema 初始化）；② `domain_db._resolved_from_inline/_resolved_from_url`（**工作流作业池走 registry 内联 database 块自行拼 conninfo，绕过 MiningDbConfig——用户全部域均为 inline 形态，只改 ①够不到事故池**）。既有 `check=check_connection`+`max_idle=300` 保持。
+- **验证**：inline/global 两路 conninfo 均解析出 keepalive 参数；真密码连远端库 OK；相关批次 81 passed；全量见提交说明。
+- **教训留档**：三层故障三因（约束词表 → 自愈空参数 → 网络空闲回收），均为"真实生产负载才触发"的形态；大文件链路（≥分钟级解析）需要专门的真机 e2e 才能兜住，容器测试覆盖不了。

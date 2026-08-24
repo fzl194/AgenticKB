@@ -10,6 +10,16 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from .pg_config import MiningDbConfig, conninfo_from_url
 
+#: TCP keepalive 探活参数（同 pg_config.MiningDbConfig.conninfo 注释）：
+#: 大文件解析期间池化连接空闲数分钟，云上 NAT/端口转发会静默回收空闲
+#: TCP；30s 探活让连接永不进入空闲判定窗口（ADR-0003 D-040）。
+_KEEPALIVE_PARAMS = {
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 3,
+}
+
 
 @dataclass(frozen=True)
 class ResolvedDomainDatabase:
@@ -37,7 +47,8 @@ def _resolved_from_url(
 ) -> ResolvedDomainDatabase:
     pool_min, pool_max = _pool_bounds(default.pg_pool_min, default.pg_pool_max)
     return ResolvedDomainDatabase(
-        conninfo_from_url(value), pool_min, pool_max, source
+        make_conninfo(conninfo_from_url(value), **_KEEPALIVE_PARAMS),
+        pool_min, pool_max, source,
     )
 
 
@@ -65,7 +76,7 @@ def _resolved_from_inline(database: object) -> ResolvedDomainDatabase:
     if not conn_params.get("host") or not conn_params.get("dbname"):
         raise ValueError("Invalid inline database configuration")
     try:
-        conninfo = make_conninfo(**conn_params)
+        conninfo = make_conninfo(**{**conn_params, **_KEEPALIVE_PARAMS})
     except Exception as exc:
         raise ValueError("Invalid inline database configuration") from exc
     return ResolvedDomainDatabase(conninfo, pool_min, pool_max, "inline")

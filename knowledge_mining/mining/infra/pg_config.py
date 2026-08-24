@@ -104,7 +104,13 @@ class MiningDbConfig:
 
     @property
     def conninfo(self) -> str:
-        """psycopg connection string."""
+        """psycopg connection string.
+
+        TCP keepalives（30s 探活）：大文件解析期间池化连接可空闲数分钟，
+        云上 NAT/端口转发（典型 240s）会静默回收空闲 TCP——复用即报
+        "server closed the connection unexpectedly"。keepalive 让连接永不
+        进入空闲判定窗口，从根上消除该类故障（ADR-0003 D-040）。
+        """
         return make_conninfo(
             host=self.pg_host,
             port=self.pg_port,
@@ -113,6 +119,10 @@ class MiningDbConfig:
             password=self.pg_password,
             sslmode=self.pg_sslmode,
             gssencmode=self.pg_gssencmode,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=3,
         )
 
     @property
@@ -126,6 +136,10 @@ class MiningDbConfig:
             password=self.pg_password,
             sslmode=self.pg_sslmode,
             gssencmode=self.pg_gssencmode,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=3,
         )
 
     def __repr__(self) -> str:  # 不泄露 password

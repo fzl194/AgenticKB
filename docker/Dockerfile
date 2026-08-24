@@ -50,30 +50,18 @@ RUN command -v libreoffice >/dev/null \
 WORKDIR /app
 
 # ── Python 依赖（仅运行时，不含 dev） ──
+# 清单唯一真相源：pyproject.toml 的 [project].dependencies，这里用 tomllib 展开安装，
+# 杜绝"改了 pyproject 忘了 Dockerfile"（历史事故：minio、python-pptx 两次漏装）。
+# 下面两个是镜像运行时额外需要的（pyproject 不声明）：FastAPI 文件上传、中文分词。
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    "fastapi>=0.110" \
-    "uvicorn[standard]>=0.29" \
+    $(python -c "import tomllib; print(' '.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))") \
     "python-multipart>=0.0.9" \
-    "pydantic>=2.7" \
-    "pydantic-settings>=2.3" \
-    "aiosqlite>=0.20" \
-    "PyYAML>=6.0" \
-    "markdown-it-py>=3.0" \
-    "jinja2>=3.1" \
-    "jsonschema>=4.21" \
-    "httpx>=0.27" \
-    "psycopg[binary,pool]>=3.1" \
-    "pdfminer.six>=20231228" \
-    "python-docx>=1.1" \
-    "openpyxl>=3.1,<4" \
-    "xlrd>=2.0,<3" \
-    "jieba>=0.42" \
-    "fastmcp>=2.0"
+    "jieba>=0.42"
 
-# 构建期验证：Excel 解析依赖必须可以导入
-RUN python -c "import openpyxl, xlrd; print(f'Excel 解析依赖验证通过：openpyxl={openpyxl.__version__}，xlrd={xlrd.__version__}')" \
-    || (echo "错误：openpyxl 或 xlrd 未正确安装，无法解析 Excel 文件" >&2; exit 1)
+# 构建期验证：解析链关键依赖必须可以导入（缺了在构建期就失败，不留到运行期崩）
+RUN python -c "import openpyxl, xlrd, pptx, pdfplumber, pdfminer, docx, lxml, minio; print(f'解析链依赖验证通过：openpyxl={openpyxl.__version__}，pptx={pptx.__version__}，pdfplumber={pdfplumber.__version__}，minio={minio.__version__}')" \
+    || (echo "错误：文档解析链依赖缺失，无法解析对应格式" >&2; exit 1)
 
 # ── 从构建阶段复制产物 ──
 COPY --from=build-java /build/target/*.jar /app/agent_serving.jar

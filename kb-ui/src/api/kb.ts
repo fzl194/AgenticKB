@@ -164,6 +164,15 @@ export function useKbApi() {
       return data
     },
 
+    /**
+     * 大文件预览直连地址（短时效预签名）。浏览器 iframe/img 直接指向
+     * 对象存储，自带 Range 分页按需加载——避免全量下载后才首屏。
+     */
+    async getDocumentPreviewUrl(kbId: string, docId: string): Promise<string> {
+      const { data } = await client.get(`/api/kb/${kbId}/documents/${docId}/preview-url`)
+      return (data as { url: string }).url
+    },
+
     async deleteDocument(kbId: string, docId: string): Promise<void> {
       await client.delete(`/api/kb/${kbId}/documents/${docId}`)
     },

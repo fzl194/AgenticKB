@@ -23,7 +23,7 @@
     <el-tabs v-model="activeTab" class="doc-preview__tabs">
       <el-tab-pane label="原始预览" name="preview">
         <!-- Body -->
-        <div class="doc-preview__body">
+        <div class="doc-preview__body" v-loading="previewLoading">
           <div v-if="error" class="doc-preview__state">
             <el-icon :size="32"><WarningFilled /></el-icon>
             <p>{{ error }}</p>
@@ -36,7 +36,22 @@
             <el-button type="primary" size="small" @click="download">下载</el-button>
           </div>
 
-          <div v-else-if="html" class="doc-preview__rich" v-html="html" />
+          <!-- 预签名直连：浏览器对 MinIO 按 Range 分页按需加载 -->
+          <div v-else-if="kind === 'image' && directUrl" class="doc-preview__img">
+            <img :src="directUrl" :alt="doc?.document_name" />
+          </div>
+
+          <div v-else-if="kind === 'pdf' && directUrl" class="doc-preview__pdf">
+            <iframe :src="directUrl" :title="doc?.document_name" />
+          </div>
+
+          <div v-else-if="html" class="doc-preview__rich">
+            <div v-html="html" />
+            <div v-if="textTruncated" class="doc-preview__more">
+              <span>已展示前 {{ (renderLimit / 1000).toFixed(0) }}k 字符</span>
+              <el-button size="small" @click="showMoreText">展示更多</el-button>
+            </div>
+          </div>
 
           <div v-else-if="kind === 'image' && objectUrl" class="doc-preview__img">
             <img :src="objectUrl" :alt="doc?.document_name" />
@@ -46,7 +61,13 @@
             <iframe :src="objectUrl" :title="doc?.document_name" />
           </div>
 
-          <pre v-else-if="text !== null" class="doc-preview__text">{{ text }}</pre>
+          <template v-else-if="text !== null">
+            <pre class="doc-preview__text">{{ text }}</pre>
+            <div v-if="textTruncated" class="doc-preview__more">
+              <span>已展示前 {{ (renderLimit / 1000).toFixed(0) }}k 字符</span>
+              <el-button size="small" @click="showMoreText">展示更多</el-button>
+            </div>
+          </template>
 
           <div v-else-if="kind === 'unsupported'" class="doc-preview__state">
             <el-icon :size="32"><Document /></el-icon>
@@ -76,112 +97,127 @@
           </div>
 
           <template v-else-if="parseResult">
-            <!-- 出生证明 -->
-            <div class="doc-preview__card">
-              <div class="doc-preview__card-title">知识快照</div>
-              <div class="doc-preview__meta-grid">
-                <div class="doc-preview__meta-item">
-                  <span class="doc-preview__meta-label">质量结论</span>
-                  <el-tag :type="parseResult.snapshot.quality_status === 'PASS' ? 'success' : 'warning'" size="small">
-                    {{ parseResult.snapshot.quality_status }}
-                  </el-tag>
+            <!-- 各区块独立收缩；顺序：快照 → 大纲 → 切片 → 元素 → 表格 -->
+            <el-collapse v-model="openCards" class="doc-preview__cards">
+              <!-- 知识快照 -->
+              <el-collapse-item name="snapshot" title="知识快照">
+                <div class="doc-preview__meta-grid">
+                  <div class="doc-preview__meta-item">
+                    <span class="doc-preview__meta-label">质量结论</span>
+                    <el-tag :type="parseResult.snapshot.quality_status === 'PASS' ? 'success' : 'warning'" size="small">
+                      {{ parseResult.snapshot.quality_status }}
+                    </el-tag>
+                  </div>
+                  <div class="doc-preview__meta-item">
+                    <span class="doc-preview__meta-label">内容版本</span>
+                    <span>rev.{{ parseResult.snapshot.source_content_revision ?? '—' }}</span>
+                  </div>
+                  <div class="doc-preview__meta-item">
+                    <span class="doc-preview__meta-label">元素 / 容器 / 关系</span>
+                    <span>{{ parseResult.elements.count }} / {{ parseResult.diagnostics.containers }} / {{ parseResult.diagnostics.relations }}</span>
+                  </div>
+                  <div class="doc-preview__meta-item">
+                    <span class="doc-preview__meta-label">切片数</span>
+                    <span>{{ parseResult.segments.count }}</span>
+                  </div>
+                  <div class="doc-preview__meta-item">
+                    <span class="doc-preview__meta-label">解析管线</span>
+                    <span class="doc-preview__mono">{{ parseResult.snapshot.parser_fingerprint || '—' }}</span>
+                  </div>
+                  <div class="doc-preview__meta-item">
+                    <span class="doc-preview__meta-label">切片策略</span>
+                    <span class="doc-preview__mono">{{ parseResult.snapshot.compiler_fingerprint || '默认' }}</span>
+                  </div>
                 </div>
-                <div class="doc-preview__meta-item">
-                  <span class="doc-preview__meta-label">内容版本</span>
-                  <span>rev.{{ parseResult.snapshot.source_content_revision ?? '—' }}</span>
-                </div>
-                <div class="doc-preview__meta-item">
-                  <span class="doc-preview__meta-label">元素 / 容器 / 关系</span>
-                  <span>{{ parseResult.elements.count }} / {{ parseResult.diagnostics.containers }} / {{ parseResult.diagnostics.relations }}</span>
-                </div>
-                <div class="doc-preview__meta-item">
-                  <span class="doc-preview__meta-label">切片数</span>
-                  <span>{{ parseResult.segments.count }}</span>
-                </div>
-                <div class="doc-preview__meta-item">
-                  <span class="doc-preview__meta-label">解析管线</span>
-                  <span class="doc-preview__mono">{{ parseResult.snapshot.parser_fingerprint || '—' }}</span>
-                </div>
-                <div class="doc-preview__meta-item">
-                  <span class="doc-preview__meta-label">切片策略</span>
-                  <span class="doc-preview__mono">{{ parseResult.snapshot.compiler_fingerprint || '默认' }}</span>
-                </div>
-              </div>
-            </div>
+              </el-collapse-item>
 
-            <!-- 大纲 -->
-            <div v-if="parseResult.outline.length" class="doc-preview__card">
-              <div class="doc-preview__card-title">文档大纲</div>
-              <el-tree
-                :data="outlineTree"
-                :props="{ label: 'title', children: 'children' }"
-                default-expand-all
-                class="doc-preview__outline"
-              />
-            </div>
+              <!-- 文档大纲 -->
+              <el-collapse-item v-if="parseResult.outline.length" name="outline" title="文档大纲">
+                <el-tree
+                  :data="outlineTree"
+                  :props="{ label: 'title', children: 'children' }"
+                  default-expand-all
+                  class="doc-preview__outline"
+                />
+              </el-collapse-item>
 
-            <div v-if="parseResult.elements.items.length" class="doc-preview__card">
-              <div class="doc-preview__card-title">结构元素（{{ parseResult.elements.count }}）</div>
-              <el-collapse>
-                <el-collapse-item
-                  v-for="element in parseResult.elements.items"
-                  :key="element.element_id"
-                  :name="element.element_id"
-                >
-                  <template #title>
-                    <el-tag size="small" effect="plain">{{ element.element_type }}</el-tag>
-                    <span class="doc-preview__element-title">{{ element.text || '空元素' }}</span>
-                  </template>
-                  <pre class="doc-preview__seg-text">{{ element.text }}</pre>
-                  <p v-if="element.has_evidence" class="doc-preview__muted">已保留来源定位</p>
-                </el-collapse-item>
-              </el-collapse>
-              <p v-if="parseResult.elements.count > parseResult.elements.items.length" class="doc-preview__muted">
-                当前仅展示前 {{ parseResult.elements.items.length }} 个元素。
-              </p>
-            </div>
-
-            <!-- 表格 -->
-            <div v-if="parseResult.tables.length" class="doc-preview__card">
-              <div class="doc-preview__card-title">表格（{{ parseResult.tables.length }}）</div>
-              <div v-for="t in parseResult.tables" :key="t.table_id" class="doc-preview__table-block">
-                <div class="doc-preview__table-caption">{{ t.rows }} 行 × {{ t.columns }} 列</div>
-                <el-table :data="tableRows(t)" size="small" border class="kb-table">
-                  <el-table-column
-                    v-for="(_, ci) in tableRows(t)[0] || []"
-                    :key="ci"
-                    :label="t.header[ci] || String(ci + 1)"
+              <!-- 切片 -->
+              <el-collapse-item
+                v-if="parseResult.segments.items.length"
+                name="segments"
+                :title="`切片（${parseResult.segments.count}）`"
+              >
+                <el-collapse>
+                  <el-collapse-item
+                    v-for="seg in parseResult.segments.items"
+                    :key="seg.segment_index"
+                    :name="seg.segment_index"
                   >
-                    <template #default="{ row }">
-                      <span>{{ row[ci] }}</span>
-                    </template>
-                  </el-table-column>
-                </el-table>
-              </div>
-            </div>
-
-            <!-- 切片 -->
-            <div v-if="parseResult.segments.items.length" class="doc-preview__card">
-              <div class="doc-preview__card-title">切片（{{ parseResult.segments.count }}）</div>
-              <el-collapse>
-                <el-collapse-item
-                  v-for="seg in parseResult.segments.items"
-                  :key="seg.segment_index"
-                  :name="seg.segment_index"
-                >
-                  <template #title>
-                    <span class="doc-preview__seg-title">
-                      <span class="doc-preview__seg-idx">#{{ seg.segment_index }}</span>
-                      <span v-if="seg.heading_chain.length" class="doc-preview__seg-path">
-                        {{ seg.heading_chain.map(h => h.title).join(' › ') }}
+                    <template #title>
+                      <span class="doc-preview__seg-title">
+                        <span class="doc-preview__seg-idx">#{{ seg.segment_index }}</span>
+                        <span v-if="seg.heading_chain.length" class="doc-preview__seg-path">
+                          {{ seg.heading_chain.map(h => h.title).join(' › ') }}
+                        </span>
+                        <el-tag v-if="seg.semantic_role" size="small" effect="light">{{ seg.semantic_role }}</el-tag>
+                        <el-tag size="small" effect="plain" class="doc-preview__seg-type">{{ seg.block_type }}</el-tag>
                       </span>
-                      <el-tag size="small" effect="plain" class="doc-preview__seg-type">{{ seg.block_type }}</el-tag>
-                    </span>
-                  </template>
-                  <pre class="doc-preview__seg-text">{{ seg.text }}</pre>
-                </el-collapse-item>
-              </el-collapse>
-            </div>
+                    </template>
+                    <pre class="doc-preview__seg-text">{{ seg.text }}</pre>
+                  </el-collapse-item>
+                </el-collapse>
+                <p v-if="parseResult.segments.count > parseResult.segments.items.length" class="doc-preview__muted">
+                  当前仅展示前 {{ parseResult.segments.items.length }} 条切片。
+                </p>
+              </el-collapse-item>
+
+              <!-- 结构元素 -->
+              <el-collapse-item
+                v-if="parseResult.elements.items.length"
+                name="elements"
+                :title="`结构元素（${parseResult.elements.count}）`"
+              >
+                <el-collapse>
+                  <el-collapse-item
+                    v-for="element in parseResult.elements.items"
+                    :key="element.element_id"
+                    :name="element.element_id"
+                  >
+                    <template #title>
+                      <el-tag size="small" effect="plain">{{ element.element_type }}</el-tag>
+                      <span class="doc-preview__element-title">{{ element.text || '空元素' }}</span>
+                    </template>
+                    <pre class="doc-preview__seg-text">{{ element.text }}</pre>
+                    <p v-if="element.has_evidence" class="doc-preview__muted">已保留来源定位</p>
+                  </el-collapse-item>
+                </el-collapse>
+                <p v-if="parseResult.elements.count > parseResult.elements.items.length" class="doc-preview__muted">
+                  当前仅展示前 {{ parseResult.elements.items.length }} 个元素。
+                </p>
+              </el-collapse-item>
+
+              <!-- 表格 -->
+              <el-collapse-item
+                v-if="parseResult.tables.length"
+                name="tables"
+                :title="`表格（${parseResult.tables.length}）`"
+              >
+                <div v-for="t in parseResult.tables" :key="t.table_id" class="doc-preview__table-block">
+                  <div class="doc-preview__table-caption">{{ t.rows }} 行 × {{ t.columns }} 列</div>
+                  <el-table :data="tableRows(t)" size="small" border class="kb-table">
+                    <el-table-column
+                      v-for="(_, ci) in tableRows(t)[0] || []"
+                      :key="ci"
+                      :label="t.header[ci] || String(ci + 1)"
+                    >
+                      <template #default="{ row }">
+                        <span>{{ row[ci] }}</span>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
 
             <div v-if="parseResult.diagnostics.warnings.length" class="doc-preview__card">
               <div class="doc-preview__card-title">解析诊断</div>
@@ -193,30 +229,6 @@
         </div>
       </el-tab-pane>
       <template v-if="knowledgeMined">
-        <el-tab-pane v-if="segments.length" :label="`切片分段 (${segments.length})`" name="segments">
-          <div class="doc-preview__knowledge">
-            <el-collapse>
-              <el-collapse-item
-                v-for="seg in segments"
-                :key="seg.segment_index"
-                :name="seg.segment_index"
-              >
-                <template #title>
-                  <span class="doc-preview__seg-title">
-                    <span class="doc-preview__seg-idx">#{{ seg.segment_index }}</span>
-                    <span>{{ seg.section_title || seg.semantic_role || seg.block_type || '切片' }}</span>
-                  </span>
-                </template>
-                <div class="doc-preview__seg-meta">
-                  <el-tag v-if="seg.block_type" size="small" effect="plain">{{ seg.block_type }}</el-tag>
-                  <el-tag v-if="seg.semantic_role" size="small" effect="light">{{ seg.semantic_role }}</el-tag>
-                </div>
-                <pre v-if="seg.raw_text" class="doc-preview__seg-text">{{ seg.raw_text }}</pre>
-              </el-collapse-item>
-            </el-collapse>
-          </div>
-        </el-tab-pane>
-
         <el-tab-pane v-if="units.length" :label="`检索单元 (${units.length})`" name="units">
           <div class="doc-preview__knowledge">
             <div class="doc-preview__units">
@@ -315,9 +327,10 @@ import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
 import type { Component } from 'vue'
-import type { KbDocEntityMention, KbDocRelation, KbDocument, KbDocRetrievalUnit, KbDocSegment } from '@/types/kb'
+import type { KbDocEntityMention, KbDocRelation, KbDocument, KbDocRetrievalUnit } from '@/types/kb'
 
 const PREVIEW_MAX_BYTES = 50 * 1024 * 1024
+const TEXT_RENDER_LIMIT = 200_000
 
 const props = defineProps<{ kbId: string; docId: string }>()
 const router = useRouter()
@@ -325,19 +338,28 @@ const kbApi = useKbApi()
 
 const doc = ref<KbDocument | null>(null)
 const loading = ref(false)
+const previewLoading = ref(false)
 const downloading = ref(false)
 const error = ref('')
 const text = ref<string | null>(null)
 const html = ref('')
 const objectUrl = ref<string | null>(null)
+// 大文件预览直连（预签名 URL）：iframe/img 直接指向对象存储，浏览器
+// 自带 Range 分页按需加载——替代全量下载后再首屏。
+const directUrl = ref<string | null>(null)
 const blobSize = ref(0)
+// 大文本/md 分段渲染：初始限量 + 「展示更多」翻倍，避免巨型 DOM 单节点。
+const fullText = ref<string | null>(null)
+const renderLimit = ref(TEXT_RENDER_LIMIT)
 
-const segments = ref<KbDocSegment[]>([])
 const units = ref<KbDocRetrievalUnit[]>([])
 const mentions = ref<KbDocEntityMention[]>([])
 const relations = ref<KbDocRelation[]>([])
 const knowledgeMined = ref(false)
-const activeTab = ref<'preview' | 'structured' | 'segments' | 'units' | 'mentions' | 'relations'>('preview')
+const activeTab = ref<'preview' | 'structured' | 'units' | 'mentions' | 'relations'>('preview')
+
+// 结构化数据各卡片独立收缩（默认全开）。
+const openCards = ref<string[]>(['snapshot', 'outline', 'segments', 'elements', 'tables'])
 
 // M5 结构化数据（新链知识快照）：尽力加载，404 = 尚未走新链更新知识
 const parseResult = ref<ParseResult | null>(null)
@@ -416,14 +438,16 @@ const tooLarge = computed(() =>
 
 function cleanup() {
   if (objectUrl.value) { URL.revokeObjectURL(objectUrl.value); objectUrl.value = null }
+  directUrl.value = null
   text.value = null
   html.value = ''
   error.value = ''
   blobSize.value = 0
+  fullText.value = null
+  renderLimit.value = TEXT_RENDER_LIMIT
 }
 
 function resetKnowledge() {
-  segments.value = []
   units.value = []
   mentions.value = []
   relations.value = []
@@ -434,31 +458,88 @@ function resetKnowledge() {
   parseRetryable.value = false
 }
 
+const textTruncated = computed(() => (fullText.value?.length ?? 0) > renderLimit.value)
+
+/** 渲染可见文本/HTML（按 renderLimit 截断，大文件分步渲染）.*/
+function renderTextual(content: string) {
+  fullText.value = content
+  const shown = content.slice(0, renderLimit.value)
+  const k = kind.value
+  if (k === 'md') html.value = DOMPurify.sanitize(marked.parse(shown) as string)
+  else if (k === 'html') html.value = DOMPurify.sanitize(shown)
+  else text.value = shown
+}
+
+function showMoreText() {
+  renderLimit.value *= 2
+  if (fullText.value !== null) renderTextual(fullText.value)
+}
+
+async function loadPreview() {
+  previewLoading.value = true
+  try {
+    // 1) PDF/图片：预签名直连（浏览器 Range 按需加载，首屏只拉首页字节）。
+    let url: string | null = null
+    try {
+      url = await kbApi.getDocumentPreviewUrl(props.kbId, props.docId)
+    } catch {
+      url = null // legacy 本地文档 / 对象缺失 → 走回落
+    }
+    const k = kind.value
+    if (url && (k === 'pdf' || k === 'image')) {
+      directUrl.value = url
+      return
+    }
+    // 2) 文本类：直连取内容（省一跳后端全量代理）；CORS 不通则回落
+    //    带鉴权的 download 代理。
+    let blob: Blob | null = null
+    if (url && (k === 'md' || k === 'html' || k === 'text')) {
+      try {
+        const resp = await fetch(url)
+        if (!resp.ok) throw new Error(`preview fetch ${resp.status}`)
+        blob = await resp.blob()
+      } catch {
+        blob = null
+      }
+    }
+    if (blob === null) {
+      try {
+        blob = await kbApi.downloadDocument(props.kbId, props.docId)
+      } catch (e) {
+        error.value = await apiErrorDetail(e)
+        return
+      }
+    }
+    blobSize.value = blob.size
+    if ((k === 'image' || k === 'pdf')) {
+      if (blob.size > PREVIEW_MAX_BYTES) return // tooLarge 分支提示下载
+      objectUrl.value = URL.createObjectURL(blob)
+      return
+    }
+    if (k === 'md' || k === 'html' || k === 'text') {
+      if (blob.size > PREVIEW_MAX_BYTES) return // tooLarge 分支提示下载
+      renderTextual(await blob.text())
+    }
+  } finally {
+    previewLoading.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   cleanup()
   resetKnowledge()
   try {
-    // 元信息 + 字节并行；知识接口仅在文档已挖掘时才请求（单一权威状态 = doc.status，修 Bug B）
-    const [d, blob] = await Promise.all([
-      kbApi.getDocument(props.kbId, props.docId),
-      kbApi.downloadDocument(props.kbId, props.docId),
-    ])
+    // 元信息先出（不等文件字节）；预览与知识数据各自异步。
+    const d = await kbApi.getDocument(props.kbId, props.docId)
     doc.value = d
-    blobSize.value = blob.size
-    const k = kind.value
-    if (k === 'md') html.value = DOMPurify.sanitize(await marked(await blob.text()))
-    else if (k === 'html') html.value = DOMPurify.sanitize(await blob.text())
-    else if (k === 'text') text.value = await blob.text()
-    else if ((k === 'image' || k === 'pdf') && blob.size <= PREVIEW_MAX_BYTES) {
-      objectUrl.value = URL.createObjectURL(blob)
-    }
-    // 已挖掘文档：拉知识资产（切片/检索单元/实体/关系）；接口失败时按 status==='mined' 回退
+    loading.value = false
+    void loadPreview()
+    // 已挖掘文档：拉知识资产（检索单元/实体/关系）；接口失败时按 status==='mined' 回退
     if (d.status === 'mined' || d.status === 'published') {
       const knowledge = await kbApi.getDocumentKnowledge(props.kbId, props.docId).catch(() => null)
       if (knowledge && knowledge.mined) {
         knowledgeMined.value = true
-        segments.value = knowledge.segments ?? []
         units.value = knowledge.retrieval_units ?? []
         mentions.value = knowledge.entity_mentions ?? []
         relations.value = knowledge.relations ?? []
@@ -469,7 +550,6 @@ async function load() {
     void loadParseResult()
   } catch (e) {
     error.value = await apiErrorDetail(e)
-  } finally {
     loading.value = false
   }
 }
@@ -586,7 +666,6 @@ onUnmounted(cleanup)
   font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 11.5px;
   color: var(--kb-text-tertiary);
 }
-.doc-preview__seg-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 .doc-preview__seg-text {
   font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12.5px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word; color: var(--kb-text-secondary);
@@ -607,7 +686,21 @@ onUnmounted(cleanup)
   overflow: hidden; font-size: 12.5px; line-height: 1.5; color: var(--kb-text-secondary);
 }
 
+.doc-preview__more {
+  display: flex; align-items: center; gap: 10px; justify-content: center;
+  padding: 10px 0 2px; color: var(--kb-text-tertiary); font-size: 12px;
+}
+
 /* M5 结构化数据 */
+.doc-preview__cards {
+  --el-collapse-border-color: var(--kb-border-light);
+}
+.doc-preview__cards :deep(.el-collapse-item__header) {
+  font-weight: 600; font-size: 13px; color: var(--kb-text-primary);
+}
+.doc-preview__cards :deep(.el-collapse-item__content) {
+  padding-bottom: 12px;
+}
 .doc-preview__card {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;

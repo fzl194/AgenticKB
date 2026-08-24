@@ -37,7 +37,8 @@ async def test_non_ascii_filename_download_headers():
     assert "filename*=UTF-8''" in disposition
     assert "%E7%AB%AF%E5%88%B0%E7%AB%AF" in disposition  # 「端到端」
     assert "验收" not in disposition  # 头本身必须纯 ASCII
-    assert response.body.decode("utf-8").startswith("# 中文内容")
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    assert body.decode("utf-8").startswith("# 中文内容")
 
 
 @pytest.mark.asyncio
@@ -49,3 +50,20 @@ async def test_ascii_filename_download_headers_unchanged():
     disposition = response.headers["content-disposition"]
     assert 'filename="report.txt"' in disposition
     assert "filename*=UTF-8''report.txt" in disposition
+
+
+@pytest.mark.asyncio
+async def test_preview_url_route_returns_presigned_access():
+    """大文件预览直连：路由返回短时效预签名 URL（duck-typed 服务）."""
+    from knowledge_mining.mining.kb.routes.documents import document_preview_url
+
+    class _PresignStub:
+        async def presign_document(self, *, document_id: str, user_id: str,
+                                   expires_in: int = 600):
+            return "手册.pdf", "application/pdf", "http://minio/presigned?X-Amz=1"
+
+    resp = await document_preview_url(
+        "kb-1", "doc-1", user={"id": "alice"}, svc=_PresignStub(),
+    )
+    assert resp["url"].startswith("http://minio/presigned")
+    assert resp["expires_in"] == 600

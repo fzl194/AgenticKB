@@ -306,6 +306,42 @@ class DocumentService:
         ))
         return doc.get("document_name") or "document", record.mime, stream
 
+    async def presign_document(
+        self, *, document_id: str, user_id: str, expires_in: int = 600
+    ) -> tuple[str, str | None, str] | None:
+        """对象文档预签名 URL：浏览器直连 MinIO 按需（Range）加载。
+
+        大文件（如十几 MB 的 PDF）在线预览若经"后端全量转发→前端 Blob"
+        两跳全量下载，首屏极卡；预签名 URL 让 iframe/img 直接指向对象
+        存储浏览器自带的分页按需加载（首屏只拉第一页字节）。鉴权在本
+        方法（KB 成员可见性），URL 本身短时效（默认 10 分钟）自失效。
+        无 ``storage_object_id``（legacy 本地文档）返回 None 走回落。
+        """
+        doc = await self._db.get_document_identity(document_id)
+        if doc is None:
+            raise NotFound(document_id)
+        await self._svc._assert_read(doc["kb_id"], user_id)
+        if not doc.get("storage_object_id"):
+            return None
+        if self._object_store is None or self._storage_objects is None:
+            raise RuntimeError("KB object storage is not configured")
+        record = await self._storage_objects.get(doc["storage_object_id"])
+        if record is None or record.state != "AVAILABLE":
+            raise NotFound(document_id)
+        from knowledge_mining.mining.contracts.storage.types import (
+            ObjectLocation,
+        )
+
+        access = await self._object_store.presign_get(
+            ObjectLocation(
+                bucket=record.bucket, object_key=record.object_key,
+                version_id=record.object_version_id,
+            ),
+            expires_in_seconds=expires_in,
+        )
+        name = doc.get("document_name") or "document"
+        return name, record.mime, access.url
+
     async def download_path(self, *, document_id: str, user_id: str) -> Path:
         doc = await self._db.get_document_identity(document_id)
         if doc is None:

@@ -158,6 +158,31 @@ async def patch_document(
         raise _map_error(exc) from None
 
 
+@router.get("/{document_id}/preview-url")
+async def document_preview_url(
+    kb_id: str,
+    document_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    svc: DocumentService = Depends(get_document_service),
+):
+    """大文件在线预览的直连地址（短时效预签名，10 分钟自失效）.
+
+    浏览器拿到后 iframe/img 直接指向对象存储，自带 Range 分页按需
+    加载（首屏只拉首页字节）——替代"后端全量转发→前端 Blob"的全量
+    下载路径。legacy 本地文档无对象可签，返回 404 由前端回落。
+    """
+    try:
+        presigned = await svc.presign_document(
+            document_id=document_id, user_id=user["id"],
+        )
+    except (NotFound, Forbidden) as exc:
+        raise _map_error(exc) from None
+    if presigned is None:
+        raise HTTPException(404, "Document has no presignable object")
+    _, _, url = presigned
+    return {"url": url, "expires_in": 600}
+
+
 @router.get("/{document_id}/download")
 async def download_document(
     kb_id: str,
@@ -166,14 +191,14 @@ async def download_document(
     svc: DocumentService = Depends(get_document_service),
 ):
     try:
-        # 对象存储文档：流式返回对象字节；legacy 本地文档回落文件路径。
+        # 对象存储文档：流式转发对象字节（不整读内存）；legacy 本地文档
+        # 回落文件路径。
         obj = await svc.download_object(
             document_id=document_id, user_id=user["id"],
         )
         if obj is not None:
             filename, mime, stream = obj
-            chunks = [chunk async for chunk in stream]
-            from fastapi.responses import Response
+            from fastapi.responses import StreamingResponse
             from urllib.parse import quote
 
             # HTTP 头只允许 latin-1：中文文件名走 RFC 5987 的 filename*，
@@ -183,8 +208,8 @@ async def download_document(
                 f'attachment; filename="{ascii_name}"; '
                 f"filename*=UTF-8''{quote(filename)}"
             )
-            return Response(
-                content=b"".join(chunks),
+            return StreamingResponse(
+                stream,
                 media_type=mime or "application/octet-stream",
                 headers={"Content-Disposition": disposition},
             )

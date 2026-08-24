@@ -214,6 +214,8 @@ import { ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
 import { useMiningApi } from '@/api/mining'
+// 共用一份 run 状态文案：这里原先缺 queued、多一个 DB CHECK 里不存在的 pending
+import { runStatusLabel as statusLabel } from '@/utils/runStatus'
 import type { RunTrace } from '@/types'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import PipelineFlow from '@/components/kb/PipelineFlow.vue'
@@ -232,14 +234,6 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 let resumeTimer: ReturnType<typeof setTimeout> | null = null
 
 // ── Formatters ──
-
-function statusLabel(status: string) {
-  const map: Record<string, string> = {
-    running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消', pending: '等待中',
-    awaiting_review: '待人审', interrupted: '已中断',
-  }
-  return map[status] || status
-}
 
 function docStatusLabel(status: string) {
   const map: Record<string, string> = {

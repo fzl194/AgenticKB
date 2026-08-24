@@ -65,21 +65,24 @@ function render() {
   })
 }
 
+/** 具名处理函数，好让 onUnmounted 能摘掉它（原来是内联箭头，永不回收）。 */
+function handleResize() {
+  chart?.resize()
+}
+
 onMounted(() => {
   if (chartRef.value) {
     chart = echarts.init(chartRef.value)
     render()
   }
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
   chart?.dispose()
   chart = null
 })
 
 watch(() => [props.labels, props.series], render, { deep: true })
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('resize', () => chart?.resize())
-}
 </script>

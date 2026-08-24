@@ -28,7 +28,16 @@ export interface KnowledgeStats {
   builds: number
   releases: number
   retrieval_units_by_type?: Record<string, number>
-  active_release?: string
+  /**
+   * 该域该 channel 下的 active release（后端字段是**复数** `active_releases`，
+   * 原先这里写成 `active_release?: string` 是错的，从来取不到值）。
+   *
+   * 它是区分「口径不适用」与「真的是 0」的唯一依据：全部计数都只统计域级 active
+   * release 的范围，纯 KB 部署永远没有 release，一排 0 并不代表没有知识。
+   * 后端刻意保留这个区分——撤回最后一个文档会发布一个**空**的 active build，
+   * 那种情况下的 0 是真的 0。
+   */
+  active_releases?: Array<{ id: string; domain: string; channel: string }>
 }
 
 // ─── Mining Run ───

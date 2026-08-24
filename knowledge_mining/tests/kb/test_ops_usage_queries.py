@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import pytest_asyncio
 
 from knowledge_mining.mining.infra.query_log_db import QueryLogStats
 
@@ -54,7 +55,9 @@ CREATE TABLE IF NOT EXISTS serving_query_logs (
 """
 
 
-@pytest.fixture
+# async fixture 必须交给 pytest_asyncio 接管（仓库为 strict 模式，
+# 无 asyncio_mode=auto 配置——普通 @pytest.fixture 会无人处理）。
+@pytest_asyncio.fixture
 async def qlog(async_pool):
     """建表 + 清空 + 交出仓储；用完把表删掉，不污染同库的其余用例。"""
     async with async_pool.connection() as conn:

@@ -20,8 +20,10 @@ _SEGMENT_COMPILE = "segment_compile"
 
 #: 切片档位默认值换代（v2 编译器，2026-08）：启动自愈时把"恰好等于
 #: 旧默认值"的 segment_compile 参数刷成新默认（大上下文窗口尺度 +
-#: 表格默认整表）。只改这三个键且只在值等于旧默认时改写——幂等不动
-#: 用户显式选择的其它值。
+#: 表格默认整表）。两种命中形态：显式等于旧默认，或**键缺失**（草稿
+#: 依赖默认值时，发布版 manifest 在旧时代发布即烤死旧默认——空参数
+#: 必须显式补新默认才能触发重发版）。只改这三个键——幂等不动用户显
+#: 式选择的其它值。
 _OLD_SEGMENT_DEFAULTS = {"maxTokens": 512, "minTokens": 64, "tableView": "rows"}
 _NEW_SEGMENT_DEFAULTS = {"maxTokens": 2048, "minTokens": 512, "tableView": "whole"}
 
@@ -120,17 +122,21 @@ def _segment_params(legacy: dict[str, Any]) -> dict[str, Any]:
 
 
 def _refresh_segment_defaults(graph: dict[str, Any]) -> dict[str, Any]:
-    """已 v2 图：segment_compile 参数里等于旧默认值的键刷成新默认.
+    """已 v2 图：segment_compile 参数刷成新默认档位.
 
-    幂等固定点：刷成新默认后二次运行不再命中旧默认 → 图不再变化，
-    启动自愈的"图未变则不重发版"判断保持成立。
+    命中两种形态：值等于旧默认（显式烤死）、或键缺失（草稿空参数，
+    但已发布 manifest 在旧时代发布时烤死了旧默认——补显式新默认才能
+    触发重发版让运行吃到新档位）。
+
+    幂等固定点：补齐/刷新后二次运行不再命中 → 图不再变化，启动自愈的
+    "图未变则不重发版"判断保持成立。
     """
     for node in graph.get("nodes") or ():
         if node.get("operatorType") != _SEGMENT_COMPILE:
             continue
         params = dict(node.get("params") or {})
         for key, new_value in _NEW_SEGMENT_DEFAULTS.items():
-            if params.get(key) == _OLD_SEGMENT_DEFAULTS[key]:
+            if key not in params or params[key] == _OLD_SEGMENT_DEFAULTS[key]:
                 params[key] = new_value
         node["params"] = params
     return graph

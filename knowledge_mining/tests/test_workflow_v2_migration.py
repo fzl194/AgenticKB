@@ -114,6 +114,31 @@ def test_v2_graph_with_old_segment_defaults_refreshed_to_new() -> None:
     assert upgrade_graph_to_v2(refreshed) == refreshed
 
 
+def test_v2_graph_with_empty_params_gets_new_defaults() -> None:
+    """空参数草稿（发布版烤死旧默认的形态）→ 显式补新默认触发重发版.
+
+    生产事故形态（2026-08-24）："基础文档入库"草稿 segment_compile
+    params={}，已发布 manifest 在旧时代发布时烤死 512/64/rows——
+    只刷"显式等于旧默认"够不到它，必须把缺失键也补上。
+    """
+    from knowledge_mining.mining.workflow.v2_migration import upgrade_graph_to_v2
+
+    once = upgrade_graph_to_v2(_v1_graph())
+    compile_node = next(
+        n for n in once["nodes"] if n["operatorType"] == "segment_compile"
+    )
+    compile_node["params"] = {}  # 空参数：依赖默认值的草稿形态
+
+    refreshed = upgrade_graph_to_v2(once)
+    params = next(
+        n for n in refreshed["nodes"] if n["operatorType"] == "segment_compile"
+    )["params"]
+    assert params["maxTokens"] == 2048
+    assert params["minTokens"] == 512
+    assert params["tableView"] == "whole"
+    assert upgrade_graph_to_v2(refreshed) == refreshed  # 幂等
+
+
 def test_upgrade_graph_rejects_mixed_v1_and_v2_parse_operators() -> None:
     from knowledge_mining.mining.workflow.v2_migration import (
         WorkflowV2MigrationError,

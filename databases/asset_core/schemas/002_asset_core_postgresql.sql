@@ -114,7 +114,9 @@ CREATE TABLE IF NOT EXISTS asset_raw_segments (
     semantic_role       TEXT NOT NULL DEFAULT 'unknown' CHECK (
         semantic_role IN (
             'concept', 'parameter', 'example', 'note', 'procedure_step',
-            'troubleshooting_step', 'constraint', 'alarm', 'checklist', 'unknown'
+            'troubleshooting_step', 'constraint', 'alarm', 'checklist',
+            'definition', 'enumeration', 'conclusion', 'navigation',
+            'overview', 'unknown'
         )
     ),
     raw_text            TEXT NOT NULL,
@@ -195,7 +197,9 @@ CREATE TABLE IF NOT EXISTS asset_retrieval_units (
     semantic_role        TEXT NOT NULL DEFAULT 'unknown' CHECK (
         semantic_role IN (
             'concept', 'parameter', 'example', 'note', 'procedure_step',
-            'troubleshooting_step', 'constraint', 'alarm', 'checklist', 'unknown'
+            'troubleshooting_step', 'constraint', 'alarm', 'checklist',
+            'definition', 'enumeration', 'conclusion', 'navigation',
+            'overview', 'unknown'
         )
     ),
     facets_json          JSONB NOT NULL DEFAULT '{}'::jsonb,

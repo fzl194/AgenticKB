@@ -61,6 +61,11 @@ _M4_PARSE_RUN_STATE_DDL = (
 _M5_SEGMENT_LINKS_DDL = (
     _REPO_ROOT / "databases" / "asset_core" / "schemas" / "011_m5_segment_links_postgresql.sql"
 )
+# 切片编译器 v2 语义角色词表（definition/enumeration/...）：存量库约束加宽，
+# 幂等 DROP+ADD（同 007 block_type 模式）。
+_SEMANTIC_ROLE_V2_DDL = (
+    _REPO_ROOT / "databases" / "asset_core" / "schemas" / "012_semantic_role_v2.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -143,6 +148,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _M4_PARSE_RUN_STATE_DDL,
         # M5 切片落库：asset_raw_segments 增列 + links 表。
         _M5_SEGMENT_LINKS_DDL,
+        # v2 语义角色词表加宽（存量库幂等迁移）。
+        _SEMANTIC_ROLE_V2_DDL,
     )
 
 

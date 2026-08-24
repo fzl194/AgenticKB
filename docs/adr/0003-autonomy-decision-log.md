@@ -379,3 +379,12 @@
 - **同文档前后对比（真实 IR 重切实测）**：317 片 → **62 片（-80%）**；30 表全部原子整片；p50 64→355 tok，均 133→518 tok；<32 tok 碎片 62→**0**；角色/表格类型全标注（definition 46/constraint 9/conclusion 3/enumeration 1/navigation 3；definition_table 17/relation_table 3/generic_table 10）。重刷方式：对文档重新触发"更新知识"（编译指纹变化→新快照，A08 复用 IR 不重新解析）。
 - **验证**：segment_compiler 套件 30 passed（新增 test_compiler_v2.py 10 用例覆盖小片治理/表格原子/超限降级/行边界切分/语义标注）；迁移参数刷新 4 用例（含幂等）；m6/manifest/options/golden corpus 断言对齐新默认；全量套件与 DB 门控批次结果见提交说明。
 - **明确不做（范围外留档）**：解析算子零改动（审计健康：结构/层级/单元格级 TableAsset 完整）；contextual retrieval（每片 LLM 上下文前缀）与父子双层检索索引留给向量化阶段；md 列表项粒度恢复（需动解析指纹，性价比低）。
+
+## D-039 ｜ 强挖事故修复：semantic_role 约束加宽 + 范式档位自愈补缺（2026-08-24）
+- **事故**：用户对 test2 md 点"强制重挖"失败。节点事件定位：document_parse ✓ → segment_compile ✗（`asset_raw_segments_semantic_role_check` 拒绝 v2 新角色 `definition`——002 DDL 白名单是旧域词表 concept/parameter/...，与 D-038 新角色不相交）→ asset_persist 未跑 → finalize 报缺能力（连锁伤）。**切片替换为单事务，失败整体回滚，旧 317 片无损**。
+- **漏网根因**：PgSegmentStore 此前没有任何真库用例——新角色值从未经过真约束验证；测试样例章节标题不匹配角色模式全落 unknown，DB 门控批次形同虚设。
+- **修复 1（约束）**：002 双表（asset_raw_segments + asset_retrieval_units）semantic_role CHECK 加宽为旧词表 ∪ v2 词表（definition/enumeration/conclusion/navigation/overview）；新增 `012_semantic_role_v2.sql` 幂等 DROP+ADD 迁移（同 007 模式）挂 pg_schema 链尾——新库直建新词表、存量库启动自愈。**真库已应用并验证**。
+- **修复 2（自愈补缺）**：强挖 run 的 manifest 仍用旧档位（512/64/rows）——"基础文档入库"草稿 segment_compile params={}（依赖默认值），发布版在旧时代发布时烤死旧默认；D-038 的 `_refresh_segment_defaults` 只刷"显式等于旧默认"够不到空参数。补齐：**键缺失也显式写入新默认**（幂等固定点不变），触发重发版让全部范式吃到新档位。
+- **修复 3（测试防线）**：新增 `tests/segment_compiler/test_repositories_pg.py`（DB 门控）：v2 全角色值过真约束 + 替换语义/指纹读回 round trip——补上缺失的防线；迁移测试补空参数形态用例。
+- **范式存储结论（用户问询，代码级核实）**：范式真相源在代码（templates.py 七套图 + paradigms.py 六范式）；启动 `ensure_workflow_library()` 按名引种缺失项并发布"初始范式版本"（空库冷启动自动初始化，已有测试覆盖六范式+幂等）；发布即冻结——run 执行已发布 manifest，代码模板后续演进靠自愈迁移同步（本 D 修复 2 即该机制的一环）。
+- **验证**：迁移/切片本地 35 passed；全量套件（含 DB 真库批次，测试库经 ensure_schema 自动吃到 012）结果见提交说明；真库约束已实际加宽（BEFORE/AFTER 已核）。

@@ -440,6 +440,10 @@ export interface ParseResultSegment {
   heading_chain: { level: number; title: string }[]
   text: string
   element_ids: string[]
+  /** 语义角色（segment-compiler v2 起标注；旧快照可能为空） */
+  semantic_role?: string | null
+  /** token 计数（字符近似，CJK 1 字 ≈ 1 token） */
+  token_count?: number | null
 }
 
 export interface ParseResult {

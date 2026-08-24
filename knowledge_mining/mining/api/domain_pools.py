@@ -56,6 +56,7 @@ class DomainPoolManager:
         self._sync_factory = sync_pool_factory
         self._groups: dict[PoolKey, _PoolGroup] = {}
         self._ensured: set[PoolKey] = set()
+        self._ensure_locks: dict[PoolKey, threading.Lock] = {}
         self._state_lock = threading.RLock()
         self._async_lock = asyncio.Lock()
         self._closed = False
@@ -66,11 +67,22 @@ class DomainPoolManager:
         return resolved, _pool_key(resolved)
 
     def _ensure_once(self, key: PoolKey, resolved: ResolvedDomainDatabase) -> None:
+        """对目标库跑一次全量 DDL（幂等）。按库单飞；DDL 不持有 _state_lock。
+
+        远端库上一套重放要跑几十秒——若在 _state_lock 内执行，其他协程在
+        fast-path 上的 `with self._state_lock` 会被连带冻住（那可是事件循环线程）。
+        """
         with self._state_lock:
             if key in self._ensured:
                 return
+            ensure_lock = self._ensure_locks.setdefault(key, threading.Lock())
+        with ensure_lock:
+            with self._state_lock:  # 双检：等锁期间可能已被前一个完成
+                if key in self._ensured:
+                    return
             self._ensure_schema(resolved)
-            self._ensured.add(key)
+            with self._state_lock:
+                self._ensured.add(key)
 
     def _assert_open(self) -> None:
         if self._closed:
@@ -92,7 +104,11 @@ class DomainPoolManager:
                     return group.async_pool
 
             try:
-                self._ensure_once(key, resolved)
+                # ensure 必须跑在工作线程：DDL 里的 ALTER TABLE 若撞上别的连接
+                # 未提交的事务会在服务端排队等锁——直接跑在事件循环上时，持有
+                # 事务的协程永远轮不到 commit，两者互等即全服务冻结
+                # （2026-08-24 Docker 登录并发触发的事故）。
+                await asyncio.to_thread(self._ensure_once, key, resolved)
                 candidate = self._async_factory(
                     resolved.conninfo,
                     min_size=resolved.pool_min,

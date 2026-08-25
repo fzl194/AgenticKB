@@ -124,13 +124,19 @@ def _raw_file(document_key="doc-1.md"):
 # ---------------------------------------------------------------------------
 
 
-def _parse_facade(operator, documents, objects, *, plan_factory=None):
+def _parse_facade(operator, documents, objects, store, *, plan_factory=None):
+    from knowledge_mining.mining.frozen_input.service import FrozenInputService
     from knowledge_mining.mining.workflow.new_chain_services import (
         DocumentParseFacade,
     )
 
+    # P03 后 freeze 链是门面必需组件（frozen_inputs 缺失 → 一律 SKIP）。
+    frozen_inputs = FrozenInputService(
+        documents=documents, storage_objects=objects, object_store=store,
+    )
     return DocumentParseFacade(
         operator=operator, documents=documents, storage_objects=objects,
+        frozen_inputs=frozen_inputs,
         plan_factory=plan_factory or (lambda raw, params: ParsePlan(
             plan_id="p", primary_parser_id="legacy_markdown",
         )),
@@ -144,7 +150,7 @@ def test_parse_facade_happy_path_returns_outcome(tmp_path):
         documents = MemoryDocumentCurrentContentRepository()
         await _seed(store, objects, documents)
         operator = _StubOperator()
-        facade = _parse_facade(operator, documents, objects)
+        facade = _parse_facade(operator, documents, objects, store)
         outcome = facade.parse_document(
             _raw_file(), params={"qualityProfile": "default"},
             domain="default", run_document_id="rd-1",
@@ -159,16 +165,17 @@ def test_parse_facade_happy_path_returns_outcome(tmp_path):
     assert asyncio.new_event_loop().run_until_complete(scene())
 
 
-def test_parse_facade_document_without_object_returns_none():
+def test_parse_facade_document_without_object_returns_none(tmp_path):
     async def scene():
         documents = MemoryDocumentCurrentContentRepository()
         objects = MemoryStorageObjectRepository()  # 空：对象未注册
+        store = FakeObjectStore(str(tmp_path / "facade-objects"))
         await documents.create_document(
             kb_id="kb1", document_id="doc-9", folder_id=None, owner_id=None,
             document_name="d", document_type="other",
             storage_object_id="so_missing", source_raw_hash="x" * 0 or "x",
         )  # 指针指向未注册对象（旧链 storage_path 文档形态）
-        facade = _parse_facade(_StubOperator(), documents, objects)
+        facade = _parse_facade(_StubOperator(), documents, objects, store)
         from types import SimpleNamespace
 
         raw = SimpleNamespace(
@@ -190,7 +197,7 @@ def test_parse_facade_failed_run_raises(tmp_path):
         objects = MemoryStorageObjectRepository()
         await _seed(store, objects, documents)
         facade = _parse_facade(
-            _StubOperator(final="FAILED"), documents, objects,
+            _StubOperator(final="FAILED"), documents, objects, store,
         )
         with pytest.raises(RuntimeError, match="quality decision FAIL"):
             facade.parse_document(
@@ -209,6 +216,7 @@ def test_parse_facade_maps_budget_params_into_plan(tmp_path):
         objects = MemoryStorageObjectRepository()
         await _seed(store, objects, documents)
         operator = _StubOperator()
+        from knowledge_mining.mining.frozen_input.service import FrozenInputService
         from knowledge_mining.mining.workflow.new_chain_services import (
             DocumentParseFacade,
         )
@@ -216,6 +224,9 @@ def test_parse_facade_maps_budget_params_into_plan(tmp_path):
         facade = DocumentParseFacade(
             operator=operator, documents=documents,
             storage_objects=objects,
+            frozen_inputs=FrozenInputService(
+                documents=documents, storage_objects=objects, object_store=store,
+            ),
             plan_factory=DocumentParseFacade.default_plan_factory,
         )
         facade.parse_document(

@@ -219,7 +219,7 @@ class DocumentParseFacade:
         self, document_id: str, raw_file: Any, plan: ParsePlan, domain: str
     ) -> Any | None:
         from dataclasses import replace
-        from knowledge_mining.mining.frozen_input.contracts import StorageObjectMissing
+        from knowledge_mining.mining.contracts.storage.errors import StorageObjectMissing
 
         if self._frozen_inputs is None:
             return None

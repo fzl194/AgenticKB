@@ -1,8 +1,8 @@
-# Phase 2 鉴权配置。
-# 部署时务必把下列 secret / 密码改为强随机值；首登后从 auth.yaml 移除 bootstrap.admin_password。
+# Authentication configuration. Runtime secrets are supplied by the deployment
+# environment and must never be committed to this file.
 enabled: true
-jwt_secret: change-me-to-a-strong-random-32byte-hex
+jwt_secret_env: CMKB_JWT_SECRET
 token_ttl_seconds: 43200
-internal_verify_secret: change-me-internal-verify-secret
+internal_verify_secret_env: CMKB_INTERNAL_VERIFY_SECRET
 bootstrap:
-  admin_password: change-me-on-first-login
+  admin_password_env: CMKB_BOOTSTRAP_ADMIN_PASSWORD

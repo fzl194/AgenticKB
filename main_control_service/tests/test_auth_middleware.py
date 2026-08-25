@@ -136,16 +136,39 @@ def test_reload_via_endpoint(tmp_path):
         assert r.json()["enabled"] is False
 
 
-def test_placeholder_secrets_force_disabled(tmp_path):
-    """jwt_secret/internal_verify_secret 仍是样板占位符 → enabled 强制视为 false（防误部署伪造）。"""
+def test_placeholder_secrets_fail_closed(tmp_path):
+    """jwt_secret/internal_verify_secret 仍是样板占位符时，启用的认证不能退化为放行。"""
     with TestClient(_mw_app(tmp_path, auth_text=(
         "enabled: true\n"
         "jwt_secret: change-me-to-a-strong-random-32byte-hex\n"
         "token_ttl_seconds: 3600\n"
         "internal_verify_secret: change-me-internal-verify-secret\n"
     ))) as c:
-        # 占位符 secret → 强制关闭 → 无 token 放行（运维会因 mining 全 401 立刻发现）
-        assert c.get("/api/v1/me").status_code == 200
+        assert c.get("/api/v1/me").status_code == 503
+
+
+def test_environment_referenced_secrets_enable_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("CMKB_TEST_JWT_SECRET", "jwt-from-env")
+    monkeypatch.setenv("CMKB_TEST_INTERNAL_SECRET", "internal-from-env")
+    auth_text = (
+        "enabled: true\n"
+        "jwt_secret_env: CMKB_TEST_JWT_SECRET\n"
+        "internal_verify_secret_env: CMKB_TEST_INTERNAL_SECRET\n"
+    )
+    with TestClient(_mw_app(tmp_path, auth_text=auth_text)) as c:
+        assert c.get("/api/v1/me").status_code == 401
+        token = _token("member", secret="jwt-from-env")
+        assert c.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+def test_enabled_auth_without_resolved_secrets_rejects_requests(tmp_path):
+    auth_text = (
+        "enabled: true\n"
+        "jwt_secret_env: MISSING_JWT_SECRET\n"
+        "internal_verify_secret_env: MISSING_INTERNAL_SECRET\n"
+    )
+    with TestClient(_mw_app(tmp_path, auth_text=auth_text)) as c:
+        assert c.get("/api/v1/me").status_code == 503
 
 
 def test_cors_preflight_passes_before_auth(tmp_path):

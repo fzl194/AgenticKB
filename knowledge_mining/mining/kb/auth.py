@@ -7,6 +7,7 @@ site_role 由库现查（require_admin），不靠 X-KB-Role 头。
 """
 from __future__ import annotations
 
+from hmac import compare_digest
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -15,8 +16,8 @@ from knowledge_mining.mining.infra.control_plane import get_internal_verify_secr
 from knowledge_mining.mining.kb.db import KbDB
 
 
-async def current_user(request: Request) -> dict[str, Any]:
-    """Resolve caller from X-KB-User + X-Internal-Auth; upsert kb_users row."""
+async def authenticate_request(request: Request) -> dict[str, Any]:
+    """Resolve and validate the trusted gateway identity once per request."""
     username = request.headers.get("X-KB-User", "").strip()
     if not username:
         raise HTTPException(401, "missing X-KB-User header")
@@ -24,13 +25,23 @@ async def current_user(request: Request) -> dict[str, Any]:
     if not secret:
         # auth.yaml 未就绪（启动期控制面不可达）—— 一律拒，避免无 secret 时放行
         raise HTTPException(401, "auth not initialized")
-    if request.headers.get("X-Internal-Auth", "") != secret:
+    if not compare_digest(request.headers.get("X-Internal-Auth", ""), secret):
         raise HTTPException(401, "unauthenticated")
     db = KbDB(request.app.state.pg_pool)
     user = await db.upsert_user_by_username(username)
     # disabled 账号即使持有有效 JWT（12h 内）也立即失效 —— 禁用要即时生效。
     if user.get("status") == "disabled":
         raise HTTPException(401, "account disabled")
+    return user
+
+
+async def current_user(request: Request) -> dict[str, Any]:
+    """Return the API guard's identity or authenticate a standalone route call."""
+    user = getattr(request.state, "authenticated_user", None)
+    if isinstance(user, dict):
+        return user
+    user = await authenticate_request(request)
+    request.state.authenticated_user = user
     return user
 
 

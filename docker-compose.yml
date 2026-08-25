@@ -41,11 +41,11 @@ services:
     # 宿主机端口与容器端口映射
     ports:
       - "${CMKB_UI_PORT:-8080}:80"         # Nginx，对外提供知识库前端页面
-      - "${CMKB_LLM_PORT:-8900}:8900"      # 大模型服务 llm_service
-      - "${CMKB_MINING_PORT:-8901}:8901"   # 知识挖掘服务 knowledge_mining
-      - "${CMKB_CONTROL_PORT:-8910}:8910"  # 主控服务 main_control_service
-      - "${CMKB_SERVING_PORT:-8081}:8081"  # 在线检索服务 agent_serving_java
-      - "${CMKB_MCP_PORT:-9000}:9000"      # MCP 服务 mcp_server
+      - "127.0.0.1:${CMKB_LLM_PORT:-8900}:8900"      # 大模型服务 llm_service
+      - "127.0.0.1:${CMKB_MINING_PORT:-8901}:8901"   # 知识挖掘服务 knowledge_mining
+      - "127.0.0.1:${CMKB_CONTROL_PORT:-8910}:8910"  # 主控服务 main_control_service
+      - "127.0.0.1:${CMKB_SERVING_PORT:-8081}:8081"  # 在线检索服务 agent_serving_java
+      - "127.0.0.1:${CMKB_MCP_PORT:-9000}:9000"      # MCP 服务 mcp_server
 
     volumes:
       # Docker 命名卷，用于持久化上传文件。
@@ -71,6 +71,12 @@ services:
       - ./databases:/app/databases
 
     environment:
+      # Authentication secrets are injected at deploy time and never committed.
+      CMKB_JWT_SECRET: "${CMKB_JWT_SECRET:-}"
+      CMKB_INTERNAL_VERIFY_SECRET: "${CMKB_INTERNAL_VERIFY_SECRET:-}"
+      CMKB_BOOTSTRAP_ADMIN_PASSWORD: "${CMKB_BOOTSTRAP_ADMIN_PASSWORD:-}"
+      CMKB_CORS_ORIGINS: "${CMKB_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}"
+
       # 是否启用按依赖顺序启动服务。
       # 0：使用 Supervisor 默认自动启动行为。
       # 1：先停止所有子服务，再由部署脚本按顺序启动。
@@ -133,4 +139,3 @@ networks:
         # 默认使用 172.30.30.0/24 网段。
         # 可以通过 CMKB_DOCKER_SUBNET 环境变量覆盖。
         - subnet: ${CMKB_DOCKER_SUBNET:-172.30.30.0/24}
-

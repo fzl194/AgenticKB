@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -28,6 +29,12 @@ def _find_auth_mw(request: Request) -> AuthMiddleware | None:
             return layer
         layer = layer.app
     return None
+
+
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CMKB_CORS_ORIGINS", "")
+    configured = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return configured or ["http://localhost:8080", "http://127.0.0.1:8080"]
 
 
 async def verify_user_via_mining(
@@ -105,7 +112,7 @@ def create_app(
     app.add_middleware(AuthMiddleware, config_path=auth_yaml_path)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_origins(),
         allow_methods=["*"],
         allow_headers=["*"],
     )

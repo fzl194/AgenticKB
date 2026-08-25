@@ -10,6 +10,7 @@ verify 例外：它是登录语义（main_control 的服务端调用），不挂
 """
 from __future__ import annotations
 
+from hmac import compare_digest
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -65,7 +66,7 @@ def _require_internal(request: Request) -> None:
     secret = get_internal_verify_secret()
     if not secret:
         raise HTTPException(401, "auth not initialized")
-    if request.headers.get("X-Internal-Auth", "") != secret:
+    if not compare_digest(request.headers.get("X-Internal-Auth", ""), secret):
         raise HTTPException(401, "unauthenticated")
 
 

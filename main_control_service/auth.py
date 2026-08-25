@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -101,18 +102,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     @property
     def secrets_valid(self) -> bool:
-        return _secret_valid(self._state.get("jwt_secret")) and _secret_valid(
-            self._state.get("internal_verify_secret")
-        )
+        return _secret_valid(self.jwt_secret) and _secret_valid(self.internal_verify_secret)
 
     @property
     def enabled(self) -> bool:
-        # enabled 要求 secrets 有效：占位符/空 secret 时强制视为关闭。
-        return bool(self._state.get("enabled", False)) and self.secrets_valid
+        return bool(self._state.get("enabled", False))
+
+    def _secret(self, name: str) -> str:
+        env_name = self._state.get(f"{name}_env")
+        if isinstance(env_name, str) and env_name:
+            return os.getenv(env_name, "")
+        return str(self._state.get(name, ""))
 
     @property
     def jwt_secret(self) -> str:
-        return str(self._state.get("jwt_secret", ""))
+        return self._secret("jwt_secret")
 
     @property
     def token_ttl_seconds(self) -> int:
@@ -123,15 +127,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     @property
     def internal_verify_secret(self) -> str:
-        return str(self._state.get("internal_verify_secret", ""))
+        return self._secret("internal_verify_secret")
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # 暴露内部 secret 给 proxy（app.state 单例，所有请求共享读）。
         # 即使 enabled=False / SKIP_PATHS 也设置，保证 login(SKIP_PATH) 能拿到 secret 调 mining verify。
         request.app.state.internal_verify_secret = self.internal_verify_secret
 
-        if (not self.enabled
-                or request.method == "OPTIONS"
+        if not self.enabled:
+            return await call_next(request)
+        if not self.secrets_valid:
+            return JSONResponse(status_code=503, content={"detail": "auth misconfigured"})
+        if (request.method == "OPTIONS"
                 or request.url.path in _SKIP_PATHS
                 or _is_open_config_read(request.method, request.url.path)):
             return await call_next(request)

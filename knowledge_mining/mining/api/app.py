@@ -49,6 +49,19 @@ from knowledge_mining.mining.workflow.run_binding import WorkflowRunBinder
 logger = logging.getLogger(__name__)
 
 
+def _cors_origins() -> list[str]:
+    raw = os.getenv("CMKB_CORS_ORIGINS", "")
+    configured = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = configured or ["http://localhost:8080", "http://127.0.0.1:8080"]
+    for origin in origins:
+        parsed = urlsplit(origin)
+        if origin == "*":
+            raise ValueError("CMKB_CORS_ORIGINS cannot contain wildcard origins")
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(f"CMKB_CORS_ORIGINS contains invalid origin: {origin!r}")
+    return origins
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize PostgreSQL pool and ensure schema exists."""
@@ -88,7 +101,9 @@ async def lifespan(app: FastAPI):
     from knowledge_mining.mining.kb.bootstrap import seed_initial_admin
     try:
         _auth_cfg = fetch_auth_config(force=True)
-        _admin_pw = (_auth_cfg.get("bootstrap") or {}).get("admin_password") or ""
+        _admin_pw = os.getenv("CMKB_BOOTSTRAP_ADMIN_PASSWORD", "") or (
+            (_auth_cfg.get("bootstrap") or {}).get("admin_password") or ""
+        )
         await seed_initial_admin(pool, admin_password=_admin_pw)
     except Exception as exc:  # noqa: BLE001
         logger.warning("auth bootstrap skipped: %s", exc)
@@ -173,6 +188,9 @@ def create_app() -> FastAPI:
         description="Knowledge Mining Pipeline — REST API for triggering mining runs, "
                      "querying knowledge assets, and managing builds/releases.",
         lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
 
     app.include_router(health_router)
@@ -198,9 +216,12 @@ def create_app() -> FastAPI:
     app.include_router(workflows_router)
 
     # Allow cross-origin requests from the dev server and any local UI.
+    from knowledge_mining.mining.api.auth_guard import MiningApiAuthMiddleware
+
+    app.add_middleware(MiningApiAuthMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -250,7 +250,11 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            origin.strip()
+            for origin in os.getenv("CMKB_CORS_ORIGINS", "").split(",")
+            if origin.strip()
+        ] or ["http://localhost:8080", "http://127.0.0.1:8080"],
         allow_methods=["*"],
         allow_headers=["*"],
     )

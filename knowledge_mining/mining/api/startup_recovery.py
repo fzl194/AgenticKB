@@ -20,17 +20,20 @@ ResumeWorkflow = Callable[[str, str], Awaitable[None] | None]
 class StartupRecoveryResult:
     interrupted_run_ids: tuple[str, ...]
     failed_domains: tuple[str, ...]
+    workflow_runs: tuple[tuple[str, str], ...] = ()
 
 
 async def recover_startup_runs(
     *,
     domain_ids: tuple[str, ...],
     domain_pools: DomainPools,
-    resume_workflow: ResumeWorkflow,
     now: str,
-    max_concurrency: int = 2,
 ) -> StartupRecoveryResult:
-    """Interrupt abandoned runs and resume only workflow runs after one-process restart."""
+    """Interrupt abandoned runs atomically; collect workflow runs for background resume.
+
+    仅做标记（毫秒级），供 lifespan 同步等待；恢复是分钟级长任务，
+    必须走 schedule_startup_resumes 后台执行，否则会拖住 API 启动与健康检查。
+    """
     interrupted: list[str] = []
     failed_domains: list[str] = []
     workflow_runs: list[tuple[str, str]] = []
@@ -59,16 +62,37 @@ async def recover_startup_runs(
             if str(row.get("execution_engine") or "legacy") == "workflow":
                 workflow_runs.append((run_id, str(row["domain"])))
 
+    return StartupRecoveryResult(
+        tuple(interrupted), tuple(failed_domains), tuple(workflow_runs),
+    )
+
+
+# 持有后台任务强引用，防止事件循环只留弱引用导致任务被 GC 中途取消。
+_background_resume_tasks: set[asyncio.Task] = set()
+
+
+def schedule_startup_resumes(
+    result: StartupRecoveryResult,
+    resume_workflow: ResumeWorkflow,
+    *,
+    max_concurrency: int = 2,
+) -> "asyncio.Future[None]":
+    """在后台恢复 workflow Run：lifespan 只拿 future 不等待，长挖掘不拖住启动。"""
     semaphore = asyncio.Semaphore(max_concurrency)
 
     async def resume_one(run_id: str, domain: str) -> None:
         async with semaphore:
             try:
-                result = resume_workflow(run_id, domain)
-                if result is not None:
-                    await result
+                outcome = resume_workflow(run_id, domain)
+                if outcome is not None:
+                    await outcome
             except Exception:
                 logger.exception("Startup recovery resume failed for run %s", run_id)
 
-    await asyncio.gather(*(resume_one(run_id, domain) for run_id, domain in workflow_runs))
-    return StartupRecoveryResult(tuple(interrupted), tuple(failed_domains))
+    # gather 返回的 Future 已被事件循环调度，无需（也不可）再包 create_task。
+    task: "asyncio.Future[None]" = asyncio.gather(  # type: ignore[assignment]
+        *(resume_one(run_id, domain) for run_id, domain in result.workflow_runs)
+    )
+    _background_resume_tasks.add(task)
+    task.add_done_callback(_background_resume_tasks.discard)
+    return task

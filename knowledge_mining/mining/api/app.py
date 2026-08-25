@@ -46,7 +46,7 @@ from knowledge_mining.mining.workflow.repositories.global_workflow_repository im
 from knowledge_mining.mining.workflow.service import WorkflowService
 from knowledge_mining.mining.workflow.manifest import value_hash
 from knowledge_mining.mining.workflow.run_binding import WorkflowRunBinder
-from knowledge_mining.mining.api.startup_recovery import recover_startup_runs
+from knowledge_mining.mining.api.startup_recovery import recover_startup_runs, schedule_startup_resumes
 
 logger = logging.getLogger(__name__)
 
@@ -143,11 +143,13 @@ async def lifespan(app: FastAPI):
     recovery = await recover_startup_runs(
         domain_ids=enabled_domains,
         domain_pools=app.state.domain_pools,
-        resume_workflow=_resume_workflow_after_restart,
         now=_utcnow(),
     )
     if recovery.interrupted_run_ids:
         logger.warning("Startup recovery interrupted %d abandoned run(s)", len(recovery.interrupted_run_ids))
+    if recovery.workflow_runs:
+        schedule_startup_resumes(recovery, _resume_workflow_after_restart)
+        logger.info("Scheduled %d workflow run resume(s) in background", len(recovery.workflow_runs))
 
     async def _active_ontology_id(domain: str) -> str | None:
         domain_pool = await app.state.domain_pools.async_pool(domain)

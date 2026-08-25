@@ -162,6 +162,28 @@ class PgParseRunRepository:
             assert row is not None, "INSERT ... RETURNING must yield a row"
             return _parse_run_from_row(dict(row))
 
+    async def update_metadata(
+        self, parse_run_id: str, metadata_json: str
+    ) -> ParseRunRecord:
+        """只更新 JSONB 观测负载，不虚构一次状态迁移。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE asset_parse_runs
+                   SET metadata_json = %s
+                   WHERE id = %s
+                   RETURNING *""",
+                [
+                    json.dumps(
+                        json.loads(metadata_json or "{}"), ensure_ascii=False
+                    ),
+                    parse_run_id,
+                ],
+            )
+            row = await cur.fetchone()
+            if row is None:
+                raise KeyError(f"unknown parse run id: {parse_run_id!r}")
+            return _parse_run_from_row(dict(row))
+
     async def get(self, parse_run_id: str) -> ParseRunRecord | None:
         async with self._pool.connection() as conn:
             cur = await conn.execute(

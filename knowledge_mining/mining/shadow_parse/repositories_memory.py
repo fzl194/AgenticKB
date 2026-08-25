@@ -124,6 +124,16 @@ class MemoryParseRunRepository:
         self._by_id[parse_run_id] = updated
         return updated
 
+    async def update_metadata(
+        self, parse_run_id: str, metadata_json: str
+    ) -> ParseRunRecord:
+        existing = self._by_id.get(parse_run_id)
+        if existing is None:
+            raise KeyError(f"unknown parse run id: {parse_run_id!r}")
+        updated = replace(existing, metadata_json=metadata_json)
+        self._by_id[parse_run_id] = updated
+        return updated
+
     # -- 测试辅助（非 Protocol 成员） ---------------------------------------
 
     def count(self) -> int:

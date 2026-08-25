@@ -208,6 +208,12 @@ class ParseRunRepository(Protocol):
         """
         ...
 
+    async def update_metadata(
+        self, parse_run_id: str, metadata_json: str
+    ) -> ParseRunRecord:
+        """更新 Run 的观测元数据，不改变状态机位置。"""
+        ...
+
 
 @runtime_checkable
 class ParseAttemptRepository(Protocol):

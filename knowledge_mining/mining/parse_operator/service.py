@@ -185,6 +185,9 @@ class DocumentParseService:
                 return await self._final(rid)
 
             # 阶段如实推进（normalize/reconcile 已在 shadow.execute 内完成）。
+            await self._record_quality(
+                rid, attempt_index, parser_id, kind, outcome.quality_meta,
+            )
             await self._advance(rid, "NORMALIZING")
             await self._advance(rid, "RECONCILING")
             await self._advance(
@@ -304,6 +307,9 @@ class DocumentParseService:
             )
             return await self._final(rid)
 
+        await self._record_quality(
+            rid, 0, parser_id, "replay", outcome.quality_meta,
+        )
         await self._advance(rid, "NORMALIZING")
         await self._advance(rid, "RECONCILING")
         await self._advance(
@@ -395,6 +401,40 @@ class DocumentParseService:
                 ),
             ),),
             metrics=decision.metrics,
+        )
+
+    async def _record_quality(
+        self,
+        rid: str,
+        attempt_index: int,
+        parser_id: str,
+        attempt_kind: str,
+        quality_meta: dict[str, Any],
+    ) -> None:
+        """将每次已完成解析的质量结论追加到 Run 投影。"""
+        if not quality_meta:
+            return
+        record = await self._parse_runs.get(rid)
+        assert record is not None, f"parse run {rid} disappeared mid-flight"
+        try:
+            current = json.loads(record.metadata_json or "{}")
+        except json.JSONDecodeError:
+            current = {}
+        if not isinstance(current, dict):
+            current = {}
+        existing_attempts = current.get("quality_attempts")
+        attempts = list(existing_attempts) if isinstance(existing_attempts, list) else []
+        entry = {
+            "attempt_index": attempt_index,
+            "parser_id": parser_id,
+            "attempt_kind": attempt_kind,
+            "decision": quality_meta.get("quality_decision"),
+            "issues": quality_meta.get("quality_issues", []),
+            "metrics": quality_meta.get("quality_metrics", {}),
+        }
+        metadata = {**current, "quality_attempts": [*attempts, entry]}
+        await self._parse_runs.update_metadata(
+            rid, json.dumps(metadata, ensure_ascii=False, sort_keys=True),
         )
 
     async def _commit_or_supersede(

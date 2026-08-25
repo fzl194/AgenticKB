@@ -101,6 +101,17 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
+def _text_baseline(mime: str, data: bytes) -> str | None:
+    """从已聚合的冻结文本字节构造覆盖率基准，不增加对象存储读取。"""
+    if mime.lower() not in {"text/markdown", "text/plain"}:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        # 基准不可得不应阻断解析；解析器仍按自己的解码策略处理输入。
+        return None
+
+
 async def _chunked(payload: bytes) -> AsyncIterator[bytes]:
     """把已物化的制品字节切成 64 KiB 块喂给 ``put_stream``。"""
     for offset in range(0, len(payload), _CHUNK_SIZE):
@@ -229,9 +240,15 @@ class ShadowParseService:
         与 ``run`` 的区别：不写 ``asset_parse_runs`` 投影、不做幂等探针
         ——Run 生命周期与 attempt 审计由调用方（DocumentParseService）拥有。
         """
-        doc, artifact = await self._read_and_parse(frozen)
+        doc, artifact, source_bytes = await self._read_and_parse(frozen)
+        source_text_was_supplied = source_text is not None
+        effective_source_text = source_text
+        if effective_source_text is None:
+            effective_source_text = _text_baseline(frozen.mime, source_bytes)
         return await self._finish(
-            doc, artifact, source_text=source_text, budget=budget,
+            doc, artifact, source_text=effective_source_text,
+            enforce_source_coverage=source_text_was_supplied,
+            budget=budget,
             backend_attempts_used=backend_attempts_used,
         )
 
@@ -255,7 +272,9 @@ class ShadowParseService:
             norm.normalize, artifact, source_raw_hash=source_raw_hash,
         )
         return await self._finish(
-            doc, artifact, source_text=source_text, budget=budget,
+            doc, artifact, source_text=source_text,
+            enforce_source_coverage=source_text is not None,
+            budget=budget,
             backend_attempts_used=backend_attempts_used,
         )
 
@@ -265,6 +284,7 @@ class ShadowParseService:
         artifact: Any,
         *,
         source_text: str | None = None,
+        enforce_source_coverage: bool = False,
         budget: Any | None = None,
         backend_attempts_used: int = 0,
     ) -> AttemptOutcome:
@@ -277,6 +297,7 @@ class ShadowParseService:
         decision, quality_meta = self._evaluate_quality(
             doc,
             source_text=source_text,
+            enforce_source_coverage=enforce_source_coverage,
             budget=budget,
             backend_attempts_used=backend_attempts_used,
         )
@@ -322,7 +343,7 @@ class ShadowParseService:
 
     async def _read_and_parse(
         self, frozen: FrozenInput
-    ) -> tuple[ParsedDocument, Any]:
+    ) -> tuple[ParsedDocument, Any, bytes]:
         """流式读冻结对象（sha256 增量校验）、严格解码、parse + normalize。
 
         - parse 是同步 CPU 工作，经 ``asyncio.to_thread`` 下放（D-021 惯例），
@@ -330,7 +351,7 @@ class ShadowParseService:
         - normalize **不传 parse_run_id**：IR 制品字节必须对同一输入完全确定，
           否则内容寻址去重（D-002 / §2.2 幂等）永远 miss；run 归属只记录在
           ``asset_parse_runs`` 投影行，不进制品。
-        - 整改轮：返回 (IR, backend artifact)——artifact 随后持久化供 replay。
+        - 返回 IR、backend artifact 与已读取源字节，后者供质量基准复用。
         """
         chunks: list[bytes] = []
         async for chunk in self._reader.open_stream(frozen):
@@ -342,39 +363,50 @@ class ShadowParseService:
             artifact,
             source_raw_hash=frozen.source_raw_hash,
         )
-        return doc, artifact
+        return doc, artifact, data
 
     def _evaluate_quality(
         self,
         doc: ParsedDocument,
         *,
         source_text: str | None = None,
+        enforce_source_coverage: bool = False,
         budget: Any | None = None,
         backend_attempts_used: int = 0,
     ) -> tuple[Any | None, dict[str, Any]]:
         """质量门禁评估（C09）；未注入 gate 时返回 (None, {})（影子观测不阻断）."""
         if self._quality_gate is None:
             return None, {}
-        from knowledge_mining.mining.parse_quality import compute_metrics
+        from knowledge_mining.mining.parse_quality import (
+            compute_metrics,
+            quality_metrics_to_dict,
+        )
 
         metrics = compute_metrics(doc, source_text=source_text)
+        # S1 自动基准先用于观测：现有无 fallback 的生产链不能因历史解析
+        # 器的文本归一化差异被批量阻断。调用方显式传入基准时仍保留既有强制
+        # 门控语义；S2/S3 再把自动基准接入策略档与实际 fallback 链。
+        gate_metrics = metrics
+        if source_text is not None and not enforce_source_coverage:
+            from dataclasses import replace
+
+            gate_metrics = replace(metrics, char_coverage=None)
         decision = self._quality_gate.evaluate(
-            metrics,
+            gate_metrics,
             budget=budget,
             backend_attempts_used=backend_attempts_used,
         )
+        if gate_metrics is not metrics:
+            from dataclasses import replace
+
+            decision = replace(decision, metrics=metrics)
         meta = {
             "quality_decision": decision.decision,
             "quality_issues": [
                 {"code": i.code, "message": i.message}
                 for i in decision.issues
             ],
-            "quality_metrics": {
-                "element_count": metrics.element_count,
-                "evidence_locatability": metrics.evidence_locatability,
-                "table_cell_evidence": metrics.table_cell_evidence,
-                "reading_order_monotonicity": metrics.reading_order_monotonicity,
-            },
+            "quality_metrics": quality_metrics_to_dict(metrics),
         }
         return decision, meta
 

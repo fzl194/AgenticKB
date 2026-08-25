@@ -7,6 +7,7 @@ from knowledge_mining.mining.parse_quality.metrics import (
     GoldenExpectations,
     QualityMetrics,
     compute_metrics,
+    quality_metrics_to_dict,
 )
 from knowledge_mining.mining.parse_quality.gate import (
     QualityDecision,
@@ -21,4 +22,5 @@ __all__ = [
     "QualityMetrics",
     "QualityProfile",
     "compute_metrics",
+    "quality_metrics_to_dict",
 ]

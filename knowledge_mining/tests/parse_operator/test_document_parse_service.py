@@ -13,6 +13,7 @@ SRS 验收场景映射：
 """
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
@@ -337,6 +338,33 @@ async def test_quality_fallback_on_low_coverage(harness) -> None:
     events = await harness.attempts.list_by_run(run.id)
     kinds = [(e.attempt_kind, e.outcome) for e in events]
     assert kinds == [("primary", "FAILED"), ("fallback", "SUCCEEDED")]
+
+
+async def test_frozen_text_baseline_and_quality_metrics_are_persisted(harness) -> None:
+    """S1：编排不传 source_text 时也要以冻结源文本度量并留存每次尝试。"""
+    harness.register(StubParser("partial", text="line one\n"))
+    service = harness.make_service()
+    frozen = _frozen()
+    await harness.seed_source(frozen, b"line one\nline two\n")
+
+    # 生产调用不会手动传 source_text：ShadowParseService 必须复用已读取的
+    # 冻结字节构造基准。S1 先灰度观察，不因旧链尚无 fallback 而阻断结果。
+    run = await service.execute(
+        frozen, _plan("partial", "good"), domain="default",
+    )
+
+    assert run.status == "SUCCEEDED"
+    run_meta = json.loads(run.metadata_json)
+    quality_attempts = run_meta["quality_attempts"]
+    assert [item["decision"] for item in quality_attempts] == ["PASS"]
+    assert quality_attempts[0]["metrics"]["char_coverage"] < 0.85
+
+    # 失败 attempt 没有 snapshot，故 Run 投影是完整观测源；成功快照保留
+    # 同一份质量数值，方便结果读取端展示。
+    snapshot = await harness.snapshots.get(run.snapshot_id)
+    assert snapshot is not None
+    snapshot_meta = json.loads(snapshot.metadata_json)
+    assert snapshot_meta["quality_metrics"]["char_coverage"] < 0.85
 
 
 async def test_quality_fail_when_budget_exhausted(harness) -> None:

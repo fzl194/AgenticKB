@@ -214,6 +214,10 @@ class SnapshotCommitService:
     def _metadata(
         self, decision: QualityDecision, identity: Any
     ) -> str:
+        from knowledge_mining.mining.parse_quality.metrics import (
+            quality_metrics_to_dict,
+        )
+
         return json.dumps(
             {
                 "mode": "m4-commit",
@@ -222,6 +226,10 @@ class SnapshotCommitService:
                     {"code": i.code, "message": i.message}
                     for i in decision.issues
                 ],
+                "quality_metrics": (
+                    quality_metrics_to_dict(decision.metrics)
+                    if decision.metrics is not None else None
+                ),
                 "normalizer_version": identity.normalizer_version,
                 "reconciler_version": identity.reconciler_version,
                 "rule_config_fingerprint": identity.rule_config_fingerprint,

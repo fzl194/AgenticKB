@@ -13,6 +13,7 @@ builder，保证本层与 adapter 契约层测试同一份格式输入。
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -164,6 +165,16 @@ async def test_multi_format_document_to_structured_data(fmt: str, tmp_path):
         f"{getattr(snapshot, 'quality_status', None)}"
     )
     assert outcome.parse_ir_storage_object_id, f"{fmt}: Parse IR not stored"
+
+    if fmt in {"md", "txt"}:
+        # S1：生产组合根复用冻结源文本做基准；Run 是每次尝试（包括未来
+        # FAIL/FALLBACK）的权威观测源，成功快照则保留同一份指标副本。
+        parse_run = await parse_runs.get(outcome.id)
+        assert parse_run is not None
+        run_meta = json.loads(parse_run.metadata_json)
+        assert run_meta["quality_attempts"][0]["metrics"]["char_coverage"] is not None
+        snapshot_meta = json.loads(snapshot.metadata_json)
+        assert snapshot_meta["quality_metrics"]["char_coverage"] is not None
 
     # 2. 切片编译：生产默认档（whole 整表 + 大窗口 + 小片治理）
     compiled = services.segment_compile_service.compile_for_snapshot(

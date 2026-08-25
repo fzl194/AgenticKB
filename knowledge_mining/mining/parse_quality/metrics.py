@@ -155,6 +155,25 @@ def compute_metrics(
     )
 
 
+def quality_metrics_to_dict(metrics: QualityMetrics) -> dict[str, Any]:
+    """将质量指标转为稳定、可写入 JSONB 的观测负载。"""
+    return {
+        "element_count": metrics.element_count,
+        "container_count": metrics.container_count,
+        "char_coverage": metrics.char_coverage,
+        "evidence_locatability": metrics.evidence_locatability,
+        "table_cell_evidence": metrics.table_cell_evidence,
+        "table_grid_consistency": metrics.table_grid_consistency,
+        "heading_match_ratio": metrics.heading_match_ratio,
+        "anchor_hit_ratio": metrics.anchor_hit_ratio,
+        "table_count_match": metrics.table_count_match,
+        "structure_accuracy": metrics.structure_accuracy,
+        "reading_order_monotonicity": metrics.reading_order_monotonicity,
+        "empty_container_ids": list(metrics.empty_container_ids),
+        "warning_counts": dict(metrics.warning_counts),
+    }
+
+
 def _char_coverage(source_text: str, ir_text: str) -> float:
     """源实义字符的多重集合覆盖率."""
     src = _MEANINGFUL_RE.findall(source_text)
@@ -265,4 +284,5 @@ __all__ = [
     "GoldenExpectations",
     "QualityMetrics",
     "compute_metrics",
+    "quality_metrics_to_dict",
 ]

@@ -154,11 +154,13 @@ class DocumentParseFacade:
         *,
         operator: Any,
         documents: Any,
+        frozen_inputs: Any | None = None,
         storage_objects: Any | None = None,
         plan_factory: Callable[[Any, dict], ParsePlan] | None = None,
     ) -> None:
         self._operator = operator
         self._documents = documents
+        self._frozen_inputs = frozen_inputs
         self._storage_objects = storage_objects
         self._plan_factory = plan_factory or self.default_plan_factory
 
@@ -216,36 +218,18 @@ class DocumentParseFacade:
     async def _parse(
         self, document_id: str, raw_file: Any, plan: ParsePlan, domain: str
     ) -> Any | None:
-        from knowledge_mining.mining.frozen_input.contracts import FrozenInput
-        from knowledge_mining.mining.infra.object_store.keys import (
-            build_object_key,
-        )
+        from dataclasses import replace
+        from knowledge_mining.mining.contracts.storage.errors import StorageObjectMissing
 
-        current = await self._documents.get(document_id)
-        if current is None or not current.storage_object_id:
-            return None  # 旧链 storage_path 文档：v2 骨架下跳过（不混跑）
-        if self._storage_objects is None:
-            return None  # 无注册仓储无法定位对象（组合根必须注入）
-        record = await self._storage_objects.get(current.storage_object_id)
-        if record is None:
-            return None  # 对象未注册（完整性缺口）：跳过并留 Run 无快照
-        frozen = FrozenInput(
-            document_id=document_id,
-            source_storage_object_id=current.storage_object_id,
-            source_raw_hash=current.source_raw_hash,
-            source_content_revision=current.content_revision,
-            mime=_as_str(
-                getattr(raw_file, "mime", None), record.mime or "text/plain",
-            ),
-            size=record.size,
-            original_filename=_as_str(
-                getattr(raw_file, "document_key", None), document_id,
-            ),
-            captured_at="1970-01-01T00:00:00+00:00",
-            provider=record.provider,
-            bucket=record.bucket,
-            object_key=record.object_key,
-            object_version_id=record.object_version_id,
+        if self._frozen_inputs is None:
+            return None
+        try:
+            frozen = await self._frozen_inputs.freeze(document_id)
+        except StorageObjectMissing:
+            return None  # Preserve legacy/no-object SKIP semantics.
+        frozen = replace(
+            frozen,
+            original_filename=_as_str(getattr(raw_file, "document_key", None), document_id),
         )
         run = await self._operator.execute(frozen, plan, domain=domain)
         if run.status != "SUCCEEDED":
@@ -407,11 +391,16 @@ def build_new_chain_services(
         SnapshotCommitService,
     )
 
-    async def _no_stale(frozen: Any) -> None:
-        return None
+    from knowledge_mining.mining.frozen_input.service import FrozenInputService
+
+    frozen_inputs = FrozenInputService(
+        documents=documents,
+        storage_objects=storage_objects,
+        object_store=object_store,
+    )
 
     commit = SnapshotCommitService(
-        snapshots=snapshots, stale_checker=_no_stale,
+        snapshots=snapshots, stale_checker=frozen_inputs.check_stale,
         storage_objects=storage_objects, object_store=object_store,
     )
     operator = DocumentParseService(
@@ -428,7 +417,7 @@ def build_new_chain_services(
     return NewChainServices(
         document_parse_service=DocumentParseFacade(
             operator=operator, documents=documents,
-            storage_objects=storage_objects,
+            storage_objects=storage_objects, frozen_inputs=frozen_inputs,
         ),
         segment_compile_service=SegmentCompileFacade(
             compiler=compiler, segment_store=segment_store,

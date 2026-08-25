@@ -21,8 +21,22 @@ def test_sensitive_service_ports_bind_to_loopback_only() -> None:
         )
 
 def test_tracked_auth_config_is_a_secret_free_initialization_template() -> None:
-    auth_path = REPO_ROOT / "main_control_service" / "config" / "system" / "auth.yaml"
-    auth = yaml.safe_load(auth_path.read_text(encoding="utf-8"))
+    """Git 跟踪的 auth.yaml 必须是无凭据模板。
+
+    部署宿主机的本地副本会被 deploy-server.sh 按设计写入真实凭据（属预期脏文件），
+    因此这里读 HEAD 版本而非工作区文件；无 git 环境（如裸 CI）则跳过。
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "show", "HEAD:main_control_service/config/system/auth.yaml"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        import pytest
+
+        pytest.skip("git 不可用，无法校验 HEAD 版 auth.yaml")
+    auth = yaml.safe_load(result.stdout)
 
     assert auth.get("jwt_secret") == ""
     assert auth.get("internal_verify_secret") == ""

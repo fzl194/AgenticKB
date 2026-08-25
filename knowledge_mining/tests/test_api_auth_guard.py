@@ -114,6 +114,40 @@ def test_service_only_whitelist_is_method_specific() -> None:
         assert client.get("/api/kb/auth/verify").status_code == 401
 
 
+def test_service_only_internal_auth_precedes_body_validation() -> None:
+    """缺 body + 无内部 secret 必须 401（鉴权先于 422，不泄露参数 schema）。"""
+    from knowledge_mining.mining.api.app import create_app
+
+    app = create_app()
+    app.state.pg_pool = object()  # 依赖解析需要；鉴权短路后不会真正触库
+    client = TestClient(app)
+    try:
+        for path in ("/api/kb/auth/identify", "/api/kb/auth/verify"):
+            response = client.post(path)
+            assert response.status_code == 401, path
+    finally:
+        client.close()
+
+
+def test_service_only_body_validation_applies_after_internal_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """鉴权通过后缺 body 仍应 422（body 校验不因鉴权前置而丢失）。"""
+    from knowledge_mining.mining.api.app import create_app
+    from knowledge_mining.mining.kb.routes import auth as routes_auth
+
+    monkeypatch.setattr(routes_auth, "get_internal_verify_secret", lambda: "test-ivs")
+    app = create_app()
+    app.state.pg_pool = object()  # KbDB 惰性持有；body 校验不触库
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/kb/auth/verify",
+            headers={"X-Internal-Auth": "test-ivs"},
+        )
+        assert response.status_code == 422
+    finally:
+        client.close()
+
+
 @pytest.mark.parametrize(
     "path",
     [

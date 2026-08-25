@@ -62,7 +62,11 @@ class ChangeMyPasswordReq(BaseModel):
 # ---------------------------------------------------------------- helpers
 
 def _require_internal(request: Request) -> None:
-    """verify 端点独立校验 X-Internal-Auth（与 current_user 同语义：缺失/不符 → 401）。"""
+    """内部端点（identify/verify/reload-auth-config）的 X-Internal-Auth 校验。
+
+    以路由级 dependency 挂载：在 body 校验（422）之前执行，缺失/不符一律 401，
+    不向未鉴权调用方泄露参数 schema。与 current_user 同语义。
+    """
     secret = get_internal_verify_secret()
     if not secret:
         raise HTTPException(401, "auth not initialized")
@@ -82,22 +86,20 @@ def _map_user_error(exc: Exception) -> HTTPException:
 
 # ---------------------------------------------------------------- verify (internal)
 
-@router.post("/auth/identify")
+@router.post("/auth/identify", dependencies=[Depends(_require_internal)])
 async def identify(
-    body: IdentifyReq, request: Request,
+    body: IdentifyReq,
     svc: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     """登录第一步：按用户名判定模式（password / member / not_found）。内部端点。"""
-    _require_internal(request)
     return await svc.identify(body.username)
 
 
-@router.post("/auth/verify")
+@router.post("/auth/verify", dependencies=[Depends(_require_internal)])
 async def verify_credentials(
-    body: VerifyReq, request: Request,
+    body: VerifyReq,
     svc: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
-    _require_internal(request)
     user = await svc.verify_credentials(username=body.username, password=body.password)
     if user is None:
         raise HTTPException(401, "invalid credentials")
@@ -108,15 +110,14 @@ async def verify_credentials(
     }}
 
 
-@router.post("/admin/reload-auth-config")
-async def reload_auth_config(request: Request) -> dict[str, Any]:
+@router.post("/admin/reload-auth-config", dependencies=[Depends(_require_internal)])
+async def reload_auth_config() -> dict[str, Any]:
     """内部端点：强制重拉控制面 auth.yaml 刷本地缓存。
 
     main_control 的 reload-auth 在更新网关侧 auth.yaml 后扇出调用本端点。否则网关
     注入新 internal_verify_secret、mining 仍验旧值 → 全部代理 401（mining 的 auth
     缓存启动期拉取，原本无 reload 通路）。
     """
-    _require_internal(request)
     from knowledge_mining.mining.infra import control_plane
     control_plane.fetch_auth_config(force=True)
     return {

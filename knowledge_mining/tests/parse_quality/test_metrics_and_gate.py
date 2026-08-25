@@ -235,3 +235,26 @@ def test_named_quality_profiles_have_distinct_operational_thresholds() -> None:
     assert lenient.min_evidence_locatability == pytest.approx(0.0)
     with pytest.raises(ValueError, match="quality profile"):
         quality_profile_for("experimental")
+
+
+def test_named_profiles_change_gate_decision_on_same_metrics() -> None:
+    """P09-S2 行为级：同一指标向量下 default PASS、strict FAIL。
+
+    10 个段落元素中 8 个带页锚 → evidence_locatability=0.8：
+    default(min=0.80) 放行，strict(min=0.90) 拒绝——证明命名档位
+    真正进入 Gate 决策，而非仅停留在参数表。
+    """
+    elements = tuple(
+        _el(f"e-{i}", "paragraph", f"第{i}段正文", span=True, page="p-1")
+        if i < 8 else
+        _el(f"e-{i}", "paragraph", f"第{i}段正文", span=False)
+        for i in range(10)
+    )
+    metrics = compute_metrics(_doc(elements))
+    assert 0.80 <= metrics.evidence_locatability < 0.90
+
+    from knowledge_mining.mining.parse_quality.gate import QualityGate
+    default_decision = QualityGate(profile=quality_profile_for("default")).evaluate(metrics)
+    strict_decision = QualityGate(profile=quality_profile_for("strict")).evaluate(metrics)
+    assert default_decision.decision in ("PASS", "WARN")  # default 不因档位拒绝
+    assert strict_decision.decision == "FAIL"

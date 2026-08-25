@@ -83,6 +83,8 @@ class QualityProfile:
     min_table_cell_evidence: float = 0.30
     min_reading_order_monotonicity: float = 0.60
     warn_char_coverage: float = 0.95
+    # strict 专用：证据可定位率违规即 FAIL（default/lenient 维持 S1 只观测灰度）。
+    hard_evidence_locatability: bool = False
 
 
 def quality_profile_for(profile_name: str) -> QualityProfile:
@@ -94,6 +96,7 @@ def quality_profile_for(profile_name: str) -> QualityProfile:
             min_char_coverage=0.95,
             warn_char_coverage=0.99,
             min_evidence_locatability=0.90,
+            hard_evidence_locatability=True,
         )
     if profile_name == "lenient":
         # lenient 只保留空文档和 <70% 覆盖率两类硬拒绝；其余问题仍可写入
@@ -138,6 +141,7 @@ class QualityGate:
             )
 
         coverage_failed = False
+        locatability_failed = False
         if (
             metrics.char_coverage is not None
             and metrics.char_coverage < self.profile.min_char_coverage
@@ -164,7 +168,10 @@ class QualityGate:
             ))
 
         if metrics.evidence_locatability < self.profile.min_evidence_locatability:
-            decision = "WARN" if decision == "PASS" else decision
+            if self.profile.hard_evidence_locatability:
+                locatability_failed = True
+            else:
+                decision = "WARN" if decision == "PASS" else decision
             issues.append(QualityIssue(
                 code="low_evidence_locatability",
                 message=(
@@ -201,6 +208,9 @@ class QualityGate:
                     f"< {self.profile.min_reading_order_monotonicity:.2f}"
                 ),
             ))
+
+        if locatability_failed:
+            decision = "FAIL"
 
         # -- 覆盖类灾难：FAIL，或预算内升级为 FALLBACK（§4.9） ----------------
         if coverage_failed:
@@ -257,7 +267,8 @@ class QualityGate:
                         f"{metrics.empty_container_ids} left visible"
                     ),
                 ))
-            decision = "WARN"
+            # 不得降级已有结论（strict 硬阈值 FAIL 不被空容器兜底洗成 WARN）。
+            decision = "WARN" if decision == "PASS" else decision
 
         return QualityDecision(
             decision=decision,

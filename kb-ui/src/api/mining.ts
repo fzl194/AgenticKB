@@ -27,12 +27,6 @@ export function useMiningApi() {
       return data
     },
 
-    // M5 结构化数据（文档最新知识快照的大纲/元素/表格/切片/出生证明）
-    async getParseResult(docId: string): Promise<ParseResult> {
-      const { data } = await client.get(`/api/knowledge/documents/${docId}/parse-result`)
-      return data
-    },
-
     // Runs
     async getRuns(domain: string, params?: { status?: string; limit?: number }): Promise<MiningRun[]> {
       const { data } = await client.get('/api/runs', { params: { ...params, domain } })

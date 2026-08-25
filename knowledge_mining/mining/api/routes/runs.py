@@ -1482,6 +1482,18 @@ async def resume_run(
     if not run_lock.acquire(blocking=False):
         raise HTTPException(409, f"域 {resume_domain} 已有挖掘任务在进行中，请稍候再试")
 
+    def _mark_resume_failure(error: Exception) -> None:
+        try:
+            sync_pool = request.app.state.domain_pools.sync_pool(resume_domain)
+            with sync_pool.connection() as conn:
+                conn.execute(
+                    "UPDATE mining_runs SET status = 'failed', finished_at = %s, error_summary = %s "
+                    "WHERE id = %s AND domain = %s AND status = 'running'",
+                    [_utcnow(), str(error)[:500], run_id, resume_domain],
+                )
+        except Exception:
+            logger.exception("Unable to record escaped resume failure for run %s", run_id)
+
     def _resume_in_thread():
         try:
             from knowledge_mining.mining.jobs.run import resume as resume_run_job
@@ -1491,10 +1503,15 @@ async def resume_run(
             )
         except Exception as e:
             logger.error("Resume run failed: %s", e, exc_info=True)
+            _mark_resume_failure(e)
         finally:
             run_lock.release()
 
-    threading.Thread(target=_resume_in_thread, daemon=True).start()
+    try:
+        threading.Thread(target=_resume_in_thread, daemon=True).start()
+    except Exception as exc:
+        run_lock.release()
+        raise HTTPException(500, f"Unable to start resume: {exc}") from exc
     return {"run_id": run_id, "status": "resuming", "message": "已开始继续挖掘，请稍候查看进度"}
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
@@ -45,6 +46,7 @@ from knowledge_mining.mining.workflow.repositories.global_workflow_repository im
 from knowledge_mining.mining.workflow.service import WorkflowService
 from knowledge_mining.mining.workflow.manifest import value_hash
 from knowledge_mining.mining.workflow.run_binding import WorkflowRunBinder
+from knowledge_mining.mining.api.startup_recovery import recover_startup_runs, schedule_startup_resumes
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +137,30 @@ async def lifespan(app: FastAPI):
 
     # Domain-specific async/sync pools are opened lazily by API dependencies.
     app.state.domain_pools = DomainPoolManager(cfg)
+
+    from knowledge_mining.mining.infra.domain_pack import load_domain_registry
+    from knowledge_mining.mining.api.routes.runs import _utcnow
+
+    registry = load_domain_registry()
+    enabled_domains = tuple(
+        domain_id for domain_id, entry in (registry.get("domains") or {}).items()
+        if isinstance(entry, dict) and entry.get("enabled", True)
+    )
+
+    async def _resume_workflow_after_restart(run_id: str, domain: str) -> None:
+        from knowledge_mining.mining.jobs.run import resume
+        await asyncio.to_thread(resume, run_id, domain=domain, db_config=cfg)
+
+    recovery = await recover_startup_runs(
+        domain_ids=enabled_domains,
+        domain_pools=app.state.domain_pools,
+        now=_utcnow(),
+    )
+    if recovery.interrupted_run_ids:
+        logger.warning("Startup recovery interrupted %d abandoned run(s)", len(recovery.interrupted_run_ids))
+    if recovery.workflow_runs:
+        schedule_startup_resumes(recovery, _resume_workflow_after_restart)
+        logger.info("Scheduled %d workflow run resume(s) in background", len(recovery.workflow_runs))
 
     async def _active_ontology_id(domain: str) -> str | None:
         domain_pool = await app.state.domain_pools.async_pool(domain)

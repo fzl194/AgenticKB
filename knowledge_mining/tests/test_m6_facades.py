@@ -230,12 +230,15 @@ def test_parse_facade_maps_budget_params_into_plan(tmp_path):
             plan_factory=DocumentParseFacade.default_plan_factory,
         )
         facade.parse_document(
-            _raw_file(), params={"maxBackendAttempts": 2}, domain="default",
+            _raw_file(), params={
+                "maxBackendAttempts": 2, "qualityProfile": "strict",
+            }, domain="default",
             run_document_id="rd",
         )
         _, plan = operator.calls[0]
         assert plan.budget.max_backend_attempts == 2
         assert plan.primary_parser_id == "legacy_markdown"
+        assert plan.quality_profile == "strict"
         return True
 
     assert asyncio.new_event_loop().run_until_complete(scene())

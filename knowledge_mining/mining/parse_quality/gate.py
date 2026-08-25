@@ -85,6 +85,29 @@ class QualityProfile:
     warn_char_coverage: float = 0.95
 
 
+def quality_profile_for(profile_name: str) -> QualityProfile:
+    """将冻结 Plan 的档位名解析为不可变的质量阈值。"""
+    if profile_name == "default":
+        return QualityProfile()
+    if profile_name == "strict":
+        return QualityProfile(
+            min_char_coverage=0.95,
+            warn_char_coverage=0.99,
+            min_evidence_locatability=0.90,
+        )
+    if profile_name == "lenient":
+        # lenient 只保留空文档和 <70% 覆盖率两类硬拒绝；其余问题仍可写入
+        # metadata，但不应阻断尽量入库的工作流。
+        return QualityProfile(
+            min_char_coverage=0.70,
+            warn_char_coverage=0.70,
+            min_evidence_locatability=0.0,
+            min_table_cell_evidence=0.0,
+            min_reading_order_monotonicity=0.0,
+        )
+    raise ValueError(f"unknown quality profile {profile_name!r}")
+
+
 class QualityGate:
     """指标 -> 决策（纯函数式，无 IO；预算为可选上下文）."""
 
@@ -251,4 +274,5 @@ __all__ = [
     "QualityIssue",
     "QualityProfile",
     "RepairRequest",
+    "quality_profile_for",
 ]

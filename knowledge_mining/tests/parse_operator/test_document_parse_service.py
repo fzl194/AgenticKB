@@ -382,6 +382,39 @@ async def test_quality_fail_when_budget_exhausted(harness) -> None:
     assert harness.snapshots.count() == 0
 
 
+async def test_plan_quality_profile_selects_lenient_or_strict_gate(harness) -> None:
+    """P09-S2：同一低覆盖结果按冻结 Plan 的档位得出不同结论。"""
+    from dataclasses import replace
+
+    harness.register(StubParser("mostly", text="abcdefgh"))
+    service = harness.make_service()
+    source = b"abcdefghij"
+    lenient_input = _frozen(source)
+    strict_input = replace(lenient_input, document_id="doc-strict")
+    await harness.seed_source(lenient_input, source)
+
+    lenient = await service.execute(
+        lenient_input,
+        ParsePlan(
+            plan_id="lenient", primary_parser_id="mostly",
+            quality_profile="lenient",
+        ),
+        domain="default", source_text=source.decode(),
+    )
+    strict = await service.execute(
+        strict_input,
+        ParsePlan(
+            plan_id="strict", primary_parser_id="mostly",
+            quality_profile="strict",
+        ),
+        # 生产路径不显式传基准：strict 必须让自动冻结文本基准参与门控。
+        domain="default",
+    )
+
+    assert lenient.status == "SUCCEEDED"
+    assert strict.status == "FAILED"
+
+
 # ---------------------------------------------------------------------------
 # SUPERSEDED / FAIL 不入库
 # ---------------------------------------------------------------------------

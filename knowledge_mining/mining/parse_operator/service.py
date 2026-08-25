@@ -159,13 +159,19 @@ class DocumentParseService:
         while attempt_index < len(chain) and attempt_index < budget.max_backend_attempts:
             parser_id = chain[attempt_index]
             kind = "primary" if attempt_index == 0 else "fallback"
-            shadow = self._shadow_for(parser_id)
+            shadow = self._shadow_for(parser_id, plan.quality_profile)
             await self._advance(rid, "PARSING")
             attempt_started = _utcnow()
             try:
                 outcome = await shadow.execute(
                     frozen,
                     source_text=source_text,
+                    # S1 默认档仍只观测自动基准；strict 明确选择以该基准
+                    # 参与门控。显式 source_text 保留调用方原有强制语义。
+                    enforce_source_coverage=(
+                        None if source_text is not None
+                        else plan.quality_profile == "strict"
+                    ),
                     budget=budget,
                     backend_attempts_used=attempt_index + 1,
                 )
@@ -355,7 +361,9 @@ class DocumentParseService:
         snap = await self._snapshots.get(snapshot_id)
         return snap is not None and snap.lifecycle_status == "READY"
 
-    def _shadow_for(self, parser_id: str) -> ShadowParseService:
+    def _shadow_for(
+        self, parser_id: str, quality_profile: str = "default"
+    ) -> ShadowParseService:
         """为一次尝试组装 ShadowParseService（共享存储/仓储，换 parser）."""
         parser, normalizer = self._resolver(parser_id)
         return ShadowParseService(
@@ -365,10 +373,20 @@ class DocumentParseService:
             parser=parser,
             normalizer=normalizer,
             reconciler=self._reconciler,
-            quality_gate=self._gate,
+            quality_gate=self._gate_for(quality_profile),
             bucket_prefix=self._bucket_prefix,
             parse_bucket=self._parse_bucket,
         )
+
+    def _gate_for(self, quality_profile: str) -> QualityGate:
+        """默认保留注入 Gate；命名档位按冻结 Plan 生成阈值快照。"""
+        if quality_profile == "default":
+            return self._gate
+        from knowledge_mining.mining.parse_quality.gate import (
+            quality_profile_for,
+        )
+
+        return QualityGate(profile=quality_profile_for(quality_profile))
 
     def _resolve_decision(
         self, decision: QualityDecision | None

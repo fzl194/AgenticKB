@@ -63,7 +63,7 @@ def test_parse_plan_backend_chain_and_defaults() -> None:
     )
     assert plan.backend_chain() == ("native_pdf", "docling_standard")
     # 预算默认值存在且为正（SRS §4.9 防死循环）。
-    assert plan.budget.max_backend_attempts >= 1
+    assert plan.budget.max_backend_attempts == 3
     assert plan.budget.max_repair_attempts >= 0
     assert plan.budget.max_duration_seconds > 0
     assert isinstance(plan.budget, AttemptBudget)
@@ -82,6 +82,15 @@ def test_parse_plan_rejects_empty_primary() -> None:
 
     with pytest.raises(ValueError, match="primary"):
         ParsePlan(plan_id="p", primary_parser_id="")
+
+
+def test_parse_plan_rejects_unknown_quality_profile() -> None:
+    from knowledge_mining.mining.contracts.parse_plan import ParsePlan
+
+    with pytest.raises(ValueError, match="quality profile"):
+        ParsePlan(
+            plan_id="p", primary_parser_id="a", quality_profile="experimental"
+        )
 
 
 def test_parse_plan_rejects_duplicate_backends() -> None:

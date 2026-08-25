@@ -193,6 +193,7 @@ class DocumentParseFacade:
             plan_id=f"workflow-{parser_id}",
             primary_parser_id=parser_id,
             budget=budget,
+            quality_profile=params.get("qualityProfile", "default"),
         )
 
     def parse_document(

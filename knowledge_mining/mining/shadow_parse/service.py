@@ -232,6 +232,7 @@ class ShadowParseService:
         frozen: FrozenInput,
         *,
         source_text: str | None = None,
+        enforce_source_coverage: bool | None = None,
         budget: Any | None = None,
         backend_attempts_used: int = 0,
     ) -> AttemptOutcome:
@@ -247,7 +248,11 @@ class ShadowParseService:
             effective_source_text = _text_baseline(frozen.mime, source_bytes)
         return await self._finish(
             doc, artifact, source_text=effective_source_text,
-            enforce_source_coverage=source_text_was_supplied,
+            enforce_source_coverage=(
+                source_text_was_supplied
+                if enforce_source_coverage is None
+                else enforce_source_coverage
+            ),
             budget=budget,
             backend_attempts_used=backend_attempts_used,
         )

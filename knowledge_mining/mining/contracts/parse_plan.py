@@ -24,6 +24,11 @@ DEFAULT_PLAN_VERSION = "route-policy@1"
 #: 默认质量档位名（QualityProfile 由 parse_quality 层解析）。
 DEFAULT_QUALITY_PROFILE = "default"
 
+#: 允许写入冻结 ParsePlan 的质量档位；未知值必须在编排前拒绝。
+SUPPORTED_QUALITY_PROFILES: frozenset[str] = frozenset(
+    {"default", "strict", "lenient"}
+)
+
 
 @dataclass(frozen=True)
 class AttemptBudget:
@@ -34,7 +39,7 @@ class AttemptBudget:
     - ``max_duration_seconds``：整次知识更新的墙钟时长上限。
     """
 
-    max_backend_attempts: int = 2
+    max_backend_attempts: int = 3
     max_repair_attempts: int = 1
     max_duration_seconds: float = 3600.0
 
@@ -76,6 +81,11 @@ class ParsePlan:
     def __post_init__(self) -> None:
         if not self.primary_parser_id:
             raise ValueError("ParsePlan requires a non-empty primary_parser_id")
+        if self.quality_profile not in SUPPORTED_QUALITY_PROFILES:
+            raise ValueError(
+                f"unknown quality profile {self.quality_profile!r}; expected one of "
+                f"{sorted(SUPPORTED_QUALITY_PROFILES)}"
+            )
         chain = (self.primary_parser_id, *self.fallback_parser_ids)
         if len(set(chain)) != len(chain):
             raise ValueError(
@@ -97,4 +107,5 @@ __all__ = [
     "DEFAULT_PLAN_VERSION",
     "DEFAULT_QUALITY_PROFILE",
     "ParsePlan",
+    "SUPPORTED_QUALITY_PROFILES",
 ]

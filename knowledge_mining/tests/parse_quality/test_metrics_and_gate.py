@@ -21,6 +21,7 @@ from knowledge_mining.mining.parse_quality import (
     QualityGate,
     QualityProfile,
     compute_metrics,
+    quality_profile_for,
 )
 
 RAW_HASH = "7e" * 32
@@ -220,3 +221,17 @@ def test_profile_thresholds_change_decision() -> None:
     strict = QualityProfile(min_evidence_locatability=1.0)
     decision = QualityGate(profile=strict).evaluate(metrics)
     assert decision.decision in ("WARN", "FAIL")
+
+
+def test_named_quality_profiles_have_distinct_operational_thresholds() -> None:
+    """P09-S2：档位名必须映射为真实阈值，而非仅停留在 UI 参数。"""
+    strict = quality_profile_for("strict")
+    lenient = quality_profile_for("lenient")
+
+    assert strict.min_char_coverage == pytest.approx(0.95)
+    assert strict.warn_char_coverage == pytest.approx(0.99)
+    assert strict.min_evidence_locatability == pytest.approx(0.90)
+    assert lenient.min_char_coverage == pytest.approx(0.70)
+    assert lenient.min_evidence_locatability == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="quality profile"):
+        quality_profile_for("experimental")

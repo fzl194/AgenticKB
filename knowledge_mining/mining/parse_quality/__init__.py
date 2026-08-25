@@ -13,6 +13,7 @@ from knowledge_mining.mining.parse_quality.gate import (
     QualityDecision,
     QualityGate,
     QualityProfile,
+    quality_profile_for,
 )
 
 __all__ = [
@@ -22,5 +23,6 @@ __all__ = [
     "QualityMetrics",
     "QualityProfile",
     "compute_metrics",
+    "quality_profile_for",
     "quality_metrics_to_dict",
 ]

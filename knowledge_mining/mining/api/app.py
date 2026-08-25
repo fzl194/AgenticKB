@@ -50,9 +50,7 @@ logger = logging.getLogger(__name__)
 
 
 def _cors_origins() -> list[str]:
-    raw = os.getenv("CMKB_CORS_ORIGINS", "")
-    configured = [origin.strip() for origin in raw.split(",") if origin.strip()]
-    origins = configured or ["http://localhost:8080", "http://127.0.0.1:8080"]
+    origins = ["http://localhost:8080", "http://127.0.0.1:8080"]
     for origin in origins:
         parsed = urlsplit(origin)
         if origin == "*":
@@ -101,9 +99,7 @@ async def lifespan(app: FastAPI):
     from knowledge_mining.mining.kb.bootstrap import seed_initial_admin
     try:
         _auth_cfg = fetch_auth_config(force=True)
-        _admin_pw = os.getenv("CMKB_BOOTSTRAP_ADMIN_PASSWORD", "") or (
-            (_auth_cfg.get("bootstrap") or {}).get("admin_password") or ""
-        )
+        _admin_pw = (_auth_cfg.get("bootstrap") or {}).get("admin_password") or ""
         await seed_initial_admin(pool, admin_password=_admin_pw)
     except Exception as exc:  # noqa: BLE001
         logger.warning("auth bootstrap skipped: %s", exc)

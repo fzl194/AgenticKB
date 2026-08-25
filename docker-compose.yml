@@ -71,12 +71,6 @@ services:
       - ./databases:/app/databases
 
     environment:
-      # Authentication secrets are injected at deploy time and never committed.
-      CMKB_JWT_SECRET: "${CMKB_JWT_SECRET:-}"
-      CMKB_INTERNAL_VERIFY_SECRET: "${CMKB_INTERNAL_VERIFY_SECRET:-}"
-      CMKB_BOOTSTRAP_ADMIN_PASSWORD: "${CMKB_BOOTSTRAP_ADMIN_PASSWORD:-}"
-      CMKB_CORS_ORIGINS: "${CMKB_CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}"
-
       # 是否启用按依赖顺序启动服务。
       # 0：使用 Supervisor 默认自动启动行为。
       # 1：先停止所有子服务，再由部署脚本按顺序启动。

@@ -165,12 +165,10 @@ def test_real_app_cors_allows_only_configured_local_origin() -> None:
     assert "access-control-allow-origin" not in blocked.headers
 
 
-def test_real_app_rejects_wildcard_credentialed_cors(monkeypatch) -> None:
+def test_real_app_uses_fixed_non_wildcard_credentialed_cors() -> None:
     from knowledge_mining.mining.api.app import _cors_origins
 
-    monkeypatch.setenv("CMKB_CORS_ORIGINS", "*")
-    with pytest.raises(ValueError, match="wildcard"):
-        _cors_origins()
+    assert _cors_origins() == ["http://localhost:8080", "http://127.0.0.1:8080"]
 
 
 def test_real_app_disables_unauthenticated_api_documentation() -> None:

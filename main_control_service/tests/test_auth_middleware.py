@@ -147,38 +147,31 @@ def test_placeholder_secrets_fail_closed(tmp_path):
         assert c.get("/api/v1/me").status_code == 503
 
 
-def test_environment_referenced_secrets_enable_auth(tmp_path, monkeypatch):
-    monkeypatch.setenv("CMKB_TEST_JWT_SECRET", "jwt-from-env")
-    monkeypatch.setenv("CMKB_TEST_INTERNAL_SECRET", "internal-from-env")
+def test_empty_control_plane_secrets_fail_closed(tmp_path):
     auth_text = (
         "enabled: true\n"
-        "jwt_secret_env: CMKB_TEST_JWT_SECRET\n"
-        "internal_verify_secret_env: CMKB_TEST_INTERNAL_SECRET\n"
-    )
-    with TestClient(_mw_app(tmp_path, auth_text=auth_text)) as c:
-        assert c.get("/api/v1/me").status_code == 401
-        token = _token("member", secret="jwt-from-env")
-        assert c.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
-
-
-def test_enabled_auth_without_resolved_secrets_rejects_requests(tmp_path):
-    auth_text = (
-        "enabled: true\n"
-        "jwt_secret_env: MISSING_JWT_SECRET\n"
-        "internal_verify_secret_env: MISSING_INTERNAL_SECRET\n"
+        "jwt_secret: ''\n"
+        "internal_verify_secret: ''\n"
     )
     with TestClient(_mw_app(tmp_path, auth_text=auth_text)) as c:
         assert c.get("/api/v1/me").status_code == 503
 
 
-def test_cors_preflight_passes_before_auth(tmp_path):
-    """中间件顺序：CORS 须在 Auth 之外 —— OPTIONS preflight 不被 auth 401。"""
+def test_cors_preflight_allows_only_configured_origin_before_auth(tmp_path):
+    """CORS 在 Auth 之外，且只接受受信任 UI 来源的 preflight。"""
     from main_control_service.main import create_app
     _write_auth(tmp_path)
     app = create_app(config_dir=tmp_path)
     with TestClient(app) as c:
-        r = c.options("/api/v1/auth/me", headers={
+        allowed = c.options("/api/v1/auth/me", headers={
+            "Origin": "http://localhost:8080",
+            "Access-Control-Request-Method": "GET",
+        })
+        blocked = c.options("/api/v1/auth/me", headers={
             "Origin": "http://localhost:5173",
             "Access-Control-Request-Method": "GET",
         })
-        assert r.status_code != 401  # CORS 处理 preflight（200/204），不进 auth
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:8080"
+    assert blocked.status_code == 400
+    assert "access-control-allow-origin" not in blocked.headers

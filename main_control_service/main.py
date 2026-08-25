@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -32,9 +31,7 @@ def _find_auth_mw(request: Request) -> AuthMiddleware | None:
 
 
 def _cors_origins() -> list[str]:
-    raw = os.getenv("CMKB_CORS_ORIGINS", "")
-    configured = [origin.strip() for origin in raw.split(",") if origin.strip()]
-    return configured or ["http://localhost:8080", "http://127.0.0.1:8080"]
+    return ["http://localhost:8080", "http://127.0.0.1:8080"]
 
 
 async def verify_user_via_mining(

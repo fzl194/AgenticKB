@@ -22,6 +22,7 @@ else
 fi
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-2}"
+AUTH_CONFIG_PATH="main_control_service/config/system/auth.yaml"
 TMP_CONTAINER_ACTIVE=false
 CODE_STAGE_DIR=""
 CODE_BACKUP_DIR=""
@@ -84,6 +85,114 @@ compose() {
     fi
 
     die "未找到 Docker Compose。请安装 Docker Compose v2（docker compose）或旧版 docker-compose。"
+}
+
+read_auth_config_value() {
+    local key="$1"
+    sed -n -E "s|^[[:space:]]*${key}:[[:space:]]*[\"']?([^\"']*)[\"']?[[:space:]]*(#.*)?$|\\1|p" \
+        "$AUTH_CONFIG_PATH" | tail -n 1 | tr -d '\r'
+}
+
+generate_auth_secret() {
+    local bytes="$1"
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex "$bytes"
+        return
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "import secrets; print(secrets.token_hex(${bytes}))"
+        return
+    fi
+    die "无法生成认证凭据：需要 openssl 或 python3。"
+}
+
+set_auth_secret() {
+    local key="$1"
+    local bytes="$2"
+    local current secret_file tmp_file
+
+    current="$(read_auth_config_value "$key")"
+    if [ -n "$current" ] && [[ "$current" != change-me* ]]; then
+        return
+    fi
+    if ! grep -Eq "^[[:space:]]*${key}:" "$AUTH_CONFIG_PATH"; then
+        die "认证配置缺少 ${key} 字段：${AUTH_CONFIG_PATH}"
+    fi
+
+    secret_file="$(mktemp "${AUTH_CONFIG_PATH}.secret.XXXXXX")"
+    tmp_file="$(mktemp "${AUTH_CONFIG_PATH}.tmp.XXXXXX")"
+    chmod 600 -- "$secret_file" "$tmp_file"
+    if ! generate_auth_secret "$bytes" > "$secret_file"; then
+        rm -f -- "$secret_file" "$tmp_file"
+        die "无法生成 ${key}。"
+    fi
+    if ! AUTH_SECRET_FILE="$secret_file" awk -v key="$key" '
+        BEGIN {
+            if ((getline value < ENVIRON["AUTH_SECRET_FILE"]) != 1 || value == "") exit 1
+            close(ENVIRON["AUTH_SECRET_FILE"])
+        }
+        $0 ~ "^[[:space:]]*" key ":" {
+            prefix = $0
+            sub(/:.*/, ":", prefix)
+            print prefix " \"" value "\""
+            replaced = 1
+            next
+        }
+        { print }
+        END { exit(replaced ? 0 : 1) }
+    ' "$AUTH_CONFIG_PATH" > "$tmp_file"; then
+        rm -f -- "$secret_file" "$tmp_file"
+        die "无法写入 ${key} 到 ${AUTH_CONFIG_PATH}。"
+    fi
+    mv -- "$tmp_file" "$AUTH_CONFIG_PATH"
+    chmod 600 -- "$AUTH_CONFIG_PATH"
+    rm -f -- "$secret_file"
+    echo "已初始化 ${key}。"
+}
+
+set_bootstrap_initialization_complete() {
+    local tmp_file
+    tmp_file="$(mktemp "${AUTH_CONFIG_PATH}.tmp.XXXXXX")"
+    chmod 600 -- "$tmp_file"
+    if ! sed -E 's|^([[:space:]]*initialize_on_deploy:).*|\1 false|' \
+        "$AUTH_CONFIG_PATH" > "$tmp_file"; then
+        rm -f -- "$tmp_file"
+        die "无法更新 bootstrap 初始化状态。"
+    fi
+    mv -- "$tmp_file" "$AUTH_CONFIG_PATH"
+    chmod 600 -- "$AUTH_CONFIG_PATH"
+}
+
+ensure_auth_config_secrets() {
+    local bootstrap_initialization
+
+    [ -L "$AUTH_CONFIG_PATH" ] && die "认证配置不能是符号链接：${AUTH_CONFIG_PATH}"
+    [ -f "$AUTH_CONFIG_PATH" ] || die "缺少认证配置：${AUTH_CONFIG_PATH}"
+    for key in jwt_secret internal_verify_secret initialize_on_deploy admin_password; do
+        grep -Eq "^[[:space:]]*${key}:" "$AUTH_CONFIG_PATH" || \
+            die "认证配置缺少 ${key} 字段：${AUTH_CONFIG_PATH}"
+    done
+    bootstrap_initialization="$(read_auth_config_value "initialize_on_deploy")"
+    case "$bootstrap_initialization" in
+        true|false) ;;
+        *) die "bootstrap.initialize_on_deploy 必须为 true 或 false。" ;;
+    esac
+    chmod 600 -- "$AUTH_CONFIG_PATH"
+    set_auth_secret "jwt_secret" 32
+    set_auth_secret "internal_verify_secret" 32
+
+    case "$bootstrap_initialization" in
+        true)
+            set_auth_secret "admin_password" 20
+            set_bootstrap_initialization_complete
+            echo "已完成首次管理员密码初始化。"
+            ;;
+        false|"")
+            ;;
+        *)
+            die "bootstrap.initialize_on_deploy 必须为 true 或 false。"
+            ;;
+    esac
 }
 
 published_ports() {
@@ -501,6 +610,7 @@ stage_code_from_image() {
 apply_config_only() {
     echo "=== 正在应用宿主机现有配置（不会替换镜像和文件） ==="
     require_host_config
+    ensure_auth_config_secrets
     validate_compose_config
     preflight_ports
     start_and_verify
@@ -574,6 +684,7 @@ deploy_from_image() {
 
     cleanup_tmp_container
     require_host_config
+    ensure_auth_config_secrets
     start_and_verify
 }
 

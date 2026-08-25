@@ -1,8 +1,11 @@
-# Authentication configuration. Runtime secrets are supplied by the deployment
-# environment and must never be committed to this file.
+# Authentication configuration. deploy-server.sh creates strong values on the
+# deployment host before the first startup; generated values must not be committed.
 enabled: true
-jwt_secret_env: CMKB_JWT_SECRET
+jwt_secret: ""
 token_ttl_seconds: 43200
-internal_verify_secret_env: CMKB_INTERNAL_VERIFY_SECRET
+internal_verify_secret: ""
 bootstrap:
-  admin_password_env: CMKB_BOOTSTRAP_ADMIN_PASSWORD
+  # First deployment generates this once, then flips the flag to false.
+  # Set to false before deployment to opt out of automatic bootstrap creation.
+  initialize_on_deploy: true
+  admin_password: ""

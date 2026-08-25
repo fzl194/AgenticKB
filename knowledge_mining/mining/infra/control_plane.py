@@ -115,9 +115,9 @@ def get_internal_verify_secret() -> str | None:
     缓存未就绪 / 空 / 仍是 auth.yaml 样板占位符 → None（current_user 一律 401）。
     拒占位符是防误部署：占位符在仓库公开，若接受则任何人能直连 8901 伪造 X-Internal-Auth。
     """
-    val = os.getenv("CMKB_INTERNAL_VERIFY_SECRET", "")
-    if not val and _auth_config_cache is not None:
-        val = _auth_config_cache.get("internal_verify_secret")
+    if _auth_config_cache is None:
+        return None
+    val = _auth_config_cache.get("internal_verify_secret")
     if not isinstance(val, str) or not val or val.startswith("change-me"):
         return None
     return val

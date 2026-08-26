@@ -300,9 +300,11 @@ def test_default_registry_selects_backends_by_mime() -> None:
     # primary（路由层过滤见 tests/parse_adapters/test_registry.py）。
     # M3.5：PDF 现在由已实现的 native_pdf 承接（license ok），
     # 占位槽位 docling/cloud_vlm 仍在但 license != "ok"。
+    # P02-S3：pdf_text_layer（pdfminer 文本层 fallback）注册在 native_pdf
+    # 之后，select_for("application/pdf") 仍确定性命中 native_pdf。
     pdf_slot = registry.select_for("application/pdf")
     by_id = {d.parser_id: d for d in registry.all()}
     assert pdf_slot is not None and pdf_slot.parser_id == "native_pdf"
     assert by_id["docling"].license_status != "ok"
     assert by_id["cloud_vlm"].license_status != "ok"
-    assert len(registry.all()) == 9
+    assert len(registry.all()) == 10

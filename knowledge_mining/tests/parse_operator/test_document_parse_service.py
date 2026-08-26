@@ -307,6 +307,23 @@ async def test_a05_primary_failure_falls_back_and_audits(harness) -> None:
     assert run.snapshot_id is not None
 
 
+async def test_successful_fallback_run_is_reused_by_primary_fingerprint(harness) -> None:
+    """P02：fallback 成功的 Run 重跑时仍应命中 primary 指纹幂等探针。"""
+    bad = harness.register(StubParser("bad", text="x", fail=True))
+    good = harness.parsers["good"]
+    service = harness.make_service()
+    frozen = _frozen()
+    await harness.seed_source(frozen, b"line one\nline two\n")
+    plan = _plan("bad", "good")
+
+    first = await service.execute(frozen, plan, domain="default")
+    second = await service.execute(frozen, plan, domain="default")
+
+    assert second.id == first.id
+    assert bad.parse_calls == 1
+    assert good.parse_calls == 1
+
+
 async def test_a06_all_backends_fail_no_snapshot(harness) -> None:
     harness.register(StubParser("bad1", text="x", fail=True))
     harness.register(StubParser("bad2", text="x", fail=True))
@@ -380,6 +397,45 @@ async def test_quality_fail_when_budget_exhausted(harness) -> None:
     )
     assert run.status == "FAILED"
     assert harness.snapshots.count() == 0
+
+
+async def test_repair_uses_real_fallback_when_plan_has_next_backend(harness) -> None:
+    """P02：REPAIR 不得在存在备用后端时被降级成 WARN 后直接提交。"""
+    harness.register(StubParser("empty_page", text="line one\nline two\n"))
+    service = harness.make_service()
+    frozen = _frozen()
+    await harness.seed_source(frozen, b"line one\nline two\n")
+    original = service._shadow_for
+
+    class RepairingShadow:
+        async def execute(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            from knowledge_mining.mining.parse_quality.gate import (
+                QualityDecision, RepairRequest,
+            )
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                document=SimpleNamespace(schema_version="0.1", elements=(), containers=(), relations=()),
+                parse_ir_storage_object_id="ignored",
+                quality_meta={},
+                quality_decision=QualityDecision(
+                    decision="REPAIR", repair_request=RepairRequest(
+                        reason_codes=("empty_containers",), container_ids=("p1",),
+                    ),
+                ),
+            )
+
+    calls = 0
+    def shadow_for(parser_id, quality_profile="default"):
+        nonlocal calls
+        calls += 1
+        return RepairingShadow() if calls == 1 else original(parser_id, quality_profile)
+    service._shadow_for = shadow_for
+    run = await service.execute(frozen, _plan("empty_page", "good"), domain="default")
+    assert run.status == "SUCCEEDED"
+    events = await harness.attempts.list_by_run(run.id)
+    assert [(e.attempt_kind, e.outcome) for e in events] == [
+        ("primary", "FAILED"), ("fallback", "SUCCEEDED"),
+    ]
 
 
 async def test_plan_quality_profile_selects_lenient_or_strict_gate(harness) -> None:

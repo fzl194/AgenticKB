@@ -205,7 +205,11 @@ class DocumentParseService:
                 relation_count=len(outcome.document.relations),
             )
             decision = outcome.quality_decision
-            effective = self._resolve_decision(decision)
+            effective = self._resolve_decision(
+                decision,
+                can_fallback=(attempt_index + 1 < len(chain)
+                              and attempt_index + 1 < budget.max_backend_attempts),
+            )
 
             if effective.decision in ("PASS", "WARN"):
                 await self._attempts.append(self._attempt(
@@ -389,7 +393,7 @@ class DocumentParseService:
         return QualityGate(profile=quality_profile_for(quality_profile))
 
     def _resolve_decision(
-        self, decision: QualityDecision | None
+        self, decision: QualityDecision | None, *, can_fallback: bool = False
     ) -> QualityDecision:
         """REPAIR 的 M4 降级策略：无修复执行器 → 保守 WARN（问题保留）.
 
@@ -407,6 +411,14 @@ class DocumentParseService:
             ),), metrics=None)
         if decision.decision != "REPAIR":
             return decision
+        if can_fallback:
+            from knowledge_mining.mining.parse_quality.gate import FallbackRequest
+
+            return QualityDecision(
+                decision="FALLBACK", issues=decision.issues,
+                metrics=decision.metrics,
+                fallback_request=FallbackRequest(reason_codes=("repair_unavailable",)),
+            )
         from knowledge_mining.mining.parse_quality.gate import QualityIssue
 
         return QualityDecision(

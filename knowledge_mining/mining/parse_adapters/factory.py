@@ -56,6 +56,9 @@ from knowledge_mining.mining.parse_adapters.native_pdf import (
     NATIVE_PDF_PARSER_ID,
     NativePdfParser,
 )
+from knowledge_mining.mining.parse_adapters.pdf_text_layer import (
+    PDF_TEXT_LAYER_PARSER_ID, PdfTextLayerParser,
+)
 from knowledge_mining.mining.parse_adapters.normalizer import LegacyLineNormalizer
 from knowledge_mining.mining.parse_adapters.pdf_normalizer import PdfNormalizer
 
@@ -71,6 +74,7 @@ _PIPELINE_FACTORIES: dict[
     NATIVE_PPTX_PARSER_ID: (NativePptxParser, PptxNormalizer),
     NATIVE_HTML_PARSER_ID: (NativeHtmlParser, HtmlNormalizer),
     NATIVE_PDF_PARSER_ID: (NativePdfParser, PdfNormalizer),
+    PDF_TEXT_LAYER_PARSER_ID: (PdfTextLayerParser, PdfNormalizer),
 }
 
 

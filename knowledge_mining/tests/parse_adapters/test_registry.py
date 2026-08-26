@@ -75,6 +75,7 @@ def test_include_cloud_slots_false_restores_implemented_set() -> None:
     assert _ids(registry) == {
         "legacy_markdown", "legacy_txt",
         "native_docx", "native_xlsx", "native_pptx", "native_html", "native_pdf",
+        "pdf_text_layer",
     }
 
 
@@ -138,7 +139,7 @@ def test_factory_resolves_pipeline_for_all_native_ids() -> None:
 
     for pid in (
         "legacy_markdown", "legacy_txt", "native_docx", "native_xlsx",
-        "native_pptx", "native_html", "native_pdf",
+        "native_pptx", "native_html", "native_pdf", "pdf_text_layer",
     ):
         pair = resolve_pipeline(pid)
         assert pair is not None, pid
@@ -146,3 +147,33 @@ def test_factory_resolves_pipeline_for_all_native_ids() -> None:
         assert parser.descriptor.parser_id == pid
         assert callable(normalizer.normalize)
     assert resolve_pipeline("docling") is None  # 占位无实现
+
+
+def test_pdf_router_and_production_plan_keep_native_then_text_layer_order() -> None:
+    """P02：同一 registry 顺序必须同时约束 Router 与生产 ParsePlan。"""
+    from types import SimpleNamespace
+    from knowledge_mining.mining.workflow.new_chain_services import DocumentParseFacade
+
+    decision = ParserRouter(build_default_registry()).plan(DocumentProfile(
+        detected_mime="application/pdf", source_format="pdf", has_text_layer=True,
+    ))
+    plan = DocumentParseFacade.default_plan_factory(
+        SimpleNamespace(mime="application/pdf"), {}
+    )
+    assert decision.primary_parser_id == "native_pdf"
+    assert decision.fallback_parser_ids == ("pdf_text_layer",)
+    assert plan.backend_chain() == ("native_pdf", "pdf_text_layer")
+
+
+def test_pdf_text_layer_pipeline_parses_a_real_pdf() -> None:
+    """P02：备用后端必须能实际解析并规范化，而非只存在 descriptor。"""
+    from knowledge_mining.mining.parse_adapters.factory import resolve_pipeline
+    from knowledge_mining.tests.parse_adapters.test_cross_format_contract import (
+        _pdf_with_table,
+    )
+
+    parser, normalizer = resolve_pipeline("pdf_text_layer")
+    artifact = parser.parse(_pdf_with_table(), mime="application/pdf")
+    document = normalizer.normalize(artifact, source_raw_hash="a" * 64)
+    assert artifact.blocks
+    assert document.elements

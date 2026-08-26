@@ -88,7 +88,8 @@ class ParserRouter:
             )
 
         reasons = [f"mime_{profile.source_format}"]
-        primary = self._select_local(mime)
+        candidates = self._select_locals(mime)
+        primary = candidates[0] if candidates else None
         if primary is None:
             reasons.append("no_local_backend")
             return RouteDecision(
@@ -102,14 +103,15 @@ class ParserRouter:
             if profile.source_format in _LEGACY_ROUTE_FORMATS
             else f"native_{profile.source_format}"
         )
-        # M3 初版：无降级链（fallback 留空），由后续 WP 引入多 backend 竞争。
-        fallback: tuple[str, ...] = ()
+        fallback = tuple(candidate.parser_id for candidate in candidates[1:])
 
         if (
             profile.source_format == "pdf"
             and profile.has_text_layer is False
         ):
-            # 扫描件：保留弱能力 primary，OCR 让位云端槽位（用户后续配置）
+            # 扫描件没有文本层，pdf_text_layer 也无可提取内容；保留 native
+            # 尝试与 OCR 信号，但不得把无效 fallback 写进计划。
+            fallback = ()
             reasons.append("no_text_layer_needs_ocr")
             reasons.append("ocr_reserved_cloud")
 
@@ -120,16 +122,14 @@ class ParserRouter:
             route_name=route_name,
         )
 
-    def _select_local(self, mime: str):
-        """registry 中第一个支持 ``mime`` 且 local + 许可 ok 的 descriptor."""
-        for descriptor in self._registry.all():
-            if (
-                descriptor.supports(mime)
-                and descriptor.backend_kind == "local"
-                and descriptor.license_status == _OK_LICENSE
-            ):
-                return descriptor
-        return None
+    def _select_locals(self, mime: str):
+        """按注册顺序返回所有可运行 local backend（首个为 primary）。"""
+        return tuple(
+            descriptor for descriptor in self._registry.all()
+            if descriptor.supports(mime)
+            and descriptor.backend_kind == "local"
+            and descriptor.license_status == _OK_LICENSE
+        )
 
 
 __all__ = [

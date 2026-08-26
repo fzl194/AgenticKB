@@ -178,20 +178,20 @@ class DocumentParseFacade:
         mime = _as_str(
             getattr(raw_file, "mime", None), "text/plain",
         )
-        descriptor = None
-        for candidate in registry.all():
-            if candidate.supports(mime) and candidate.license_status == "ok":
-                descriptor = candidate
-                break
-        parser_id = descriptor.parser_id if descriptor else "legacy_markdown"
-        # resolve_pipeline 保证 parser_id 可解析（描述符来自同一 registry）。
-        resolve_pipeline(parser_id)
+        parser_ids = tuple(
+            candidate.parser_id for candidate in registry.all()
+            if candidate.supports(mime)
+            and candidate.license_status == "ok"
+            and resolve_pipeline(candidate.parser_id) is not None
+        )
+        parser_id = parser_ids[0] if parser_ids else "legacy_markdown"
         budget = AttemptBudget(
             max_backend_attempts=int(params.get("maxBackendAttempts", 3)),
         )
         return ParsePlan(
             plan_id=f"workflow-{parser_id}",
             primary_parser_id=parser_id,
+            fallback_parser_ids=parser_ids[1:budget.max_backend_attempts],
             budget=budget,
             quality_profile=params.get("qualityProfile", "default"),
         )

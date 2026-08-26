@@ -55,6 +55,7 @@ def _full_registry() -> BackendRegistry:
     registry.register(_descriptor("md_a", "text/markdown"))
     registry.register(_descriptor("txt_a", "text/plain"))
     registry.register(_descriptor("pdf_native", "application/pdf"))
+    registry.register(_descriptor("pdf_text", "application/pdf"))
     registry.register(_descriptor("docx_native", OOXML_DOCX_MIME))
     registry.register(_descriptor("html_native", "text/html"))
     return registry
@@ -158,7 +159,7 @@ def test_pdf_without_text_layer_flags_ocr(router: ParserRouter) -> None:
 def test_pdf_with_text_layer_no_ocr_reason(router: ParserRouter) -> None:
     decision = router.plan(_profile("pdf", has_text_layer=True))
     assert "no_text_layer_needs_ocr" not in decision.reason_codes
-    assert decision.fallback_parser_ids == ()
+    assert decision.fallback_parser_ids == ("pdf_text",)
 
 
 def test_decision_is_frozen(router: ParserRouter) -> None:

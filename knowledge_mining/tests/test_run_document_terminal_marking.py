@@ -131,3 +131,40 @@ def test_fail_unfinished_run_documents_sweeps_processing_rows() -> None:
     sql, params = db.sqls[0]
     assert "status = 'processing'" in sql and "UPDATE mining_run_documents" in sql
     assert params[2] == "run-9" and "run failed: X" in params[0]
+
+
+# -- BUG-4（批次1）：resume 已 finalize Run 的终态回写安全网 -----------------------
+
+def test_ensure_completed_status_writes_when_row_still_active() -> None:
+    from knowledge_mining.mining.jobs.run import _ensure_completed_status
+
+    calls = []
+    db = SimpleNamespace(
+        get_run=lambda rid: {"status": "running"},
+        update_run_status=lambda rid, status, **kw: calls.append((rid, status, kw)),
+    )
+    _ensure_completed_status(db, "run-1", "generic")
+    assert len(calls) == 1
+    assert calls[0][0] == "run-1" and calls[0][1] == "completed"
+    assert calls[0][2]["expected_statuses"] == ("queued", "running", "awaiting_review")
+
+
+def test_ensure_completed_status_noop_when_already_terminal() -> None:
+    from knowledge_mining.mining.jobs.run import _ensure_completed_status
+
+    calls = []
+    db = SimpleNamespace(
+        get_run=lambda rid: {"status": "completed"},
+        update_run_status=lambda rid, status, **kw: calls.append((rid, status)),
+    )
+    _ensure_completed_status(db, "run-1", "generic")
+    assert calls == []
+
+
+def test_ensure_completed_status_swallows_errors() -> None:
+    from knowledge_mining.mining.jobs.run import _ensure_completed_status
+
+    def boom(rid):
+        raise RuntimeError("db down")
+    db = SimpleNamespace(get_run=boom)
+    _ensure_completed_status(db, "run-1", "generic")  # 不应抛

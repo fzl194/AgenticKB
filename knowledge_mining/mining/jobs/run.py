@@ -1493,6 +1493,11 @@ def _execute_workflow_job(
                 expected_statuses=("queued", "running", "awaiting_review"),
             )
             runtime_db.commit()
+        elif result.status == "completed":
+            # BUG-4（批次1）：终态安全网。正常路径 finalize 节点已写 completed
+            # （此处条件不触发）；resume 已 finalize 的 Run 走 document_persist_marker
+            # 快速路径跳过 finalize——无人写终态，行滞留 running 且每次重启回弹。
+            _ensure_completed_status(runtime_db, run_id, frozen_domain)
         return {
             "run_id": run_id,
             "status": result.status,
@@ -1547,6 +1552,26 @@ def _fail_unfinished_run_documents(
         logger.exception(
             "Failed to sweep unfinished run documents for run %s", run_id,
         )
+
+
+def _ensure_completed_status(
+    runtime_db: MiningRuntimeDB, run_id: str, domain: str,
+) -> None:
+    """completed 结果的落库安全网（BUG-4）：行仍处活动态时补写终态。
+
+    幂等：正常路径 finalize 节点已写 completed，此处条件不命中。
+    """
+    try:
+        row = runtime_db.get_run(run_id) or {}
+        if row.get("status") in ("queued", "running", "awaiting_review"):
+            runtime_db.update_run_status(
+                run_id, "completed",
+                finished_at=_utcnow(), current_stage="done",
+                domain=domain,
+                expected_statuses=("queued", "running", "awaiting_review"),
+            )
+    except Exception:
+        logger.exception("Failed to ensure completed status for run %s", run_id)
 
 
 def _check_review_gate(asset_db: AssetCoreDB, run_id: str, domain_id: str) -> str | None:

@@ -40,6 +40,36 @@ def _stat_meta(path: Path) -> tuple[int, str]:
         return 0, _utcnow_iso()
 
 
+#: 扩展名 → MIME 回落表。浏览器对 .md 常给 application/octet-stream（或空），
+#: 盲信 multipart content_type 会把 mime 记错导致解析链拒收（BUG-2，批次1）。
+_EXTENSION_MIME: dict[str, str] = {
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".txt": "text/plain",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".csv": "text/csv",
+    ".json": "application/json",
+}
+
+_GENERIC_MIME = {"", "application/octet-stream"}
+
+
+def resolve_upload_mime(filename: str, declared: str | None) -> str:
+    """声明 MIME 缺失或为泛型时按扩展名回落；具体声明（含非匹配扩展名）以声明为准。"""
+    declared = (declared or "").strip().lower()
+    if declared not in _GENERIC_MIME:
+        return declared
+    return _EXTENSION_MIME.get(Path(filename).suffix.lower(), "application/octet-stream")
+
+
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -91,7 +121,9 @@ class DocumentService:
         build_storage_path(self._upload_root, kb_id, directory_path, filename)
         normalized_directory = _normalize_directory(directory_path)
         normalized_filename = Path(filename).name
-        storage_object = await self._store_source(content=content, mime=mime)
+        storage_object = await self._store_source(
+            content=content, mime=resolve_upload_mime(filename, mime),
+        )
         doc = await self._db.insert_document_from_storage(
             domain=kb["domain"], kb_id=kb_id,
             document_key=build_document_key(normalized_directory, normalized_filename),

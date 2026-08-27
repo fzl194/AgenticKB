@@ -4,7 +4,9 @@
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -18,7 +20,9 @@ from knowledge_mining.mining.kb.auth import current_user
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.deps import get_document_service, get_folder_service, get_kb_db
 from knowledge_mining.mining.kb.routes.kbs import _map_error
-from knowledge_mining.mining.kb.services.document_service import DocumentService
+from knowledge_mining.mining.kb.services.document_service import (
+    DocumentService, UploadTooLarge,
+)
 from knowledge_mining.mining.kb.services.folder_service import FolderService
 from knowledge_mining.mining.kb.services.kb_service import Duplicate, Forbidden, NotFound
 
@@ -82,6 +86,18 @@ async def document_parse_result(
     return result
 
 
+_ROUTE_CHUNK = 256 * 1024
+
+
+async def _upload_file_chunks(file: UploadFile) -> AsyncIterator[bytes]:
+    """分块读 multipart 文件（P01-S1）：不整读，内存与文件大小无关。"""
+    while True:
+        chunk = await file.read(_ROUTE_CHUNK)
+        if not chunk:
+            break
+        yield chunk
+
+
 @router.post("", status_code=201)
 async def upload_document(
     kb_id: str,
@@ -91,18 +107,38 @@ async def upload_document(
     user: dict[str, Any] = Depends(current_user),
     svc: DocumentService = Depends(get_document_service),
 ):
-    content = await file.read()
     filename = file.filename or "unnamed"
+    cfg = UploadConfig()
     try:
         if _is_archive(filename):
-            docs = await svc.upload_zip(
-                kb_id=kb_id, owner_id=user["id"], zip_bytes=content, filename=filename,
-            )
-            return {"documents": docs}
-        return await svc.upload(
-            kb_id=kb_id, owner_id=user["id"], filename=filename, content=content,
-            directory_path=directory, document_type=document_type, mime=file.content_type,
+            # zip 需完整字节才能解压——分块落到临时文件（内存有界），带额度解压。
+            with TemporaryDirectory(prefix="agentickb-zip-") as tmp:
+                zip_path = Path(tmp) / Path(filename).name
+                written = 0
+                with zip_path.open("wb") as fh:
+                    async for chunk in _upload_file_chunks(file):
+                        written += len(chunk)
+                        if written > cfg.upload_max_archive_size:
+                            raise UploadTooLarge(
+                                (f"zip 上传 {written} 字节超过上限 "
+                                 f"{cfg.upload_max_archive_size} 字节"),
+                                limit_bytes=cfg.upload_max_archive_size,
+                            )
+                        fh.write(chunk)
+                docs = await svc.upload_zip_path(
+                    kb_id=kb_id, owner_id=user["id"], zip_path=zip_path,
+                )
+                return {"documents": docs}
+        return await svc.upload_stream(
+            kb_id=kb_id, owner_id=user["id"], filename=filename,
+            stream=_upload_file_chunks(file),
+            directory_path=directory, document_type=document_type,
+            mime=file.content_type, max_bytes=cfg.upload_max_file_size,
         )
+    except UploadTooLarge as exc:
+        raise HTTPException(
+            413, f"文件超过大小上限（{exc.limit_bytes} 字节）：{exc}"
+        ) from None
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
     except ValueError as exc:

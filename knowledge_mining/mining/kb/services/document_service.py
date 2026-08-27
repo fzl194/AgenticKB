@@ -16,7 +16,7 @@ from typing import Any
 
 from psycopg.errors import UniqueViolation
 
-from knowledge_mining.mining.infra.archive_extractor import extract_archive
+from knowledge_mining.mining.infra.archive_extractor import extract_archive, extract_zip
 from knowledge_mining.mining.infra.upload_config import UploadConfig
 from knowledge_mining.mining.contracts.file_management import (
     StorageObjectRecord,
@@ -68,6 +68,29 @@ def resolve_upload_mime(filename: str, declared: str | None) -> str:
     if declared not in _GENERIC_MIME:
         return declared
     return _EXTENSION_MIME.get(Path(filename).suffix.lower(), "application/octet-stream")
+
+
+class UploadTooLarge(Exception):
+    """上传超过大小上限（路由映射 413）。"""
+
+    def __init__(self, message: str, *, limit_bytes: int):
+        super().__init__(message)
+        self.limit_bytes = limit_bytes
+
+
+_SPILL_CHUNK = 256 * 1024
+
+
+def _file_chunks(path: Path) -> AsyncIterator[bytes]:
+    """从磁盘文件分块读出（异步生成器）。"""
+    async def _gen() -> AsyncIterator[bytes]:
+        with path.open("rb") as fh:
+            while True:
+                block = fh.read(_SPILL_CHUNK)
+                if not block:
+                    break
+                yield block
+    return _gen()
 
 
 def _utcnow_iso() -> str:
@@ -152,6 +175,138 @@ class DocumentService:
         doc["status"] = "uploaded"
         return doc
 
+    async def upload_stream(
+        self, *, kb_id: str, owner_id: str, filename: str,
+        stream: AsyncIterator[bytes],
+        mime: str | None = None, directory_path: str | None = None,
+        document_type: str | None = None, max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        """流式上传（P01-S1）：路由分块喂入，进程内存与文件大小无关。
+
+        ``max_bytes`` 上限在落盘暂存阶段强制（超限 UploadTooLarge → 路由 413），
+        不会触碰对象存储或文档表。
+        """
+        kb = await self._db.get_kb(kb_id)
+        if kb is None:
+            raise NotFound(kb_id)
+        await self._svc._assert_write(kb_id, owner_id)
+        build_storage_path(self._upload_root, kb_id, directory_path, filename)
+        normalized_directory = _normalize_directory(directory_path)
+        normalized_filename = Path(filename).name
+        storage_object = await self._store_source_stream(
+            stream, mime=resolve_upload_mime(filename, mime), max_bytes=max_bytes,
+        )
+        return await self._register_uploaded_document(
+            kb=kb, kb_id=kb_id, owner_id=owner_id,
+            normalized_directory=normalized_directory,
+            normalized_filename=normalized_filename,
+            storage_object=storage_object, document_type=document_type,
+        )
+
+    async def _register_uploaded_document(
+        self, *, kb: dict[str, Any], kb_id: str, owner_id: str,
+        normalized_directory: str, normalized_filename: str,
+        storage_object: StorageObjectRecord, document_type: str | None,
+    ) -> dict[str, Any]:
+        """内容入库后的文档登记（含软删同名复活，P08-S1）。单文件/zip 共用。"""
+        document_key = build_document_key(normalized_directory, normalized_filename)
+        soft_deleted = await self._db.find_document_by_key(
+            kb_id, document_key, include_deleted=True,
+        )
+        if soft_deleted is not None and soft_deleted.get("deleted_at") is not None:
+            revived = await self._db.revive_document_from_storage(
+                soft_deleted["id"],
+                storage_object_id=storage_object.id,
+                source_raw_hash=storage_object.sha256,
+                file_size=storage_object.size, modified_at=_utcnow_iso(),
+            )
+            if revived is not None:
+                revived["status"] = "uploaded"
+                return revived
+        doc = await self._db.insert_document_from_storage(
+            domain=kb["domain"], kb_id=kb_id,
+            document_key=document_key,
+            document_name=normalized_filename,
+            storage_object_id=storage_object.id,
+            source_raw_hash=storage_object.sha256,
+            directory_path=normalized_directory, document_type=document_type,
+            owner_id=owner_id, file_size=storage_object.size, modified_at=_utcnow_iso(),
+        )
+        doc["status"] = "uploaded"
+        return doc
+
+    async def _store_source_stream(
+        self, stream: AsyncIterator[bytes], *, mime: str | None,
+        max_bytes: int | None = None,
+    ) -> StorageObjectRecord:
+        """流式落 source 对象：分块暂存 + 增量 sha256 → 去重检查 → 流式上传。
+
+        内容寻址要求先有哈希才知道 object_key——单遍暂存（磁盘）+ 第二遍
+        从暂存文件流式 put_stream，全程不在内存持有整包。
+        """
+        if self._object_store is None or self._storage_objects is None or not self._source_bucket:
+            raise RuntimeError("KB object storage is not configured")
+        sha = hashlib.sha256()
+        size = 0
+        with TemporaryDirectory(prefix="agentickb-upload-") as tmp:
+            staging = Path(tmp) / "staged.bin"
+            with staging.open("wb") as fh:
+                async for chunk in stream:
+                    if not chunk:
+                        continue
+                    size += len(chunk)
+                    if max_bytes is not None and size > max_bytes:
+                        raise UploadTooLarge(
+                            f"upload exceeds limit: {size} > {max_bytes} bytes",
+                            limit_bytes=max_bytes,
+                        )
+                    fh.write(chunk)
+                    sha.update(chunk)
+            digest = sha.hexdigest()
+            object_key = build_object_key("source", digest)
+            existing = await self._storage_objects.find_by_location(
+                self._source_bucket, object_key, None,
+            )
+            if existing is not None:
+                if (existing.sha256 != digest or existing.size != size
+                        or existing.state != "AVAILABLE"):
+                    raise ValueError("registered storage object does not match upload content")
+                return existing
+            put_result = await self._object_store.put_stream(
+                ObjectLocation(bucket=self._source_bucket, object_key=object_key),
+                _file_chunks(staging),
+                PutOptions(
+                    artifact_class="source", mime=mime, expected_sha256=digest,
+                    content_length=size,
+                ),
+            )
+            if put_result.sha256 != digest or put_result.size != size:
+                raise ValueError("object storage verification failed")
+        return await self._register_source_object(
+            object_key=object_key, sha256=digest, size=size,
+            mime=mime, etag=put_result.etag,
+        )
+
+    async def _register_source_object(
+        self, *, object_key: str, sha256: str, size: int,
+        mime: str | None, etag: str,
+    ) -> StorageObjectRecord:
+        registered = await self._storage_objects.register(
+            StorageObjectRecord(
+                id=f"obj_{uuid.uuid4().hex}",
+                provider=getattr(self._object_store, "provider", "unknown"),
+                bucket=self._source_bucket, object_key=object_key,
+                object_version_id=None, sha256=sha256,
+                size=size, mime=mime, etag=etag,
+                artifact_class="source", state="AVAILABLE", created_at=_utcnow_iso(),
+                last_verified_at=_utcnow_iso(),
+            )
+        )
+        if (registered.sha256 != sha256 or registered.size != size
+                or registered.state != "AVAILABLE"):
+            raise ValueError("registered storage object does not match upload content")
+        return registered
+
     async def _store_source(
         self, *, content: bytes, mime: str | None,
     ) -> StorageObjectRecord:
@@ -210,6 +365,33 @@ class DocumentService:
     async def upload_zip(
         self, *, kb_id: str, owner_id: str, zip_bytes: bytes, filename: str = "upload.zip",
     ) -> list[dict[str, Any]]:
+        """旧签名（整包 bytes）薄包装——生产路由已改走 upload_zip_path。"""
+        with TemporaryDirectory(prefix="agentickb-kb-upload-") as temporary_dir:
+            zip_path = Path(temporary_dir) / Path(filename).name
+            zip_path.write_bytes(zip_bytes)
+            return await self.upload_zip_path(
+                kb_id=kb_id, owner_id=owner_id, zip_path=zip_path,
+            )
+
+    async def upload_zip_path(
+        self, *, kb_id: str, owner_id: str, zip_path: Path,
+        max_archive_bytes: int | None = None,
+        max_member_bytes: int | None = None,
+        max_members: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """zip 上传（P01-S1 流式）：磁盘 zip → 带额度解压 → 成员流式入库。
+
+        解压三重额度（成员数/单成员/总量，zip-bomb 防护）；默认上限来自
+        UploadConfig（archive 500MB / file 100MB / 100 成员）。
+        """
+        cfg = UploadConfig()
+        if max_archive_bytes is None:
+            max_archive_bytes = cfg.upload_max_archive_size
+        if max_member_bytes is None:
+            max_member_bytes = cfg.upload_max_file_size
+        if max_members is None:
+            max_members = cfg.upload_max_files_per_request
+
         kb = await self._db.get_kb(kb_id)
         if kb is None:
             raise NotFound(kb_id)
@@ -218,11 +400,14 @@ class DocumentService:
         # scratch space.  No extracted path is persisted in asset_documents.
         with TemporaryDirectory(prefix="agentickb-kb-upload-") as temporary_dir:
             base = Path(temporary_dir)
-            zip_path = base / Path(filename).name
-            await asyncio.to_thread(zip_path.write_bytes, zip_bytes)
-            result = await asyncio.to_thread(extract_archive, zip_path, base)
+            result = await asyncio.to_thread(
+                extract_zip, zip_path, base,
+                max_members=max_members,
+                max_member_bytes=max_member_bytes,
+                max_total_bytes=max_archive_bytes,
+            )
             if result.error:
-                raise ValueError(f"archive extract failed: {result.error}")
+                raise ValueError(result.error)
 
             # 先幂等建齐 zip 内子目录对应的 kb_folders（否则 UI 按 folder.path 过滤 → 列表空）
             dir_paths = {
@@ -244,10 +429,11 @@ class DocumentService:
                     continue  # 解压越界，跳过
                 parts = Path(rel).parts
                 try:
-                    docs.append(await self.upload(
+                    docs.append(await self.upload_stream(
                         kb_id=kb_id, owner_id=owner_id, filename=parts[-1],
-                        content=await asyncio.to_thread(full.read_bytes),
+                        stream=_file_chunks(full),
                         directory_path="/".join(parts[:-1]),
+                        max_bytes=max_member_bytes,
                     ))
                 except UniqueViolation:
                     continue  # KB 内同名已存在，跳过

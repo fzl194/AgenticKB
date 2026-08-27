@@ -45,13 +45,34 @@ def _fix_zip_filename(info: zipfile.ZipInfo) -> str:
         return raw_name
 
 
-def extract_zip(archive_path: Path, dest_dir: Path) -> ExtractResult:
-    """Extract a ZIP archive with path-traversal protection and Chinese filename support."""
+_COPY_CHUNK = 256 * 1024
+
+
+def extract_zip(
+    archive_path: Path,
+    dest_dir: Path,
+    *,
+    max_members: int | None = None,
+    max_member_bytes: int | None = None,
+    max_total_bytes: int | None = None,
+) -> ExtractResult:
+    """Extract a ZIP archive with path-traversal protection and Chinese filename support.
+
+    P01-S1：分块拷贝（不整读成员）+ 三重解压额度（成员数/单成员/总量）——
+    zip-bomb 的解压总量可以比压缩包大几个数量级，必须在解压时强制。
+    额度为 None 表示不限（兼容既有内部调用方；生产上传路径显式传限）。
+    """
     extracted: list[str] = []
+    total = 0
 
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
-            for info in zf.infolist():
+            infos = zf.infolist()
+            if max_members is not None and len(infos) > max_members:
+                return ExtractResult(
+                    error=f"ZIP 成员数 {len(infos)} 超过上限 {max_members}",
+                )
+            for info in infos:
                 if info.is_dir():
                     continue
 
@@ -66,8 +87,25 @@ def extract_zip(archive_path: Path, dest_dir: Path) -> ExtractResult:
                 out_path = dest_dir / member_path
                 out_path.parent.mkdir(parents=True, exist_ok=True)
 
+                member_size = 0
                 with zf.open(info) as src, open(out_path, "wb") as dst:
-                    dst.write(src.read())
+                    while True:
+                        block = src.read(_COPY_CHUNK)
+                        if not block:
+                            break
+                        member_size += len(block)
+                        total += len(block)
+                        if max_member_bytes is not None and member_size > max_member_bytes:
+                            return ExtractResult(
+                                error=(f"ZIP 成员 {safe_name} 解压后 "
+                                       f"{member_size} 字节超过单成员上限 {max_member_bytes}"),
+                            )
+                        if max_total_bytes is not None and total > max_total_bytes:
+                            return ExtractResult(
+                                error=(f"ZIP 解压总量 {total} 字节超过上限 "
+                                       f"{max_total_bytes}（疑似 zip 炸弹）"),
+                            )
+                        dst.write(block)
 
                 extracted.append(member_path)
 

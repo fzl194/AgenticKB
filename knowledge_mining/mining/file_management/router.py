@@ -2,9 +2,11 @@
 
 Exposes the SRS §C01 resource boundary on top of
 :class:`FileManagementService` and the M1.2 :class:`UploadSessionService`.
-This is a NEW, parallel link (writes ``storage_object_id``); the legacy
-``kb/routes/documents`` surface continues to write ``storage_path`` and is
-untouched here (SRS §2.3 migration-period coexistence).
+This is a NEW, parallel link (writes ``storage_object_id``). The KB product
+route ``kb/routes/documents`` now also writes ``storage_object_id`` (object
+store, content-addressed); only its legacy disk fallback branch still touches
+``storage_path``. Note: this router is NOT mounted in production (P01-S2
+pending); see docs/下一阶段/01-P01.
 
 Routes (path style mirrors ``kb/routes``):
     GET    /api/kb/{kb_id}/documents

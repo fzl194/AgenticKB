@@ -176,22 +176,34 @@ class MinioObjectStore:
         stream: AsyncIterator[bytes],
         options: PutOptions,
     ) -> PutResult:
-        # Materialize to a tmp file so we can both stream into minio's
-        # blocking put_object and compute sha256 in one pass.
-        data = await _drain(stream)
-        sha = hashlib.sha256(data).hexdigest()
-        if options.expected_sha256 is not None and options.expected_sha256 != sha:
-            raise ChecksumMismatch(
-                f"expected {options.expected_sha256}, got {sha}",
-                expected=options.expected_sha256,
-                actual=sha,
-            )
+        """真流式写入（P01-S1 前置）：增量 sha256 + 分块落盘，内存峰值与对象
+        大小无关（原实现 ``_drain`` 整包 join——签名流式、实现整包，100MB
+        上传 = 进程 RSS +100MB）。
+
+        内容寻址（expected_sha256）与阻塞 SDK 上传共用同一次落盘产物。
+        """
+        sha = hashlib.sha256()
+        size = 0
         tmp_fd, tmp_path = tempfile.mkstemp(prefix=".minio-put-")
         try:
             with os.fdopen(tmp_fd, "wb") as fh:
-                fh.write(data)
+                async for chunk in stream:
+                    if not chunk:
+                        continue
+                    # 64KB~1MB 级磁盘写走缓冲 IO：亚毫秒级，不值得每块一次
+                    # to_thread 的调度开销；事件循环保持响应。
+                    fh.write(chunk)
+                    sha.update(chunk)
+                    size += len(chunk)
+            digest = sha.hexdigest()
+            if options.expected_sha256 is not None and options.expected_sha256 != digest:
+                raise ChecksumMismatch(
+                    f"expected {options.expected_sha256}, got {digest}",
+                    expected=options.expected_sha256,
+                    actual=digest,
+                )
             result = await asyncio.to_thread(
-                self._put_file_blocking, location, tmp_path, options, len(data), sha
+                self._put_file_blocking, location, tmp_path, options, size, digest
             )
             return result
         finally:

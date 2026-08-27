@@ -134,6 +134,11 @@ class DocumentParseService:
         ):
             return existing
 
+        # 扫描件守卫（批次3-问题3）：无文本层 PDF 不进解析链，直接 FAILED 终态。
+        rejection = await self._scanned_pdf_rejection(frozen)
+        if rejection is not None:
+            return await self._reject_scanned(frozen, plan, primary_fp, rejection)
+
         rid = run_id or _new_id("parse")
         await self._parse_runs.insert(ParseRunRecord(
             id=rid,
@@ -279,6 +284,11 @@ class DocumentParseService:
         norm = normalizer or resolved_norm
         artifact = await self._load_raw_artifact(backend_raw_storage_object_id)
 
+        # 扫描件守卫（批次3-问题3）：无文本层 PDF 不进解析链，直接 FAILED 终态。
+        rejection = await self._scanned_pdf_rejection(frozen)
+        if rejection is not None:
+            return await self._reject_scanned(frozen, plan, primary_fp, rejection)
+
         rid = run_id or _new_id("parse")
         await self._parse_runs.insert(ParseRunRecord(
             id=rid,
@@ -391,6 +401,74 @@ class DocumentParseService:
         )
 
         return QualityGate(profile=quality_profile_for(quality_profile))
+
+    #: 扫描件守卫的字节缓存（批次3-问题3）：source 对象不可变，检测结果
+    #: 进程内复用——同一文档重复挖掘/重放不再重复读对象。
+    _pdf_bytes_cache: dict = {}
+    _PDF_BYTES_CACHE_MAX = 32
+
+    async def _scanned_pdf_rejection(self, frozen) -> str | None:
+        """无文本层 PDF 直接明确拒绝（批次3-问题3：file_inspector 接线）。
+
+        has_text_layer 检测此前只在未挂线的路由模块——生产链由 registry
+        顺序直接构链，扫描件靠质量 FAIL"巧合"兜住且报错误导（empty_document）。
+        接线后：不进解析链、给明确的"需 OCR"信息、attempt 完整留痕。
+        """
+        if (frozen.mime or "").lower() != "application/pdf":
+            return None
+        data = self._pdf_bytes_cache.get(frozen.source_storage_object_id)
+        if data is None:
+            chunks = []
+            async for chunk in self._store.get_stream(ObjectLocation(
+                    bucket=frozen.bucket, object_key=frozen.object_key,
+                    version_id=frozen.object_version_id)):
+                chunks.append(chunk)
+            data = b"".join(chunks)
+            self._pdf_bytes_cache[frozen.source_storage_object_id] = data
+            while len(self._pdf_bytes_cache) > self._PDF_BYTES_CACHE_MAX:
+                self._pdf_bytes_cache.pop(next(iter(self._pdf_bytes_cache)))
+        try:
+            from knowledge_mining.mining.file_inspector.inspect import FileInspector
+            profile = FileInspector().inspect(data, declared_mime=frozen.mime)
+        except Exception:  # noqa: BLE001 —— 检测失败不拦解析（让解析链自己报）
+            return None
+        if profile.has_text_layer is False:
+            return (
+                "scanned_pdf_needs_ocr: 扫描件 PDF（无文本层）暂不支持解析——"
+                "需 OCR 能力（未上线）。请上传文本版 PDF，或先用 OCR 工具转换。"
+            )
+        return None
+
+    async def _reject_scanned(self, frozen, plan, primary_fp: str,
+                              message: str):
+        """扫描件守卫的失败终态：run + attempt 完整留痕（不走解析链）。"""
+        rid = _new_id("parse")
+        await self._parse_runs.insert(ParseRunRecord(
+            id=rid,
+            document_id=frozen.document_id,
+            source_storage_object_id=frozen.source_storage_object_id,
+            source_raw_hash=frozen.source_raw_hash,
+            source_content_revision=frozen.source_content_revision,
+            parser_id=plan.primary_parser_id,
+            parser_fingerprint=primary_fp,
+            status="QUEUED",
+            started_at=_utcnow(),
+            metadata_json=json.dumps(
+                {"mode": "m4-operator", "plan_id": plan.plan_id,
+                 "guard": "scanned_pdf"},
+                ensure_ascii=False, sort_keys=True,
+            ),
+        ))
+        await self._advance(rid, "INSPECTING")
+        await self._advance(rid, "PLANNED")
+        await self._advance(rid, "PARSING")  # 状态机：FAILED 只能从 PARSING 进入
+        await self._attempts.append(self._attempt(
+            rid, 0, plan.primary_parser_id, "primary", "FAILED", _utcnow(),
+            error_message=f"scanned_pdf_needs_ocr: {message}",
+        ))
+        await self._advance(rid, "FAILED", error_message=message,
+                            finished_at=_utcnow())
+        return await self._final(rid)
 
     def _resolve_decision(
         self, decision: QualityDecision | None, *, can_fallback: bool = False

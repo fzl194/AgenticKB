@@ -87,3 +87,52 @@
 ```
 
 > 所有方案在实施前需用户对四个产品决策点拍板：① 04-S1-A KB 默认范式是否切 fast_retrieval；② 02-S4 第二解析后端路线（docling/云/暂缓）；③ 07 删除语义（quick/withdraw 默认策略）；④ 08 legacy 各族下线 vs 收编清单。
+
+---
+
+## 7. 决策记录（2026-08-27，用户拍板）
+
+| 决策点 | 结论 |
+|---|---|
+| ② 第二解析后端 / 扫描件 OCR（02-S4） | **暂缓**——先修确定性 bug，待 P09 质量数据积累后按分布决策（届时在本地 Docling vs 云 VLM 间选） |
+| ① KB 挖掘范式（04-S1-A） | **建库默认 `system-full-baseline`**（范式可后改），消除「不选范式无法挖掘」的 UX 陷阱 |
+| 新增：批次挖掘通道 | **退役**——挖掘必须基于知识库（整库或部分文档）；`POST /api/runs` 的 `upload_batch_id` 入口及其 UI 路径移除（实测该通道 v2 解析必败 `document_parse_unavailable`，无修复价值） |
+| 新增：多实例 / P07-S3 | **暂缓**——单实例 + 租约 + 延迟复扫已自洽，横向扩容需求出现时再做 |
+| ③ 删除语义 | 方案既定（软删优先、GC 后置）无需再拍；仅 P12 批次时的「保留期时长」参数届时确认 |
+| ④ legacy 路由族 | 维持 P05/P06 批次时按需处置，不单独拍板 |
+
+## 8. 修订后实施顺序（2026-08-27，决策落定版）
+
+```text
+批次1 止血+速赢（无需决策，立即可做）
+ ├─ P08-S1 软删替代硬删（唯一剩的 P0：硬删改写历史 Build）+ 9 点读面过滤 + Java 侧过滤
+ ├─ .md mime 扩展名回落（kb/routes/documents.py:104 盲信 multipart content_type → .md 记为 octet-stream 被 parser 拒收）
+ ├─ 失败文档 mining_run_documents 终态回写（卡 processing、document_id=None、run 计数黑洞 total≠committed+failed+skipped）
+ ├─ resume 已 finalize Run 的终态回写（runtime.resume() 快速路径 ~4s 内存返回 completed 无人写 DB → 行滞留 running、重启回弹）
+ └─ 批次挖掘通道退役（决策：KB 唯一）——/api/runs upload_batch_id 变体 + /api/uploads 消费面 + UI 批次挖掘入口
+
+批次2 上传通道工业化（P01）
+ ├─ S1 put_stream 流式适配器（消整读内存）+ 大小上限
+ └─ S2 UploadSessionService 接线 router + multipart 真实现（复用 S1 适配器；批次通道退役后按 KB 上传路径收口）
+
+批次3 读路径与加固（P05 + 小项）
+ ├─ Parse IR 读路径三重全量成本（磁盘 tmp + 内存 bytes + 对象图）→ 流式/按需 + 前端懒加载
+ ├─ KB 认证池加固（每请求 upsert_user_by_username 直查 DB、请求风暴下池耗尽 → 缓存/扩容）
+ └─ ParserRouter 接线（has_text_layer 保护进生产链，为 OCR 决策铺路）
+
+批次4 检索就绪（P04+P10，范式默认已定）
+ ├─ 范式切换 + readiness 门控（units/embeddings=0 不得称 validated；KB 建库默认范式同批落地）
+ ├─ 失败文档重试闭环
+ └─ figure/caption 闭环（随 OCR 决策）
+
+批次5 删除链闭环（P08-S2/S3 + P12，依赖批次1）
+ └─ KB removal Build → purge → GC 执行器（含保留期参数，届时确认）
+
+批次6 视需求
+ ├─ OCR / 第二解析后端（决策已定：暂缓，待质量数据）
+ ├─ P07-S3 独立 worker + SKIP LOCKED 队列认领（多实例时）
+ └─ legacy 路由族收尾
+```
+
+已完成批次对照（截至 2026-08-27，均经真实运行时审查后合并 master）：
+08-S0/S1（P13 鉴权）✅ · 06-S1（P07 启动自愈）✅ · 06-S2（P07 租约）✅ · 03-S1（P03 冻结输入）✅ · 05-P06（幽灵路由退役）✅ · 02-S1（质量基准+落库）✅ · 02-S2（质量档位）✅ · 02-S3（fallback 链）✅

@@ -46,7 +46,11 @@ from knowledge_mining.mining.workflow.repositories.global_workflow_repository im
 from knowledge_mining.mining.workflow.service import WorkflowService
 from knowledge_mining.mining.workflow.manifest import value_hash
 from knowledge_mining.mining.workflow.run_binding import WorkflowRunBinder
-from knowledge_mining.mining.api.startup_recovery import recover_startup_runs, schedule_startup_resumes
+from knowledge_mining.mining.api.startup_recovery import (
+    recover_startup_runs,
+    schedule_lease_expiry_sweep,
+    schedule_startup_resumes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +165,12 @@ async def lifespan(app: FastAPI):
     if recovery.workflow_runs:
         schedule_startup_resumes(recovery, _resume_workflow_after_restart)
         logger.info("Scheduled %d workflow run resume(s) in background", len(recovery.workflow_runs))
+    # P07-S2：重启瞬间仍持有效租约的 Run，等租约到期后补一轮标记 + 恢复。
+    schedule_lease_expiry_sweep(
+        domain_ids=enabled_domains,
+        domain_pools=app.state.domain_pools,
+        resume_workflow=_resume_workflow_after_restart,
+    )
 
     async def _active_ontology_id(domain: str) -> str | None:
         domain_pool = await app.state.domain_pools.async_pool(domain)

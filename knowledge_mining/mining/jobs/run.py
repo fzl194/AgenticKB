@@ -28,6 +28,89 @@ logger = logging.getLogger(__name__)
 class RunLeaseLost(RuntimeError):
     """Another executor owns the Run; this worker must stop advancing it."""
 
+
+#: 租约窗口与续租间隔：30s 心跳 × 300s 租约 = 容忍 ~9 轮丢失。
+RUN_LEASE_SECONDS = 300
+RUN_LEASE_RENEW_INTERVAL_SECONDS = 30
+
+#: resume 认领的合法状态集：与 RuntimeTracker.resume_running(recover_workflow)
+#: 及 routes._is_run_resumable 的 workflow 策略对齐。
+_RESUME_CLAIM_STATUSES = ("running", "interrupted", "failed", "awaiting_review")
+
+
+def _claim_statuses_for_action(action: str) -> tuple[str, ...] | None:
+    """按执行动作返回认领合法状态集；publish 作用于 completed Run，不认领。"""
+    if action == "resume":
+        return _RESUME_CLAIM_STATUSES
+    if action == "execute":
+        return ("queued", "running")
+    return None
+
+
+def _claim_run_lease(
+    runtime_db: "MiningRuntimeDB",
+    run_id: str,
+    domain: str,
+    allowed_statuses: tuple[str, ...],
+) -> tuple[bool, str, threading.Event, "threading.Thread | None"]:
+    """原子认领 Run 执行权并启动心跳线程；返回 (claimed, worker_id, stop, thread)。
+
+    未认领（他方持有有效租约 / 状态不符）时 claimed=False、无心跳。
+    心跳线程：每 30s 续租；续租失败（所有权丢失）置
+    ``runtime_db._run_lease_lost``，执行线程在下一个检查点以 RunLeaseLost 停止。
+    """
+    worker_id = f"api-{uuid.uuid4().hex}"
+    claim = getattr(runtime_db, "claim_run", None)
+    if claim is None:
+        return False, worker_id, threading.Event(), None
+    claimed = bool(claim(
+        run_id, domain, worker_id,
+        lease_seconds=RUN_LEASE_SECONDS, allowed_statuses=allowed_statuses,
+    ))
+    if not claimed:
+        return False, worker_id, threading.Event(), None
+
+    lease_stop = threading.Event()
+
+    def _heartbeat() -> None:
+        while not lease_stop.wait(RUN_LEASE_RENEW_INTERVAL_SECONDS):
+            try:
+                renewed = runtime_db.renew_run_lease(
+                    run_id, worker_id, lease_seconds=RUN_LEASE_SECONDS,
+                )
+            except Exception:
+                # 数据库抖动不等于失去所有权：记录后等下一轮，租约窗口内有 9 次机会。
+                logger.exception("Lease renew errored for run %s", run_id)
+                continue
+            if not renewed:
+                runtime_db._run_lease_lost = True
+                return
+
+    thread = threading.Thread(
+        target=_heartbeat, daemon=True, name=f"run-lease-{run_id[:8]}",
+    )
+    thread.start()
+    return True, worker_id, lease_stop, thread
+
+
+def _stop_run_lease(
+    runtime_db: "MiningRuntimeDB",
+    run_id: str,
+    lease_claimed: bool,
+    worker_id: str,
+    lease_stop: threading.Event,
+    lease_thread: "threading.Thread | None",
+) -> None:
+    """停心跳并按 worker_id 释放；失去所有权时释放为天然空操作。"""
+    lease_stop.set()
+    if lease_thread is not None:
+        lease_thread.join(timeout=1)
+    if lease_claimed:
+        try:
+            runtime_db.release_run_lease(run_id, worker_id)
+        except Exception:
+            logger.exception("Failed to release run lease for %s", run_id)
+
 _PREPROCESS_METADATA_KEYS = (
     "preprocess_status",
     "preprocess_error_code",
@@ -360,7 +443,7 @@ def _run_legacy(
     submitted_run_id = run_id
     run_id = run_id or uuid.uuid4().hex
     run_domain = str(registry_entry.get("id") or domain)
-    worker_id = f"api-{uuid.uuid4().hex}"
+    worker_id = ""
     lease_claimed = False
     lease_stop = threading.Event()
     lease_thread: threading.Thread | None = None
@@ -390,16 +473,11 @@ def _run_legacy(
 
         claim = getattr(runtime_db, "claim_run", None)
         if claim is not None:
-            lease_claimed = bool(claim(run_id, run_domain, worker_id))
+            lease_claimed, worker_id, lease_stop, lease_thread = _claim_run_lease(
+                runtime_db, run_id, run_domain, ("queued", "running"),
+            )
             if not lease_claimed:
                 return {"run_id": run_id, "status": "claimed_elsewhere"}
-            def _heartbeat() -> None:
-                while not lease_stop.wait(30):
-                    if not runtime_db.renew_run_lease(run_id, worker_id):
-                        runtime_db._run_lease_lost = True
-                        return
-            lease_thread = threading.Thread(target=_heartbeat, daemon=True)
-            lease_thread.start()
 
         if not tracker.set_run_phase(run_id, run_domain, "ingest"):
             row = runtime_db.get_run(run_id) or {}
@@ -461,14 +539,9 @@ def _run_legacy(
             pass
         raise
     finally:
-        lease_stop.set()
-        if lease_thread is not None:
-            lease_thread.join(timeout=1)
-        if lease_claimed:
-            try:
-                runtime_db.release_run_lease(run_id, worker_id)
-            except Exception:
-                logger.exception("Failed to release run lease for %s", run_id)
+        _stop_run_lease(
+            runtime_db, run_id, lease_claimed, worker_id, lease_stop, lease_thread,
+        )
         asset_db.close()
         runtime_db.close()
 
@@ -1285,6 +1358,9 @@ def _execute_workflow_job(
 ) -> dict[str, Any]:
     from knowledge_mining.mining.infra.mining_config import MiningConfig
     from knowledge_mining.mining.workflow.core import OperatorRuntimeContext
+    from knowledge_mining.mining.workflow.executors.document_executor import (
+        WorkflowCancelled,
+    )
     from knowledge_mining.mining.workflow.repositories.domain_run_repository import (
         DomainRunRepository,
     )
@@ -1298,6 +1374,10 @@ def _execute_workflow_job(
     )
     asset_db, runtime_db = _create_dbs(resolved)
     tracker = RuntimeTracker(runtime_db)
+    worker_id = ""
+    lease_claimed = False
+    lease_stop = threading.Event()
+    lease_thread: threading.Thread | None = None
     try:
         run_data = runtime_db.get_run(run_id)
         if run_data is None:
@@ -1328,6 +1408,18 @@ def _execute_workflow_job(
         partial = bool(
             overrides.get("publishOnPartialFailure", publish_on_partial_failure)
         )
+        # P07-S2：execute/resume 在推进前原子认领；他方持有有效租约时本执行器
+        # 立即退出（publish 作用于 completed Run，不参与认领）。
+        claim_statuses = _claim_statuses_for_action(action)
+        if claim_statuses is not None:
+            lease_claimed, worker_id, lease_stop, lease_thread = _claim_run_lease(
+                runtime_db, run_id, frozen_domain, claim_statuses,
+            )
+            if not lease_claimed:
+                logger.info(
+                    "Run %s claimed by another executor; this worker exits", run_id,
+                )
+                return {"run_id": run_id, "status": "claimed_elsewhere"}
         if action == "resume":
             if not tracker.resume_running(
                 run_id,
@@ -1370,7 +1462,8 @@ def _execute_workflow_job(
             services=services,
             publish_lock_provider=_domain_publish_transaction,
             cancellation_check=lambda: (
-                (runtime_db.get_run(run_id) or {}).get("status") == "cancelled"
+                getattr(runtime_db, "_run_lease_lost", False)
+                or (runtime_db.get_run(run_id) or {}).get("status") == "cancelled"
             ),
             manifest=manifest,
         )
@@ -1393,6 +1486,14 @@ def _execute_workflow_job(
             "capabilities": sorted(result.capabilities),
             "publish_on_partial_failure": partial,
         }
+    except RunLeaseLost:
+        # 所有权已丢失：不写 failed（新持有者可能正在推进），原样上抛。
+        raise
+    except WorkflowCancelled:
+        if getattr(runtime_db, "_run_lease_lost", False):
+            # 心跳断供被检查点当成取消抛出——还原为租约丢失语义。
+            raise RunLeaseLost(f"run lease lost: {run_id}") from None
+        raise
     except Exception as exc:
         row = runtime_db.get_run(run_id) or {}
         if row.get("status") != "cancelled":
@@ -1404,6 +1505,9 @@ def _execute_workflow_job(
             )
         raise
     finally:
+        _stop_run_lease(
+            runtime_db, run_id, lease_claimed, worker_id, lease_stop, lease_thread,
+        )
         asset_db.close()
         runtime_db.close()
 

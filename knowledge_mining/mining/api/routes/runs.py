@@ -18,6 +18,7 @@ from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.infra.domain_pack import resolve_domain
 from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+from knowledge_mining.mining.jobs.run import RunLeaseLost
 from knowledge_mining.mining.preflight import build_run_preflight
 from knowledge_mining.mining.workflow.repositories.domain_run_repository import (
     AsyncDomainRunRepository,
@@ -455,6 +456,11 @@ async def create_run(body: CreateRunRequest, request: Request) -> dict:
                 max_workers=body.max_workers,
                 domain=resolved_domain,
                 run_id=run_id,
+            )
+        except RunLeaseLost:
+            # 租约已被他方接管：不得把（新持有者正在推进的）Run 误标 failed。
+            logger.warning(
+                "Run %s lease lost to another executor; skipping failure marking", run_id,
             )
         except Exception as e:
             logger.error("Mining run failed: %s", e, exc_info=True)
@@ -1500,6 +1506,12 @@ async def resume_run(
             resume_run_job(
                 run_id, domain=resume_domain, db_config=db_config,
                 publish_on_partial_failure=publish_partial,
+            )
+        except RunLeaseLost:
+            # 租约已被他方接管：不得把（新持有者正在推进的）Run 误标 failed。
+            logger.warning(
+                "Run %s lease lost to another executor; skipping resume failure marking",
+                run_id,
             )
         except Exception as e:
             logger.error("Resume run failed: %s", e, exc_info=True)

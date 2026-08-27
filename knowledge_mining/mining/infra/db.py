@@ -1135,25 +1135,40 @@ class MiningRuntimeDB(_DB):
 
     # -- mining runs --
 
-    def claim_run(self, run_id: str, domain: str, worker_id: str, lease_seconds: int = 300) -> bool:
-        """Atomically claim an unowned or expired active run."""
+    def claim_run(
+        self,
+        run_id: str,
+        domain: str,
+        worker_id: str,
+        lease_seconds: int = 300,
+        allowed_statuses: tuple[str, ...] = ("queued", "running"),
+    ) -> bool:
+        """Atomically claim an unowned or expired run.
+
+        ``allowed_statuses`` 按执行动作扩展：resume 认领需覆盖
+        interrupted/failed/awaiting_review（与 ``resume_running`` 的
+        recover_workflow 状态集对齐），execute 保持 queued/running。
+        """
         count = self._run(
             "WITH domain_claim AS (SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0)) AS locked) "
             "UPDATE mining_runs SET worker_id = %s, heartbeat_at = NOW(), "
             "lease_until = NOW() + (%s * INTERVAL '1 second'), attempt_no = attempt_no + 1 "
-            "FROM domain_claim WHERE domain_claim.locked AND id = %s AND domain = %s AND status IN ('queued', 'running') "
+            "FROM domain_claim WHERE domain_claim.locked AND id = %s AND domain = %s AND status = ANY(%s) "
             "AND (worker_id IS NULL OR lease_until IS NULL OR lease_until < NOW()) "
             "AND NOT EXISTS (SELECT 1 FROM mining_runs active WHERE active.domain = %s "
             "AND active.id <> %s AND active.status IN ('queued', 'running') "
             "AND active.worker_id IS NOT NULL AND active.lease_until >= NOW())",
-            (domain, worker_id, lease_seconds, run_id, domain, domain, run_id), fetch="rowcount",
+            (domain, worker_id, lease_seconds, allowed_statuses, run_id, domain, domain, run_id),
+            fetch="rowcount",
         )
         return bool(count)
 
     def renew_run_lease(self, run_id: str, worker_id: str, lease_seconds: int = 300) -> bool:
+        """续租仅以 worker_id 为栅栏：resume 认领后状态仍为 interrupted 的
+        窗口期内也必须能续租（否则误判租约丢失）。"""
         count = self._run(
             "UPDATE mining_runs SET heartbeat_at = NOW(), lease_until = NOW() + (%s * INTERVAL '1 second') "
-            "WHERE id = %s AND worker_id = %s AND status IN ('queued', 'running')",
+            "WHERE id = %s AND worker_id = %s",
             (lease_seconds, run_id, worker_id), fetch="rowcount",
         )
         return bool(count)

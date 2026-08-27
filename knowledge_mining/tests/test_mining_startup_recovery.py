@@ -125,3 +125,32 @@ async def test_scheduled_resumes_run_in_background_without_blocking_caller():
         release.set()
         await task
     assert resumed == ["w-1"]
+
+
+@pytest.mark.asyncio
+async def test_lease_expiry_sweep_recovers_runs_skipped_by_valid_lease():
+    """P07-S2：重启瞬间仍持有效租约的 Run，补扫在延迟后重跑同一恢复逻辑。"""
+    import asyncio
+
+    from knowledge_mining.mining.api.startup_recovery import schedule_lease_expiry_sweep
+
+    # 重启后租约窗口内：首轮恢复跳过；租约到期后补扫应能标记并恢复
+    pool = _Pool([
+        {"id": "leased-1", "domain": "d1", "execution_engine": "workflow"},
+    ])
+    resumed: list[tuple[str, str]] = []
+
+    async def resume_workflow(run_id: str, domain: str) -> None:
+        resumed.append((run_id, domain))
+
+    task = schedule_lease_expiry_sweep(
+        domain_ids=("d1",),
+        domain_pools=_DomainPools({"d1": pool}),
+        resume_workflow=resume_workflow,
+        delay_seconds=0.01,
+    )
+    assert not task.done()  # 延迟窗口内不扫，不拖启动
+    await asyncio.wait_for(task, timeout=5)
+    assert resumed == [("leased-1", "d1")]
+    sql = pool.connection_impl.sql
+    assert "worker_id IS NULL OR lease_until IS NULL OR lease_until < NOW()" in sql

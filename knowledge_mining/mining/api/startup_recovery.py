@@ -97,3 +97,64 @@ def schedule_startup_resumes(
     _background_resume_tasks.add(task)
     task.add_done_callback(_background_resume_tasks.discard)
     return task
+
+
+async def _lease_expiry_sweep_once(
+    *,
+    domain_ids: tuple[str, ...],
+    domain_pools: DomainPools,
+    resume_workflow: ResumeWorkflow,
+    max_concurrency: int,
+) -> None:
+    """重跑一次启动恢复：处理重启瞬间仍持有有效租约、随后才到期的僵尸 Run。"""
+    from datetime import datetime, timezone
+
+    recovery = await recover_startup_runs(
+        domain_ids=domain_ids,
+        domain_pools=domain_pools,
+        now=datetime.now(timezone.utc).isoformat(),
+    )
+    if recovery.interrupted_run_ids:
+        logger.warning(
+            "Lease-expiry sweep interrupted %d abandoned run(s): %s",
+            len(recovery.interrupted_run_ids),
+            ", ".join(recovery.interrupted_run_ids),
+        )
+    if recovery.workflow_runs:
+        await schedule_startup_resumes(
+            recovery, resume_workflow, max_concurrency=max_concurrency,
+        )
+
+
+def schedule_lease_expiry_sweep(
+    *,
+    domain_ids: tuple[str, ...],
+    domain_pools: DomainPools,
+    resume_workflow: ResumeWorkflow,
+    delay_seconds: float = 360.0,
+    max_concurrency: int = 2,
+) -> "asyncio.Task[None]":
+    """租约到期补扫（P07-S2）：修复「崩溃重启 → 有效租约挡住首轮恢复 → 永不自愈」。
+
+    worker 崩溃时租约仍剩 ≤300s 有效期；首轮 recover_startup_runs 按
+    多实例语义跳过这类 Run。本任务在租约窗口（默认 300s）+ 余量后重跑同一
+    恢复逻辑，把已到期的僵尸标记 interrupted 并后台 resume——单实例自愈
+    时延收敛到 ~6 分钟。多实例下仍安全：活 worker 持续心跳 → 租约有效 →
+    本轮照旧跳过。
+    """
+    async def _sweep() -> None:
+        await asyncio.sleep(delay_seconds)
+        try:
+            await _lease_expiry_sweep_once(
+                domain_ids=domain_ids,
+                domain_pools=domain_pools,
+                resume_workflow=resume_workflow,
+                max_concurrency=max_concurrency,
+            )
+        except Exception:
+            logger.exception("Lease-expiry sweep failed")
+
+    task = asyncio.ensure_future(_sweep())
+    _background_resume_tasks.add(task)
+    task.add_done_callback(_background_resume_tasks.discard)
+    return task

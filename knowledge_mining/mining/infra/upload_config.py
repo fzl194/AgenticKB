@@ -16,7 +16,7 @@ _DEFAULT_UPLOAD = {
     "root": "./uploads",
     "max_file_size": 100 * 1024 * 1024,        # 100MB
     "max_archive_size": 500 * 1024 * 1024,     # 500MB
-    "max_files_per_request": 2000,
+    "max_files_per_request": 50000,
     "disk_reserve_bytes": 1024 * 1024 * 1024,  # 1GB
     "archive_extensions": ".zip .hdx .chm",
 }

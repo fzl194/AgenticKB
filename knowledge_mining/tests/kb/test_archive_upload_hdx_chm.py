@@ -171,7 +171,7 @@ def test_upload_config_accepts_hdx_chm():
     from knowledge_mining.mining.infra import upload_config as uc
     # 直接断言默认值表（无参构造会连控制面，本地不可达）
     assert ".zip .hdx .chm" == uc._DEFAULT_UPLOAD["archive_extensions"]
-    assert 2000 == uc._DEFAULT_UPLOAD["max_files_per_request"]
+    assert 50000 == uc._DEFAULT_UPLOAD["max_files_per_request"]
 
 
 def test_route_archive_detection_covers_new_formats(monkeypatch):

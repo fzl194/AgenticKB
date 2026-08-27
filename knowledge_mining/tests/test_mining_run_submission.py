@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from knowledge_mining.mining.api.routes import runs
-from knowledge_mining.mining.api.routes import uploads
 from knowledge_mining.mining.jobs import run as run_job
 from knowledge_mining.mining.runtime import RuntimeTracker
 from knowledge_mining.mining.workflow.run_binding import WorkflowRunBinding
@@ -73,56 +72,6 @@ class _LegacyEngineConfig:
 
 
 @pytest.mark.asyncio
-async def test_create_run_inserts_real_queued_row_before_thread_start(monkeypatch):
-    pool = _Pool()
-    started = []
-
-    class FakeThread:
-        def __init__(self, *, target, daemon):
-            self.target = target
-            assert daemon is True
-
-        def start(self):
-            assert pool.conn.inserted is not None
-            started.append(True)
-
-    monkeypatch.setattr(runs.threading, "Thread", FakeThread)
-    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                domain_pools=_DomainPools(pool),
-                db_config=SimpleNamespace(),
-            )
-        )
-    )
-    body = runs.CreateRunRequest(input_path="C:/incoming", domain="odn")
-
-    if runs._domain_run_lock("odn").locked():
-        runs._domain_run_lock("odn").release()
-    try:
-        response = await runs.create_run(body, request)
-    finally:
-        if runs._domain_run_lock("odn").locked():
-            runs._domain_run_lock("odn").release()
-
-    assert started == [True]
-    assert response["run_id"] != "pending"
-    assert response == {
-        "run_id": pool.conn.inserted["id"],
-        "status": "queued",
-        "current_stage": "queued",
-        "started_at": pool.conn.inserted["started_at"],
-        "execution_engine": "legacy",
-        "workflow_id": None,
-        "workflow_version": None,
-        "workflow_graph_hash": None,
-    }
-    assert pool.conn.inserted["id"] != "previous-run"
-    assert pool.conn.inserted["status"] == "queued"
-    assert pool.conn.inserted["current_stage"] == "queued"
-
-
 class _RuntimeDB:
     def __init__(self):
         self.row = None
@@ -248,113 +197,6 @@ def _patch_worker(monkeypatch, runtime_db, ingest):
         "_run_pipeline",
         lambda *args, **kwargs: {"run_id": args[5], "status": "running"},
     )
-
-
-def test_slow_ingest_exposes_same_run_as_running_ingest_without_documents(monkeypatch):
-    runtime_db = _RuntimeDB()
-    runtime_db.insert_run(SimpleNamespace(
-        id="submitted", input_path="C:/incoming", domain="odn", channel="prod",
-        status="queued", current_stage="queued", total_documents=0,
-    ))
-    entered = threading.Event()
-    release = threading.Event()
-
-    def slow_ingest(path, params):
-        entered.set()
-        assert release.wait(5)
-        return [], {"accepted": 0}
-
-    _patch_worker(monkeypatch, runtime_db, slow_ingest)
-    result = {}
-    worker = threading.Thread(
-        target=lambda: result.update(run_job.run("C:/incoming", domain="odn", run_id="submitted"))
-    )
-    worker.start()
-    assert entered.wait(5)
-    assert runtime_db.row["id"] == "submitted"
-    assert (runtime_db.row["status"], runtime_db.row["current_stage"]) == ("running", "ingest")
-    assert runtime_db.documents == []
-    release.set()
-    worker.join(5)
-    assert not worker.is_alive()
-
-
-def test_ingest_failure_keeps_id_and_phase_and_records_failed_event(monkeypatch):
-    runtime_db = _RuntimeDB()
-    runtime_db.insert_run(SimpleNamespace(
-        id="submitted", input_path="C:/incoming", domain="odn", channel="prod",
-        status="queued", current_stage="queued", total_documents=0,
-    ))
-
-    def fail_ingest(path, params):
-        raise RuntimeError("broken archive")
-
-    _patch_worker(monkeypatch, runtime_db, fail_ingest)
-    with pytest.raises(RuntimeError, match="broken archive"):
-        run_job.run("C:/incoming", domain="odn", run_id="submitted")
-
-    assert runtime_db.row["id"] == "submitted"
-    assert (runtime_db.row["status"], runtime_db.row["current_stage"]) == ("failed", "ingest")
-    assert runtime_db.row["error_summary"] == "broken archive"
-    assert [(e["stage"], e["status"]) for e in runtime_db.events] == [
-        ("ingest", "started"),
-        ("ingest", "failed"),
-    ]
-
-
-def test_successful_ingest_updates_total_summary_and_single_event_pair(monkeypatch):
-    runtime_db = _RuntimeDB()
-    runtime_db.insert_run(SimpleNamespace(
-        id="submitted", input_path="C:/incoming", domain="odn", channel="prod",
-        status="queued", current_stage="queued", total_documents=0,
-    ))
-    docs = [SimpleNamespace(), SimpleNamespace()]
-    _patch_worker(monkeypatch, runtime_db, lambda path, params: (docs, {"accepted": 2}))
-
-    result = run_job.run("C:/incoming", domain="odn", run_id="submitted")
-
-    assert result["run_id"] == "submitted"
-    assert runtime_db.row["total_documents"] == 2
-    assert runtime_db.row["metadata_json"]["ingest_summary"] == {"accepted": 2}
-    assert runtime_db.row["current_stage"] == "mining"
-    assert [(e["stage"], e["status"]) for e in runtime_db.events] == [
-        ("ingest", "started"),
-        ("ingest", "completed"),
-    ]
-
-
-def test_cli_run_creates_queued_before_entering_ingest(monkeypatch):
-    runtime_db = _RuntimeDB()
-    seen = []
-
-    def ingest(path, params):
-        seen.extend(runtime_db.transitions)
-        return [], {}
-
-    _patch_worker(monkeypatch, runtime_db, ingest)
-    run_job.run("C:/incoming", domain="odn")
-
-    assert seen[:2] == [("queued", "queued"), ("running", "ingest")]
-
-
-def test_cancelled_during_ingest_is_not_failed_or_advanced(monkeypatch):
-    runtime_db = _RuntimeDB()
-    runtime_db.insert_run(SimpleNamespace(
-        id="submitted", input_path="C:/incoming", domain="odn", channel="prod",
-        status="queued", current_stage="queued", total_documents=0,
-    ))
-
-    def cancelled_ingest(path, params):
-        runtime_db.row["status"] = "cancelled"
-        raise RuntimeError("reader stopped")
-
-    _patch_worker(monkeypatch, runtime_db, cancelled_ingest)
-    result = run_job.run("C:/incoming", domain="odn", run_id="submitted")
-
-    assert result == {"run_id": "submitted", "status": "cancelled"}
-    assert runtime_db.row["status"] == "cancelled"
-    assert runtime_db.row["current_stage"] == "ingest"
-    assert runtime_db.documents == []
 
 
 def test_resume_running_moves_run_phase_back_to_mining():
@@ -533,356 +375,12 @@ def test_resume_cas_returns_concurrent_cancel_status(monkeypatch, pending_gate):
 
 
 @pytest.mark.asyncio
-async def test_queued_insert_failure_releases_lock_and_never_starts_thread(monkeypatch):
-    class Connection:
-        async def execute(self, sql, params):
-            raise RuntimeError("insert unavailable")
-
-    class Pool:
-        @asynccontextmanager
-        async def connection(self):
-            yield Connection()
-
-    class Thread:
-        def __init__(self, **kwargs):
-            raise AssertionError("thread must not be constructed")
-
-    monkeypatch.setattr(runs.threading, "Thread", Thread)
-    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        domain_pools=_DomainPools(Pool()), db_config=SimpleNamespace(),
-    )))
-    if runs._domain_run_lock("odn").locked():
-        runs._domain_run_lock("odn").release()
-
-    with pytest.raises(RuntimeError, match="insert unavailable"):
-        await runs.create_run(
-            runs.CreateRunRequest(input_path="C:/incoming", domain="odn"), request
-        )
-
-    assert runs._domain_run_lock("odn").acquire(blocking=False) is True
-    runs._domain_run_lock("odn").release()
-
-
 @pytest.mark.asyncio
-async def test_thread_start_failure_marks_same_queued_id_failed_and_releases_lock(monkeypatch):
-    statements = []
-
-    class Connection:
-        async def execute(self, sql, params):
-            statements.append((sql, list(params)))
-            return _Cursor()
-
-    class Pool:
-        @asynccontextmanager
-        async def connection(self):
-            yield Connection()
-
-    class Thread:
-        def __init__(self, **kwargs):
-            pass
-
-        def start(self):
-            raise RuntimeError("thread unavailable")
-
-    monkeypatch.setattr(runs.threading, "Thread", Thread)
-    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        domain_pools=_DomainPools(Pool()), db_config=SimpleNamespace(),
-    )))
-    if runs._domain_run_lock("odn").locked():
-        runs._domain_run_lock("odn").release()
-
-    with pytest.raises(Exception, match="Unable to start mining run"):
-        await runs.create_run(
-            runs.CreateRunRequest(input_path="C:/incoming", domain="odn"), request
-        )
-
-    inserted_id = statements[0][1][0]
-    failed_update = next(item for item in statements if "SET status = 'failed'" in item[0])
-    assert failed_update[1][2] == inserted_id
-    assert "domain = %s" in failed_update[0]
-    assert "status = 'queued'" in failed_update[0]
-    assert runs._domain_run_lock("odn").acquire(blocking=False) is True
-    runs._domain_run_lock("odn").release()
-
-
 @pytest.mark.asyncio
-async def test_queued_run_can_be_cancelled_before_worker_enters_ingest(monkeypatch):
-    row = {
-        "id": None,
-        "domain": "odn",
-        "status": "queued",
-        "current_stage": "queued",
-    }
-    worker_called = []
-
-    class Cursor:
-        def __init__(self, value=None):
-            self.value = value
-
-        async def fetchone(self):
-            return self.value
-
-    class Connection:
-        async def execute(self, sql, params):
-            if "INSERT INTO mining_runs" in sql:
-                row["id"] = params[0]
-                return Cursor()
-            if sql.startswith("SELECT"):
-                return Cursor(dict(row))
-            if "SET status = 'cancelled'" in sql:
-                row["status"] = "cancelled"
-                return Cursor({"status": "cancelled"})
-            return Cursor()
-
-    class Pool:
-        @asynccontextmanager
-        async def connection(self):
-            yield Connection()
-
-    class Thread:
-        def __init__(self, *, target, daemon):
-            self.target = target
-
-        def start(self):
-            worker_called.append(False)
-
-    pool = Pool()
-    monkeypatch.setattr(runs.threading, "Thread", Thread)
-    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        domain_pools=_DomainPools(pool), db_config=SimpleNamespace(),
-    )))
-    if runs._domain_run_lock("odn").locked():
-        runs._domain_run_lock("odn").release()
-    try:
-        created = await runs.create_run(
-            runs.CreateRunRequest(input_path="C:/incoming", domain="odn"), request
-        )
-        cancelled = await runs.cancel_run(created["run_id"], request, "odn")
-    finally:
-        if runs._domain_run_lock("odn").locked():
-            runs._domain_run_lock("odn").release()
-
-    assert worker_called == [False]
-    assert cancelled["status"] == "cancelled"
-    assert row["status"] == "cancelled"
-    assert row["current_stage"] == "queued"
-
-
 @pytest.mark.asyncio
-async def test_run_mutex_is_per_domain_not_global(monkeypatch):
-    """一个域在挖掘不应阻塞其他域；同域内仍然互斥。"""
-
-    class _AnyDomainPools:
-        def __init__(self, pool):
-            self.pool = pool
-
-        async def async_pool(self, domain):
-            return self.pool
-
-    class FakeThread:
-        def __init__(self, *, target, daemon):
-            self.target = target
-
-        def start(self):
-            pass  # 永不结束 —— 模拟挖掘中，锁保持占用
-
-    monkeypatch.setattr(runs.threading, "Thread", FakeThread)
-    monkeypatch.setattr(runs, "MiningConfig", _LegacyEngineConfig)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        domain_pools=_AnyDomainPools(_Pool()), db_config=SimpleNamespace(),
-    )))
-
-    busy = runs._domain_run_lock("odn")
-    other = runs._domain_run_lock("generic")
-    for lock in (busy, other):
-        if lock.locked():
-            lock.release()
-
-    try:
-        # odn 起一次挖掘 —— 占住 odn 的锁
-        await runs.create_run(
-            runs.CreateRunRequest(input_path="C:/incoming", domain="odn"), request
-        )
-        assert busy.locked() is True
-
-        # 同域再提交 → 409
-        with pytest.raises(Exception) as excinfo:
-            await runs.create_run(
-                runs.CreateRunRequest(input_path="C:/incoming", domain="odn"), request
-            )
-        assert excinfo.value.status_code == 409
-        assert "odn" in excinfo.value.detail
-
-        # 另一个域不受影响
-        response = await runs.create_run(
-            runs.CreateRunRequest(input_path="C:/incoming", domain="generic"), request
-        )
-        assert response["status"] == "queued"
-        assert other.locked() is True
-    finally:
-        for lock in (busy, other):
-            if lock.locked():
-                lock.release()
-
-
-def test_submission_contract_has_no_latest_run_or_pending_response():
-    from pathlib import Path
-
-    source = Path(runs.__file__).read_text(encoding="utf-8")
-    create_source = source[source.index("async def create_run"):source.index("@router.get(\"\")")]
-
-    assert "ORDER BY started_at DESC LIMIT 1" not in create_source
-    assert '"pending"' not in create_source
-    assert "domain_pools.async_pool" in create_source
-    assert "run_id=run_id" in create_source
-
-
 @pytest.mark.asyncio
-async def test_legacy_mode_rejects_explicit_workflow_before_inserting(monkeypatch):
-    class Config:
-        mining_run_submission_engine = "legacy"
-        llm_service_url = "http://localhost:8900"
-
-    class DomainPools:
-        async def async_pool(self, domain):
-            raise AssertionError("rejected request must not open a Domain pool")
-
-    monkeypatch.setattr(runs, "MiningConfig", Config)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        domain_pools=DomainPools(), db_config=SimpleNamespace(),
-    )))
-
-    with pytest.raises(Exception) as excinfo:
-        await runs.create_run(
-            runs.CreateRunRequest(
-                input_path="C:/incoming", domain="odn", workflow_id="wf"
-            ),
-            request,
-        )
-
-    assert excinfo.value.status_code == 503
-    assert excinfo.value.detail["code"] == "workflow_engine_unavailable"
-
-
 @pytest.mark.asyncio
-async def test_workflow_mode_binds_full_and_inserts_manifest_before_thread(
-    monkeypatch, tmp_path
-):
-    pool = _Pool()
-    inserted = []
-    binder_calls = []
-    started = []
-
-    class Config:
-        mining_run_submission_engine = "workflow"
-        llm_service_url = "http://localhost:8900"
-
-    class Binder:
-        async def resolve(self, **kwargs):
-            binder_calls.append(kwargs)
-            return WorkflowRunBinding(
-                workflow_id="system-full-baseline",
-                workflow_version=4,
-                workflow_version_id="version-full-4",
-                graph_hash="graph-hash",
-                manifest={"runtimeBinding": {"domain": "odn"}},
-            )
-
-    class Repository:
-        def __init__(self, selected_pool):
-            assert selected_pool is pool
-
-        async def insert_queued_run(self, **kwargs):
-            inserted.append(kwargs)
-
-    class Thread:
-        def __init__(self, *, target, daemon):
-            self.target = target
-            assert daemon is True
-
-        def start(self):
-            assert inserted
-            started.append(True)
-
-    batch_path = tmp_path / "odn" / "abcdef123456"
-    batch_path.mkdir(parents=True)
-    monkeypatch.setattr(runs, "MiningConfig", Config)
-    monkeypatch.setattr(runs, "AsyncDomainRunRepository", Repository)
-    monkeypatch.setattr(
-        runs,
-        "resolve_upload_batch_path",
-        lambda domain, batch_id: (
-            batch_path
-            if (domain, batch_id) == ("odn", "abcdef123456")
-            else (_ for _ in ()).throw(AssertionError("wrong batch lookup"))
-        ),
-    )
-    monkeypatch.setattr(runs, "resolve_domain", lambda domain: {
-        "id": domain, "default_channel": "prod"
-    })
-    monkeypatch.setattr(runs.threading, "Thread", Thread)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        domain_pools=_DomainPools(pool),
-        db_config=SimpleNamespace(),
-        workflow_run_binder=Binder(),
-    )))
-    lock = runs._domain_run_lock("odn")
-    if lock.locked():
-        lock.release()
-    try:
-        response = await runs.create_run(
-            runs.CreateRunRequest(
-                domain="odn",
-                upload_batch_id="abcdef123456",
-                max_workers=8,
-                phase1_only=True,
-                publish_on_partial_failure=True,
-            ),
-            request,
-        )
-    finally:
-        if lock.locked():
-            lock.release()
-
-    assert started == [True]
-    assert binder_calls == [{
-        "workflow_id": None,
-        "workflow_version": None,
-        "domain": "odn",
-        "channel": "prod",
-        "upload_batch_id": "abcdef123456",
-        "run_overrides": {
-            "maxWorkers": 8,
-            "executionMode": "assets_only",
-            "publishOnPartialFailure": True,
-        },
-    }]
-    assert inserted[0]["input_path"] == str(batch_path.resolve())
-    assert inserted[0]["execution_engine"] == "workflow"
-    assert inserted[0]["binding"].workflow_version == 4
-    assert response["execution_engine"] == "workflow"
-    assert response["workflow_id"] == "system-full-baseline"
-    assert response["workflow_version"] == 4
-    assert response["workflow_graph_hash"] == "graph-hash"
-
-
 @pytest.mark.asyncio
-async def test_upload_config_exposes_submission_engine(monkeypatch):
-    class Config:
-        mining_run_submission_engine = "workflow"
-
-    monkeypatch.setattr(uploads, "MiningConfig", Config)
-
-    result = await uploads.get_upload_config()
-
-    assert result["mining_run_submission_engine"] == "workflow"
-    assert ".xls" in result["accepted_extensions"]
-    assert ".xlsx" in result["accepted_extensions"]
-
-
 def test_preprocess_log_has_identifiers_but_not_cell_content(caplog):
     from knowledge_mining.mining.jobs import run as run_job
 
@@ -1022,3 +520,24 @@ async def test_cancel_cas_rejects_run_claimed_for_publishing():
 
     with pytest.raises(Exception, match="publishing, cannot cancel"):
         await runs.cancel_run("r1", request, "odn")
+
+
+@pytest.mark.asyncio
+async def test_batch_mining_endpoints_are_retired():
+    """批次/域级挖掘通道退役（决策 2026-08-27）：POST /api/runs 不得存在。
+
+    挖掘必须基于知识库（POST /api/kb/{kb_id}/mine）。批次通道写 kb_id=NULL
+    的域级文档且 v2 解析链不认领（document_parse_unavailable 必败）。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(runs.router)
+    client = TestClient(app)
+    try:
+        assert client.post("/api/runs", json={"domain": "generic", "input_path": "/x"}).status_code == 405
+        assert client.post("/api/runs/preflight", json={"domain": "generic"}).status_code in (404, 405)
+        assert client.post("/api/uploads", files={"files": ("a.txt", b"x")}).status_code == 404
+    finally:
+        client.close()

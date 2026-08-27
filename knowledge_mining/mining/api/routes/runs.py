@@ -6,24 +6,20 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field
 
 from knowledge_mining.mining.api.domain_scope import require_domain
-from knowledge_mining.mining.api.routes.uploads import resolve_upload_batch_path
 from knowledge_mining.mining.kb.auth import current_user, require_admin
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.infra.domain_pack import resolve_domain
-from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
 from knowledge_mining.mining.jobs.run import RunLeaseLost
-from knowledge_mining.mining.preflight import build_run_preflight
 from knowledge_mining.mining.workflow.repositories.domain_run_repository import (
     AsyncDomainRunRepository,
 )
-from knowledge_mining.mining.workflow.service import WorkflowArchived, WorkflowNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -70,70 +66,8 @@ def _domain_run_lock(domain: str) -> threading.Lock:
 
 # ── Request / Response models ──
 
-class CreateRunRequest(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    input_path: str | None = None
-    upload_batch_id: str | None = None
-    domain: str
-    workflow_id: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("workflow_id", "workflowId"),
-    )
-    workflow_version: int | None = Field(
-        default=None,
-        ge=1,
-        validation_alias=AliasChoices("workflow_version", "workflowVersion"),
-    )
-    domain_pack: str | None = None
-    max_workers: int | None = None
-    phase1_only: bool = False
-    publish_on_partial_failure: bool = False
-    llm_base_url: str | None = None
-    preflight_id: str | None = None
-    document_decisions: list["RunDocumentDecision"] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_selection(self):
-        if bool(self.input_path) == bool(self.upload_batch_id):
-            raise ValueError("exactly one of input_path or upload_batch_id is required")
-        if self.workflow_version is not None and self.workflow_id is None:
-            raise ValueError("workflow_id is required with workflow_version")
-        if self.upload_batch_id and self.workflow_id is not None:
-            if not self.preflight_id or not self.document_decisions:
-                raise ValueError(
-                    "explicit Workflow uploads require preflight_id and document_decisions"
-                )
-        return self
-
-
-class RunDocumentDecision(BaseModel):
-    relative_path: str
-    raw_content_hash: str
-    selected_action: Literal[
-        "NEW", "REUSED", "RESTORED", "REMINED", "KEPT_CURRENT", "JOINED_EXISTING"
-    ]
-    state_token: str
-
-
-class RunResponse(BaseModel):
-    run_id: str
-    status: str
-    current_stage: str
-    started_at: str | None = None
-    execution_engine: str = "legacy"
-    workflow_id: str | None = None
-    workflow_version: int | None = None
-    workflow_graph_hash: str | None = None
-
-
-class RunPreflightRequest(BaseModel):
-    domain: str
-    upload_batch_id: str
-    workflow_id: str
-    workflow_version: int = Field(ge=1)
-
-
+# 批次/域级挖掘入口已退役（决策 2026-08-27）：挖掘必须基于知识库，
+# 唯一创建入口为 POST /api/kb/{kb_id}/mine。
 def _frozen_workflow_summary(
     run: dict[str, Any], *, include_graph: bool = False
 ) -> dict[str, Any] | None:
@@ -239,263 +173,6 @@ async def require_run_write(
 
 
 # ── Routes ──
-
-@router.post("/preflight", dependencies=[Depends(require_admin)])
-async def preflight_run(body: RunPreflightRequest, request: Request) -> dict[str, Any]:
-    resolved_domain = require_domain(body.domain)
-    domain_entry = resolve_domain(resolved_domain)
-    channel = str(domain_entry.get("default_channel") or "prod").strip() or "prod"
-    batch_path = resolve_upload_batch_path(resolved_domain, body.upload_batch_id)
-    try:
-        binding = await request.app.state.workflow_run_binder.resolve(
-            workflow_id=body.workflow_id,
-            workflow_version=body.workflow_version,
-            domain=resolved_domain,
-            channel=channel,
-            upload_batch_id=body.upload_batch_id,
-            run_overrides={},
-        )
-    except WorkflowNotFound as exc:
-        raise HTTPException(404, detail={"code": "workflow_not_found", "message": str(exc)}) from exc
-    except WorkflowArchived as exc:
-        raise HTTPException(409, detail={"code": "workflow_archived", "message": str(exc)}) from exc
-    pool = await request.app.state.domain_pools.async_pool(resolved_domain)
-    return await build_run_preflight(
-        pool=pool,
-        batch_path=batch_path,
-        domain=resolved_domain,
-        channel=channel,
-        binding=binding,
-    )
-
-@router.post("", response_model=RunResponse, status_code=202,
-             dependencies=[Depends(require_admin)])
-async def create_run(body: CreateRunRequest, request: Request) -> dict:
-    """Submit a mining run (async, returns immediately)."""
-    # legacy 域级挖掘入口：逐步废弃，推荐走 KB 中心化挖掘（POST /api/kb/{kb_id}/mine）。
-    # 域级挖掘写 asset_documents.kb_id=NULL、默认 publish=true 进域级 active release，
-    # 与 KB 作用域知识分属两套模型。详见 docs/融合-KB中心化挖掘-设计规格.md。
-    # 也正因为影响面是整个域而非某个库，这个入口是 admin-only（见装饰器）。
-    logger.warning(
-        "Legacy domain mining (/api/runs) is deprecated; prefer KB-centric mining "
-        "(POST /api/kb/{kb_id}/mine). domain=%s",
-        getattr(body, "domain", None),
-    )
-    cfg = MiningConfig()
-    resolved_domain = require_domain(body.domain)
-    engine = cfg.mining_run_submission_engine
-    explicit_workflow = body.workflow_id is not None or body.workflow_version is not None
-    if engine == "legacy" and explicit_workflow:
-        raise HTTPException(
-            503,
-            detail={
-                "code": "workflow_engine_unavailable",
-                "message": "Workflow execution is not enabled for new runs",
-                "details": {},
-            },
-        )
-
-    pool = await request.app.state.domain_pools.async_pool(resolved_domain)
-    db_config: MiningDbConfig = request.app.state.db_config
-    domain_entry = resolve_domain(resolved_domain)
-    channel = str(domain_entry.get("default_channel") or "prod").strip() or "prod"
-
-    batch_path = (
-        resolve_upload_batch_path(resolved_domain, body.upload_batch_id)
-        if body.upload_batch_id
-        else None
-    )
-    input_path = str(batch_path) if batch_path else str(Path(body.input_path or "").resolve())
-
-    llm_base_url = body.llm_base_url or cfg.llm_service_url
-
-    binding = None
-    preflight_manifest: dict[str, Any] | None = None
-    if engine == "workflow":
-        run_overrides: dict[str, Any] = {}
-        if body.max_workers is not None:
-            run_overrides["maxWorkers"] = body.max_workers
-        if body.phase1_only:
-            run_overrides["executionMode"] = "assets_only"
-        if "publish_on_partial_failure" in body.model_fields_set:
-            run_overrides["publishOnPartialFailure"] = body.publish_on_partial_failure
-        try:
-            binding = await request.app.state.workflow_run_binder.resolve(
-                workflow_id=body.workflow_id,
-                workflow_version=body.workflow_version,
-                domain=resolved_domain,
-                channel=channel,
-                upload_batch_id=body.upload_batch_id,
-                run_overrides=run_overrides,
-            )
-        except WorkflowNotFound as exc:
-            raise HTTPException(
-                404,
-                detail={
-                    "code": "workflow_not_found",
-                    "message": str(exc),
-                    "details": {},
-                },
-            ) from exc
-        except WorkflowArchived as exc:
-            raise HTTPException(
-                409,
-                detail={
-                    "code": "workflow_archived",
-                    "message": str(exc),
-                    "details": {},
-                },
-            ) from exc
-        except Exception as exc:
-            raise HTTPException(
-                503,
-                detail={
-                    "code": "workflow_store_unavailable",
-                    "message": "Unable to resolve the selected Workflow version",
-                    "details": {},
-                },
-            ) from exc
-
-        if body.preflight_id:
-            current_preflight = await build_run_preflight(
-                pool=pool,
-                batch_path=batch_path,
-                domain=resolved_domain,
-                channel=channel,
-                binding=binding,
-            )
-            current_items = {
-                (item["relative_path"], item["raw_content_hash"]): item
-                for item in current_preflight["items"]
-            }
-            submitted = {
-                (item.relative_path, item.raw_content_hash): item
-                for item in body.document_decisions
-            }
-            if set(current_items) != set(submitted):
-                raise HTTPException(
-                    409,
-                    detail={
-                        "code": "preflight_stale",
-                        "message": "Uploaded files changed after preflight",
-                    },
-                )
-            confirmed_items = []
-            for key, current_item in current_items.items():
-                decision = submitted[key]
-                if (
-                    decision.state_token != current_item["state_token"]
-                    or decision.selected_action not in current_item["allowed_actions"]
-                ):
-                    raise HTTPException(
-                        409,
-                        detail={
-                            "code": "preflight_stale",
-                            "message": f"Preflight state changed for {decision.relative_path}",
-                        },
-                    )
-                confirmed_items.append({
-                    **current_item,
-                    "selected_action": decision.selected_action,
-                })
-            preflight_manifest = {
-                **current_preflight,
-                "preflight_id": body.preflight_id,
-                "items": confirmed_items,
-                "confirmed_at": _utcnow(),
-            }
-
-    # Prevent concurrent mining runs within the same domain
-    run_lock = _domain_run_lock(resolved_domain)
-    if not run_lock.acquire(blocking=False):
-        raise HTTPException(
-            409,
-            f"A mining run is already in progress for domain '{resolved_domain}'. "
-            "Please wait for it to complete.",
-        )
-
-    run_id = uuid.uuid4().hex
-    started_at = datetime.now(timezone.utc).isoformat()
-    try:
-        await AsyncDomainRunRepository(pool).insert_queued_run(
-            run_id=run_id,
-            input_path=input_path,
-            domain=resolved_domain,
-            channel=channel,
-            execution_engine=engine,
-            binding=binding,
-            started_at=started_at,
-            preflight_manifest=preflight_manifest,
-        )
-    except Exception:
-        run_lock.release()
-        raise
-
-    def _mark_thread_failure(error: Exception) -> None:
-        try:
-            sync_pool = request.app.state.domain_pools.sync_pool(resolved_domain)
-            with sync_pool.connection() as conn:
-                conn.execute(
-                    "UPDATE mining_runs SET status = 'failed', finished_at = %s, "
-                    "error_summary = %s WHERE id = %s AND domain = %s "
-                    "AND status IN ('queued', 'running')",
-                    [_utcnow(), str(error)[:500], run_id, resolved_domain],
-                )
-        except Exception:
-            logger.exception("Unable to record escaped failure for run %s", run_id)
-
-    def _run_in_thread():
-        try:
-            from knowledge_mining.mining.jobs.run import run as mining_run
-            mining_run(
-                input_path,
-                db_config=db_config,
-                phase1_only=body.phase1_only,
-                publish_on_partial_failure=body.publish_on_partial_failure,
-                llm_base_url=llm_base_url,
-                max_workers=body.max_workers,
-                domain=resolved_domain,
-                run_id=run_id,
-            )
-        except RunLeaseLost:
-            # 租约已被他方接管：不得把（新持有者正在推进的）Run 误标 failed。
-            logger.warning(
-                "Run %s lease lost to another executor; skipping failure marking", run_id,
-            )
-        except Exception as e:
-            logger.error("Mining run failed: %s", e, exc_info=True)
-            _mark_thread_failure(e)
-        finally:
-            run_lock.release()
-
-    # Pre-create run to get run_id — but the actual run() creates its own.
-    # We start the thread and query the run table after.
-    thread = threading.Thread(target=_run_in_thread, daemon=True)
-    try:
-        thread.start()
-    except Exception as exc:
-        try:
-            async with pool.connection() as conn:
-                await conn.execute(
-                    "UPDATE mining_runs SET status = 'failed', finished_at = %s, "
-                    "error_summary = %s WHERE id = %s AND domain = %s AND status = 'queued'",
-                    [_utcnow(), str(exc)[:500], run_id, resolved_domain],
-                )
-        finally:
-            run_lock.release()
-        raise HTTPException(500, f"Unable to start mining run: {exc}") from exc
-
-    return {
-        "run_id": run_id,
-        "status": "queued",
-        "current_stage": "queued",
-        "started_at": started_at,
-        "execution_engine": engine,
-        "workflow_id": binding.workflow_id if binding else None,
-        "workflow_version": binding.workflow_version if binding else None,
-        "workflow_graph_hash": binding.graph_hash if binding else None,
-    }
-
 
 @router.get("")
 async def list_runs(

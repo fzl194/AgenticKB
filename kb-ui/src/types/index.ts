@@ -69,73 +69,6 @@ export interface MiningRun {
 
 export type MiningSubmissionEngine = 'legacy' | 'workflow'
 
-interface CreateMiningRunBase {
-  domain: string
-  max_workers?: number
-  phase1_only?: boolean
-  publish_on_partial_failure?: boolean
-  workflow_id?: string
-  workflow_version?: number
-  preflight_id?: string
-  document_decisions?: MiningPreflightDecision[]
-}
-
-export type MiningPreflightAction =
-  | 'NEW' | 'REUSED' | 'RESTORED' | 'REMINED' | 'KEPT_CURRENT' | 'JOINED_EXISTING'
-
-export interface MiningPreflightDecision {
-  relative_path: string
-  raw_content_hash: string
-  selected_action: MiningPreflightAction
-  state_token: string
-}
-
-export interface MiningPreflightSnapshot {
-  snapshot_id: string
-  document_id: string
-  document_key: string
-  workflow_id: string | null
-  workflow_version: number | null
-  workflow_version_id?: string | null
-  workflow_graph_hash: string | null
-  is_active?: boolean
-  artifacts_complete?: boolean
-}
-
-export interface MiningPreflightItem extends MiningPreflightDecision {
-  file_name: string
-  file_size: number
-  classification: string
-  default_action: MiningPreflightAction
-  allowed_actions: MiningPreflightAction[]
-  current_snapshot: MiningPreflightSnapshot | null
-  matched_snapshot: MiningPreflightSnapshot | null
-  existing_run_id?: string | null
-}
-
-export interface MiningPreflightResult {
-  preflight_id: string
-  domain: string
-  workflow: { id: string; version: number; version_id: string; graph_hash: string }
-  summary: Record<string, number>
-  items: MiningPreflightItem[]
-}
-
-export type CreateMiningRunRequest =
-  | (CreateMiningRunBase & { upload_batch_id: string; input_path?: never })
-  | (CreateMiningRunBase & { input_path: string; upload_batch_id?: never })
-
-export interface CreateMiningRunResponse {
-  run_id: string
-  status: string
-  current_stage: string
-  started_at?: string | null
-  execution_engine: MiningSubmissionEngine
-  workflow_id: string | null
-  workflow_version: number | null
-  workflow_graph_hash: string | null
-}
-
 export interface MiningRunStage {
   id: string
   stage: string
@@ -435,33 +368,6 @@ export interface LlmTaskDetail extends LlmTask {
   latency_ms?: number
   raw_response?: Record<string, unknown>
   parsed_output?: Record<string, unknown>
-}
-
-// ─── Upload Config ───
-
-export interface UploadConfig {
-  max_file_size: number
-  max_archive_size: number
-  max_files_per_request: number
-  max_file_size_mb: number
-  max_archive_size_mb: number
-  accepted_extensions: string[]
-  archive_extensions: string[]
-  mining_run_submission_engine: MiningSubmissionEngine
-}
-
-export interface UploadResult {
-  upload_batch_id: string
-  domain: string
-  file_count: number
-  files: string[]
-  storage_path: string
-  extracted_archives: Array<{
-    archive: string
-    error: string | null
-    file_count: number
-    files: string[]
-  }>
 }
 
 // ─── 本体 / 知识图谱（B7）───

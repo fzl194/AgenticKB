@@ -154,21 +154,21 @@ def test_write_routes_require_write_guard():
     assert seen == expected
 
 
-def test_domain_level_create_is_admin_only():
-    """域级挖掘入口写 kb_id=NULL 且默认 publish=true，影响整个域——普通成员走 /api/kb/{id}/mine。"""
+def test_domain_level_create_endpoints_are_retired():
+    """批次/域级挖掘入口已退役（决策 2026-08-27）：挖掘必须基于知识库。
+
+    POST /api/runs 与 POST /api/runs/preflight 不得复活——它们写 kb_id=NULL
+    的域级文档且 v2 解析链不认领（document_parse_unavailable 必败）。
+    """
     app = FastAPI()
     app.include_router(runs.router)
 
+    retired = []
     for route in app.routes:
-        if getattr(route, "path", "") in ("/api/runs", "/api/runs/preflight") and (
-            "POST" in route.methods
-        ):
-            names = {
-                d.call.__name__
-                for d in route.dependant.dependencies
-                if getattr(d, "call", None)
-            }
-            assert "require_admin" in names, f"{route.path} 不是 admin-only"
+        path = getattr(route, "path", "")
+        if path in ("/api/runs", "/api/runs/preflight") and "POST" in route.methods:
+            retired.append(f"{sorted(route.methods)} {path}")
+    assert not retired, f"已退役的批次/域级挖掘入口仍然存在：{retired}"
 
 
 # ── 单 run 授权判定 ─────────────────────────────────────────────────────────

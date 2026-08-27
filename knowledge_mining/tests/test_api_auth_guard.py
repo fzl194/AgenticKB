@@ -153,7 +153,6 @@ def test_service_only_body_validation_applies_after_internal_auth(monkeypatch: p
     [
         "/api/knowledge/stats",
         "/api/builds",
-        "/api/uploads",
         "/api/ontology/versions",
         "/api/mining-workflows",
         "/api/knowledge/documents/document-1/download",

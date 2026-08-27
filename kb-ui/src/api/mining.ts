@@ -2,11 +2,9 @@ import type {
   MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus,
   KnowledgeDocument, KnowledgeSegment, KnowledgeUnit, KnowledgeRelation,
   MiningBatchSummary, LifecycleRemovalResult,
-  UploadConfig, UploadResult,
   RunTrace, OntologyVersion, OntologyNodeType, OntologyRelationType, ActiveOntology, OntologyDraft, OntologyCandidate,
   PendingMention, GraphEntity, EntityNeighbors, GraphEvidence,
   EntityMutationResult,
-    CreateMiningRunRequest, CreateMiningRunResponse, MiningPreflightResult,
 } from '@/types'
 import type { PaginatedResponse } from '@/types'
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
@@ -59,20 +57,7 @@ export function useMiningApi() {
       return data
     },
 
-    async createRun(config: CreateMiningRunRequest): Promise<CreateMiningRunResponse> {
-      const { data } = await client.post('/api/runs', config)
-      return extractOne<CreateMiningRunResponse>(data)
-    },
 
-    async preflightRun(config: {
-      domain: string
-      upload_batch_id: string
-      workflow_id: string
-      workflow_version: number
-    }): Promise<MiningPreflightResult> {
-      const { data } = await client.post('/api/runs/preflight', config)
-      return extractOne<MiningPreflightResult>(data)
-    },
 
     async cancelRun(runId: string): Promise<void> {
       await client.post(`/api/runs/${runId}/cancel`)
@@ -147,44 +132,8 @@ export function useMiningApi() {
       return { content: data, format }
     },
 
-    // Upload
-    async getUploadConfig(): Promise<UploadConfig> {
-      const { data } = await client.get('/api/uploads/config')
-      return data
-    },
 
-    async uploadFiles(
-      domain: string,
-      files: File[],
-      onUploadProgress?: (progressEvent: { loaded: number; total: number; progress: number }) => void,
-    ): Promise<UploadResult> {
-      const form = new FormData()
-      form.append('domain', domain)
-      for (const f of files) {
-        form.append('files', f)
-      }
-      const { data } = await client.post('/api/uploads', form, {
-        onUploadProgress(e) {
-          if (onUploadProgress && e.total) {
-            onUploadProgress({ loaded: e.loaded, total: e.total, progress: Math.round((e.loaded / e.total) * 100) })
-          }
-        },
-      })
-      return data
-    },
 
-    async listUploads(domain?: string): Promise<{
-      items: Array<{
-        upload_batch_id: string
-        domain: string
-        file_count: number
-        files: string[]
-        storage_path: string
-      }>
-    }> {
-      const { data } = await client.get('/api/uploads', { params: domain ? { domain } : undefined })
-      return data
-    },
 
     // Knowledge assets
     // domain 通常由 proxyClient 拦截器自动注入；下架/下载等破坏性操作可显式传入

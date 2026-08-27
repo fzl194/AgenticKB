@@ -27,7 +27,6 @@ from knowledge_mining.mining.api.routes.runs import router as runs_router
 from knowledge_mining.mining.api.routes.knowledge import router as knowledge_router
 from knowledge_mining.mining.api.routes.config import router as config_router
 from knowledge_mining.mining.api.routes.builds import router as builds_router
-from knowledge_mining.mining.api.routes.uploads import router as uploads_router
 from knowledge_mining.mining.api.routes.ontology import router as ontology_router
 from knowledge_mining.mining.api.routes.workflows import router as workflows_router
 from knowledge_mining.mining.api.routes.ops import router as ops_router
@@ -230,7 +229,6 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_router)
     app.include_router(config_router)
     app.include_router(builds_router)
-    app.include_router(uploads_router)
     app.include_router(ontology_router)
     app.include_router(document_lifecycle_router)
     # /api/ops/* —— 运维使用分析（admin-only）。独立 prefix，不与 /api/kb 的动态段相争。

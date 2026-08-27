@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { CreateMiningRunRequest, MiningRun, MiningRunStage, MiningRunDocument } from '@/types'
+import type { MiningRun, MiningRunStage, MiningRunDocument } from '@/types'
 import { useMiningApi } from '@/api/mining'
 import { useDomainStore } from '@/stores/domain'
 
@@ -89,16 +89,6 @@ export const useMiningStore = defineStore('mining', () => {
     }
   }
 
-  async function createRun(config: CreateMiningRunRequest) {
-    try {
-      await miningApi.createRun(config)
-      await fetchRuns()
-    } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : 'Failed to create run'
-      throw e
-    }
-  }
-
   async function cancelRun(runId: string) {
     try {
       await miningApi.cancelRun(runId)
@@ -174,6 +164,6 @@ export const useMiningStore = defineStore('mining', () => {
     loading, error,
     fetchRuns, fetchRunDetail, fetchRunDocuments, fetchProgress,
     fetchDocumentDetail,
-    createRun, cancelRun, publishRun, clearCurrentRun,
+    cancelRun, publishRun, clearCurrentRun,
   }
 })

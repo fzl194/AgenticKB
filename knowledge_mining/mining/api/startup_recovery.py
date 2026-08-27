@@ -48,6 +48,7 @@ async def recover_startup_runs(
                                || '{\"interrupted_by\": \"restart\"}'::jsonb
                        WHERE domain = %s AND status IN ('queued', 'running')
                          AND finished_at IS NULL
+                         AND (worker_id IS NULL OR lease_until IS NULL OR lease_until < NOW())
                        RETURNING id, domain, execution_engine""",
                     [now, domain],
                 )

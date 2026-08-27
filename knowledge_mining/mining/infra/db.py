@@ -1135,6 +1135,36 @@ class MiningRuntimeDB(_DB):
 
     # -- mining runs --
 
+    def claim_run(self, run_id: str, domain: str, worker_id: str, lease_seconds: int = 300) -> bool:
+        """Atomically claim an unowned or expired active run."""
+        count = self._run(
+            "WITH domain_claim AS (SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0)) AS locked) "
+            "UPDATE mining_runs SET worker_id = %s, heartbeat_at = NOW(), "
+            "lease_until = NOW() + (%s * INTERVAL '1 second'), attempt_no = attempt_no + 1 "
+            "FROM domain_claim WHERE domain_claim.locked AND id = %s AND domain = %s AND status IN ('queued', 'running') "
+            "AND (worker_id IS NULL OR lease_until IS NULL OR lease_until < NOW()) "
+            "AND NOT EXISTS (SELECT 1 FROM mining_runs active WHERE active.domain = %s "
+            "AND active.id <> %s AND active.status IN ('queued', 'running') "
+            "AND active.worker_id IS NOT NULL AND active.lease_until >= NOW())",
+            (domain, worker_id, lease_seconds, run_id, domain, domain, run_id), fetch="rowcount",
+        )
+        return bool(count)
+
+    def renew_run_lease(self, run_id: str, worker_id: str, lease_seconds: int = 300) -> bool:
+        count = self._run(
+            "UPDATE mining_runs SET heartbeat_at = NOW(), lease_until = NOW() + (%s * INTERVAL '1 second') "
+            "WHERE id = %s AND worker_id = %s AND status IN ('queued', 'running')",
+            (lease_seconds, run_id, worker_id), fetch="rowcount",
+        )
+        return bool(count)
+
+    def release_run_lease(self, run_id: str, worker_id: str) -> bool:
+        count = self._run(
+            "UPDATE mining_runs SET worker_id = NULL, lease_until = NULL "
+            "WHERE id = %s AND worker_id = %s", (run_id, worker_id), fetch="rowcount",
+        )
+        return bool(count)
+
     def insert_run(self, data: MiningRunData) -> str:
         self._execute(
             """INSERT INTO mining_runs

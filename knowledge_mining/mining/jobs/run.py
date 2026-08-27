@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,6 +23,10 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+class RunLeaseLost(RuntimeError):
+    """Another executor owns the Run; this worker must stop advancing it."""
 
 _PREPROCESS_METADATA_KEYS = (
     "preprocess_status",
@@ -103,6 +108,8 @@ def _check_cancelled(runtime_db: "MiningRuntimeDB", run_id: str) -> None:
     Reads the current run row's status from PG; raises MiningCancelled if the
     UI (or anyone else) has flipped it to 'cancelled'. Cheap (<1ms point query).
     """
+    if getattr(runtime_db, "_run_lease_lost", False):
+        raise RunLeaseLost(f"run lease lost: {run_id}")
     row = runtime_db._fetchone(
         "SELECT status FROM mining_runs WHERE id = %s", (run_id,)
     )
@@ -353,6 +360,10 @@ def _run_legacy(
     submitted_run_id = run_id
     run_id = run_id or uuid.uuid4().hex
     run_domain = str(registry_entry.get("id") or domain)
+    worker_id = f"api-{uuid.uuid4().hex}"
+    lease_claimed = False
+    lease_stop = threading.Event()
+    lease_thread: threading.Thread | None = None
 
     try:
         if submitted_run_id is None:
@@ -376,6 +387,19 @@ def _run_legacy(
             channel = existing["channel"]
             if existing.get("status") not in ("queued", "running"):
                 return {"run_id": run_id, "status": existing["status"]}
+
+        claim = getattr(runtime_db, "claim_run", None)
+        if claim is not None:
+            lease_claimed = bool(claim(run_id, run_domain, worker_id))
+            if not lease_claimed:
+                return {"run_id": run_id, "status": "claimed_elsewhere"}
+            def _heartbeat() -> None:
+                while not lease_stop.wait(30):
+                    if not runtime_db.renew_run_lease(run_id, worker_id):
+                        runtime_db._run_lease_lost = True
+                        return
+            lease_thread = threading.Thread(target=_heartbeat, daemon=True)
+            lease_thread.start()
 
         if not tracker.set_run_phase(run_id, run_domain, "ingest"):
             row = runtime_db.get_run(run_id) or {}
@@ -437,6 +461,14 @@ def _run_legacy(
             pass
         raise
     finally:
+        lease_stop.set()
+        if lease_thread is not None:
+            lease_thread.join(timeout=1)
+        if lease_claimed:
+            try:
+                runtime_db.release_run_lease(run_id, worker_id)
+            except Exception:
+                logger.exception("Failed to release run lease for %s", run_id)
         asset_db.close()
         runtime_db.close()
 

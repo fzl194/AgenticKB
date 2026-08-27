@@ -20,7 +20,7 @@ def test_claim_is_atomic_and_only_accepts_unowned_or_expired_run():
     assert "worker_id IS NULL OR lease_until IS NULL OR lease_until < NOW()" in sql
     assert "attempt_no = attempt_no + 1" in sql
     assert params == (
-        "d1", "worker-a", 300, ("queued", "running"), "r1", "d1", "d1", "r1",
+        "d1", "worker-a", 300, ["queued", "running"], "r1", "d1", "d1", "r1",
     ) and fetch == "rowcount"
 
 
@@ -32,14 +32,14 @@ def test_claim_allows_resume_statuses_when_requested():
     sql, params, _, = db.calls[0]
     assert "status = ANY(%s)" in sql
     # allowed_statuses 随参数下发，默认路径不受影响
-    assert params == ("d1", "worker-a", 300, statuses, "r1", "d1", "d1", "r1")
+    assert params == ("d1", "worker-a", 300, list(statuses), "r1", "d1", "d1", "r1")
 
 
 def test_claim_default_statuses_still_queued_running_only():
     db = _db(0)
     assert db.claim_run("r1", "d1", "worker-a") is False
     _, params, _, = db.calls[0]
-    assert params == ("d1", "worker-a", 300, ("queued", "running"), "r1", "d1", "d1", "r1")
+    assert params == ("d1", "worker-a", 300, ["queued", "running"], "r1", "d1", "d1", "r1")
 
 
 def test_renew_is_fenced_by_worker_only_not_status():

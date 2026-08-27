@@ -310,15 +310,40 @@ async function deleteFolder(f: KbFolder) {
 }
 
 // ── 文件操作 ──
+const ARCHIVE_EXTS = ['.zip', '.hdx', '.chm']
+
+/** 轮询归档后台解压任务直至终态（批次2c）。 */
+async function pollArchiveTask(taskId: string, name: string) {
+  for (let i = 0; i < 600; i++) { // 最长 30 分钟（3s × 600）
+    await new Promise((r) => setTimeout(r, 3000))
+    const t = await kbApi.getArchiveTask(props.kbId, taskId)
+    if (t.status === 'completed') {
+      ElMessage.success(`「${name}」解压完成：入库 ${t.document_count ?? 0} 个文档`)
+      return
+    }
+    if (t.status === 'failed') {
+      ElMessage.error(`「${name}」解压失败：${t.error ?? '未知错误'}`)
+      return
+    }
+  }
+  ElMessage.warning(`「${name}」解压耗时较长，可稍后刷新文件列表查看结果`)
+}
+
 async function handleUpload(opts: UploadRequestOptions) {
   const file = opts.file as File
   uploading.value += 1
   try {
-    if (file.name.toLowerCase().endsWith('.zip')) {
-      const n = (await kbApi.uploadZip(props.kbId, file)).length
-      ElMessage.success(`已解压上传 ${n} 个文档`)
-      // zip 可能新建子文件夹（kb_folders），需连同树一起刷新
-      await reload()
+    const lower = file.name.toLowerCase()
+    if (ARCHIVE_EXTS.some((e) => lower.endsWith(e))) {
+      const r = await kbApi.uploadArchive(props.kbId, file, currentPath.value || undefined)
+      if (r.archiveTaskId) {
+        ElMessage.info(`「${file.name}」较大，正在后台解压入库…`)
+        // 后台跑着：解除上传锁，轮询完成后再刷新树
+        pollArchiveTask(r.archiveTaskId, file.name).finally(() => reload())
+      } else {
+        ElMessage.success(`已解压上传 ${r.documents?.length ?? 0} 个文档`)
+        await reload()
+      }
     } else {
       await kbApi.uploadDocument(props.kbId, file, { directory: currentPath.value || undefined })
       ElMessage.success(`已上传 ${file.name}`)

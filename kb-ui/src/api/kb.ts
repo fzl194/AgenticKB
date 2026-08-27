@@ -154,11 +154,37 @@ export function useKbApi() {
     async uploadZip(kbId: string, file: File): Promise<KbDocument[]> {
       const form = new FormData()
       form.append('file', file)
-      const { data } = await client.post(`/api/kb/${kbId}/documents`, form)
-      const envelope = data as { documents?: KbDocument[] }
+      const response = await client.post(`/api/kb/${kbId}/documents`, form)
+      const envelope = response.data as { documents?: KbDocument[] }
       if (Array.isArray(envelope.documents)) return envelope.documents
-      // 后端若按单文件处理（非 zip 扩展名），兜底成单元素数组
-      return [extractOne<KbDocument>(data)]
+      // 后端若按单文件处理（非归档扩展名），兜底成单元素数组
+      return [extractOne<KbDocument>(response.data)]
+    },
+
+    /** 归档上传（zip/hdx/chm）：小包同步返回文档列表；大包返回任务 ID（HTTP 202）。 */
+    async uploadArchive(
+      kbId: string, file: File, directory?: string,
+    ): Promise<{ documents?: KbDocument[]; archiveTaskId?: string }> {
+      const form = new FormData()
+      form.append('file', file)
+      if (directory) form.append('directory', directory)
+      const response = await client.post(`/api/kb/${kbId}/documents`, form)
+      const data = response.data as {
+        documents?: KbDocument[]; archive_task_id?: string
+      }
+      if (data.archive_task_id) return { archiveTaskId: data.archive_task_id }
+      return { documents: data.documents ?? [] }
+    },
+
+    /** 归档后台解压任务状态轮询（批次2c）。 */
+    async getArchiveTask(kbId: string, taskId: string): Promise<{
+      status: 'processing' | 'completed' | 'failed'
+      progress: { done: number; total: number | null }
+      document_count: number | null
+      error: string | null
+    }> {
+      const { data } = await client.get(`/api/kb/${kbId}/documents/archive-tasks/${taskId}`)
+      return data
     },
 
     async listDocuments(kbId: string, directory?: string): Promise<KbDocument[]> {

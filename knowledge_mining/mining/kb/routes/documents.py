@@ -4,13 +4,16 @@
 """
 from __future__ import annotations
 
+import asyncio
+import shutil
+import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel
 
@@ -21,7 +24,7 @@ from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.deps import get_document_service, get_folder_service, get_kb_db
 from knowledge_mining.mining.kb.routes.kbs import _map_error
 from knowledge_mining.mining.kb.services.document_service import (
-    DocumentService, UploadTooLarge,
+    DocumentService, UploadTooLarge, SYNC_ARCHIVE_MEMBERS, count_archive_members,
 )
 from knowledge_mining.mining.kb.services.folder_service import FolderService
 from knowledge_mining.mining.kb.services.kb_service import Duplicate, Forbidden, NotFound
@@ -88,6 +91,9 @@ async def document_parse_result(
 
 _ROUTE_CHUNK = 256 * 1024
 
+#: 后台归档任务的强引用（防事件循环只留弱引用被 GC）
+_archive_bg_tasks: set = set()
+
 
 async def _upload_file_chunks(file: UploadFile) -> AsyncIterator[bytes]:
     """分块读 multipart 文件（P01-S1）：不整读，内存与文件大小无关。"""
@@ -96,6 +102,33 @@ async def _upload_file_chunks(file: UploadFile) -> AsyncIterator[bytes]:
         if not chunk:
             break
         yield chunk
+
+
+#: chm 无廉价成员枚举——按包体大小决策同步/异步（超过即异步）
+_ASYNC_ARCHIVE_BYTES = 10 * 1024 * 1024
+
+
+async def _run_archive_task(task_id: str, svc: DocumentService, *,
+                            kb_id: str, owner_id: str, archive_path: Path,
+                            archive_name: str, max_member_bytes: int | None) -> None:
+    """后台解压任务：进度回写注册表，结束删暂存包。"""
+    from knowledge_mining.mining.kb.services.archive_tasks import registry
+    try:
+        docs = await svc.upload_archive_path(
+            kb_id=kb_id, owner_id=owner_id, archive_path=archive_path,
+            archive_name=archive_name, persist_archive=True,
+            max_member_bytes=max_member_bytes,
+            on_progress=lambda done, total, name: registry.update(
+                task_id, done=done, total=total),
+        )
+        registry.complete(task_id, document_count=len(docs), failed=0)
+    except Exception as exc:
+        registry.fail(task_id, f"{type(exc).__name__}: {exc}")
+    finally:
+        try:
+            archive_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @router.post("", status_code=201)
@@ -111,22 +144,60 @@ async def upload_document(
     cfg = UploadConfig()
     try:
         if _is_archive(filename):
-            # zip 需完整字节才能解压——分块落到临时文件（内存有界），带额度解压。
-            with TemporaryDirectory(prefix="agentickb-zip-") as tmp:
-                zip_path = Path(tmp) / Path(filename).name
+            # 归档需完整字节——分块落临时文件（内存有界），额度强制。
+            with TemporaryDirectory(prefix="agentickb-archive-") as tmp:
+                archive_path = Path(tmp) / Path(filename).name
                 written = 0
-                with zip_path.open("wb") as fh:
+                with archive_path.open("wb") as fh:
                     async for chunk in _upload_file_chunks(file):
                         written += len(chunk)
                         if written > cfg.upload_max_archive_size:
                             raise UploadTooLarge(
-                                (f"zip 上传 {written} 字节超过上限 "
+                                (f"归档上传 {written} 字节超过上限 "
                                  f"{cfg.upload_max_archive_size} 字节"),
                                 limit_bytes=cfg.upload_max_archive_size,
                             )
                         fh.write(chunk)
-                docs = await svc.upload_zip_path(
-                    kb_id=kb_id, owner_id=user["id"], zip_path=zip_path,
+
+                ext = archive_path.suffix.lower()
+                # 同步阈值：zip/hdx 按成员数；chm 按包体大小
+                if ext == ".chm":
+                    go_async = archive_path.stat().st_size > _ASYNC_ARCHIVE_BYTES
+                else:
+                    try:
+                        member_count = await count_archive_members(archive_path)
+                    except Exception:
+                        member_count = SYNC_ARCHIVE_MEMBERS + 1  # 数不清→异步兜底
+                    go_async = member_count > SYNC_ARCHIVE_MEMBERS
+
+                if go_async:
+                    # 大包异步（批次2c）：包转存进程级暂存（请求临时目录随请求
+                    # 结束清理），后台解压，立即返回任务 ID 供轮询。
+                    from knowledge_mining.mining.kb.services.archive_tasks import (
+                        registry,
+                    )
+                    task_id = registry.create(kb_id=kb_id, archive_name=filename)
+                    staging_dir = Path(tempfile.gettempdir()) / "agentickb-archive-tasks"
+                    staging_dir.mkdir(parents=True, exist_ok=True)
+                    staging_path = staging_dir / f"{task_id}{archive_path.suffix}"
+                    shutil.copyfile(archive_path, staging_path)
+                    task = asyncio.create_task(_run_archive_task(
+                        task_id, svc, kb_id=kb_id, owner_id=user["id"],
+                        archive_path=staging_path, archive_name=filename,
+                        max_member_bytes=cfg.upload_max_file_size,
+                    ))
+                    _archive_bg_tasks.add(task)
+                    task.add_done_callback(_archive_bg_tasks.discard)
+                    return JSONResponse(status_code=202, content={
+                        "archive_task_id": task_id,
+                        "status": "processing",
+                        "message": (f"归档 {filename!r} 正在后台解压入库，"
+                                    f"请轮询任务状态获取进度"),
+                    })
+
+                docs = await svc.upload_archive_path(
+                    kb_id=kb_id, owner_id=user["id"], archive_path=archive_path,
+                    archive_name=filename, persist_archive=True,
                 )
                 return {"documents": docs}
         return await svc.upload_stream(
@@ -149,6 +220,22 @@ async def upload_document(
         raise HTTPException(
             409, f"Document named {filename!r} already exists in this KB"
         ) from None
+
+
+@router.get("/archive-tasks/{task_id}")
+async def get_archive_task(
+    kb_id: str,
+    task_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    svc: DocumentService = Depends(get_document_service),
+):
+    """归档后台解压任务状态（批次2c）：前端轮询至 completed/failed。"""
+    from knowledge_mining.mining.kb.services.archive_tasks import registry
+    task = registry.get(task_id)
+    if task is None or task["kb_id"] != kb_id:
+        raise HTTPException(404, f"archive task {task_id!r} not found")
+    await svc._svc._assert_read(kb_id, user["id"])  # noqa: SLF001
+    return task
 
 
 @router.get("")

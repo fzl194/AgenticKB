@@ -74,6 +74,22 @@ def resolve_upload_mime(filename: str, declared: str | None) -> str:
     return _EXTENSION_MIME.get(Path(filename).suffix.lower(), "application/octet-stream")
 
 
+#: 同步解压的成员数阈值（批次2c）：≤ 此值的归档在 HTTP 请求内同步完成，
+#: 超出走后台任务（网关 proxy_read_timeout 300s 内 200 成员有余量）。
+SYNC_ARCHIVE_MEMBERS = 200
+
+
+async def count_archive_members(archive_path: Path) -> int:
+    """不解压的前提下数归档成员数（zip/hdx 读中央目录；chm 无廉价枚举，
+    调用方应按包大小决策或直接走异步）。"""
+    import zipfile
+    ext = archive_path.suffix.lower()
+    if ext in {".zip", ".hdx"}:
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            return sum(1 for i in zf.infolist() if not i.is_dir())
+    raise ValueError(f"cannot count members of {ext} without extraction")
+
+
 class UploadTooLarge(Exception):
     """上传超过大小上限（路由映射 413）。"""
 
@@ -399,6 +415,8 @@ class DocumentService:
         max_archive_bytes: int | None = None,
         max_member_bytes: int | None = None,
         max_members: int | None = None,
+        persist_archive: bool = False,
+        on_progress=None,
     ) -> list[dict[str, Any]]:
         """归档上传统一入口（批次2b）：.zip/.hdx/.chm 与 zip 同构处理。
 
@@ -407,6 +425,9 @@ class DocumentService:
         - **统一以压缩包名建总文件夹**（产品文档.hdx → 「产品文档/」），
           成员保留内部目录结构——多个包互不混
         - 解压额度（成员数/单成员/总量）+ 成员流式入库（批次2 通道复用）
+        - persist_archive=True 时原始包本体也内容寻址存入对象存储
+          （批次2c 决策：可追溯/可重新解压）
+        - on_progress(done, total, name) 在每个成员入库后回调（异步任务进度）
         """
         cfg = UploadConfig()
         if max_archive_bytes is None:
@@ -467,8 +488,10 @@ class DocumentService:
                 await self._folders.ensure_folder_path(kb_id=kb_id, path=dp, user_id=owner_id)
 
             docs: list[dict[str, Any]] = []
+            failed = 0
             member_base = chm_base if ext == ".chm" else base
-            for rel, parts in zip(extracted_files, members):
+            total = len(extracted_files)
+            for done, (rel, parts) in enumerate(zip(extracted_files, members), start=1):
                 full = (member_base / rel).resolve()
                 if not full.is_file():
                     continue
@@ -483,8 +506,34 @@ class DocumentService:
                         directory_path="/".join(parts[:-1]),
                         max_bytes=max_member_bytes,
                     ))
+                except UploadTooLarge:
+                    failed += 1  # 单成员超限：如实计数，不中断整包
                 except UniqueViolation:
                     continue  # KB 内同名已存在，跳过
+                if on_progress is not None:
+                    on_progress(done, total, parts[-1])
+            if failed:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "archive %s: %d/%d members exceeded size limit",
+                    archive_name or archive_path.name, failed, total,
+                )
+            if persist_archive:
+                # 包本体内容寻址归档（不登记为可挖文档，仅对象可追溯）
+                import logging
+                try:
+                    await self._store_source_stream(
+                        _file_chunks(archive_path),
+                        mime=resolve_upload_mime(
+                            archive_name or archive_path.name, None),
+                        max_bytes=max_archive_bytes,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "archive blob persistence failed for %s",
+                        archive_name or archive_path.name,
+                    )
+                    # 归档失败不阻断成员入库结果
             return docs
 
     # ----------------------------------------------------- read / patch

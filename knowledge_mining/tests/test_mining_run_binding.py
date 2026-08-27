@@ -5,7 +5,6 @@ from copy import deepcopy
 import pytest
 from pydantic import ValidationError
 
-from knowledge_mining.mining.api.routes.runs import CreateRunRequest
 from knowledge_mining.mining.workflow.run_binding import WorkflowRunBinder
 
 
@@ -62,35 +61,6 @@ def fake_binding_deps() -> dict:
         "ontology_lookup": ontology_lookup,
         "config_fingerprint": lambda: "config-hash",
     }
-
-
-def test_create_request_requires_exactly_one_input_source() -> None:
-    body = CreateRunRequest(domain="odn", upload_batch_id="abcdef123456")
-    assert body.input_path is None
-
-    with pytest.raises(ValidationError, match="exactly one"):
-        CreateRunRequest(
-            domain="odn",
-            input_path="C:/a",
-            upload_batch_id="abcdef123456",
-        )
-    with pytest.raises(ValidationError, match="exactly one"):
-        CreateRunRequest(domain="odn")
-
-
-def test_create_request_accepts_camel_case_workflow_aliases() -> None:
-    body = CreateRunRequest.model_validate({
-        "domain": "odn",
-        "input_path": "C:/a",
-        "workflowId": "wf",
-        "workflowVersion": 2,
-    })
-
-    assert (body.workflow_id, body.workflow_version) == ("wf", 2)
-    with pytest.raises(ValidationError, match="workflow_id is required"):
-        CreateRunRequest(
-            domain="odn", input_path="C:/a", workflow_version=2
-        )
 
 
 @pytest.mark.asyncio

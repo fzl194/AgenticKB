@@ -124,9 +124,25 @@ class DocumentService:
         storage_object = await self._store_source(
             content=content, mime=resolve_upload_mime(filename, mime),
         )
+        document_key = build_document_key(normalized_directory, normalized_filename)
+        # P08-S1：软删行仍占 uq_asset_documents_kb_key——同名重传复活身份行
+        #（指针/哈希/revision 前移），而不是 409 或插入第二行。
+        soft_deleted = await self._db.find_document_by_key(
+            kb_id, document_key, include_deleted=True,
+        )
+        if soft_deleted is not None and soft_deleted.get("deleted_at") is not None:
+            revived = await self._db.revive_document_from_storage(
+                soft_deleted["id"],
+                storage_object_id=storage_object.id,
+                source_raw_hash=storage_object.sha256,
+                file_size=storage_object.size, modified_at=_utcnow_iso(),
+            )
+            if revived is not None:
+                revived["status"] = "uploaded"
+                return revived
         doc = await self._db.insert_document_from_storage(
             domain=kb["domain"], kb_id=kb_id,
-            document_key=build_document_key(normalized_directory, normalized_filename),
+            document_key=document_key,
             document_name=normalized_filename,
             storage_object_id=storage_object.id,
             source_raw_hash=storage_object.sha256,
@@ -273,11 +289,13 @@ class DocumentService:
         return doc
 
     async def delete(self, *, document_id: str, user_id: str) -> None:
-        """删除 KB 文档：删磁盘文件 + 身份行。
+        """软删 KB 文档（P08-S1）：盖 deleted_at，不触 FK CASCADE。
 
-        FK CASCADE 清掉该文档的 snapshot_links 与 build_document_snapshots；
-        共享 snapshot 保留（别的文档可能引用）。mining_run_documents 按 document_key
-        留存为历史（无 FK，不阻塞），下次同 document_key 重传再挖会重新关联。
+        硬删会借 CASCADE 清掉 asset_document_snapshot_links 与
+        asset_build_document_snapshots——**改写历史 Build**（P0 事故面）。
+        软删后：读面/挖掘取数/Java 检索按 deleted_at IS NULL 过滤退出；
+        restore 可恢复；同 document_key 重传会复活该身份行。
+        legacy 磁盘分支（storage_path 非 NULL 的老文档）仍清磁盘文件。
         """
         doc = await self._db.get_document_identity(document_id)
         if doc is None:
@@ -294,8 +312,21 @@ class DocumentService:
                 if resolved.is_file():
                     resolved.unlink()
             except (ValueError, OSError):
-                pass  # 不在库内或已不存在：仍删 DB 行
-        await self._db.delete_document_identity(document_id)
+                pass  # 不在库内或已不存在：仍软删 DB 行
+        await self._db.soft_delete_document(document_id)
+
+    async def restore(self, *, document_id: str, user_id: str) -> dict[str, Any]:
+        """恢复软删文档：身份行与对象指针原样回来。"""
+        doc = await self._db.get_document_identity(document_id, include_deleted=True)
+        if doc is None:
+            raise NotFound(document_id)
+        await self._svc._assert_write(doc["kb_id"], user_id)
+        if doc.get("deleted_at") is None:
+            return doc  # 幂等：本来就没删
+        await self._db.clear_document_deleted(document_id)
+        restored = await self._db.get_document_identity(document_id)
+        assert restored is not None
+        return restored
 
     async def patch_document(
         self, *, document_id: str, user_id: str,

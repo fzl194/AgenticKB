@@ -45,6 +45,7 @@
         <foreach collection="segmentIds" item="id" open="(" separator="," close=")">
             #{id}
         </foreach>
+        AND d.deleted_at IS NULL
         <if test="snapshotIds != null and snapshotIds.size() > 0">
         AND rs.document_snapshot_id IN
         <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">

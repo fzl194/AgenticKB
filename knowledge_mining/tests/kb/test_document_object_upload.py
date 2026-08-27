@@ -32,6 +32,9 @@ class _KbUploadDb:
     async def can_write(self, *, kb_id: str, user_id: str) -> bool:
         return True
 
+    async def find_document_by_key(self, kb_id, document_key, *, include_deleted=False):
+        return None
+
     async def insert_document_from_storage(self, **values: object) -> dict:
         document = {
             "id": f"doc-{len(self.documents) + 1}",

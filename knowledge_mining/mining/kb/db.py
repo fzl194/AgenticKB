@@ -296,7 +296,7 @@ class KbDB:
                               kb.mining_workflow_id,
                               'admin' AS my_role,
                               (SELECT COUNT(*) FROM asset_documents d
-                               WHERE d.kb_id = kb.id) AS document_count
+                               WHERE d.kb_id = kb.id AND d.deleted_at IS NULL) AS document_count
                        FROM knowledge_bases kb
                        WHERE kb.domain = %(dom)s AND kb.status = 'active'
                        ORDER BY kb.created_at DESC""",
@@ -315,7 +315,7 @@ class KbDB:
                             ELSE 'viewer'
                           END AS my_role,
                           (SELECT COUNT(*) FROM asset_documents d
-                           WHERE d.kb_id = kb.id) AS document_count
+                           WHERE d.kb_id = kb.id AND d.deleted_at IS NULL) AS document_count
                    FROM knowledge_bases kb
                    WHERE kb.domain = %(dom)s AND kb.status = 'active'
                      AND (kb.owner_id = %(uid)s
@@ -373,7 +373,7 @@ class KbDB:
                            COUNT(*) FILTER (WHERE rs.rd_status = 'failed') AS failed
                     FROM asset_documents d
                     {_RUN_DOC_JOIN_SQL}
-                    WHERE d.kb_id = ANY(%s)
+                    WHERE d.kb_id = ANY(%s) AND d.deleted_at IS NULL
                     GROUP BY d.kb_id""",
                 [kb_ids],
             )
@@ -487,7 +487,7 @@ WITH cur AS (
                 f"""SELECT {case_sql} AS status, COUNT(*) AS c
                     FROM asset_documents d
                     {join_sql}
-                    WHERE d.kb_id = ANY(%s)
+                    WHERE d.kb_id = ANY(%s) AND d.deleted_at IS NULL
                     GROUP BY 1""",
                 [kb_ids],
             )
@@ -896,7 +896,7 @@ WITH cur AS (
 
         状态优先级与原 derive_document_status 一致：published > failed > mining > withdrawn > uploaded。
         """
-        clause = "d.kb_id = %s"
+        clause = "d.kb_id = %s AND d.deleted_at IS NULL"
         params: list[Any] = [kb_id]
         if directory is not None:
             clause += " AND d.directory_path = %s"
@@ -917,8 +917,15 @@ WITH cur AS (
             )
             return [dict(r) for r in await cur.fetchall()]
 
-    async def get_document_identity(self, document_id: str) -> dict[str, Any] | None:
-        """单文档身份 + 内联派生状态（一次 SQL）。"""
+    async def get_document_identity(
+        self, document_id: str, *, include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """单文档身份 + 内联派生状态（一次 SQL）。
+
+        默认过滤软删行（详情/下载/预览/patch/删除的共同入口，P08-S1）；
+        restore 与重传复活走 include_deleted=True。
+        """
+        soft_delete_clause = "" if include_deleted else " AND d.deleted_at IS NULL"
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 f"""SELECT d.id, d.domain, d.kb_id, d.document_key, d.document_name,
@@ -928,17 +935,69 @@ WITH cur AS (
                            {_STATUS_CASE_SQL} AS status
                     FROM asset_documents d
                     {_STATUS_JOIN_SQL}
-                    WHERE d.id = %s""",
+                    WHERE d.id = %s{soft_delete_clause}""",
                 [document_id],
             )
             row = await cur.fetchone()
             return dict(row) if row else None
 
-    async def delete_document_identity(self, document_id: str) -> None:
-        """删文档身份行。FK CASCADE 自动清 asset_document_snapshot_links 与
-        asset_build_document_snapshots；共享 snapshot 保留（别的文档可能引用）。"""
+    async def revive_document_from_storage(
+        self, document_id: str, *, storage_object_id: str, source_raw_hash: str,
+        file_size: int | None = None, modified_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        """软删文档的重传复活（P08-S1）：软删行占着 uq_asset_documents_kb_key，
+        同名重传不能 409——清软删标记并把对象指针/哈希/revision 前移到新内容。"""
         async with self._pool.connection() as conn:
-            await conn.execute("DELETE FROM asset_documents WHERE id = %s", [document_id])
+            cur = await conn.execute(
+                """UPDATE asset_documents
+                   SET deleted_at = NULL, storage_object_id = %(so)s,
+                       source_raw_hash = %(hash)s, file_size = COALESCE(%(fs)s, file_size),
+                       modified_at = %(ma)s,
+                       content_revision = content_revision + 1,
+                       content_updated_at = %(ma)s
+                   WHERE id = %(id)s AND deleted_at IS NOT NULL
+                   RETURNING id, domain, kb_id, document_key, document_name,
+                             document_type, storage_path, directory_path, owner_id,
+                             created_at, file_size, modified_at, storage_object_id,
+                             source_raw_hash, content_revision, deleted_at""",
+                {"so": storage_object_id, "hash": source_raw_hash,
+                 "fs": file_size, "ma": modified_at or _utcnow(), "id": document_id},
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def find_document_by_key(
+        self, kb_id: str, document_key: str, *, include_deleted: bool = False,
+    ) -> dict[str, Any] | None:
+        """按 KB 内唯一键查身份（重传冲突预检用）。默认只找活文档。"""
+        soft = "" if include_deleted else " AND deleted_at IS NULL"
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, document_key, deleted_at FROM asset_documents
+                   WHERE kb_id = %s AND document_key = %s""" + soft,
+                [kb_id, document_key],
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def soft_delete_document(self, document_id: str) -> None:
+        """软删文档（P08-S1）：盖 deleted_at，不触 FK CASCADE——历史 Build 的
+        selection 行完整保留（硬删会借 CASCADE 改写历史 Build，属 P0 事故面）。
+        读面/检索退出由各查询的 deleted_at IS NULL 过滤实现。
+        """
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE asset_documents SET deleted_at = %s WHERE id = %s",
+                [datetime.now(timezone.utc).isoformat(), document_id],
+            )
+
+    async def clear_document_deleted(self, document_id: str) -> None:
+        """restore：清软删标记（身份行与对象指针不变）。"""
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE asset_documents SET deleted_at = NULL WHERE id = %s",
+                [document_id],
+            )
 
     async def update_document_identity(
         self, document_id: str, *,
@@ -970,7 +1029,7 @@ WITH cur AS (
                 f"""SELECT {_STATUS_CASE_SQL} AS status
                     FROM asset_documents d
                     {_STATUS_JOIN_SQL}
-                    WHERE d.id = %s""",
+                    WHERE d.id = %s AND d.deleted_at IS NULL""",
                 [document_id],
             )
             row = await cur.fetchone()
@@ -1048,7 +1107,7 @@ WITH cur AS (
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT COUNT(*) AS n FROM asset_documents
-                   WHERE kb_id = %s
+                   WHERE kb_id = %s AND deleted_at IS NULL
                      AND (directory_path = %s OR directory_path LIKE %s)""",
                 [kb_id, path, path + "/%"],
             )
@@ -1096,7 +1155,7 @@ WITH cur AS (
             cur = await conn.execute(
                 """SELECT id, document_name, directory_path, storage_path
                    FROM asset_documents
-                   WHERE kb_id = %s
+                   WHERE kb_id = %s AND deleted_at IS NULL
                      AND (directory_path = %s OR directory_path LIKE %s)""",
                 [kb_id, prefix, prefix + "/%"],
             )

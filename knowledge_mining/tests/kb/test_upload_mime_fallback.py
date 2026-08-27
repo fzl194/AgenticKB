@@ -45,6 +45,9 @@ async def test_upload_records_resolved_mime_for_markdown(tmp_path) -> None:
         async def get_kb(self, kb_id):
             return {"id": kb_id, "domain": "generic"}
 
+        async def find_document_by_key(self, kb_id, document_key, *, include_deleted=False):
+            return None
+
         async def is_visible(self, *, kb_id, user_id):
             return True
 

@@ -226,10 +226,24 @@ async def delete_document(
     user: dict[str, Any] = Depends(current_user),
     svc: DocumentService = Depends(get_document_service),
 ):
-    """删除 KB 文档（磁盘文件 + 身份行）。撤回（从发布中移除）是另一个概念，待 release 机制接线。"""
+    """软删 KB 文档（P08-S1）：盖 deleted_at，历史 Build 不被改写；restore 可恢复。"""
     try:
         await svc.delete(document_id=document_id, user_id=user["id"])
         return {"ok": True}
+    except (NotFound, Forbidden) as exc:
+        raise _map_error(exc) from None
+
+
+@router.post("/{document_id}/restore")
+async def restore_document(
+    kb_id: str,
+    document_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    svc: DocumentService = Depends(get_document_service),
+):
+    """恢复软删文档（写权限校验在 service 内；幂等——未删状态原样返回）。"""
+    try:
+        return await svc.restore(document_id=document_id, user_id=user["id"])
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
 

@@ -46,6 +46,7 @@
             JOIN asset_documents d ON d.id = bs.document_id
             WHERE b.status IN ('validated', 'published')
               AND b.kb_id = d.kb_id
+              AND d.deleted_at IS NULL
               AND d.domain = #{domain}
               AND d.kb_id IN
               <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">

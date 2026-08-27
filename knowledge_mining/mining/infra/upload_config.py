@@ -57,9 +57,16 @@ class UploadConfig:
     @computed_field
     @property
     def archive_exts_set(self) -> frozenset[str]:
-        """Extensions that will be auto-extracted after upload (ZIP only — pure Python)."""
+        """Extensions that will be auto-extracted after upload (zip/hdx/chm).
+
+        兼容空格或逗号分隔（YAML 里 ``.zip .hdx .chm`` 与 ``.zip,.hdx,.chm``
+        等价）——只按逗号切会把整串当成一个"扩展名"，E2E 实锤过。
+        """
+        import re
         return frozenset(
-            e.strip().lower() for e in self.upload_archive_extensions.split(",") if e.strip()
+            e.strip().lower()
+            for e in re.split(r"[,\s]+", self.upload_archive_extensions)
+            if e.strip()
         )
 
     @computed_field

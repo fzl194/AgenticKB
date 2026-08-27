@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from typing import Any
 
 from knowledge_mining.mining.contracts.file_management import (
@@ -147,6 +148,11 @@ class ParseResultReadService:
             },
         }
 
+    #: 快照 IR LRU（批次3-问题2）：快照不可变，按 parse_ir 对象键缓存；
+    #: 容量按条数（单 IR MB 级，16 条 ≈ 数十 MB 上限）。类级共享。
+    _IR_CACHE_MAX = 16
+    _ir_cache: "OrderedDict[str, ParsedDocument]" = OrderedDict()
+
     async def _load_ir(self, storage_object_id: str | None) -> ParsedDocument:
         from knowledge_mining.mining.contracts.storage.errors import (
             StorageObjectMissing,
@@ -154,6 +160,10 @@ class ParseResultReadService:
 
         if not storage_object_id:
             raise StorageObjectMissing("snapshot has no parse IR object")
+        cached = ParseResultReadService._ir_cache.get(storage_object_id)
+        if cached is not None:
+            ParseResultReadService._ir_cache.move_to_end(storage_object_id)
+            return cached
         record = await self._storage_objects.get(storage_object_id)
         if record is None:
             raise StorageObjectMissing(
@@ -163,10 +173,27 @@ class ParseResultReadService:
             bucket=record.bucket, object_key=record.object_key,
             version_id=record.object_version_id,
         )
-        chunks: list[bytes] = []
-        async for chunk in self._store.get_stream(location):
-            chunks.append(chunk)
-        return ParsedDocument.from_dict(json.loads(b"".join(chunks)))
+        # 批次3-问题2：磁盘直解——分块落盘后 json.load 直读文件，
+        # 消灭内存里的 chunks 列表 + b"".join 两份全量副本（原 4 份 → 2 份）。
+        import tempfile
+        import os
+        fd, tmp_path = tempfile.mkstemp(prefix=".ir-load-")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                async for chunk in self._store.get_stream(location):
+                    fh.write(chunk)
+            with open(tmp_path, "rb") as fh:
+                doc = ParsedDocument.from_dict(json.load(fh))
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        ParseResultReadService._ir_cache[storage_object_id] = doc
+        ParseResultReadService._ir_cache.move_to_end(storage_object_id)
+        while len(ParseResultReadService._ir_cache) > ParseResultReadService._IR_CACHE_MAX:
+            ParseResultReadService._ir_cache.popitem(last=False)
+        return doc
 
 
 def _level(element: Any) -> int:

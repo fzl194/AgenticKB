@@ -646,7 +646,7 @@ WITH cur AS (
             return [dict(r) for r in await cur.fetchall()]
 
     async def get_document_knowledge(
-        self, kb_id: str, document_id: str
+        self, kb_id: str, document_id: str, *, max_rows: int = 2000,
     ) -> dict[str, Any]:
         """文档当前知识：查「包含该文档的最新 validated/published build」对应的 snapshot，
         返回该 snapshot 的 segments / retrieval_units / entity_mentions / relations。
@@ -673,19 +673,28 @@ WITH cur AS (
                 return {"mined": False, "build_id": None}
             snap_id = row["document_snapshot_id"]
             build_id = row["build_id"]
+            # 批次3-问题2：四类知识读全部限量（窗口函数带出精确总数）——
+            # 几千切片的大文档不再一次整包（截断标志随响应返回前端）。
             cur = await conn.execute(
                 """SELECT segment_index, block_type, semantic_role, section_title,
-                          raw_text, normalized_text
+                          raw_text, normalized_text,
+                          COUNT(*) OVER() AS _total
                    FROM asset_raw_segments
-                   WHERE document_snapshot_id = %s ORDER BY segment_index""",
-                [snap_id],
+                   WHERE document_snapshot_id = %s ORDER BY segment_index
+                   LIMIT %s""",
+                [snap_id, max_rows + 1],
             )
-            segments = [dict(r) for r in await cur.fetchall()]
+            seg_rows = [dict(r) for r in await cur.fetchall()]
+            segments_truncated = len(seg_rows) > max_rows
+            segments_total = (seg_rows[0].get("_total", len(seg_rows)) if seg_rows else 0)
+            segments = [{k: v for k, v in r.items() if k != "_total"}
+                        for r in seg_rows[:max_rows]]
             cur = await conn.execute(
                 """SELECT unit_key, unit_type, title, text, block_type, semantic_role
                    FROM asset_retrieval_units
-                   WHERE document_snapshot_id = %s ORDER BY unit_key""",
-                [snap_id],
+                   WHERE document_snapshot_id = %s ORDER BY unit_key
+                   LIMIT %s""",
+                [snap_id, max_rows],
             )
             units = [dict(r) for r in await cur.fetchall()]
             cur = await conn.execute(
@@ -709,6 +718,8 @@ WITH cur AS (
             relations = [dict(r) for r in await cur.fetchall()]
             return {
                 "mined": True,
+                "truncated": segments_truncated,
+                "total_segments": segments_total,
                 "build_id": build_id,
                 "document_snapshot_id": snap_id,
                 "segments": segments,

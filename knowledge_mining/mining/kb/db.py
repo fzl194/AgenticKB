@@ -954,14 +954,18 @@ WITH cur AS (
                        source_raw_hash = %(hash)s, file_size = COALESCE(%(fs)s, file_size),
                        modified_at = %(ma)s,
                        content_revision = content_revision + 1,
-                       content_updated_at = %(ma)s
+                       content_updated_at = %(ca)s
                    WHERE id = %(id)s AND deleted_at IS NOT NULL
                    RETURNING id, domain, kb_id, document_key, document_name,
                              document_type, storage_path, directory_path, owner_id,
                              created_at, file_size, modified_at, storage_object_id,
                              source_raw_hash, content_revision, deleted_at""",
                 {"so": storage_object_id, "hash": source_raw_hash,
-                 "fs": file_size, "ma": modified_at or _utcnow(), "id": document_id},
+                 # modified_at 是 TEXT、content_updated_at 是 TIMESTAMPTZ——同一参数
+                 # 供两列会 AmbiguousParameter（PG 会把转型绑定到参数本身），
+                 # 必须拆成两个独立参数。
+                 "fs": file_size, "ma": modified_at or _utcnow(),
+                 "ca": modified_at or _utcnow(), "id": document_id},
             )
             row = await cur.fetchone()
             return dict(row) if row else None

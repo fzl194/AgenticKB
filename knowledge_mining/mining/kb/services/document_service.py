@@ -17,6 +17,7 @@ from typing import Any
 from psycopg.errors import UniqueViolation
 
 from knowledge_mining.mining.infra.archive_extractor import extract_archive, extract_zip
+from knowledge_mining.mining.ingestion.preprocessing import extract_chm
 from knowledge_mining.mining.infra.upload_config import UploadConfig
 from knowledge_mining.mining.contracts.file_management import (
     StorageObjectRecord,
@@ -57,6 +58,9 @@ _EXTENSION_MIME: dict[str, str] = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".csv": "text/csv",
     ".json": "application/json",
+    ".zip": "application/zip",
+    ".chm": "application/vnd.ms-htmlhelp",
+    ".hdx": "application/zip",
 }
 
 _GENERIC_MIME = {"", "application/octet-stream"}
@@ -365,12 +369,13 @@ class DocumentService:
     async def upload_zip(
         self, *, kb_id: str, owner_id: str, zip_bytes: bytes, filename: str = "upload.zip",
     ) -> list[dict[str, Any]]:
-        """旧签名（整包 bytes）薄包装——生产路由已改走 upload_zip_path。"""
+        """旧签名（整包 bytes）薄包装——生产路由已改走 upload_archive_path。"""
         with TemporaryDirectory(prefix="agentickb-kb-upload-") as temporary_dir:
             zip_path = Path(temporary_dir) / Path(filename).name
             zip_path.write_bytes(zip_bytes)
-            return await self.upload_zip_path(
-                kb_id=kb_id, owner_id=owner_id, zip_path=zip_path,
+            return await self.upload_archive_path(
+                kb_id=kb_id, owner_id=owner_id, archive_path=zip_path,
+                archive_name=filename,
             )
 
     async def upload_zip_path(
@@ -379,10 +384,29 @@ class DocumentService:
         max_member_bytes: int | None = None,
         max_members: int | None = None,
     ) -> list[dict[str, Any]]:
-        """zip 上传（P01-S1 流式）：磁盘 zip → 带额度解压 → 成员流式入库。
+        """zip 入口（兼容名）——统一转发 upload_archive_path。"""
+        return await self.upload_archive_path(
+            kb_id=kb_id, owner_id=owner_id, archive_path=zip_path,
+            archive_name=zip_path.name,
+            max_archive_bytes=max_archive_bytes,
+            max_member_bytes=max_member_bytes,
+            max_members=max_members,
+        )
 
-        解压三重额度（成员数/单成员/总量，zip-bomb 防护）；默认上限来自
-        UploadConfig（archive 500MB / file 100MB / 100 成员）。
+    async def upload_archive_path(
+        self, *, kb_id: str, owner_id: str, archive_path: Path,
+        archive_name: str | None = None,
+        max_archive_bytes: int | None = None,
+        max_member_bytes: int | None = None,
+        max_members: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """归档上传统一入口（批次2b）：.zip/.hdx/.chm 与 zip 同构处理。
+
+        - 解压按扩展分派：.zip/.hdx → zipfile（HedEx 本质是 zip 包 HTML）；
+          .chm → 库存 7z 提取器（hh.exe 回退链，容器内已有 7z）
+        - **统一以压缩包名建总文件夹**（产品文档.hdx → 「产品文档/」），
+          成员保留内部目录结构——多个包互不混
+        - 解压额度（成员数/单成员/总量）+ 成员流式入库（批次2 通道复用）
         """
         cfg = UploadConfig()
         if max_archive_bytes is None:
@@ -398,36 +422,60 @@ class DocumentService:
         await self._svc._assert_write(kb_id, owner_id)  # IDOR 防护：写权限校验（admin/owner/editor）
         # Archive extraction needs a filesystem, but it is only a transient
         # scratch space.  No extracted path is persisted in asset_documents.
+        ext = archive_path.suffix.lower()
+        archive_stem = Path(archive_name or archive_path.name).stem or "archive"
         with TemporaryDirectory(prefix="agentickb-kb-upload-") as temporary_dir:
             base = Path(temporary_dir)
-            result = await asyncio.to_thread(
-                extract_zip, zip_path, base,
-                max_members=max_members,
-                max_member_bytes=max_member_bytes,
-                max_total_bytes=max_archive_bytes,
-            )
-            if result.error:
-                raise ValueError(result.error)
+            if ext == ".chm":
+                # CHM 非 zip：走库存 7z 提取器（hh.exe 回退）。成员数/单成员
+                # 上限在入库层强制；解压总量由包体上限（≤500MB）间接约束。
+                extract_dir = base / "chm-extracted"
+                try:
+                    await asyncio.to_thread(extract_chm, archive_path, extract_dir)
+                except Exception as exc:
+                    raise ValueError(f"CHM 解压失败：{exc}") from exc
+                # rel 相对 extract_dir；full 必须以 extract_dir 为基准拼接
+                extracted_files = [
+                    p.relative_to(extract_dir).as_posix()
+                    for p in sorted(extract_dir.rglob("*")) if p.is_file()
+                ]
+                chm_base = extract_dir
+                if max_members is not None and len(extracted_files) > max_members:
+                    raise ValueError(
+                        f"CHM 成员数 {len(extracted_files)} 超过上限 {max_members}"
+                    )
+            else:
+                result = await asyncio.to_thread(
+                    extract_zip, archive_path, base,
+                    max_members=max_members,
+                    max_member_bytes=max_member_bytes,
+                    max_total_bytes=max_archive_bytes,
+                )
+                if result.error:
+                    raise ValueError(result.error)
+                extracted_files = result.extracted_files
 
-            # 先幂等建齐 zip 内子目录对应的 kb_folders（否则 UI 按 folder.path 过滤 → 列表空）
-            dir_paths = {
-                "/".join(Path(rel).parts[:-1])
-                for rel in result.extracted_files
-                if len(Path(rel).parts) > 1
-            }
-            for dp in sorted(dir_paths, key=lambda p: p.count("/")):
+            # 统一以压缩包名建总文件夹（批次2b 决策）：成员目录 = 包名/内部路径
+            all_dirs, members = set(), []
+            for rel in extracted_files:
+                parts = (archive_stem, *Path(rel).parts)
+                members.append(parts)
+                if len(parts) > 1:
+                    all_dirs.add("/".join(parts[:-1]))
+            # 先幂等建齐子目录对应的 kb_folders（否则 UI 按 folder.path 过滤 → 列表空）
+            for dp in sorted(all_dirs, key=lambda p: p.count("/")):
                 await self._folders.ensure_folder_path(kb_id=kb_id, path=dp, user_id=owner_id)
 
             docs: list[dict[str, Any]] = []
-            for rel in result.extracted_files:
-                full = (base / rel).resolve()
+            member_base = chm_base if ext == ".chm" else base
+            for rel, parts in zip(extracted_files, members):
+                full = (member_base / rel).resolve()
                 if not full.is_file():
                     continue
                 try:
                     full.relative_to(base)
                 except ValueError:
                     continue  # 解压越界，跳过
-                parts = Path(rel).parts
                 try:
                     docs.append(await self.upload_stream(
                         kb_id=kb_id, owner_id=owner_id, filename=parts[-1],

@@ -13,6 +13,6 @@ upload:
   root: ./uploads
   max_file_size: 104857600          # 100MB
   max_archive_size: 524288000       # 500MB
-  max_files_per_request: 100
+  max_files_per_request: 2000
   disk_reserve_bytes: 1073741824    # 1GB
-  archive_extensions: .zip
+  archive_extensions: .zip .hdx .chm

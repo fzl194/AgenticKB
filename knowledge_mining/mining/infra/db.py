@@ -1158,8 +1158,9 @@ class MiningRuntimeDB(_DB):
             "AND NOT EXISTS (SELECT 1 FROM mining_runs active WHERE active.domain = %s "
             "AND active.id <> %s AND active.status IN ('queued', 'running') "
             "AND active.worker_id IS NOT NULL AND active.lease_until >= NOW())",
-            # 注意必须是 list：psycopg 把 tuple 适配为 record 字面量，ANY() 会炸。
-            (domain, worker_id, lease_seconds, list(allowed_statuses), run_id, domain, domain, run_id),
+            # 参数序必须与 %s 在 SQL 文本中的出现序一致（$n 按出现序绑定）；
+            # statuses 必须是 list——psycopg 把 tuple 适配为 record 字面量。
+            (domain, worker_id, lease_seconds, run_id, domain, list(allowed_statuses), domain, run_id),
             fetch="rowcount",
         )
         return bool(count)

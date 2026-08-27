@@ -7,6 +7,9 @@ site_role 由库现查（require_admin），不靠 X-KB-Role 头。
 """
 from __future__ import annotations
 
+import asyncio
+import time
+
 from hmac import compare_digest
 from typing import Any
 
@@ -14,6 +17,39 @@ from fastapi import HTTPException, Request
 
 from knowledge_mining.mining.infra.control_plane import get_internal_verify_secret
 from knowledge_mining.mining.kb.db import KbDB
+
+
+class IdentityCache:
+    """网关身份确认缓存（批次3-问题1）。
+
+    原实现每请求一次 kb_users upsert 写——pool_max=10 下慢查询占满连接时
+    认证排队 30s 超时（PoolTimeout 实测），全站 401/500。用户行极少变化，
+    短 TTL 缓存即可；禁用即时生效由禁用端点主动 invalidate 保证（同进程）。
+    """
+
+    def __init__(self, *, ttl_seconds: float = 60.0, max_entries: int = 500) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._max_entries = max_entries
+        self._entries: dict[str, tuple[float, dict]] = {}
+        self._lock = asyncio.Lock()
+
+    async def get_user(self, db: Any, username: str) -> dict[str, Any]:
+        now = time.monotonic()
+        hit = self._entries.get(username)
+        if hit is not None and now - hit[0] < self.ttl_seconds:
+            return dict(hit[1])
+        user = await db.upsert_user_by_username(username)
+        async with self._lock:
+            self._entries[username] = (now, dict(user))
+            while len(self._entries) > self._max_entries:
+                self._entries.pop(next(iter(self._entries)))
+        return user
+
+    def invalidate(self, username: str) -> None:
+        self._entries.pop(username, None)
+
+    def size(self) -> int:
+        return len(self._entries)
 
 
 async def authenticate_request(request: Request) -> dict[str, Any]:
@@ -28,8 +64,12 @@ async def authenticate_request(request: Request) -> dict[str, Any]:
     if not compare_digest(request.headers.get("X-Internal-Auth", ""), secret):
         raise HTTPException(401, "unauthenticated")
     db = KbDB(request.app.state.pg_pool)
-    user = await db.upsert_user_by_username(username)
-    # disabled 账号即使持有有效 JWT（12h 内）也立即失效 —— 禁用要即时生效。
+    cache = getattr(request.app.state, "identity_cache", None)
+    if cache is None:
+        cache = request.app.state.identity_cache = IdentityCache()
+    user = await cache.get_user(db, username)
+    # disabled 账号即使持有有效 JWT（12h 内）也立即失效 —— 禁用要即时生效
+    # （禁用端点同进程主动 invalidate；TTL 兜底外部改库场景）。
     if user.get("status") == "disabled":
         raise HTTPException(401, "account disabled")
     return user

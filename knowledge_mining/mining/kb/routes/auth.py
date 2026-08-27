@@ -154,14 +154,20 @@ async def create_user(
 @router.patch("/users/{user_id}")
 async def update_user(
     user_id: str, body: UpdateUserReq,
+    request: Request,
     admin: dict = Depends(require_admin),
     svc: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     try:
-        return await svc.update_user(
+        updated = await svc.update_user(
             user_id=user_id, actor_id=admin["id"],
             display_name=body.display_name, site_role=body.site_role, status=body.status,
         )
+        # 禁用/改名即时生效（批次3）：主动失效身份缓存（TTL 只是兜底）
+        cache = getattr(request.app.state, "identity_cache", None)
+        if cache is not None and updated:
+            cache.invalidate(updated["username"])
+        return updated
     except (UserNotFound, InvalidRole, UserError) as exc:
         raise _map_user_error(exc) from None
 

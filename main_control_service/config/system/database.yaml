@@ -7,5 +7,5 @@ default:
   password: nis123qwe
   sslmode: disable
   gssencmode: disable
-  pool_min: 2
-  pool_max: 10
+  pool_min: 4
+  pool_max: 20

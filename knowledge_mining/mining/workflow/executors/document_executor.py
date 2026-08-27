@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from threading import Lock
@@ -13,6 +14,8 @@ from ..core import (
     OperatorWarning,
 )
 from ..execution_plan import ExecutionPlan, PlannedNode
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowRunFailed(RuntimeError):
@@ -189,7 +192,38 @@ class DocumentExecutor:
             latest = outcome
             outputs[node_id] = outcome
 
+        # BUG-3（批次1）：链走完但从未 committed 的文档（如空内容从未入暂存），
+        # 不能把 mining_run_documents 留在 processing——按 skipped 留痕。
+        self._mark_run_document_terminal(
+            latest, failed=False,
+            message="document finished without asset persistence",
+        )
         return DocumentOutcome(latest, OperatorStatus.SUCCESS)
+
+    def _mark_run_document_terminal(
+        self, state: DocumentState, *, failed: bool, message: str | None,
+    ) -> None:
+        """非 committed 文档的终态留痕（BUG-3）：经 services 注入的 sink 写
+        mining_run_documents（fail_document/skip_document），已 committed 的
+        文档由成功路径负责，不重复标记。"""
+        sink = getattr(self.runtime.services, "mark_document_outcome", None)
+        if sink is None:
+            return
+        run_document_id = getattr(state, "run_document_id", None)
+        if not run_document_id:
+            return
+        try:
+            if self.repository.document_persist_marker(run_document_id) is not None:
+                return
+            sink(
+                run_document_id,
+                "failed" if failed else "skipped",
+                message or "",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to mark terminal run document state for %s", run_document_id,
+            )
 
     def _execute_node(
         self, run_id: str, planned: PlannedNode, state: DocumentState
@@ -290,6 +324,11 @@ class DocumentExecutor:
                 return output.with_context(
                     output.context, capabilities=planned.provides
                 )
+            # BUG-3：真跳过（非空态续链）——run_doc 落 skipped 终态。
+            self._mark_run_document_terminal(
+                output, failed=False,
+                message=result.error_code or f"skipped at {planned.node_id}",
+            )
             return DocumentOutcome(
                 output,
                 OperatorStatus.SKIPPED,
@@ -303,6 +342,15 @@ class DocumentExecutor:
                 result.error_message or f"{planned.node_id} failed"
             )
         if policy is ErrorPolicy.SKIP_DOCUMENT:
+            # BUG-3：节点失败但按策略跳过该文档（如 corrupt PDF 的
+            # document_parse FAILED）——run_doc 落 failed 终态并留错误信息，
+            # 否则永滞 processing、run 计数出现黑洞。
+            self._mark_run_document_terminal(
+                output, failed=True,
+                message=result.error_message
+                or result.error_code
+                or f"{planned.node_id} failed",
+            )
             return DocumentOutcome(
                 output,
                 OperatorStatus.SKIPPED,

@@ -968,6 +968,20 @@ class _WorkflowJobServices:
         self.document_parse_service = None
         self.segment_compile_service = None
         self._object_input_services_ready = False
+        # BUG-3（批次1）：document_executor 终态留痕的 sink——失败/跳过文档的
+        # mining_run_documents 不再滞留 processing（成功路径由
+        # persist_document_assets 内的 commit_document 负责）。
+        self.mark_document_outcome = self._mark_document_outcome
+
+    def _mark_document_outcome(
+        self, run_document_id: str, status: str, message: str,
+    ) -> None:
+        if status == "failed":
+            self.tracker.fail_document(run_document_id, message or "document failed")
+        else:
+            self.tracker.skip_document(
+                run_document_id, reason="workflow_skipped", detail=message or None,
+            )
 
     @property
     def domain(self) -> str:
@@ -1503,6 +1517,12 @@ def _execute_workflow_job(
                 current_stage=row.get("current_stage") or "mining",
                 domain=row.get("domain") or domain,
             )
+            # BUG-3（批次1）：run 级失败（FAIL_FAST/逃逸异常）时，仍滞留
+            # processing 的文档一并落 failed 终态——不留计数黑洞。
+            _fail_unfinished_run_documents(
+                runtime_db, run_id,
+                f"run failed: {str(exc)[:300]}",
+            )
         raise
     finally:
         _stop_run_lease(
@@ -1510,6 +1530,23 @@ def _execute_workflow_job(
         )
         asset_db.close()
         runtime_db.close()
+
+
+def _fail_unfinished_run_documents(
+    runtime_db: MiningRuntimeDB, run_id: str, message: str,
+) -> None:
+    """把该 run 内仍 processing 的文档批量标 failed（run 已定性失败时的兜底）。"""
+    try:
+        runtime_db._execute(
+            "UPDATE mining_run_documents SET status = 'failed', "
+            "error_message = %s, finished_at = %s "
+            "WHERE run_id = %s AND status = 'processing'",
+            (message[:500], _utcnow(), run_id),
+        )
+    except Exception:
+        logger.exception(
+            "Failed to sweep unfinished run documents for run %s", run_id,
+        )
 
 
 def _check_review_gate(asset_db: AssetCoreDB, run_id: str, domain_id: str) -> str | None:

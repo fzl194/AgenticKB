@@ -51,6 +51,18 @@ class FakeAssetDB:
     def count_segments_by_snapshot(self, snapshot_id):
         return sum(row["snapshot_id"] == snapshot_id for row in self.rows["segments"])
 
+    def get_segments_by_snapshot(self, snapshot_id):
+        return [
+            row for row in self.rows["segments"]
+            if row["snapshot_id"] == snapshot_id
+        ]
+
+    def get_retrieval_units_by_snapshot(self, snapshot_id):
+        return [
+            row for row in self.rows["retrieval_units"]
+            if row["document_snapshot_id"] == snapshot_id
+        ]
+
     def insert_raw_segment(self, **kwargs):
         self.rows["segments"].append({
             "snapshot_id": kwargs["document_snapshot_id"],
@@ -265,6 +277,82 @@ def test_persist_reuses_v2_snapshot_without_creating_a_second_snapshot(
     assert asset_db.rows["embeddings"][0]["retrieval_unit_id"] == (
         asset_db.rows["retrieval_units"][0]["unit_id"]
     )
+
+
+def test_v2_pre_written_segments_still_persist_units_relations_embeddings() -> None:
+    """批次4 修复回归锁：v2 链 segment_compile 预写切片后，
+    persist_document_assets 不得因『快照已有切片』跳过检索单元/关系/向量。
+
+    事故背景：2026-08 全量基线挖掘全部『成功』但 asset_retrieval_units 恒 0 条——
+    老栅栏 count_segments==0 把 units/embeddings 插入整批挡在 else 分支外。"""
+    asset_db = FakeAssetDB()
+    # 模拟 segment_compile：快照已建、切片已预写（真实 PgSegmentStore 行形状）
+    asset_db.rows["segments"].append({
+        "snapshot_id": "snapshot-v2",
+        "segment_key": "doc:/a.md#0",
+        "id": "seg-pre-1",
+    })
+    context = complete_context().with_updates(
+        document_id="document-v2",
+        snapshot_id="snapshot-v2",
+    )
+
+    result = persist_document_assets(
+        context,
+        PipelineConfig(domain="odn", asset_db=asset_db, batch_id="batch-1"),
+        strict_embeddings=True,
+    )
+
+    # 切片不重复插（预写行原样保留，seg_ids 复用预写 id）
+    assert len(asset_db.rows["segments"]) == 1
+    assert asset_db.rows["segments"][0]["id"] == "seg-pre-1"
+    assert result.seg_ids == {"doc:/a.md#0": "seg-pre-1"}
+    # 检索单元必须落库（修复点）
+    assert [
+        row["unit_key"] for row in asset_db.rows["retrieval_units"]
+    ] == ["ru:1"]
+    assert asset_db.rows["retrieval_units"][0]["document_snapshot_id"] == (
+        "snapshot-v2"
+    )
+    # 关系必须落库（同样被老栅栏静默丢弃）
+    assert len(asset_db.rows["relations"]) == 1
+    # 向量必须落库且挂靠到本次插入的单元
+    assert len(asset_db.rows["embeddings"]) == 1
+    assert asset_db.rows["embeddings"][0]["retrieval_unit_id"] == (
+        asset_db.rows["retrieval_units"][0]["unit_id"]
+    )
+
+
+def test_persist_is_idempotent_when_units_already_persisted() -> None:
+    """重跑防护：快照已有检索单元时，不得重复插 units/relations/embeddings。"""
+    asset_db = FakeAssetDB()
+    asset_db.rows["segments"].append({
+        "snapshot_id": "snapshot-v2",
+        "segment_key": "doc:/a.md#0",
+        "id": "seg-pre-1",
+    })
+    asset_db.rows["retrieval_units"].append({
+        "document_snapshot_id": "snapshot-v2",
+        "unit_key": "ru:1",
+        "unit_id": "unit-existing",
+    })
+    asset_db.rows["embeddings"].append({
+        "retrieval_unit_id": "unit-existing"
+    })
+    context = complete_context().with_updates(
+        document_id="document-v2",
+        snapshot_id="snapshot-v2",
+    )
+
+    persist_document_assets(
+        context,
+        PipelineConfig(domain="odn", asset_db=asset_db, batch_id="batch-1"),
+        strict_embeddings=True,
+    )
+
+    assert len(asset_db.rows["retrieval_units"]) == 1
+    assert len(asset_db.rows["embeddings"]) == 1
+    assert len(asset_db.rows["relations"]) == 0
 
 
 def test_generated_segment_identity_is_reused_by_document_mentions(monkeypatch) -> None:

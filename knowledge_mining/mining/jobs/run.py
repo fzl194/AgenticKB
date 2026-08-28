@@ -2482,6 +2482,50 @@ def _domain_publish_transaction(asset_db: AssetCoreDB, domain: str):
         yield
 
 
+def _paradigm_capability_signature(
+    run_row: dict[str, Any],
+    runtime_db: MiningRuntimeDB,
+    run_id: str,
+) -> tuple[list[str] | None, bool]:
+    """从 run 的 workflow manifest 提取算子能力集与嵌入降级留痕。
+
+    返回 (capabilities, embedding_fallback)：
+    - capabilities=None → legacy run（无 manifest），assemble/validate 走降级路径
+    - embedding_fallback=True → 嵌入算子 fallback/skipped（服务不可用），
+      冻进 build.summary_json 作为『向量缺失已留痕』的证据
+    """
+    manifest = run_row.get("workflow_manifest_json")
+    if isinstance(manifest, str):
+        try:
+            manifest = json.loads(manifest)
+        except (json.JSONDecodeError, TypeError):
+            manifest = None
+    if not isinstance(manifest, dict):
+        return None, False
+    types = sorted({
+        str(node.get("type"))
+        for node in (manifest.get("nodes") or [])
+        if isinstance(node, dict) and node.get("type")
+    })
+    if not types:
+        return None, False
+    embedding_fallback = False
+    if "embedding" in types:
+        try:
+            events = runtime_db.operator_statuses_for_run(run_id)
+            embedding_fallback = any(
+                str(ev.get("operator_type")) == "embedding"
+                and str(ev.get("status")) in ("fallback", "skipped")
+                for ev in events
+            )
+        except Exception:
+            logger.warning(
+                "Cannot read node events for run %s; embedding fallback "
+                "trace defaults to False", run_id,
+            )
+    return types, embedding_fallback
+
+
 def _finalize_run(
     asset_db: AssetCoreDB,
     runtime_db: MiningRuntimeDB,
@@ -2502,8 +2546,12 @@ def _finalize_run(
     # KB 挖掘（mine_kb）写 False → 只 build 不 publish 到域级 active release，
     # 避免 B1（同域多 KB 互相 retire）。读 metadata 而非参数透传，确保 review gate
     # pause/resume 后意图不丢。/api/runs 不写该键 → 默认 True，行为不变。
-    _run_meta = (runtime_db.get_run(run_id) or {}).get("metadata_json") or {}
+    run_row = runtime_db.get_run(run_id) or {}
+    _run_meta = run_row.get("metadata_json") or {}
     publish = _run_meta.get("publish", True)
+    capabilities, embedding_fallback = _paradigm_capability_signature(
+        run_row, runtime_db, run_id,
+    )
 
     committed_count = counts["committed_count"]
     new_count = counts["new_count"]
@@ -2541,6 +2589,8 @@ def _finalize_run(
                 domain=profile.domain_id,
                 channel=channel,
                 kb_id=_run_meta.get("kb_id"),
+                capabilities=capabilities,
+                embedding_fallback=embedding_fallback,
             )
 
             # This read must see the build before the outer transaction commits.

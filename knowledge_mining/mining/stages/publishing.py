@@ -121,6 +121,8 @@ def assemble_build(
     batch_id: str | None,
     snapshot_decisions: list[dict[str, Any]],
     kb_id: str | None = None,
+    capabilities: list[str] | None = None,
+    embedding_fallback: bool = False,
 ) -> str:
     """Assemble a new build from snapshot decisions with merge semantics.
 
@@ -162,6 +164,26 @@ def assemble_build(
             action = d.get("action", "NEW")
             action_counts[action] = action_counts.get(action, 0) + 1
 
+        summary: dict[str, Any] = {
+            "snapshot_count": len([d for d in snapshot_decisions if d.get("selection_status") == "active"]),
+            "removed_count": len([d for d in snapshot_decisions if d.get("selection_status") == "removed"]),
+            "action_counts": action_counts,
+        }
+        # 批次4：把范式能力签名冻进 build——validate 据此按能力校验（只读 build 行，
+        # 不再回查 run）。legacy 调用方不传 capabilities → 不冻结 → validate 降级旧检查。
+        if capabilities is not None:
+            summary["paradigm_capabilities"] = sorted(set(capabilities))
+            summary["embedding_fallback"] = bool(embedding_fallback)
+            # 能力校验只作用于本 run 产出的快照（NEW/UPDATE/RESTORE）。
+            # 父 build carry-forward 的快照按其当时的能力集验收过，不重检——
+            # 否则旧时代的无向量快照会把新 run 的建库整个拦死。
+            summary["validated_snapshots"] = sorted({
+                str(d["document_snapshot_id"])
+                for d in snapshot_decisions
+                if d.get("selection_status") == "active"
+                and d.get("action") in ("NEW", "UPDATE", "RESTORE")
+            })
+
         asset_db.insert_build(
             build_id=build_id,
             build_code=build_code,
@@ -171,11 +193,7 @@ def assemble_build(
             source_batch_id=batch_id,
             parent_build_id=parent_build_id,
             mining_run_id=run_id,
-            summary_json={
-                "snapshot_count": len([d for d in snapshot_decisions if d.get("selection_status") == "active"]),
-                "removed_count": len([d for d in snapshot_decisions if d.get("selection_status") == "removed"]),
-                "action_counts": action_counts,
-            },
+            summary_json=summary,
             kb_id=kb_id,
         )
 
@@ -237,6 +255,16 @@ def assemble_build(
     return build_id
 
 
+def _build_summary(build: dict[str, Any]) -> dict[str, Any]:
+    summary = build.get("summary_json") or {}
+    if isinstance(summary, str):
+        try:
+            summary = json.loads(summary)
+        except json.JSONDecodeError:
+            summary = {}
+    return summary if isinstance(summary, dict) else {}
+
+
 def validate_build(
     asset_db: AssetCoreDB,
     build_id: str,
@@ -249,6 +277,10 @@ def validate_build(
     1. Build has at least one active snapshot
     2. Each active snapshot has at least one segment
     3. Incremental builds must have a valid parent build
+    4. 批次4 按范式能力校验：summary 冻结了 paradigm_capabilities 时——
+       含 retrieval_unit_build → 每个活跃快照 ≥1 检索单元；
+       含 embedding → 每个活跃快照 ≥1 向量，或 embedding_fallback 已留痕。
+       legacy build（无该字段）降级为只做上面三条，行为不变。
     """
     build = asset_db.get_build(build_id)
     if build is None:
@@ -267,12 +299,7 @@ def validate_build(
     if not active:
         if not allow_empty:
             raise ValueError(f"Build {build_id} has no active snapshots")
-        summary = build.get("summary_json") or {}
-        if isinstance(summary, str):
-            try:
-                summary = json.loads(summary)
-            except json.JSONDecodeError:
-                summary = {}
+        summary = _build_summary(build)
         if not isinstance(summary, dict) or summary.get("operation") != "withdrawal":
             raise ValueError(
                 "Empty builds are only allowed for the withdrawal operation"
@@ -284,6 +311,39 @@ def validate_build(
             raise ValueError(
                 f"Snapshot {snap['document_snapshot_id']} has no segments"
             )
+
+    summary = _build_summary(build)
+    capabilities = summary.get("paradigm_capabilities")
+    if not isinstance(capabilities, list):
+        return
+    validated = set(summary.get("validated_snapshots") or [])
+
+    def _requires_check(snap: dict[str, Any]) -> bool:
+        # 只校验本 run 产出的快照；carry-forward 的父快照按当时能力验收过。
+        return str(snap["document_snapshot_id"]) in validated
+
+    if "retrieval_unit_build" in capabilities:
+        for snap in active:
+            if not _requires_check(snap):
+                continue
+            snap_id = snap["document_snapshot_id"]
+            if asset_db.count_retrieval_units_by_snapshot(snap_id) == 0:
+                raise ValueError(
+                    f"Snapshot {snap_id} has no retrieval units "
+                    f"(paradigm requires retrieval_unit_build; "
+                    f"validated-but-unsearchable builds are rejected)"
+                )
+    if "embedding" in capabilities and not summary.get("embedding_fallback"):
+        for snap in active:
+            if not _requires_check(snap):
+                continue
+            snap_id = snap["document_snapshot_id"]
+            if asset_db.count_embeddings_by_snapshot(snap_id) == 0:
+                raise ValueError(
+                    f"Snapshot {snap_id} has no embeddings "
+                    f"(paradigm requires embedding and no fallback trace "
+                    f"is recorded; re-mine after restoring the embedding service)"
+                )
 
 
 def publish_release(

@@ -50,6 +50,21 @@ export interface KbDetail {
   deleted_at: string | null
   created_at: string
   updated_at: string
+  /** 批次4 readiness 四档（后端纯查询派生；环境异常时为 null，不阻塞详情）。 */
+  readiness?: KbReadiness | null
+}
+
+/** 检索就绪度（empty→parsed→segmented→lexical_ready→vector_ready）。 */
+export type KbReadinessLevel = 'empty' | 'parsed' | 'segmented' | 'lexical_ready' | 'vector_ready'
+
+export interface KbReadiness {
+  level: KbReadinessLevel
+  documents: number
+  segments: number
+  retrieval_units: number
+  embeddings: number
+  /** true = 嵌入服务不可用已留痕（语义检索缺失但可见，最高 lexical_ready）。 */
+  embedding_fallback: boolean
 }
 
 export interface KbMember {

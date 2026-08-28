@@ -31,6 +31,40 @@ def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+#: readiness 档位（低 → 高）。展示层按 level 索引取标签/颜色。
+READINESS_LEVELS = (
+    "empty", "parsed", "segmented", "lexical_ready", "vector_ready",
+)
+
+
+def derive_readiness_level(
+    *,
+    documents: int,
+    segments: int,
+    retrieval_units: int,
+    embeddings: int,
+    embedding_fallback: bool = False,
+) -> str:
+    """批次4 readiness 档位派生（纯函数，供 get_kb_readiness 与测试直接用）。
+
+    - empty: 连文档都还没有
+    - parsed: 有文档快照（解析完成）
+    - segmented: 快照已有切片（挖掘链已跑）
+    - lexical_ready: 有检索单元（关键词检索可命中）
+    - vector_ready: 有向量且无嵌入降级留痕（语义检索可用；fallback 留痕时
+      最高只到 lexical_ready——语义检索缺失但已显式留痕，不算静默）
+    """
+    if documents <= 0:
+        return "empty"
+    if segments <= 0:
+        return "parsed"
+    if retrieval_units <= 0:
+        return "segmented"
+    if embeddings <= 0 or embedding_fallback:
+        return "lexical_ready"
+    return "vector_ready"
+
+
 # ── 文档状态派生 SQL 片段（alias d = asset_documents）────────────────────────
 # CASE 在 SELECT；LATERAL 在 FROM。优先级：
 #   published > failed > mined(committed) > mining(pending/processing) > withdrawn(removed) > uploaded
@@ -249,19 +283,72 @@ class KbDB:
             cur = await conn.execute(
                 """INSERT INTO knowledge_bases
                      (id, domain, name, description, owner_id, visibility, status,
-                      metadata_json, created_at, updated_at)
+                      metadata_json, created_at, updated_at, mining_workflow_id)
                    VALUES
                      (%(id)s, %(dom)s, %(n)s, %(desc)s, %(own)s, %(vis)s, 'active',
-                      %(meta)s::jsonb, %(t)s, %(t)s)
+                      %(meta)s::jsonb, %(t)s, %(t)s,
+                      COALESCE(%(wf)s, 'system-full-baseline'))
                    RETURNING id, domain, name, description, owner_id, visibility,
-                             status, created_at, updated_at""",
+                             status, created_at, updated_at, mining_workflow_id""",
                 {
                     "id": _new_id(), "dom": domain, "n": name, "desc": description,
                     "own": owner_id, "vis": visibility, "meta": _json(metadata), "t": _utcnow(),
+                    "wf": (metadata or {}).get("mining_workflow_id"),
                 },
             )
             row = await cur.fetchone()
             return dict(row)  # type: ignore[arg-type]
+
+    async def get_kb_readiness(self, kb_id: str) -> dict[str, Any]:
+        """批次4 readiness 四档的纯查询派生（无 DDL）。
+
+        口径：KB 内活跃（未软删）文档的**最新快照**——与检索侧 per-document
+        最新快照语义一致。embedding_fallback 取该 KB 最新 build 的冻结签名。
+        档位：empty → parsed → segmented → lexical_ready → vector_ready。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """WITH latest AS (
+                       SELECT DISTINCT ON (l.document_id)
+                              l.document_id, l.document_snapshot_id
+                       FROM asset_document_snapshot_links l
+                       JOIN asset_documents d ON d.id = l.document_id
+                       WHERE d.kb_id = %(kb)s AND d.deleted_at IS NULL
+                       ORDER BY l.document_id, l.linked_at DESC
+                   )
+                   SELECT
+                     (SELECT COUNT(*) FROM latest) AS documents,
+                     (SELECT COUNT(*) FROM asset_raw_segments s
+                       JOIN latest ON s.document_snapshot_id = latest.document_snapshot_id) AS segments,
+                     (SELECT COUNT(*) FROM asset_retrieval_units u
+                       JOIN latest ON u.document_snapshot_id = latest.document_snapshot_id) AS retrieval_units,
+                     (SELECT COUNT(*) FROM asset_retrieval_embeddings e
+                       JOIN asset_retrieval_units u ON u.id = e.retrieval_unit_id
+                       JOIN latest ON u.document_snapshot_id = latest.document_snapshot_id) AS embeddings,
+                     (SELECT COALESCE(
+                               (b.summary_json ->> 'embedding_fallback')::boolean,
+                               false)
+                        FROM asset_builds b
+                        WHERE b.kb_id = %(kb)s
+                        ORDER BY b.created_at DESC LIMIT 1) AS embedding_fallback""",
+                {"kb": kb_id},
+            )
+            row = dict(await cur.fetchone())
+        level = derive_readiness_level(
+            documents=int(row["documents"] or 0),
+            segments=int(row["segments"] or 0),
+            retrieval_units=int(row["retrieval_units"] or 0),
+            embeddings=int(row["embeddings"] or 0),
+            embedding_fallback=bool(row["embedding_fallback"]),
+        )
+        return {
+            "level": level,
+            "documents": int(row["documents"] or 0),
+            "segments": int(row["segments"] or 0),
+            "retrieval_units": int(row["retrieval_units"] or 0),
+            "embeddings": int(row["embeddings"] or 0),
+            "embedding_fallback": bool(row["embedding_fallback"]),
+        }
 
     async def get_kb(self, kb_id: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
         clause = "" if include_deleted else " AND status = 'active'"

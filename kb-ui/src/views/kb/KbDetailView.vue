@@ -37,6 +37,28 @@
 
     <p v-if="kb?.description" class="kb-detail-view__desc">{{ kb.description }}</p>
 
+    <!-- 批次4：检索就绪度——这个库现在到底能搜什么，一眼可见 -->
+    <div v-if="readiness" class="kb-detail-view__readiness">
+      <div class="kb-detail-view__readiness-main">
+        <span class="kb-detail-view__readiness-label">检索就绪度</span>
+        <el-tag :type="readinessTagType(readiness.level)" effect="dark" size="small">
+          {{ readinessLabel(readiness.level) }}
+        </el-tag>
+        <el-tooltip
+          v-if="readiness.embedding_fallback"
+          content="嵌入服务当时不可用，向量缺失已留痕；恢复后重新挖掘可补齐语义检索"
+        >
+          <el-tag type="warning" effect="plain" size="small">向量缺失已留痕</el-tag>
+        </el-tooltip>
+      </div>
+      <div class="kb-detail-view__readiness-stats">
+        <span>文档 {{ readiness.documents }}</span>
+        <span>切片 {{ readiness.segments }}</span>
+        <span>检索单元 {{ readiness.retrieval_units }}</span>
+        <span>向量 {{ readiness.embeddings }}</span>
+      </div>
+    </div>
+
     <!-- Not found / no access -->
     <div v-if="!loading && !kb" class="kb-detail-view__missing">
       <EmptyState text="知识库不存在或无权访问" />
@@ -93,7 +115,7 @@ import KbMembersPanel from '@/components/kb/KbMembersPanel.vue'
 import KbMiningPanel from '@/components/kb/KbMiningPanel.vue'
 import KbSettingsPanel from '@/components/kb/KbSettingsPanel.vue'
 import { roleLabel, roleTagType, visibilityLabel, visibilityTagType } from '@/views/kb/kbMeta'
-import type { KbSummary } from '@/types/kb'
+import type { KbReadiness, KbReadinessLevel, KbSummary } from '@/types/kb'
 
 const props = defineProps<{ kbId: string }>()
 const router = useRouter()
@@ -101,6 +123,7 @@ const domainStore = useDomainStore()
 const kbApi = useKbApi()
 
 const kb = ref<KbSummary | null>(null)
+const readiness = ref<KbReadiness | null>(null)
 const loading = ref(false)
 const activeTab = ref<'files' | 'members' | 'mining' | 'settings'>('files')
 const miningPanelRef = ref<InstanceType<typeof KbMiningPanel> | null>(null)
@@ -113,19 +136,55 @@ const canWrite = computed(
   () => kb.value?.my_role === 'owner' || kb.value?.my_role === 'editor' || kb.value?.my_role === 'admin',
 )
 
+const READINESS_LABELS: Record<KbReadinessLevel, string> = {
+  empty: '空库',
+  parsed: '已解析',
+  segmented: '已切片',
+  lexical_ready: '关键词可搜',
+  vector_ready: '语义可搜',
+}
+
+function readinessLabel(level: KbReadinessLevel): string {
+  return READINESS_LABELS[level] ?? level
+}
+
+function readinessTagType(level: KbReadinessLevel): 'info' | 'warning' | 'success' | 'primary' {
+  if (level === 'vector_ready') return 'success'
+  if (level === 'lexical_ready') return 'primary'
+  if (level === 'segmented') return 'warning'
+  return 'info'
+}
+
 async function reload() {
   if (!domainStore.currentDomain) return
   loading.value = true
   try {
-    const all = await kbApi.listKbs(domainStore.currentDomain)
+    // 列表保底（my_role/document_count 只在列表下发）；详情并行取 readiness。
+    // 详情失败（如 404/网络抖动）不阻塞页面，readiness 静默置空。
+    const [all, detail] = await Promise.all([
+      kbApi.listKbs(domainStore.currentDomain),
+      kbApi.getKb(props.kbId).catch(() => null),
+    ])
     kb.value = all.find((k) => k.id === props.kbId) ?? null
     // 同步范式状态（列表快照 → 父组件权威 ref）
     miningWorkflowId.value = kb.value?.mining_workflow_id ?? null
+    readiness.value = detail?.readiness ?? null
   } catch (e) {
     kb.value = null
+    readiness.value = null
     ElMessage.error(await apiErrorDetail(e))
   } finally {
     loading.value = false
+  }
+}
+
+/** 挖掘跑完后切回挖掘 tab 时刷新就绪度（不重拉整页）。 */
+async function refreshReadiness() {
+  try {
+    const detail = await kbApi.getKb(props.kbId)
+    readiness.value = detail?.readiness ?? null
+  } catch {
+    readiness.value = null
   }
 }
 
@@ -143,6 +202,9 @@ function onDeleted() {
 onMounted(reload)
 watch(() => domainStore.currentDomain, reload)
 watch(() => props.kbId, reload)
+watch(activeTab, (tab) => {
+  if (tab === 'mining') refreshReadiness()
+})
 </script>
 
 <style scoped>
@@ -192,6 +254,40 @@ watch(() => props.kbId, reload)
   color: var(--kb-text-secondary);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.kb-detail-view__readiness {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+}
+
+.kb-detail-view__readiness-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-detail-view__readiness-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kb-text-secondary);
+  letter-spacing: 0.5px;
+}
+
+.kb-detail-view__readiness-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--kb-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .kb-detail-view__missing {

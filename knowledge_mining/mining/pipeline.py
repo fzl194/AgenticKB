@@ -919,6 +919,21 @@ def persist_document_assets(
                     entity_refs_json=segment.entity_refs_json,
                     metadata_json=segment.metadata_json,
                 )
+        else:
+            # v2 链（segment_compile 预写切片）或重跑：切片归切片——
+            # 只回读 id 映射，绝不因此跳过下方 units/relations 的独立栅栏。
+            persisted_segments = asset_db.get_segments_by_snapshot(snapshot_id)
+            segment_ids = {
+                str(item["segment_key"]): str(item["id"])
+                for item in persisted_segments
+            }
+
+        # 批次4 修复：检索单元不再挂在「快照无切片」栅栏下。老逻辑在
+        # segment_compile 预写切片后恒走 else 分支，units/embeddings/relations
+        # 整批静默丢弃（全量基线挖掘「成功」但 asset_retrieval_units 恒 0）。
+        # 现按「本快照是否已有检索单元」独立幂等判断：首跑必插，重跑不重插。
+        units_inserted = not asset_db.get_retrieval_units_by_snapshot(snapshot_id)
+        if units_inserted:
             for relation in ctx.relations:
                 source_id = segment_ids.get(relation.source_segment_key, "")
                 target_id = segment_ids.get(relation.target_segment_key, "")
@@ -960,12 +975,6 @@ def persist_document_assets(
             if strict_embeddings:
                 for embedding in ctx.embeddings:
                     _insert_document_embedding(asset_db, embedding, unit_ids)
-        else:
-            persisted_segments = asset_db.get_segments_by_snapshot(snapshot_id)
-            segment_ids = {
-                str(item["segment_key"]): str(item["id"])
-                for item in persisted_segments
-            }
 
         output = ctx.with_updates(
             document_id=document_id,

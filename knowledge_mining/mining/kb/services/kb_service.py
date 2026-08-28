@@ -76,6 +76,11 @@ class KbService:
         if kb is None:
             raise NotFound(kb_id)
         await self._assert_read(kb_id, user_id)
+        # 批次4：详情附 readiness 四档（纯查询派生，失败不阻塞详情本身）
+        try:
+            kb["readiness"] = await self._db.get_kb_readiness(kb_id)
+        except Exception:  # pragma: no cover - 缺表/权限等环境问题
+            kb["readiness"] = None
         return kb
 
     async def update_kb(

@@ -877,6 +877,23 @@ class AssetCoreDB(_DB):
             (document_snapshot_id,),
         )
 
+    def count_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> int:
+        row = self._fetchone(
+            "SELECT COUNT(*) AS n FROM asset_retrieval_units "
+            "WHERE document_snapshot_id = %s",
+            (document_snapshot_id,),
+        )
+        return int(row["n"]) if row else 0
+
+    def count_embeddings_by_snapshot(self, document_snapshot_id: str) -> int:
+        row = self._fetchone(
+            """SELECT COUNT(*) AS n FROM asset_retrieval_embeddings e
+               JOIN asset_retrieval_units u ON u.id = e.retrieval_unit_id
+               WHERE u.document_snapshot_id = %s""",
+            (document_snapshot_id,),
+        )
+        return int(row["n"]) if row else 0
+
     # -- retrieval embeddings --
 
     def insert_retrieval_embedding(
@@ -1328,6 +1345,14 @@ class MiningRuntimeDB(_DB):
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         return self._fetchone("SELECT * FROM mining_runs WHERE id = %s", (run_id,))
+
+    def operator_statuses_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        """(operator_type, status) 行——finalize 期按算子状态留痕用（如 embedding_fallback）。"""
+        return self._fetchall(
+            "SELECT operator_type, status FROM mining_workflow_node_events "
+            "WHERE run_id = %s",
+            (run_id,),
+        )
 
     def get_interrupted_runs(self) -> list[dict[str, Any]]:
         return self._fetchall("SELECT * FROM mining_runs WHERE status = 'interrupted' ORDER BY started_at")

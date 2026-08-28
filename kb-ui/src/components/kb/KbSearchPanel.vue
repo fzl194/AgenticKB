@@ -1,0 +1,357 @@
+<template>
+  <div class="kb-search">
+    <!-- 管线选择区：库级绑定 + 生效说明 -->
+    <div class="kb-search__pipeline">
+      <div class="kb-search__pipeline-row">
+        <span class="kb-search__label">检索范式</span>
+        <el-select
+          v-model="selectedParadigmId"
+          :disabled="!canWrite || savingBinding"
+          placeholder="跟随官方默认"
+          clearable
+          size="default"
+          class="kb-search__select"
+          @change="saveBinding"
+        >
+          <el-option
+            v-for="p in activeParadigms"
+            :key="p.id"
+            :value="p.id"
+            :label="p.name"
+          />
+        </el-select>
+        <el-tag v-if="resolveInfo" size="small" :type="sourceTagType" effect="light">
+          {{ sourceLabel }}
+        </el-tag>
+        <el-tag
+          v-if="resolveInfo?.degraded"
+          size="small" type="warning" effect="plain"
+        >库级绑定失效，已降级</el-tag>
+        <span v-if="savingBinding" class="kb-search__muted">保存中…</span>
+      </div>
+      <p class="kb-search__pipeline-hint">
+        绑定后，这个库（含 MCP 检索）默认走所选管线；清除则跟随官方默认。
+        范式的检索范围保持"留空"即可随库注入——在这里测试即真实链路。
+      </p>
+    </div>
+
+    <!-- 搜索区 -->
+    <div class="kb-search__bar">
+      <el-input
+        v-model="query"
+        size="large"
+        placeholder="输入问题，用当前管线测试这个知识库的检索…"
+        :disabled="searching"
+        clearable
+        @keyup.enter="run"
+      >
+        <template #append>
+          <el-button :loading="searching" @click="run">检索</el-button>
+        </template>
+      </el-input>
+    </div>
+
+    <!-- 生效管线 -->
+    <el-alert v-if="effective" class="kb-search__effective" :closable="false" type="info">
+      <template #title>
+        本次由「{{ effective.name }}」管线执行
+        <span class="kb-search__muted">（{{ effective.sourceLabel }} · v{{ effective.version }}）</span>
+      </template>
+    </el-alert>
+
+    <!-- 结果 -->
+    <div v-if="error" class="kb-search__error">{{ error }}</div>
+    <template v-if="items.length">
+      <div class="kb-search__meta">命中 {{ items.length }} 条</div>
+      <div class="kb-search__results">
+        <div v-for="(item, i) in items" :key="String(item.id ?? i)" class="kb-search__item">
+          <div class="kb-search__item-head">
+            <span class="kb-search__item-title">{{ itemTitle(item) || `证据 ${i + 1}` }}</span>
+            <span class="kb-search__item-score">{{ scoreOf(item) }}</span>
+          </div>
+          <p class="kb-search__item-text">{{ itemText(item) }}</p>
+          <div v-if="sourceDocName(item)" class="kb-search__item-src">来源：{{ sourceDocName(item) }}</div>
+        </div>
+      </div>
+    </template>
+    <el-empty
+      v-else-if="searched && !searching && !error"
+      :description="emptyHint"
+      :image-size="80"
+    >
+      <el-button v-if="readiness && readiness.retrieval_units === 0" text type="primary" @click="goMine">
+        去挖掘出检索单元
+      </el-button>
+    </el-empty>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import { useKbApi } from '@/api/kb'
+import { useOperatorApi } from '@/api/operator'
+import { useServingApi, type ParadigmResolveResult } from '@/api/serving'
+import { apiErrorDetail } from '@/api/proxyClient'
+import { useDomainStore } from '@/stores/domain'
+import type { KbSummary } from '@/types/kb'
+import type { ParadigmView } from '@/types/operator'
+
+const props = defineProps<{
+  kb: KbSummary
+  canWrite: boolean
+  /** 批次4 readiness：units=0 时空结果给"去挖掘"引导 */
+  readiness?: { retrieval_units: number } | null
+}>()
+const emit = defineEmits<{ updated: [] }>()
+
+const kbApi = useKbApi()
+const operatorApi = useOperatorApi()
+const servingApi = useServingApi()
+const domainStore = useDomainStore()
+
+const paradigms = ref<ParadigmView[]>([])
+const selectedParadigmId = ref<string | null>(null)
+const resolveInfo = ref<ParadigmResolveResult | null>(null)
+const savingBinding = ref(false)
+
+const query = ref('')
+const searching = ref(false)
+const searched = ref(false)
+const error = ref('')
+const items = ref<Array<Record<string, unknown>>>([])
+const effective = ref<{ name: string; version: number; sourceLabel: string } | null>(null)
+
+const activeParadigms = computed(() => paradigms.value.filter(p => p.status === 'active'))
+
+const sourceLabel = computed(() => {
+  const s = resolveInfo.value?.source
+  if (s === 'library') return '库级绑定'
+  if (s === 'official') return '官方默认'
+  return s ?? ''
+})
+const sourceTagType = computed(() =>
+  resolveInfo.value?.source === 'library' ? 'success' : 'info')
+
+const emptyHint = computed(() =>
+  props.readiness && props.readiness.retrieval_units === 0
+    ? '这个库还没有可检索的内容——先完成挖掘（全量基线），检索单元生成后即可搜索'
+    : '没有命中，换个问法或调整检索范式试试')
+
+async function reload() {
+  if (!domainStore.currentDomain) return
+  selectedParadigmId.value = props.kb.default_paradigm_id ?? null
+  try {
+    paradigms.value = await operatorApi.listParadigms()
+  } catch {
+    paradigms.value = []
+  }
+  await refreshResolve()
+}
+
+async function refreshResolve() {
+  if (!domainStore.currentDomain) return
+  try {
+    resolveInfo.value = await servingApi.resolveParadigm(
+      domainStore.currentDomain, [props.kb.id])
+  } catch {
+    resolveInfo.value = null
+  }
+}
+
+async function saveBinding(value: string | null) {
+  savingBinding.value = true
+  try {
+    await kbApi.updateKb(props.kb.id, { default_paradigm_id: value ?? null })
+    ElMessage.success(value ? '已绑定本库检索范式' : '已清除绑定，跟随官方默认')
+    emit('updated')
+    await refreshResolve()
+  } catch (e) {
+    ElMessage.error(await apiErrorDetail(e))
+    // 失败回滚选择器到库里现存值
+    selectedParadigmId.value = props.kb.default_paradigm_id ?? null
+  } finally {
+    savingBinding.value = false
+  }
+}
+
+async function run() {
+  const q = query.value.trim()
+  if (!q) return
+  const resolved = resolveInfo.value
+  if (!resolved?.bound || !resolved.paradigmId) {
+    error.value = '该知识域未配置检索范式（库级/官方默认均缺失），请联系管理员在「检索范式」页发布范式。'
+    items.value = []
+    searched.value = true
+    return
+  }
+  searching.value = true
+  error.value = ''
+  try {
+    const out = await servingApi.runParadigmSearch(resolved.paradigmId, q, {
+      domain: domainStore.currentDomain ?? undefined,
+      kbIds: [props.kb.id],
+    })
+    items.value = (out.contextPack?.items ?? []) as Array<Record<string, unknown>>
+    effective.value = {
+      name: resolved.name ?? resolved.paradigmId,
+      version: resolved.version ?? 0,
+      sourceLabel: resolved.degraded ? `${sourceLabel.value}（降级）` : sourceLabel.value,
+    }
+    searched.value = true
+  } catch (e) {
+    error.value = await apiErrorDetail(e)
+    items.value = []
+    searched.value = true
+  } finally {
+    searching.value = false
+  }
+}
+
+function goMine() {
+  // 切到挖掘 tab 由父组件处理——用路由 query 或直接提示；这里简单跳转知识库页并提示
+  ElMessage.info('请在「挖掘」页签将挖掘范式切换为 system-full-baseline 后重新挖掘')
+}
+
+const _item = (item: Record<string, unknown>, ...keys: string[]): unknown => {
+  for (const k of keys) {
+    const v = item[k]
+    if (typeof v === 'string' && v) return v
+  }
+  return ''
+}
+const itemTitle = (item: Record<string, unknown>) => _item(item, 'title', 'name')
+const itemText = (item: Record<string, unknown>) => _item(item, 'text', 'content')
+function sourceDocName(item: Record<string, unknown>): string {
+  const src = item.source as Record<string, unknown> | undefined
+  if (src && typeof src.documentName === 'string') return src.documentName
+  if (typeof item.documentName === 'string') return item.documentName
+  return ''
+}
+function scoreOf(item: Record<string, unknown>): string {
+  const s = item.score
+  return typeof s === 'number' ? s.toFixed(3) : ''
+}
+
+watch(() => props.kb.id, reload)
+watch(() => props.kb.default_paradigm_id, (v) => { selectedParadigmId.value = v ?? null })
+watch(() => domainStore.currentDomain, reload)
+onMounted(reload)
+</script>
+
+<style scoped>
+.kb-search {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.kb-search__pipeline {
+  padding: 12px 16px;
+  border: 1px solid var(--kb-border-light, var(--el-border-color-light));
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+}
+
+.kb-search__pipeline-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.kb-search__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--kb-text-secondary);
+}
+
+.kb-search__select {
+  width: 280px;
+}
+
+.kb-search__pipeline-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--kb-text-tertiary);
+}
+
+.kb-search__bar :deep(.el-input-group__append) {
+  padding: 0 6px;
+}
+
+.kb-search__effective {
+  padding: 6px 12px;
+}
+
+.kb-search__error {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--kb-danger-soft, #fef0f0);
+  color: var(--kb-danger, #f56c6c);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.kb-search__meta {
+  font-size: 12.5px;
+  color: var(--kb-text-tertiary);
+}
+
+.kb-search__results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kb-search__item {
+  padding: 12px 16px;
+  border: 1px solid var(--kb-border-light, var(--el-border-color-light));
+  border-radius: 8px;
+  background: var(--kb-bg-card, var(--el-bg-color));
+}
+
+.kb-search__item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.kb-search__item-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--kb-text-primary);
+}
+
+.kb-search__item-score {
+  font-size: 12px;
+  color: var(--kb-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.kb-search__item-text {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--kb-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.kb-search__item-src {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--kb-text-tertiary);
+}
+
+.kb-search__muted {
+  color: var(--kb-text-tertiary);
+  font-size: 12px;
+}
+</style>

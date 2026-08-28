@@ -12,12 +12,65 @@ export interface SearchOptions {
   kbIds?: string[]
 }
 
+export interface ParadigmResolveResult {
+  domain: string
+  bound: boolean
+  paradigmId?: string
+  name?: string
+  description?: string
+  version?: number
+  url?: string
+  source?: 'library' | 'official' | string
+  degraded?: boolean
+  degradedFrom?: string
+}
+
+export interface ParadigmSearchResult {
+  contextPack?: {
+    query?: { original?: string }
+    items?: Array<Record<string, unknown>>
+    sources?: Array<Record<string, unknown>>
+    [k: string]: unknown
+  }
+  [k: string]: unknown
+}
+
 export function useServingApi() {
   const client = createProxyClient('serving')
 
   return {
     async getHealth(): Promise<HealthStatus> {
       const { data } = await client.get('/actuator/health')
+      return data
+    },
+
+    /**
+     * 三层解析：这个库组合该走哪条检索范式（库级 > 官方默认）。
+     * 批次6「知识库检索 tab」与 MCP 路由共用同一判定。
+     */
+    async resolveParadigm(domain: string, kbIds?: string[]): Promise<ParadigmResolveResult> {
+      const params: Record<string, unknown> = { domain }
+      if (kbIds?.length) params.kbIds = kbIds.join(',')
+      const { data } = await client.get('/api/v1/paradigm/resolve', { params })
+      return data
+    },
+
+    /**
+     * 按范式执行检索（批次6：检索唯一入口）。kbIds 只对图内 scope 留空的范式生效
+     * ——写死范围的专属范式优先按图执行。身份由 proxyClient 注入的 X-KB-User 决定。
+     */
+    async runParadigmSearch(
+      paradigmId: string,
+      query: string,
+      options?: { domain?: string; kbIds?: string[]; debug?: boolean },
+    ): Promise<ParadigmSearchResult> {
+      const payload: Record<string, unknown> = {
+        query,
+        domain: options?.domain,
+        debug: options?.debug ?? false,
+      }
+      if (options?.kbIds?.length) payload.kbIds = options.kbIds
+      const { data } = await client.post(`/api/v1/paradigm/${paradigmId}/search`, payload)
       return data
     },
 

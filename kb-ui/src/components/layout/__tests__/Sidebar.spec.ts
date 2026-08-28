@@ -34,15 +34,13 @@ describe('Sidebar navigation', () => {
     expect(wrapper.text()).not.toContain('知识图谱')
   })
 
-  it('member only sees 概览/知识库/检索', () => {
+  it('member only sees 概览/知识库（批次6：独立检索菜单已下线）', () => {
     auth.siteRole = 'member'
     const wrapper = shallowMount(Sidebar)
     expect(wrapper.text()).toContain('概览')
     expect(wrapper.text()).toContain('知识库')
-    // 「检索测试」已改名为「检索」：「测试」是建设者的语言，与搜索前置的定位冲突。
-    // 用 /search 这个 path 断言而不是文案——「检索」是「检索范式」的子串，
-    // 只比文本的话，条目消失了也可能因为别的条目而假绿。
-    expect(wrapper.html()).toContain('/search')
+    // 批次6：检索入口收进知识库详情的「检索」tab——member 侧边栏不再有 /search。
+    expect(wrapper.html()).not.toContain('/search')
     expect(wrapper.text()).not.toContain('检索测试')
     expect(wrapper.text()).not.toContain('检索范式')
     expect(wrapper.text()).not.toContain('挖掘范式')

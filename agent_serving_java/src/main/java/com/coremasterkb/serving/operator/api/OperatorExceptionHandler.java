@@ -3,7 +3,6 @@ package com.coremasterkb.serving.operator.api;
 import com.coremasterkb.serving.operator.core.exceptions.OperatorException;
 import com.coremasterkb.serving.operator.core.exceptions.ParadigmCompileException;
 import com.coremasterkb.serving.operator.paradigm.ParadigmBadRequestException;
-import com.coremasterkb.serving.operator.paradigm.ParadigmBindingException;
 import com.coremasterkb.serving.operator.paradigm.ParadigmNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,18 +41,6 @@ public class OperatorExceptionHandler {
                 .body(Map.of("error", "paradigm_not_found", "message", safe(ex.getMessage())));
     }
 
-    /** Binding rejections carry a stable code (unknown_domain / paradigm_not_servable / ...). */
-    @ExceptionHandler(ParadigmBindingException.class)
-    public ResponseEntity<Map<String, Object>> handleBinding(ParadigmBindingException ex) {
-        log.warn("[paradigm] binding rejected: {} — {}", ex.code(), ex.getMessage());
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("error", ex.code());
-        body.put("message", safe(ex.getMessage()));
-        if (!ex.details().isEmpty()) {
-            body.put("details", ex.details());
-        }
-        return ResponseEntity.badRequest().body(body);
-    }
 
     @ExceptionHandler(ParadigmBadRequestException.class)
     public ResponseEntity<Map<String, Object>> handleBadRequest(ParadigmBadRequestException ex) {

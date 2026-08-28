@@ -78,6 +78,9 @@
           @mine-queued="onMineQueued"
         />
       </el-tab-pane>
+      <el-tab-pane label="检索" name="search">
+        <KbSearchPanel :kb="kb" :can-write="canWrite" :readiness="readiness" @updated="reload" />
+      </el-tab-pane>
       <el-tab-pane label="成员" name="members">
         <KbMembersPanel :kb-id="kbId" :can-write="canWrite" :visibility="kb?.visibility ?? 'private'" />
       </el-tab-pane>
@@ -111,6 +114,7 @@ import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import KbFileManager from '@/components/kb/KbFileManager.vue'
+import KbSearchPanel from '@/components/kb/KbSearchPanel.vue'
 import KbMembersPanel from '@/components/kb/KbMembersPanel.vue'
 import KbMiningPanel from '@/components/kb/KbMiningPanel.vue'
 import KbSettingsPanel from '@/components/kb/KbSettingsPanel.vue'
@@ -125,7 +129,7 @@ const kbApi = useKbApi()
 const kb = ref<KbSummary | null>(null)
 const readiness = ref<KbReadiness | null>(null)
 const loading = ref(false)
-const activeTab = ref<'files' | 'members' | 'mining' | 'settings'>('files')
+const activeTab = ref<'files' | 'search' | 'members' | 'mining' | 'settings'>('files')
 const miningPanelRef = ref<InstanceType<typeof KbMiningPanel> | null>(null)
 
 /** 范式状态由父组件持有（单一真相源），修复旧版「按钮读列表快照 → 误报未选范式」的 Bug A。

@@ -1,9 +1,5 @@
 package com.coremasterkb.serving.operator.paradigm;
 
-import com.coremasterkb.serving.application.KbAccessService;
-import com.coremasterkb.serving.domainpack.DomainContext;
-import com.coremasterkb.serving.domainpack.DomainPoolManager;
-import com.coremasterkb.serving.mapper.KnowledgeBaseMapper;
 import com.coremasterkb.serving.operator.paradigm.mapper.ParadigmVersionMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,47 +8,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 /**
- * Which published paradigms an anonymous, domain-only caller (MCP) can actually use — and for the
- * ones it cannot, why not.
+ * Which published paradigms are usable for retrieval — and for the ones that are not, why.
  *
- * <h2>⚠️ Connection orchestration is load-bearing</h2>
+ * <p>批次6（域绑定退役）大简化：范式跨域通用，不再按 {@code bound_domain} 过滤，也不再做
+ * 图内 KB 的匿名可读预检——MCP 自批次5 起必须持用户密钥，授权在执行时按真实身份判定，
+ * 清单不再需要预判可读性。剩余的 hidden 理由只有发布质量问题（collect 终点不可服务、
+ * current_version 悬挂），供范式管理页提示。</p>
  *
- * <p>This service reads from two databases whose {@code DomainContext} requirements are
- * <em>opposite</em>:</p>
- * <ul>
- *   <li>{@code operator_paradigm} / {@code operator_paradigm_version} live in the <b>control DB</b>
- *       and are reached through the non-routed default DataSource — {@code DomainContext} must be
- *       <b>clear</b> (see {@code ParadigmMapper}'s Javadoc).</li>
- *   <li>{@code knowledge_bases} / {@code kb_users} / {@code kb_members} live in the <b>domain DB</b>
- *       — {@code DomainContext} must be <b>set to that domain</b> (see {@code KbAccessService}'s
- *       Javadoc).</li>
- * </ul>
- *
- * <p>Getting this wrong <b>does not raise an error</b>. Every domain currently points at the same
- * physical {@code kb_db}, so a control-DB read performed with a domain set still returns rows; it
- * would only break the day someone genuinely splits the databases, long after the change that
- * caused it. {@code ParadigmService.applyBinding} carries the same warning for the write path, and
- * {@code ParadigmBindingService} solves it the same way this class does: <b>segregate the two kinds
- * of read into separate phases and never interleave them.</b></p>
- *
- * <pre>
- *   Phase 1  no DomainContext   read every published paradigm + its graph      (control DB)
- *   Phase 2  per-domain context group by domain, then verify KB readability    (domain DBs)
- *   Phase 3  no DomainContext   assemble the response
- * </pre>
- *
- * <p>Phase 2 groups by domain rather than iterating paradigm-by-paradigm so one domain costs one
- * context switch and one pool validation, however many of its paradigms need checking.</p>
- *
- * <p>Callers must invoke this with no {@code DomainContext} set; it restores that state before
- * returning.</p>
+ * <p>只读控制库：无 DomainContext 编排（原 Phase 2 域库预检已删）。</p>
  */
 @Service
 public class ParadigmCatalogService {
@@ -63,32 +29,17 @@ public class ParadigmCatalogService {
 
     /** Terminates in {@code collect} — bare candidates, evaluation-only. */
     static final String NOT_SERVABLE = "not_servable";
-    /** Scopes knowledge bases an anonymous caller cannot read. */
-    static final String KB_NOT_READABLE = "kb_not_anonymously_readable";
-    /** Scopes knowledge bases but is bound to no domain, so readability cannot be verified. */
-    static final String UNBOUND_KB_SCOPE = "unbound_kb_scope";
-    /** The domain's database could not be reached — a deployment problem, not a paradigm problem. */
-    static final String DOMAIN_UNAVAILABLE = "domain_unavailable";
     /** {@code current_version} points at a version row that does not exist. */
     static final String VERSION_MISSING = "version_missing";
 
     private final ParadigmService paradigmService;
     private final ParadigmVersionMapper versionMapper;
-    private final DomainPoolManager poolManager;
-    private final KbAccessService kbAccessService;
-    private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final ObjectMapper json = new ObjectMapper();
 
     public ParadigmCatalogService(ParadigmService paradigmService,
-                                  ParadigmVersionMapper versionMapper,
-                                  DomainPoolManager poolManager,
-                                  KbAccessService kbAccessService,
-                                  KnowledgeBaseMapper knowledgeBaseMapper) {
+                                  ParadigmVersionMapper versionMapper) {
         this.paradigmService = paradigmService;
         this.versionMapper = versionMapper;
-        this.poolManager = poolManager;
-        this.kbAccessService = kbAccessService;
-        this.knowledgeBaseMapper = knowledgeBaseMapper;
     }
 
     // =====================================================================================
@@ -96,64 +47,25 @@ public class ParadigmCatalogService {
     // =====================================================================================
 
     /**
-     * @param domainFilter keep only paradigms usable in this domain — its own, plus the
-     *                     domain-agnostic ones ({@code domain: null}). Null returns everything.
-     * @param username     {@code X-KB-User}; only used to decide how much of {@code hidden}'s
-     *                     {@code details} may be disclosed. Visibility itself is always evaluated
-     *                     <em>anonymously</em>, because that is who MCP is.
+     * @param domainFilter 兼容参数（批次6 起忽略——范式跨域通用）
+     * @param username     兼容参数（忽略——授权在执行时判定）
      */
     public Catalog build(String domainFilter, String username) {
-        // ---- Phase 1: control DB, DomainContext clear ----
-        List<Candidate> candidates = loadCandidates(domainFilter);
-        Verdict[] verdicts = new Verdict[candidates.size()];
-        Map<String, List<Integer>> byDomain = new LinkedHashMap<>();
-
-        for (int i = 0; i < candidates.size(); i++) {
-            Candidate c = candidates.get(i);
-            if (c.graph() == null) {
-                verdicts[i] = Verdict.hidden(VERSION_MISSING);
-            } else if (!ParadigmGraphs.isServable(c.graph())) {
-                verdicts[i] = Verdict.hidden(NOT_SERVABLE);
-            } else if (c.kbIds().isEmpty()) {
-                // No KB scope → resolves against the domain's active release, which any domain can
-                // do. Nothing to verify against a domain DB, so no round trip at all.
-                verdicts[i] = Verdict.VISIBLE;
-            } else if (c.domain() == null) {
-                // kb ids are unique per domain; without one there is nothing to resolve them
-                // against, and executing would be a coin flip.
-                verdicts[i] = Verdict.hidden(UNBOUND_KB_SCOPE);
-            } else {
-                byDomain.computeIfAbsent(c.domain(), d -> new ArrayList<>()).add(i);
-            }
-        }
-
-        // ---- Phase 2: domain DBs, DomainContext set per group ----
-        for (Map.Entry<String, List<Integer>> group : byDomain.entrySet()) {
-            verifyDomainGroup(group.getKey(), group.getValue(), candidates, verdicts, username);
-        }
-
-        // ---- Phase 3: assemble, DomainContext clear again ----
-        return assemble(candidates, verdicts);
-    }
-
-    // =====================================================================================
-    // Phase 1 — control DB
-    // =====================================================================================
-
-    private List<Candidate> loadCandidates(String domainFilter) {
-        List<Candidate> out = new ArrayList<>();
+        List<Entry> visible = new ArrayList<>();
+        List<Hidden> hidden = new ArrayList<>();
         for (ParadigmEntity p : paradigmService.listPublished()) {
-            String domain = blankToNull(p.getBoundDomain());
-            // A domain-agnostic paradigm (no binding) stays in a filtered listing: the caller
-            // supplies the domain at execution time, so it is usable in every one of them.
-            if (domainFilter != null && domain != null && !domainFilter.equals(domain)) {
-                continue;
-            }
             JsonNode graph = graphOf(p);
-            out.add(new Candidate(p, domain, graph,
-                    graph != null ? ParadigmGraphs.kbIdsOf(graph) : List.of()));
+            if (graph == null) {
+                hidden.add(new Hidden(p.getId(), p.getName(), VERSION_MISSING, List.of(), 0));
+            } else if (!ParadigmGraphs.isServable(graph)) {
+                hidden.add(new Hidden(p.getId(), p.getName(), NOT_SERVABLE, List.of(), 0));
+            } else {
+                visible.add(new Entry(p.getId(), p.getName(), p.getDescription(),
+                        p.getCurrentVersion()));
+            }
         }
-        return out;
+        log.debug("[paradigm/catalog] visible={} hidden={}", visible.size(), hidden.size());
+        return new Catalog(visible, hidden);
     }
 
     /**
@@ -182,186 +94,14 @@ public class ParadigmCatalogService {
     }
 
     // =====================================================================================
-    // Phase 2 — domain DBs
-    // =====================================================================================
-
-    /**
-     * Verify one domain's paradigms against that domain's database.
-     *
-     * <p>A failure here is confined to this group: one unreachable domain must not blank out the
-     * paradigms of the other three. Same reasoning as the MCP client keeping its tool set when a
-     * catalog fetch fails — a local outage should not present as a global disappearance.</p>
-     */
-    private void verifyDomainGroup(String domain, List<Integer> indexes,
-                                   List<Candidate> candidates, Verdict[] verdicts, String username) {
-        try {
-            // Build and connectivity-check the pool BEFORE setting the context, exactly as
-            // ParadigmBindingService does; otherwise an unreachable domain surfaces as an opaque
-            // mapper failure instead of domain_database_unavailable.
-            poolManager.getDataSource(domain);
-        } catch (RuntimeException e) {
-            log.warn("[paradigm/catalog] domain {} unavailable, {} paradigm(s) hidden: {}",
-                    domain, indexes.size(), e.getMessage());
-            for (int i : indexes) {
-                verdicts[i] = Verdict.hidden(DOMAIN_UNAVAILABLE);
-            }
-            return;
-        }
-
-        DomainContext.set(domain);
-        try {
-            for (int i : indexes) {
-                verdicts[i] = verifyReadable(domain, candidates.get(i).kbIds(), username);
-            }
-        } catch (RuntimeException e) {
-            log.warn("[paradigm/catalog] KB check failed for domain {}: {}", domain, e.toString());
-            for (int i : indexes) {
-                if (verdicts[i] == null) {
-                    verdicts[i] = Verdict.hidden(DOMAIN_UNAVAILABLE);
-                }
-            }
-        } finally {
-            DomainContext.clear();
-        }
-    }
-
-    /**
-     * Is every scoped KB readable anonymously?
-     *
-     * <p>The decision delegates to the very {@link KbAccessService#authorize} the retrieval path
-     * uses, with a null username standing in for MCP, so the catalog cannot drift from what
-     * execution will actually do. The mapper is queried again only on the failure path, to name the
-     * offenders for the UI.</p>
-     */
-    private Verdict verifyReadable(String domain, List<String> kbIds, String username) {
-        try {
-            kbAccessService.authorize(domain, kbIds, null);
-            return Verdict.VISIBLE;
-        } catch (IllegalArgumentException notReadable) {
-            // No identity, nothing to disclose to — and the controller drops the whole `hidden`
-            // block for such a caller anyway. Computing it would be two extra queries per hidden
-            // paradigm on MCP's polling path, thrown away at the edge.
-            if (username == null || username.isBlank()) {
-                return Verdict.hidden(KB_NOT_READABLE);
-            }
-            return Verdict.hidden(KB_NOT_READABLE, disclosableOffenders(domain, kbIds, username));
-        }
-    }
-
-    /**
-     * Which of the unreadable KBs may be named to <em>this</em> caller.
-     *
-     * <p>{@code KbAccessService} deliberately refuses to reveal whether a knowledge base exists, and
-     * serving has no authentication of its own. Listing every offending id here would hand that
-     * information to anyone who can reach the port. So the ids are filtered to what the requesting
-     * user can already see, and the rest is reported only as a count.</p>
-     *
-     * <p>Only reached for an identified caller — see {@link #verifyReadable}.</p>
-     */
-    private Disclosure disclosableOffenders(String domain, List<String> kbIds, String username) {
-        List<String> anonymouslyOk = safeAccessible(domain, kbIds, null);
-        Set<String> ok = new LinkedHashSet<>(anonymouslyOk);
-        List<String> denied = new ArrayList<>();
-        for (String id : kbIds) {
-            if (!ok.contains(id)) {
-                denied.add(id);
-            }
-        }
-        if (denied.isEmpty()) {
-            // authorize() said no but the diff says yes — a concurrent visibility change between
-            // the two reads. Report the failure without naming anything.
-            return new Disclosure(List.of(), 0);
-        }
-        List<String> visibleToUser = safeAccessible(domain, denied, username);
-        return new Disclosure(visibleToUser, denied.size() - visibleToUser.size());
-    }
-
-    /** {@code IN ()} is a syntax error in PostgreSQL, so an empty id list must never reach SQL. */
-    private List<String> safeAccessible(String domain, List<String> kbIds, String username) {
-        if (kbIds == null || kbIds.isEmpty()) {
-            return List.of();
-        }
-        List<String> rows = knowledgeBaseMapper.selectAccessibleKbIds(domain, kbIds, username);
-        return rows != null ? rows : List.of();
-    }
-
-    // =====================================================================================
-    // Phase 3 — assemble
-    // =====================================================================================
-
-    private Catalog assemble(List<Candidate> candidates, Verdict[] verdicts) {
-        List<Entry> visible = new ArrayList<>();
-        List<Hidden> hidden = new ArrayList<>();
-        for (int i = 0; i < candidates.size(); i++) {
-            Candidate c = candidates.get(i);
-            Verdict v = verdicts[i];
-            if (v != null && v.visible()) {
-                visible.add(new Entry(c.entity().getId(), c.entity().getName(),
-                        c.entity().getDescription(), c.domain(),
-                        c.entity().getCurrentVersion(), c.entity().getIsDefault()));
-            } else if (v != null) {
-                hidden.add(new Hidden(c.entity().getId(), c.entity().getName(),
-                        v.reason(), v.disclosure().details(), v.disclosure().undisclosedCount()));
-            } else {
-                // Unreachable: every candidate is either classified in phase 1 or assigned by
-                // phase 2, whose failure paths fill in the whole group. Kept as a loud default
-                // rather than a plausible-looking reason, because a wrong reason here would send
-                // whoever debugs it after the wrong thing entirely.
-                log.error("[paradigm/catalog] {} was never classified — this is a bug",
-                        c.entity().getId());
-                hidden.add(new Hidden(c.entity().getId(), c.entity().getName(),
-                        "unclassified", List.of(), 0));
-            }
-        }
-        log.debug("[paradigm/catalog] visible={} hidden={}", visible.size(), hidden.size());
-        return new Catalog(visible, hidden);
-    }
-
-    private static String blankToNull(String s) {
-        return (s == null || s.isBlank()) ? null : s;
-    }
-
-    // =====================================================================================
     // Views
     // =====================================================================================
 
-    /**
-     * @param paradigms what an anonymous MCP caller can use
-     * @param hidden    why the rest cannot be — for operators, never sent to agents
-     */
+    /** @param paradigms usable for retrieval; @param hidden why the rest are not */
     public record Catalog(List<Entry> paradigms, List<Hidden> hidden) {}
 
-    /**
-     * @param domain          the bound domain, or null when the paradigm works in any of them
-     * @param isDomainDefault whether domain-only callers already resolve to it without naming it
-     */
-    public record Entry(String id, String name, String description,
-                        String domain, int version, boolean isDomainDefault) {}
+    public record Entry(String id, String name, String description, int version) {}
 
-    /**
-     * @param details          offending kb ids the requesting user is allowed to be told about
-     * @param undisclosedCount how many more there are that they are not
-     */
     public record Hidden(String id, String name, String reason,
                          List<String> details, int undisclosedCount) {}
-
-    // ---- internals ----
-
-    private record Candidate(ParadigmEntity entity, String domain, JsonNode graph, List<String> kbIds) {}
-
-    private record Disclosure(List<String> details, int undisclosedCount) {
-        static final Disclosure NONE = new Disclosure(List.of(), 0);
-    }
-
-    private record Verdict(boolean visible, String reason, Disclosure disclosure) {
-        static final Verdict VISIBLE = new Verdict(true, null, Disclosure.NONE);
-
-        static Verdict hidden(String reason) {
-            return new Verdict(false, reason, Disclosure.NONE);
-        }
-
-        static Verdict hidden(String reason, Disclosure disclosure) {
-            return new Verdict(false, reason, disclosure);
-        }
-    }
 }

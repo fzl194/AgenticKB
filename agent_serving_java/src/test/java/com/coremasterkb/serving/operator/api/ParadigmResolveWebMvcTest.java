@@ -1,6 +1,5 @@
 package com.coremasterkb.serving.operator.api;
 
-import com.coremasterkb.serving.operator.paradigm.ParadigmBindingService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmCatalogService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmEntity;
 import com.coremasterkb.serving.operator.paradigm.ParadigmNotFoundException;
@@ -41,7 +40,6 @@ class ParadigmResolveWebMvcTest {
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new ParadigmController(
                         paradigmService,
-                        mock(ParadigmBindingService.class),
                         mock(ParadigmCatalogService.class),
                         mock(ParadigmExecutionService.class)))
                 .setControllerAdvice(new OperatorExceptionHandler())
@@ -57,7 +55,7 @@ class ParadigmResolveWebMvcTest {
         e.setDescription("ODN 生产检索链");
         e.setCurrentVersion(3);
         when(paradigmService.resolveFor("odn", null)).thenReturn(
-                new ParadigmService.Resolution(e, "domain", null));
+                new ParadigmService.Resolution(e, "official", null));
 
         mockMvc.perform(get("/api/v1/paradigm/resolve").param("domain", "odn"))
                 .andExpect(status().isOk())
@@ -66,7 +64,7 @@ class ParadigmResolveWebMvcTest {
                 .andExpect(jsonPath("$.paradigmId").value("pd-abc"))
                 .andExpect(jsonPath("$.name").value("odn-production"))
                 .andExpect(jsonPath("$.version").value(3))
-                .andExpect(jsonPath("$.source").value("domain"))
+                .andExpect(jsonPath("$.source").value("official"))
                 .andExpect(jsonPath("$.url").value("/api/v1/paradigm/pd-abc/search"));
     }
 
@@ -78,7 +76,7 @@ class ParadigmResolveWebMvcTest {
         e.setName("fallback");
         e.setCurrentVersion(1);
         when(paradigmService.resolveFor("odn", null)).thenReturn(
-                new ParadigmService.Resolution(e, "domain", "library"));
+                new ParadigmService.Resolution(e, "official", "library"));
 
         mockMvc.perform(get("/api/v1/paradigm/resolve").param("domain", "odn"))
                 .andExpect(status().isOk())

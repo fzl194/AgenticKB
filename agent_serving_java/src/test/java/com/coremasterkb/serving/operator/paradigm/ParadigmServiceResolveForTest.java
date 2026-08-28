@@ -23,7 +23,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * 阶段 A（批次5）：库为中心的四层范式解析（16 号方案 §2）。
- * library（绑定一致且可用）> domain > official；降级留痕 degradedFrom。
+ * library（绑定一致且可用）> official（批次6：域绑定退役，三层）。
  */
 @ExtendWith(MockitoExtension.class)
 class ParadigmServiceResolveForTest {
@@ -50,16 +50,15 @@ class ParadigmServiceResolveForTest {
     }
 
     @Test
-    @DisplayName("kbIds 为空：跳过 library，直接 domain 层")
+    @DisplayName("kbIds 为空：直接 official 兜底")
     void noKbIds_skipsLibrary() {
-        ParadigmEntity domainDefault = published("pd-domain");
-        when(paradigmMapper.selectDefaultByDomain("odn")).thenReturn(domainDefault);
-        lenient().when(paradigmMapper.selectById(anyString())).thenReturn(null);
+        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID))
+                .thenReturn(published(ParadigmService.OFFICIAL_DEFAULT_ID));
 
         ParadigmService.Resolution r = service.resolveFor("odn", List.of());
 
         assertThat(r).isNotNull();
-        assertThat(r.source()).isEqualTo("domain");
+        assertThat(r.source()).isEqualTo("official");
         assertThat(r.degradedFrom()).isNull();
         verify(knowledgeBaseMapper, never()).selectDefaultParadigmIds(anyString(), anyList());
     }
@@ -70,7 +69,6 @@ class ParadigmServiceResolveForTest {
         when(knowledgeBaseMapper.selectDefaultParadigmIds("odn", List.of("kb1", "kb2")))
                 .thenReturn(List.of("pd-lib"));
         when(paradigmMapper.selectById("pd-lib")).thenReturn(published("pd-lib"));
-        lenient().when(paradigmMapper.selectDefaultByDomain("odn")).thenReturn(published("pd-domain"));
 
         ParadigmService.Resolution r = service.resolveFor("odn", List.of("kb1", "kb2"));
 
@@ -80,53 +78,55 @@ class ParadigmServiceResolveForTest {
     }
 
     @Test
-    @DisplayName("库级绑定不一致（两个不同范式）→ 降级 domain，degradedFrom=library")
+    @DisplayName("库级绑定不一致（两个不同范式）→ 降级 official，degradedFrom=library")
     void inconsistentLibraryBindingDegradesToDomain() {
         when(knowledgeBaseMapper.selectDefaultParadigmIds("odn", List.of("kb1", "kb2")))
                 .thenReturn(List.of("pd-a", "pd-b"));
-        when(paradigmMapper.selectDefaultByDomain("odn")).thenReturn(published("pd-domain"));
+        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID))
+                .thenReturn(published(ParadigmService.OFFICIAL_DEFAULT_ID));
 
         ParadigmService.Resolution r = service.resolveFor("odn", List.of("kb1", "kb2"));
 
-        assertThat(r.source()).isEqualTo("domain");
+        assertThat(r.source()).isEqualTo("official");
         assertThat(r.degradedFrom()).isEqualTo("library");
     }
 
     @Test
-    @DisplayName("库级绑定的范式已归档 → 降级 domain，degradedFrom=library")
+    @DisplayName("库级绑定的范式已归档 → 降级 official，degradedFrom=library")
     void archivedLibraryParadigmDegrades() {
         when(knowledgeBaseMapper.selectDefaultParadigmIds("odn", List.of("kb1")))
                 .thenReturn(List.of("pd-lib"));
         ParadigmEntity archived = published("pd-lib");
         archived.setStatus("archived");
         when(paradigmMapper.selectById("pd-lib")).thenReturn(archived);
-        when(paradigmMapper.selectDefaultByDomain("odn")).thenReturn(published("pd-domain"));
+        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID))
+                .thenReturn(published(ParadigmService.OFFICIAL_DEFAULT_ID));
 
         ParadigmService.Resolution r = service.resolveFor("odn", List.of("kb1"));
 
-        assertThat(r.source()).isEqualTo("domain");
+        assertThat(r.source()).isEqualTo("official");
         assertThat(r.degradedFrom()).isEqualTo("library");
     }
 
     @Test
-    @DisplayName("库全部未绑定 → 无降级标记，直接 domain")
+    @DisplayName("库全部未绑定 → 无降级标记，直接 official")
     void unboundLibrariesGoStraightToDomain() {
         when(knowledgeBaseMapper.selectDefaultParadigmIds("odn", List.of("kb1", "kb2")))
                 .thenReturn(List.of());
-        when(paradigmMapper.selectDefaultByDomain("odn")).thenReturn(published("pd-domain"));
+        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID))
+                .thenReturn(published(ParadigmService.OFFICIAL_DEFAULT_ID));
 
         ParadigmService.Resolution r = service.resolveFor("odn", List.of("kb1", "kb2"));
 
-        assertThat(r.source()).isEqualTo("domain");
+        assertThat(r.source()).isEqualTo("official");
         assertThat(r.degradedFrom()).isNull();
     }
 
     @Test
-    @DisplayName("domain 与库级皆无 → official 兜底")
+    @DisplayName("official 可用即兜底")
     void officialIsTheLastRung() {
         when(knowledgeBaseMapper.selectDefaultParadigmIds("odn", List.of("kb1")))
                 .thenReturn(List.of());
-        when(paradigmMapper.selectDefaultByDomain("odn")).thenReturn(null);
         when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID))
                 .thenReturn(published(ParadigmService.OFFICIAL_DEFAULT_ID));
 
@@ -141,7 +141,6 @@ class ParadigmServiceResolveForTest {
         when(knowledgeBaseMapper.selectDefaultParadigmIds("odn", List.of("kb1")))
                 .thenReturn(List.of("pd-lib"));   // 有绑定但范式查不到 → 降级
         when(paradigmMapper.selectById("pd-lib")).thenReturn(null);
-        when(paradigmMapper.selectDefaultByDomain("odn")).thenReturn(null);
         when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID)).thenReturn(null);
 
         assertThat(service.resolveFor("odn", List.of("kb1"))).isNull();

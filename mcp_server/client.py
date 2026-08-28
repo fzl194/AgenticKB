@@ -294,15 +294,8 @@ def _fetch_catalog(*, force: bool = False) -> list[dict] | None:
 
 
 def _for_domain(entries: list[dict], domain: str | None) -> list[dict]:
-    """Entries usable in this domain: its own, plus the domain-agnostic ones.
-
-    Filtering here rather than server-side keeps one cache serving every domain. Offering an agent
-    a paradigm bound to a different domain would only earn it a ``paradigm_domain_mismatch`` — a
-    choice that cannot work is worse than no choice at all.
-    """
-    if domain is None:
-        return list(entries)
-    return [e for e in entries if not e.get("domain") or e.get("domain") == domain]
+    """批次6：域绑定退役——范式跨域通用，目录不再按域过滤（domain 参数兼容保留）。"""
+    return list(entries)
 
 
 def _select_paradigm(named: str, domain: str) -> dict:

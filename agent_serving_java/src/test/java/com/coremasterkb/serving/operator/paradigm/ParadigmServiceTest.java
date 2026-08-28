@@ -10,7 +10,6 @@ import com.coremasterkb.serving.operator.registry.OperatorRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InOrder;
 
 import java.util.List;
 
@@ -123,36 +122,8 @@ class ParadigmServiceTest {
      * come first — this is the "A is default → make B default" case that a single-paradigm test
      * would never catch.
      */
-    @Test
-    void claimingDefaultClearsThePreviousHolderFirst() {
-        when(paradigmMapper.selectById("pd-b")).thenReturn(entity("pd-b", VALID_GRAPH, 1));
 
-        service.applyBinding("pd-b", "odn", true);
 
-        InOrder order = inOrder(paradigmMapper);
-        order.verify(paradigmMapper).clearDefaultForDomain("odn");
-        order.verify(paradigmMapper).updateBinding("pd-b", "odn", true);
-    }
-
-    @Test
-    void bindingWithoutDefaultLeavesTheExistingDefaultAlone() {
-        when(paradigmMapper.selectById("pd-c")).thenReturn(entity("pd-c", VALID_GRAPH, 1));
-
-        service.applyBinding("pd-c", "odn", false);
-
-        verify(paradigmMapper, never()).clearDefaultForDomain(anyString());
-        verify(paradigmMapper).updateBinding("pd-c", "odn", false);
-    }
-
-    @Test
-    void unbindingNeverTouchesTheDomainDefault() {
-        when(paradigmMapper.selectById("pd-d")).thenReturn(entity("pd-d", VALID_GRAPH, 1));
-
-        service.applyBinding("pd-d", null, false);
-
-        verify(paradigmMapper, never()).clearDefaultForDomain(anyString());
-        verify(paradigmMapper).updateBinding("pd-d", null, false);
-    }
 
     @Test
     void getOrThrowThrowsForMissingId() {

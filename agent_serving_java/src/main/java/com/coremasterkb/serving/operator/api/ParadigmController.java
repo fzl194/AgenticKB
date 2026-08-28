@@ -1,7 +1,5 @@
 package com.coremasterkb.serving.operator.api;
 
-import com.coremasterkb.serving.operator.paradigm.ParadigmBindingException;
-import com.coremasterkb.serving.operator.paradigm.ParadigmBindingService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmCatalogService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmEntity;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
@@ -24,17 +22,14 @@ import java.util.Map;
 public class ParadigmController {
 
     private final ParadigmService paradigmService;
-    private final ParadigmBindingService bindingService;
     private final ParadigmCatalogService catalogService;
     private final ParadigmExecutionService executionService;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public ParadigmController(ParadigmService paradigmService,
-                              ParadigmBindingService bindingService,
                               ParadigmCatalogService catalogService,
                               ParadigmExecutionService executionService) {
         this.paradigmService = paradigmService;
-        this.bindingService = bindingService;
         this.catalogService = catalogService;
         this.executionService = executionService;
     }
@@ -162,49 +157,14 @@ public class ParadigmController {
     /**
      * Publish: compile-validate the draft, snapshot it as a new immutable version, activate it.
      *
-     * <p>Body may carry {@code {domain, setDefault}} to bind in the same call ("publish and it is
-     * live for MCP"). The binding is applied <em>after</em> the publish commits and is not part of
-     * its transaction — binding validation reads the domain DB while publishing writes the control
-     * DB, and one transaction cannot span both (see {@link ParadigmBindingService}). So a rejected
-     * binding leaves the paradigm published-but-unbound, reported as {@code bindingError}; retry
-     * with {@code PUT /{id}/binding} once fixed.</p>
+     * <p>批次6：域绑定退役——body 的 {@code {domain, setDefault}} 同步绑定与
+     * {@code PUT/DELETE /{id}/binding} 端点已移除（范式跨域通用，18 号方案 §1.3）。
+     * 发布即全域可用；库级绑定在知识库侧（default_paradigm_id）管理。</p>
      */
     @PostMapping("/{id}/publish")
     public Map<String, Object> publish(@PathVariable String id, @RequestBody(required = false) JsonNode body) {
         String createdBy = ParadigmRequests.text(body, "createdBy");
-        Map<String, Object> view = new LinkedHashMap<>(versionView(paradigmService.publish(id, createdBy)));
-
-        String domain = ParadigmRequests.text(body, "domain");
-        if (domain != null) {
-            boolean setDefault = body != null && body.hasNonNull("setDefault")
-                    && body.get("setDefault").asBoolean();
-            try {
-                view.put("binding", bindingView(bindingService.bind(id, domain, setDefault)));
-            } catch (ParadigmBindingException e) {
-                Map<String, Object> err = new LinkedHashMap<>();
-                err.put("error", e.code());
-                err.put("message", e.getMessage());
-                if (!e.details().isEmpty()) err.put("details", e.details());
-                view.put("bindingError", err);
-            }
-        }
-        return view;
-    }
-
-    // ---- domain binding ------------------------------------------------------------------
-
-    /** Bind a published paradigm to a domain. Body: {@code {domain, isDefault?}}. */
-    @PutMapping("/{id}/binding")
-    public Map<String, Object> bind(@PathVariable String id, @RequestBody JsonNode body) {
-        boolean isDefault = body != null && body.hasNonNull("isDefault")
-                && body.get("isDefault").asBoolean();
-        return paradigmView(bindingService.bind(id, ParadigmRequests.text(body, "domain"), isDefault));
-    }
-
-    /** Remove a paradigm's domain binding. It stays callable by id, just unmatched. */
-    @DeleteMapping("/{id}/binding")
-    public Map<String, Object> unbind(@PathVariable String id) {
-        return paradigmView(bindingService.unbind(id));
+        return new LinkedHashMap<>(versionView(paradigmService.publish(id, createdBy)));
     }
 
     @PostMapping("/{id}/rollback")
@@ -282,8 +242,6 @@ public class ParadigmController {
         m.put("description", e.getDescription());
         m.put("version", e.getCurrentVersion());
         m.put("url", "/api/v1/paradigm/" + e.getId() + "/search");
-        m.put("boundDomain", e.getBoundDomain());
-        m.put("isDefault", e.getIsDefault());
         return m;
     }
 
@@ -297,16 +255,6 @@ public class ParadigmController {
         m.put("draftGraph", parseOrNull(e.getDraftGraphJson()));
         m.put("createdAt", e.getCreatedAt());
         m.put("updatedAt", e.getUpdatedAt());
-        m.putAll(bindingView(e));
-        return m;
-    }
-
-    /** The binding triple, shared by paradigmView and the publish-with-binding response. */
-    private Map<String, Object> bindingView(ParadigmEntity e) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("boundDomain", e.getBoundDomain());
-        m.put("isDefault", e.getIsDefault());
-        m.put("boundAt", e.getBoundAt());
         return m;
     }
 

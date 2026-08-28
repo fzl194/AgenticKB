@@ -199,17 +199,6 @@ def test_a_freshly_published_paradigm_forces_a_refresh_before_being_declared_unk
     assert "error" not in out
 
 
-def test_domain_mismatch_names_both_domains(monkeypatch, calls):
-    """Executing it would fail deep inside scope_resolve as kb_not_found — a misleading error."""
-    install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, CCN_ONLY)), calls)
-
-    out = mcp_client.search_knowledge(q(domain="odn", paradigm="核心网配置"), ident(), [])
-
-    assert out["error"] == "paradigm_domain_mismatch"
-    assert "cloud_core_network" in out["message"]
-    assert "odn" in out["message"]
-    assert executed_paradigm(calls) is None
-
 
 def test_catalog_down_passes_an_id_through_but_rejects_a_name(monkeypatch, calls):
     install(monkeypatch, backend(catalog=httpx.Response(503, text="down")), calls)
@@ -260,14 +249,15 @@ def test_the_list_is_attached_to_errors_too(monkeypatch, calls):
     assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]
 
 
-def test_the_list_is_filtered_to_this_domain(monkeypatch, calls):
-    """Offering a paradigm bound elsewhere would only earn a paradigm_domain_mismatch."""
+def test_the_list_is_no_longer_domain_filtered(monkeypatch, calls):
+    """批次6：域绑定退役——范式跨域通用，清单全量列出。"""
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, CCN_ONLY, ANY_DOMAIN)), calls)
 
     out = mcp_client.search_knowledge(q(domain="odn"), ident(), [])
 
     assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == [
         "ODN 拓扑排障",
+        "核心网配置",
         "通用检索",
     ]
 

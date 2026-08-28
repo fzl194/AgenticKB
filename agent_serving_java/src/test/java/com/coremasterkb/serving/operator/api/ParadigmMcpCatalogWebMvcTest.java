@@ -1,6 +1,5 @@
 package com.coremasterkb.serving.operator.api;
 
-import com.coremasterkb.serving.operator.paradigm.ParadigmBindingService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmCatalogService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,10 +40,10 @@ class ParadigmMcpCatalogWebMvcTest {
 
     private static final ParadigmCatalogService.Catalog CATALOG = new ParadigmCatalogService.Catalog(
             List.of(new ParadigmCatalogService.Entry(
-                    "pd-abc", "ODN 拓扑排障", "查 ODN 拓扑与端口", "odn", 3, true)),
+                    "pd-abc", "ODN 拓扑排障", "查 ODN 拓扑与端口", 3)),
             List.of(new ParadigmCatalogService.Hidden(
-                    "pd-xyz", "内部资料检索", "kb_not_anonymously_readable",
-                    List.of("kb-3f2a"), 1)));
+                    "pd-xyz", "内部资料检索", "not_servable",
+                    List.of(), 0)));
 
     @BeforeEach
     void setUp() {
@@ -54,7 +53,6 @@ class ParadigmMcpCatalogWebMvcTest {
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new ParadigmController(
                         paradigmService,
-                        mock(ParadigmBindingService.class),
                         catalogService,
                         mock(ParadigmExecutionService.class)))
                 .setControllerAdvice(new OperatorExceptionHandler())
@@ -82,14 +80,12 @@ class ParadigmMcpCatalogWebMvcTest {
     }
 
     @Test
-    @DisplayName("identified caller gets hidden with its reasons")
+    @DisplayName("identified caller gets hidden with its reasons (publish-quality only)")
     void identifiedCallerGetsHidden() throws Exception {
         mockMvc.perform(get("/api/v1/paradigm/mcp-catalog").header("X-KB-User", "admin"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.hidden[0].id").value("pd-xyz"))
-                .andExpect(jsonPath("$.hidden[0].reason").value("kb_not_anonymously_readable"))
-                .andExpect(jsonPath("$.hidden[0].details[0]").value("kb-3f2a"))
-                .andExpect(jsonPath("$.hidden[0].undisclosedCount").value(1));
+                .andExpect(jsonPath("$.hidden[0].reason").value("not_servable"));
 
         verify(catalogService).build(isNull(), eq("admin"));
     }
@@ -112,13 +108,11 @@ class ParadigmMcpCatalogWebMvcTest {
     }
 
     @Test
-    @DisplayName("the entry carries what an agent needs to choose: name, description, domain")
+    @DisplayName("the entry carries what an agent needs to choose: name, description, version")
     void entryShapeIsAgentFacing() throws Exception {
         mockMvc.perform(get("/api/v1/paradigm/mcp-catalog"))
                 .andExpect(jsonPath("$.paradigms[0].name").value("ODN 拓扑排障"))
                 .andExpect(jsonPath("$.paradigms[0].description").value("查 ODN 拓扑与端口"))
-                .andExpect(jsonPath("$.paradigms[0].domain").value("odn"))
-                .andExpect(jsonPath("$.paradigms[0].version").value(3))
-                .andExpect(jsonPath("$.paradigms[0].isDomainDefault").value(true));
+                .andExpect(jsonPath("$.paradigms[0].version").value(3));
     }
 }

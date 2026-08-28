@@ -13,7 +13,7 @@ import java.util.Set;
  * which knowledge bases it scopes to, and whether its result can be served to a caller.
  *
  * <p><b>Why this class exists.</b> Both walks previously existed in duplicate — bind-time
- * validation ({@code ParadigmBindingService}) and drill-down scope resolution
+ * drill-down scope resolution
  * ({@code ScopeResolver}) each carried their own copy — and they had already drifted: only the
  * former normalized the kbIds it collected. The drift was invisible because
  * {@code KbAccessService.authorize} re-normalizes its input, so both happened to behave the same;

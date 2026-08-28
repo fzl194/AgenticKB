@@ -117,31 +117,20 @@ public class ParadigmService {
     }
 
     /**
-     * The paradigm a domain-only caller (MCP) should use, or null when the domain has none.
-     *
-     * <p>"No binding" is a normal state, not an error — callers fall back to {@code /api/v1/search}.
-     * Returning null rather than throwing is what lets that stay distinguishable from a genuine
-     * failure at the HTTP layer.</p>
-     */
-    public ParadigmEntity resolveDefaultForDomain(String domain) {
-        if (domain == null || domain.isBlank()) {
-            return null;
-        }
-        return paradigmMapper.selectDefaultByDomain(domain.trim());
-    }
+    // ---- 阶段 A：三层解析（library > official）与官方默认 seeding ----------------------
+    // 批次6：域绑定退役（用户拍板"范式跨域通用"）——domain 层从解析链移除，
+    // selectDefaultByDomain/applyBinding 随之删除；002 DDL 的 bound_domain/is_default
+    // 列保留不动（存量零负担，代码不再读写）。
 
-    // ---- 阶段 A：四层解析（library > domain > official）与官方默认 seeding ---------------
-
-    /** 解析结果：{@code source} ∈ library|domain|official；降级时附来源层。 */
+    /** 解析结果：{@code source} ∈ library|official；库级降级时附来源层。 */
     public record Resolution(ParadigmEntity paradigm, String source, String degradedFrom) {}
 
     /**
-     * 库为中心的四层范式解析（16 号方案 §2）。调用方（resolve 端点/MCP 路由）传目标库
-     * 列表；kbIds 为空 = 未指定库，直接走领域默认。
+     * 库为中心的三层范式解析（18 号方案 §1.3）。kbIds 为空 = 未指定库，直接官方默认。
      *
      * <p>库级仅当目标库绑定<b>一致</b>（DISTINCT 恰好一个）且该范式可用时生效；绑定不一致
-     * 或范式失效 → 降级领域默认（degradedFrom=library），领域也没有 → 官方默认。全空 →
-     * null（调用方明确报"未配置检索范式"，不再回落 legacy）。</p>
+     * 或范式失效 → 降级官方默认（degradedFrom=library）。全空 → null（调用方明确报
+     * "未配置检索范式"，不回落 legacy）。</p>
      */
     public Resolution resolveFor(String domain, List<String> kbIds) {
         boolean libraryEligible = kbIds != null && !kbIds.isEmpty();
@@ -154,26 +143,17 @@ public class ParadigmService {
                 }
             }
             if (!defaults.isEmpty()) {
-                // 有库级绑定但不可用（归档/未发布）或绑定不一致：降级，但要留痕。
-                Resolution lower = resolveDomainThenOfficial(domain);
-                return (lower == null)
-                        ? null
-                        : new Resolution(lower.paradigm(), lower.source(), "library");
+                // 有库级绑定但不可用（归档/未发布）或绑定不一致：降级官方默认，留痕。
+                ParadigmEntity o = officialDefault();
+                return (o == null) ? null : new Resolution(o, "official", "library");
             }
         }
-        return resolveDomainThenOfficial(domain);
+        ParadigmEntity fallback = officialDefault();
+        return (fallback == null) ? null : new Resolution(fallback, "official", null);
     }
 
-    private Resolution resolveDomainThenOfficial(String domain) {
-        ParadigmEntity d = usable(resolveDefaultForDomain(domain));
-        if (d != null) {
-            return new Resolution(d, "domain", null);
-        }
-        ParadigmEntity o = usable(paradigmMapper.selectById(OFFICIAL_DEFAULT_ID));
-        if (o != null) {
-            return new Resolution(o, "official", null);
-        }
-        return null;
+    private ParadigmEntity officialDefault() {
+        return usable(paradigmMapper.selectById(OFFICIAL_DEFAULT_ID));
     }
 
     /** 可用 = 已发布（status=active）且有当前版本；不可用（含 null 入参）返回 null。 */
@@ -271,29 +251,6 @@ public class ParadigmService {
         getVersionOrThrow(id, version);
         paradigmMapper.updatePublish(id, version, "active");
         log.info("[paradigm] rolled back {} to version {}", id, version);
-        return getOrThrow(id);
-    }
-
-    /**
-     * Write a paradigm's domain binding. Clears the domain's previous default first when claiming
-     * the default slot — the reverse order violates {@code uq_paradigm_domain_default} (23505).
-     *
-     * <p><b>Callers must have cleared {@code DomainContext} before invoking this.</b> The
-     * transaction manager sits on the {@code @Primary} routing DataSource, so it binds a connection
-     * based on whatever domain the thread carried when the transaction opened — with a domain set,
-     * these control-DB writes would land in that domain's database instead. In production every
-     * domain currently points at the same physical {@code kb_db}, so the mistake would not raise an
-     * error, it would silently write to the wrong logical store. All validation that needs a domain
-     * connection therefore happens in {@link ParadigmBindingService} <em>before</em> this call.</p>
-     */
-    @Transactional
-    public ParadigmEntity applyBinding(String id, String domain, boolean isDefault) {
-        getOrThrow(id);
-        if (isDefault && domain != null) {
-            paradigmMapper.clearDefaultForDomain(domain);
-        }
-        paradigmMapper.updateBinding(id, domain, isDefault);
-        log.info("[paradigm] bound {} → domain={} default={}", id, domain, isDefault);
         return getOrThrow(id);
     }
 

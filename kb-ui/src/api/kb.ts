@@ -10,6 +10,7 @@ import type { ParseResult } from '@/api/mining'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
   KbOverview, KbRunRecord, KbStats, KbSummary, KbUpdateBody, KbUserCandidate,
+  McpAccessRotateResult, McpAccessStatus,
   DocumentKnowledge,
 } from '@/types/kb'
 
@@ -64,6 +65,24 @@ export function useKbApi() {
 
     async deleteKb(kbId: string): Promise<void> {
       await client.delete(`/api/kb/${kbId}`)
+    },
+
+    // ── MCP 接入（阶段 A：一人一钥 + 开放库清单）──
+    async getMcpAccess(domain: string): Promise<McpAccessStatus> {
+      const { data } = await client.get('/api/kb/users/me/mcp-access', { params: { domain } })
+      return extractOne<McpAccessStatus>(data)
+    },
+
+    /** 生成/轮换密钥：旧钥立即失效；明文仅本次响应返回。 */
+    async rotateMcpKey(): Promise<McpAccessRotateResult> {
+      const { data } = await client.post('/api/kb/users/me/mcp-access/rotate')
+      return extractOne<McpAccessRotateResult>(data)
+    },
+
+    /** 全量覆盖开放库勾选（空数组=清空）。 */
+    async putMcpOpenKbs(kbIds: string[]): Promise<{ open_kb_ids: string[] }> {
+      const { data } = await client.put('/api/kb/users/me/mcp-access/open-kbs', { kb_ids: kbIds })
+      return extractOne<{ open_kb_ids: string[] }>(data)
     },
 
     // ── 成员 ──

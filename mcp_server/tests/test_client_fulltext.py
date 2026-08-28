@@ -14,6 +14,11 @@ import pytest
 from pydantic import ValidationError
 
 from mcp_server import client as mcp_client
+from mcp_server.identity import Identity
+
+
+def ident() -> Identity:
+    return Identity(username="alice", user_id="u-1", open_kbs=({"id": "kb-1", "name": "基站手册库"},))
 from mcp_server.schemas import FullTextInput, SegmentRef
 
 BASE = mcp_client.BACKEND_URL
@@ -65,7 +70,6 @@ def install(monkeypatch, handler, calls):
     monkeypatch.setattr(
         mcp_client, "_client", httpx.Client(transport=httpx.MockTransport(recording))
     )
-    monkeypatch.setattr(mcp_client, "PARADIGM_ROUTING", True)
     monkeypatch.setattr(mcp_client, "RAW_FILE_BASE_URL", "")
 
 
@@ -103,7 +107,7 @@ def test_lookup_uses_the_same_paradigm_the_search_used(monkeypatch, calls):
         calls,
     )
 
-    out = mcp_client.get_segment_fulltext(refs("seg-1"))
+    out = mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert paths(calls) == ["/api/v1/paradigm/resolve", "/api/v1/segments/fulltext"]
     payload = json.loads(calls[1].content)
@@ -130,7 +134,8 @@ def test_window_granularity_is_forwarded(monkeypatch, calls):
             refs=[SegmentRef(type="raw_segment", id="seg-1")],
             granularity="window",
             window_radius=3,
-        )
+        ),
+        ident(),
     )
 
     payload = json.loads(calls[1].content)
@@ -168,22 +173,10 @@ def test_unbound_domain_sends_no_paradigm(monkeypatch, calls):
         calls,
     )
 
-    mcp_client.get_segment_fulltext(refs("seg-1"))
+    mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert "paradigm_id" not in json.loads(calls[1].content)
 
-
-def test_routing_disabled_skips_resolve_entirely(monkeypatch, calls):
-    install(
-        monkeypatch,
-        route(resolve=None, fulltext=httpx.Response(200, json=FULLTEXT_BODY)),
-        calls,
-    )
-    monkeypatch.setattr(mcp_client, "PARADIGM_ROUTING", False)
-
-    mcp_client.get_segment_fulltext(refs("seg-1"))
-
-    assert paths(calls) == ["/api/v1/segments/fulltext"]
 
 
 def test_resolve_failure_still_looks_up_rather_than_erroring(monkeypatch, calls):
@@ -197,10 +190,10 @@ def test_resolve_failure_still_looks_up_rather_than_erroring(monkeypatch, calls)
         calls,
     )
 
-    out = mcp_client.get_segment_fulltext(refs("seg-1"))
+    out = mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert "paradigm_id" not in json.loads(calls[1].content)
-    assert out["_retrieval"]["engine"] == "legacy"
+    assert out["_retrieval"]["engine"] == "none"
 
 
 # ── error handling ───────────────────────────────────────────────────────
@@ -209,7 +202,7 @@ def test_resolve_failure_still_looks_up_rather_than_erroring(monkeypatch, calls)
 def test_empty_refs_never_reaches_the_backend(monkeypatch, calls):
     install(monkeypatch, route(resolve=None, fulltext=None), calls)
 
-    out = mcp_client.get_segment_fulltext(FullTextInput(domain="odn", refs=[]))
+    out = mcp_client.get_segment_fulltext(FullTextInput(domain="odn", refs=[]), ident())
 
     assert out["error"] == "refs_required"
     assert calls == []
@@ -225,7 +218,7 @@ def test_backend_error_is_reported_not_raised(monkeypatch, calls):
         calls,
     )
 
-    out = mcp_client.get_segment_fulltext(refs("seg-1"))
+    out = mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert out["error"] == "HTTP 404"
     assert "kb_not_found" in out["raw"]
@@ -239,7 +232,7 @@ def test_transport_error_is_reported_not_raised(monkeypatch, calls):
 
     install(monkeypatch, handler, calls)
 
-    out = mcp_client.get_segment_fulltext(refs("seg-1"))
+    out = mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert "connection refused" in out["error"]
 
@@ -254,7 +247,7 @@ def test_non_json_response_is_reported(monkeypatch, calls):
         calls,
     )
 
-    out = mcp_client.get_segment_fulltext(refs("seg-1"))
+    out = mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert out["error"] == "invalid_json_response"
 
@@ -273,7 +266,7 @@ def test_no_raw_file_link_unless_a_reachable_base_url_is_configured(monkeypatch,
         calls,
     )
 
-    out = mcp_client.get_segment_fulltext(refs("seg-1"))
+    out = mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert "rawFileUrl" not in out["items"][0]["segments"][0]
 
@@ -289,7 +282,7 @@ def test_raw_file_link_added_when_configured(monkeypatch, calls):
     )
     monkeypatch.setattr(mcp_client, "RAW_FILE_BASE_URL", "https://kb.example.com")
 
-    out = mcp_client.get_segment_fulltext(refs("seg-1"))
+    out = mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert out["items"][0]["segments"][0]["rawFileUrl"] == (
         "https://kb.example.com/api/v1/documents/doc-7/raw?domain=odn"
@@ -317,7 +310,7 @@ def test_no_link_for_a_document_without_an_original_file(monkeypatch, calls):
     )
     monkeypatch.setattr(mcp_client, "RAW_FILE_BASE_URL", "https://kb.example.com")
 
-    out = mcp_client.get_segment_fulltext(refs("seg-1"))
+    out = mcp_client.get_segment_fulltext(refs("seg-1"), ident())
 
     assert "rawFileUrl" not in out["items"][0]["segments"][0]
 
@@ -340,7 +333,7 @@ def test_a_miss_passes_through_untouched(monkeypatch, calls):
         calls,
     )
 
-    out = mcp_client.get_segment_fulltext(refs("seg-gone"))
+    out = mcp_client.get_segment_fulltext(refs("seg-gone"), ident())
 
     assert out["items"][0]["found"] is False
     assert out["items"][0]["reason"] == "out_of_scope"

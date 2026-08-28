@@ -70,29 +70,41 @@ public class ParadigmController {
     }
 
     /**
-     * Auto-match lookup for domain-only callers (MCP): which paradigm should this domain use?
+     * Auto-match lookup for callers (MCP): which paradigm should this search use?
+     *
+     * <p>阶段 A 四层判定（16 号方案 §2）：目标库库级绑定一致 → library；否则领域默认 →
+     * domain；否则官方默认 → official；全无 → {@code bound:false}（调用方明确报错，MCP
+     * 不再回落 legacy）。{@code kbIds} 可选：不传 = 未指定库，跳过 library 层。</p>
      *
      * <p>Returns 200 in both cases — {@code {"bound":true,...}} or {@code {"bound":false}}. An
      * unbound domain is a normal state, not an error; if it 404'd, a caller could not tell it apart
-     * from a network failure or a wrong URL, and would have to treat "fall back to the legacy
-     * pipeline" and "the service is broken" identically.</p>
+     * from a network failure or a wrong URL, and would have to treat "no paradigm configured"
+     * and "the service is broken" identically.</p>
      *
      * <p>Mapped above {@code /{id}} deliberately: a literal segment outranks a path variable in
      * Spring's pattern comparator, so this never gets swallowed as {@code id="resolve"}. Pinned by
      * {@code ParadigmResolveWebMvcTest}.</p>
      */
     @GetMapping("/resolve")
-    public Map<String, Object> resolve(@RequestParam String domain) {
-        ParadigmEntity e = paradigmService.resolveDefaultForDomain(domain);
+    public Map<String, Object> resolve(
+            @RequestParam String domain,
+            @RequestParam(required = false) List<String> kbIds) {
+        ParadigmService.Resolution r = paradigmService.resolveFor(domain, kbIds);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("domain", domain);
-        m.put("bound", e != null);
-        if (e != null) {
+        m.put("bound", r != null);
+        if (r != null) {
+            ParadigmEntity e = r.paradigm();
             m.put("paradigmId", e.getId());
             m.put("name", e.getName());
             m.put("description", e.getDescription());
             m.put("version", e.getCurrentVersion());
             m.put("url", "/api/v1/paradigm/" + e.getId() + "/search");
+            m.put("source", r.source());
+            if (r.degradedFrom() != null) {
+                m.put("degraded", true);
+                m.put("degradedFrom", r.degradedFrom());
+            }
         }
         return m;
     }

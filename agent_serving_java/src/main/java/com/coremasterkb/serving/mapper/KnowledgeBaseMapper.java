@@ -27,4 +27,13 @@ public interface KnowledgeBaseMapper {
             @Param("domain") String domain,
             @Param("kbIds") List<String> kbIds,
             @Param("username") String username);
+
+    /**
+     * 阶段 A：目标库各自绑定的库级默认检索范式（DISTINCT，排除 NULL）。
+     * 返回恰好一个值 = 目标库库级绑定一致 → 范式跟随库走；多个值 = 绑定不一致，
+     * 调用方降级到领域/官方默认。
+     */
+    List<String> selectDefaultParadigmIds(
+            @Param("domain") String domain,
+            @Param("kbIds") List<String> kbIds);
 }

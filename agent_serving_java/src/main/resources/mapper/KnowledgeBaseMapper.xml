@@ -31,4 +31,18 @@
               )
     </select>
 
+    <!-- 阶段 A：库级默认检索范式绑定（09_kb_default_paradigm.sql 加列）。DISTINCT 排除 NULL：
+         恰好一行 = 绑定一致；多行 = 不一致（调用方降级）；零行 = 全部未绑定。 -->
+    <select id="selectDefaultParadigmIds" resultType="java.lang.String">
+        SELECT DISTINCT kb.default_paradigm_id
+        FROM knowledge_bases kb
+        WHERE kb.status = 'active'
+          AND kb.domain = #{domain}
+          AND kb.default_paradigm_id IS NOT NULL
+          AND kb.id IN
+          <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">
+              #{kbId}
+          </foreach>
+    </select>
+
 </mapper>

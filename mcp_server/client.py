@@ -1,10 +1,11 @@
 """HTTP client for the knowledge base backend.
 
-Routes each search to the paradigm bound to its domain, falling back to the legacy pipeline when
-the domain has no binding. See ``docs/mcp-paradigm-routing-design.md``.
+阶段 A（批次5）最终形态路由：库为中心的四层解析（显式范式 > 库级绑定 > 领域默认 >
+官方默认），无 legacy 回落——resolve 无果直接报"该域未配置检索范式"。所有调用携带
+用户身份（X-KB-User），授权按密钥用户实时判定（16 号方案）。
 
-Not a pure passthrough any more: the two backends return different envelopes, so responses are
-normalized to one shape before they reach the agent (:func:`_normalize_paradigm_body`).
+Not a pure passthrough: the paradigm backend's envelope is normalized to the search shape
+before it reaches the agent (:func:`_normalize_paradigm_body`).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from urllib.parse import quote
 
 import httpx
 
+from mcp_server.identity import Identity
 from mcp_server.schemas import (
     FullTextInput,
     HealthResult,
@@ -30,15 +32,8 @@ SEARCH_TIMEOUT = float(os.environ.get("SEARCH_TIMEOUT", "120.0"))
 
 # The resolve lookup is a single indexed row in the control DB, over localhost in the deployed
 # container. Kept short on purpose: it must never be the reason a search times out — if it is slow
-# or unreachable we want to give up quickly and serve the query on the legacy pipeline.
+# or unreachable we want to give up quickly and report the configuration gap.
 RESOLVE_TIMEOUT = float(os.environ.get("RESOLVE_TIMEOUT", "5.0"))
-
-_FALSEY = {"0", "false", "no", "off", ""}
-
-#: Kill switch back to plain passthrough, mirroring MINING_RUN_SUBMISSION_ENGINE=legacy on the
-#: mining side. The other way to roll back needs no restart at all: clear the domain's
-#: is_default binding and the next call resolves to nothing and falls back on its own.
-PARADIGM_ROUTING = os.environ.get("MCP_PARADIGM_ROUTING", "1").strip().lower() not in _FALSEY
 
 FULLTEXT_TIMEOUT = float(os.environ.get("FULLTEXT_TIMEOUT", "30.0"))
 
@@ -100,12 +95,12 @@ def health_check() -> HealthResult:
         )
 
 
-def search_knowledge(inp: SearchInput) -> dict:
-    """Search the domain's knowledge — via a named paradigm, the domain's default, or the legacy
-    pipeline.
+def search_knowledge(inp: SearchInput, identity: Identity, kb_ids: list[str]) -> dict:
+    """Search the domain's knowledge — 库为中心四层路由（16 号方案 §2）。
 
-    Always returns the same envelope regardless of which backend served it; ``_retrieval`` says
-    which one did and how it was picked.
+    显式范式 > 库级绑定一致 > 领域默认 > 官方默认；全无 → 明确报错（不回落 legacy）。
+    Always returns the same envelope; ``_retrieval`` says which paradigm served it,
+    how it was picked (selected_by), and whether it degraded from a higher rung.
     """
     ignored = _ignored_args(inp)
 
@@ -114,15 +109,23 @@ def search_knowledge(inp: SearchInput) -> dict:
             target = _select_paradigm(inp.paradigm.strip(), inp.domain)
         except _SelectionError as err:
             return err.envelope(inp.domain)
-        return _search_via_paradigm(target, inp, ignored, "explicit")
+        return _search_via_paradigm(target, inp, identity, kb_ids, ignored, "explicit")
 
-    target = _resolve_paradigm(inp.domain) if PARADIGM_ROUTING else None
-    if target is not None:
-        return _search_via_paradigm(target, inp, ignored, "domain_default")
-    return _search_via_legacy(inp, ignored)
+    resolved = _resolve_paradigm(inp.domain, kb_ids)
+    if resolved is None:
+        return {
+            "error": "no_paradigm_configured",
+            "message": (
+                f"知识域 {inp.domain!r} 没有可用的检索范式（库级/领域/官方默认均未配置）。"
+                "请联系管理员在范式管理中绑定默认范式。"
+            ),
+            "_retrieval": _meta(None, ignored, inp.domain, selected_by="unresolved"),
+        }
+    target, source = resolved
+    return _search_via_paradigm(target, inp, identity, kb_ids, ignored, source)
 
 
-def get_segment_fulltext(inp: FullTextInput) -> dict:
+def get_segment_fulltext(inp: FullTextInput, identity: Identity) -> dict:
     """POST /api/v1/segments/fulltext — the uncompressed text behind search-result ids.
 
     Routed through the *same* paradigm the search used, by resolving the domain's binding again.
@@ -157,10 +160,12 @@ def get_segment_fulltext(inp: FullTextInput) -> dict:
         target = {"paradigmId": inp.paradigm_id.strip()}
         payload["paradigm_id"] = target["paradigmId"]
     else:
-        target = _resolve_paradigm(inp.domain) if PARADIGM_ROUTING else None
-        if target is not None:
+        resolved = _resolve_paradigm(inp.domain, None)
+        if resolved is not None:
+            target, _source = resolved
             payload["paradigm_id"] = target["paradigmId"]
         else:
+            target = None
             logger.info(
                 "fulltext for domain=%r resolved no paradigm; looking in the active release. "
                 "If the search that produced these ids ran on a bound paradigm, they will not be "
@@ -172,6 +177,7 @@ def get_segment_fulltext(inp: FullTextInput) -> dict:
         resp = _client.post(
             f"{BACKEND_URL}/api/v1/segments/fulltext",
             json=payload,
+            headers=_identity_headers(identity),
             timeout=FULLTEXT_TIMEOUT,
         )
     except httpx.HTTPError as exc:
@@ -374,35 +380,35 @@ def _match(entries: list[dict], named: str) -> dict | None:
 # ── paradigm routing ─────────────────────────────────────────────────────
 
 
-def _resolve_paradigm(domain: str) -> dict | None:
-    """Which paradigm serves this domain, or None to use the legacy pipeline.
+def _identity_headers(identity: Identity) -> dict[str, str]:
+    """X-KB-User 透传：serving 按密钥用户实时授权（private 库对 owner/member 可见）。"""
+    return {"X-KB-User": identity.username}
 
-    Deliberately uncached. The lookup is one indexed row over localhost, negligible next to a
-    120s search budget, and paying it per call is what makes "publish, and MCP uses it on the very
-    next query" true without having to explain a staleness window.
 
-    Never raises: if the lookup fails the search still runs, just on the legacy pipeline. It does
-    warn, though — a silent degrade is how ``LlmClient.submit_task`` returning None turned into a
-    whole pipeline quietly doing nothing.
+def _resolve_paradigm(domain: str, kb_ids: list[str] | None) -> tuple[dict, str] | None:
+    """四层解析（库级 > 领域 > 官方默认）：返回 (target, source) 或 None（全无）。
+
+    kb_ids 非空时 serving 会尝试 library 层（目标库绑定一致才生效）；返回的 source 供
+    `_retrieval.selected_by` 与 degraded 留痕。Deliberately uncached——resolve 决定"哪条
+    管线回答"，陈旧的答案就是错误的答案。
     """
+    params: dict = {"domain": domain}
+    if kb_ids:
+        params["kbIds"] = ",".join(kb_ids)
     try:
         resp = _client.get(
             f"{BACKEND_URL}/api/v1/paradigm/resolve",
-            params={"domain": domain},
+            params=params,
             timeout=RESOLVE_TIMEOUT,
         )
         if resp.status_code != 200:
             logger.warning(
-                "paradigm resolve for domain=%r returned HTTP %d; using the legacy pipeline",
-                domain,
-                resp.status_code,
+                "paradigm resolve for domain=%r returned HTTP %d", domain, resp.status_code
             )
             return None
         data = resp.json()
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning(
-            "paradigm resolve for domain=%r failed (%s); using the legacy pipeline", domain, exc
-        )
+        logger.warning("paradigm resolve for domain=%r failed (%s)", domain, exc)
         return None
 
     if not data.get("bound"):
@@ -410,25 +416,35 @@ def _resolve_paradigm(domain: str) -> dict | None:
     if not data.get("paradigmId"):
         logger.warning("paradigm resolve for domain=%r said bound but named no paradigm", domain)
         return None
-    return data
+    source = str(data.get("source") or "domain")
+    if data.get("degraded"):
+        source = f"{source}(degraded_from_{data.get('degradedFrom')})"
+    return data, source
 
 
 def _search_via_paradigm(
-    target: dict, inp: SearchInput, ignored: list[str], selected_by: str
+    target: dict,
+    inp: SearchInput,
+    identity: Identity,
+    kb_ids: list[str],
+    ignored: list[str],
+    selected_by: str,
 ) -> dict:
-    """POST /api/v1/paradigm/{id}/search.
+    """POST /api/v1/paradigm/{id}/search（带用户身份与请求级库范围）。
 
-    An execution failure here is NOT retried on the legacy pipeline. Falling back would hide a
-    broken bound paradigm indefinitely and silently answer from an engine the operator did not
-    configure. Only a failure to *resolve* falls back — there, no choice has been made yet.
+    An execution failure here is NOT retried anywhere else. Falling back would hide a broken
+    bound paradigm indefinitely and silently answer from an engine the operator did not choose.
     """
     paradigm_id = target["paradigmId"]
-    payload = {"query": inp.query, "domain": inp.domain, "debug": inp.debug}
+    payload: dict = {"query": inp.query, "domain": inp.domain, "debug": inp.debug}
+    if kb_ids:
+        payload["kbIds"] = kb_ids
 
     try:
         resp = _client.post(
             f"{BACKEND_URL}/api/v1/paradigm/{paradigm_id}/search",
             json=payload,
+            headers=_identity_headers(identity),
             timeout=SEARCH_TIMEOUT,
         )
     except httpx.HTTPError as exc:
@@ -457,36 +473,6 @@ def _search_via_paradigm(
                 "_retrieval": _meta(target, ignored, inp.domain, selected_by=selected_by)}
 
     return _normalize_paradigm_body(body, target, ignored, inp.domain, selected_by)
-
-
-def _search_via_legacy(inp: SearchInput, ignored: list[str]) -> dict:
-    """POST /api/v1/search — the original passthrough, response shape untouched."""
-    payload: dict = {"query": inp.query, "domain": inp.domain, "debug": inp.debug}
-    if inp.scope:
-        payload["scope"] = inp.scope
-    if inp.entities:
-        payload["entities"] = [e.model_dump() for e in inp.entities]
-
-    try:
-        resp = _client.post(f"{BACKEND_URL}/api/v1/search", json=payload, timeout=SEARCH_TIMEOUT)
-        if resp.status_code != 200:
-            logger.warning(
-                "search returned HTTP %d for query=%r", resp.status_code, inp.query[:80]
-            )
-            return {
-                "error": f"HTTP {resp.status_code}",
-                "raw": resp.text[:500],
-                "_retrieval": _meta(None, ignored, inp.domain, selected_by="fallback"),
-            }
-        body = resp.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("search failed: %s", exc)
-        return {"error": str(exc),
-                "_retrieval": _meta(None, ignored, inp.domain, selected_by="fallback")}
-
-    if isinstance(body, dict):
-        body["_retrieval"] = _meta(None, ignored, inp.domain, selected_by="fallback")
-    return body
 
 
 # ── response normalization ───────────────────────────────────────────────
@@ -573,7 +559,7 @@ def _meta(
     have nothing to correct towards.
     """
     if target is None:
-        meta: dict = {"engine": "legacy"}
+        meta: dict = {"engine": "none"}
     else:
         meta = {
             "engine": "paradigm",

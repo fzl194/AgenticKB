@@ -1,19 +1,22 @@
-"""FastMCP server — tool definitions; instructions carry the full usage guide."""
+"""FastMCP server — tool definitions; instructions carry the full usage guide.
+
+阶段 A（批次5）：强制用户密钥鉴权（无钥/错钥一律拒绝，无匿名模式）；检索以库为中心
+——开放 1 个库时连库名都不用传，范式跟随库绑定自动走。
+"""
 
 from __future__ import annotations
 
 import os
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from mcp_server import __version__
 from mcp_server.client import get_segment_fulltext as _get_segment_fulltext
 from mcp_server.client import health_check as _health_check
 from mcp_server.client import search_knowledge as _search_knowledge
+from mcp_server.identity import IdentityError, require_identity, resolve_kb_ids
 from mcp_server.schemas import (
-    EntityRef,
     FullTextInput,
-    HealthResult,
     SearchInput,
     SegmentRef,
 )
@@ -21,15 +24,15 @@ from mcp_server.schemas import (
 mcp = FastMCP(
     "multi-domain-knowledge",
     instructions="""\
-你是多领域知识证据检索服务。
+你是多领域知识证据检索服务（用户级接入：调用必须携带 Bearer 密钥）。
 
 使用 search_knowledge 检索指定知识域中的证据。每次调用都必须显式指定 domain，
 不得使用隐式默认领域，也不得根据问题内容擅自猜测领域。如果无法确定 domain，
 先要求调用者明确选择知识域。
 
-同一知识域下可能有多套检索范式（各自擅长的问题类型不同）。**不确定时不要指定
-paradigm**——先按默认检索一次，结果里的 `_retrieval.available_paradigms` 会列出
-还有哪些可选；若这次结果不理想，第二次调用再指名其中一个。
+知识库范围由密钥主人配置（开放哪些库）：只开放一个库时不必传 kb_names，直接检索
+即走该库及其绑定的检索范式；开放多个库时可传 kb_names 缩小范围，不传则检索全部
+开放库。检索范式不需要指定——它跟随知识库绑定自动选择。
 
 search_knowledge 返回的证据文本是压缩过的。需要准确引用条款、参数或步骤原文时，
 用 get_segment_fulltext 取回完整版本再作答——不要依据被截断的文本推测缺失内容。
@@ -44,6 +47,17 @@ search_knowledge 返回的证据文本是压缩过的。需要准确引用条款
 )
 
 
+def _identity(ctx: Context):
+    """强制鉴权：取不到请求头（非 HTTP 传输）与无钥/错钥同样拒绝。"""
+    try:
+        headers = ctx.request_context.request.headers
+    except Exception:
+        headers = None
+    if headers is None:
+        raise IdentityError("MCP 接入仅支持 HTTP 传输，且必须携带 Bearer 密钥。")
+    return require_identity(headers)
+
+
 # ── Tools ────────────────────────────────────────────────────────────────
 
 
@@ -56,47 +70,48 @@ search_knowledge 返回的证据文本是压缩过的。需要准确引用条款
 
 @mcp.tool()
 def search_knowledge(
+    ctx: Context,
     query: str,
     domain: str,
+    kb_names: list[str] | None = None,
     paradigm: str | None = None,
-    scope: dict | None = None,
-    entities: list[dict] | None = None,
     debug: bool = False,
 ) -> dict:
-    """按指定知识域检索知识证据。
+    """按指定知识域检索知识证据（以密钥主人的开放库为范围）。
 
-    检索策略由检索范式决定：不指定 paradigm 时用该知识域的默认范式（未绑定的域走默认
-    检索管线）。返回结果里的 `_retrieval` 说明本次由哪条引擎、以何种方式选中的，并列出
-    该知识域下还有哪些范式可用。
+    检索范围与管线都是自动的：范围 = 密钥主人开放的库（只开放一个库时不传 kb_names
+    即可）；管线 = 目标库绑定的检索范式（未绑定时按 领域默认 → 官方默认 兜底）。
+    返回结果里的 `_retrieval` 说明本次由哪条管线、以何种方式选中（selected_by），库级
+    绑定不可用时会有 degraded 留痕。
 
     Args:
         query: 用户原问题。
         domain: 必填知识域标识，例如 civil_engineering 或 odn。
-        paradigm: 指定检索范式，取 `_retrieval.available_paradigms` 里的 name（也接受
-            范式 id）。**不确定就别传**——先用默认范式检索一次，看返回的可选列表，
-            结果不理想再指名重试。指定了不存在的范式会直接报错并列出可选项，不会静默
-            改用别的范式。
-        scope: 产品、对象或场景等附加约束。**当前不影响检索结果**：后端检索管线不消费
-            该字段，传入只会在 `_retrieval.ignored_args` 中回报。
-        entities: 已识别实体列表，每项包含 name，可选 type/normalized_name。
-            **当前同样不影响检索结果**——实体由后端查询理解自行抽取。
+        kb_names: 可选，知识库名称列表，用于在密钥主人开放的多个库中缩小范围。
+            不传 = 检索全部开放库；传了未开放的库名会直接报错并列出当前开放清单。
+            密钥主人只开放了一个库时无需传。
+        paradigm: 一般不需要传——范式跟随知识库绑定自动选择。仅在明确要用同域下另一条
+            已发布范式时按名指定（取 `_retrieval.available_paradigms` 里的 name）；
+            指定不存在的范式会报错并列出可选项，不会静默改用别的范式。
         debug: 是否返回检索过程诊断信息。
     """
-    entity_refs = [EntityRef(**e) for e in entities] if entities else None
+    identity = _identity(ctx)
+    kb_ids = resolve_kb_ids(identity, kb_names)
 
     inp = SearchInput(
         query=query,
         domain=domain,
         paradigm=paradigm,
-        scope=scope,
-        entities=entity_refs,
+        scope=None,
+        entities=None,
         debug=debug,
     )
-    return _search_knowledge(inp)
+    return _search_knowledge(inp, identity, kb_ids)
 
 
 @mcp.tool()
 def get_segment_fulltext(
+    ctx: Context,
     domain: str,
     refs: list[dict],
     granularity: str = "segment",
@@ -122,7 +137,7 @@ def get_segment_fulltext(
         paradigm_id: **把产生这些证据的那次 search_knowledge 结果里
             `_retrieval.paradigm_id` 的值原样传回来。** 不同范式对应不同的语料范围，
             用错范围会把全部条目报成 `found=false`（看起来像内容被重挖，实际是查错了
-            地方）。省略则按该知识域的默认范式查——仅当那次检索也没指定 paradigm 时
+            地方）。省略则按该知识域的默认范式查——仅当那次检索也没指定范式时
             才是对的。
 
     Returns:
@@ -131,6 +146,7 @@ def get_segment_fulltext(
         `segments` 按原文顺序排列，`role` 为 `target` 的是命中片段，`before`/`after`
         是上下文。`segments[].documentName` / `kbId` 可用于标注出处。
     """
+    identity = _identity(ctx)
     inp = FullTextInput(
         domain=domain,
         refs=[SegmentRef(**r) for r in refs],
@@ -138,4 +154,4 @@ def get_segment_fulltext(
         window_radius=window_radius,
         paradigm_id=paradigm_id,
     )
-    return _get_segment_fulltext(inp)
+    return _get_segment_fulltext(inp, identity)

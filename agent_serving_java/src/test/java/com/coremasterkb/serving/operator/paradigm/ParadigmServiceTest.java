@@ -53,7 +53,8 @@ class ParadigmServiceTest {
         };
         OperatorRegistry registry = new OperatorRegistry(List.of(seed, new CollectOperator()));
         ParadigmCompiler compiler = new ParadigmCompiler(registry);
-        service = new ParadigmService(paradigmMapper, versionMapper, compiler);
+        service = new ParadigmService(paradigmMapper, versionMapper, compiler,
+                mock(com.coremasterkb.serving.mapper.KnowledgeBaseMapper.class));
     }
 
     @Test

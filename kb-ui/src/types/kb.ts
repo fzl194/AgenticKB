@@ -32,6 +32,8 @@ export interface KbSummary {
   visibility: KbVisibility
   /** 选定的挖掘范式（workflow id）。后端 list_visible 已下发。 */
   mining_workflow_id: string | null
+  /** 阶段 A：库级默认检索范式（serving operator_paradigm id）。null = 跟随领域默认。 */
+  default_paradigm_id?: string | null
   created_at: string
   my_role: KbMyRole
   document_count: number
@@ -122,6 +124,8 @@ export interface KbUpdateBody {
   visibility?: KbVisibility
   /** 选/换挖掘范式。传 null 清除绑定。 */
   mining_workflow_id?: string | null
+  /** 阶段 A：库级默认检索范式。null = 清除（跟随领域默认）。 */
+  default_paradigm_id?: string | null
 }
 
 export interface KbMineResult {
@@ -316,4 +320,23 @@ export interface KbStats {
   /** 只含非零类型；前端按拿到的键渲染，不假定 unit_type 全集。 */
   retrieval_unit_types: Record<string, number>
   mining_trend: KbMiningTrendPoint[]
+}
+
+
+/** 阶段 A：用户级 MCP 接入（一人一钥 + 开放库清单）。 */
+export interface McpAccessStatus {
+  configured: boolean
+  key_prefix?: string
+  status?: string
+  created_at?: string
+  last_used_at?: string | null
+  rotated_at?: string
+  open_kb_ids: string[]
+}
+
+export interface McpAccessRotateResult {
+  /** 明文密钥——仅轮换响应出现一次，界面展示后不再可取。 */
+  key: string
+  key_prefix: string
+  rotated_at: string
 }

@@ -38,6 +38,7 @@ from knowledge_mining.mining.kb.routes.documents import router as kb_documents_r
 from knowledge_mining.mining.kb.routes.mining import router as kb_mining_router
 from knowledge_mining.mining.kb.routes.folders import router as kb_folders_router
 from knowledge_mining.mining.kb.routes.auth import router as kb_auth_router
+from knowledge_mining.mining.kb.routes.mcp_access import router as kb_mcp_access_router
 from knowledge_mining.mining.kb.routes.overview import router as kb_overview_router
 from knowledge_mining.mining.workflow.repositories.global_workflow_repository import (
     GlobalWorkflowRepository,
@@ -238,6 +239,7 @@ def create_app() -> FastAPI:
     # /api/kb/{kb_id} 抢先匹配（GET /api/kb/users 被当成 kb_id="users" → 404）。
     # 任何新增的 /api/kb/<字面量> 路由都得挂在这一段里，别追加到 kbs.py 末尾。
     app.include_router(kb_auth_router)
+    app.include_router(kb_mcp_access_router)
     app.include_router(kb_overview_router)
     app.include_router(kb_router)
     app.include_router(kb_documents_router)

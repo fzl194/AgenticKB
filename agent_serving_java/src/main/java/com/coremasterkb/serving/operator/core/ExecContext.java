@@ -24,6 +24,7 @@ public final class ExecContext {
     private final boolean debug;
     private final String username;
     private volatile String query;
+    private volatile List<String> requestKbIds;
     private final Map<String, Object> attributes = new ConcurrentHashMap<>();
     private final List<NodeTrace> nodeTraces = new CopyOnWriteArrayList<>();
 
@@ -43,6 +44,16 @@ public final class ExecContext {
     /** The request query, available to entry operators (e.g. request_input). */
     public String query() { return query; }
     public void setQuery(String query) { this.query = query; }
+
+    /**
+     * Request-level KB scope (阶段 A "菜谱+运行时范围")：搜索请求现场指定的库组合。
+     * 只对图内 {@code scope_resolve.kbIds} 留空的范式生效——写死 kbIds 的专属范式
+     * 优先按图执行（请求值被忽略并留痕 attribute）。空列表 = 未指定（域级 release）。
+     */
+    public List<String> requestKbIds() { return requestKbIds; }
+    public void setRequestKbIds(List<String> kbIds) {
+        this.requestKbIds = (kbIds == null) ? List.of() : List.copyOf(kbIds);
+    }
 
     public String requestId() { return requestId; }
     public String domain()    { return domain; }

@@ -67,6 +67,11 @@ _M5_SEGMENT_LINKS_DDL = (
 _SEMANTIC_ROLE_V2_DDL = (
     _REPO_ROOT / "databases" / "asset_core" / "schemas" / "012_semantic_role_v2.sql"
 )
+# 阶段 A（批次5）：用户级 MCP 接入（一人一钥 + 开放库清单）与库级默认检索范式。
+_MCP_ACCESS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "008_mcp_access.sql"
+_KB_DEFAULT_PARADIGM_DDL = (
+    _REPO_ROOT / "databases" / "kb" / "schemas" / "009_kb_default_paradigm.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -152,6 +157,9 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _M5_SEGMENT_LINKS_DDL,
         # v2 语义角色词表加宽（存量库幂等迁移）。
         _SEMANTIC_ROLE_V2_DDL,
+        # 阶段 A（批次5）：MCP 用户接入（依赖 kb_users/knowledge_bases，链尾安全）。
+        _MCP_ACCESS_DDL,
+        _KB_DEFAULT_PARADIGM_DDL,
     )
 
 

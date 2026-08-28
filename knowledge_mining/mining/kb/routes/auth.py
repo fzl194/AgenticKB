@@ -126,6 +126,40 @@ async def reload_auth_config() -> dict[str, Any]:
     }
 
 
+class McpKeyVerifyReq(BaseModel):
+    """MCP 接入密钥校验（mcp_server 调；X-Internal-Auth 防线）。"""
+    key: str
+
+
+@router.post("/auth/mcp-key-verify", dependencies=[Depends(_require_internal)])
+async def verify_mcp_key(
+    body: McpKeyVerifyReq,
+    request: Request,
+) -> dict[str, Any]:
+    """验钥 → 绑定身份与开放库。miss（无钥/已轮换/已吊销）→ 401。
+
+    返回 username 与 open_kb_ids：MCP 免二次查询；开放库 ∩ 实时权限由检索层
+    authorize 兜底（开放了但权限被收窄的库在检索时自然 403/剔除）。
+    """
+    from knowledge_mining.mining.kb.deps import get_kb_db
+    from knowledge_mining.mining.kb.services.mcp_access_service import (
+        McpAccessService,
+    )
+
+    svc = McpAccessService(await get_kb_db(request))
+    result = await svc.verify_key(body.key)
+    if result is None:
+        raise HTTPException(401, "invalid mcp key")
+    return {
+        "ok": True,
+        "username": result["username"],
+        "user_id": result["user_id"],
+        "open_kb_ids": result["open_kb_ids"],
+        # kb_names → id 的解析源：开放库 id+name（软删库自动从清单消失）
+        "open_kbs": result.get("open_kbs", []),
+    }
+
+
 # ---------------------------------------------------------------- user CRUD (admin)
 
 @router.get("/users")

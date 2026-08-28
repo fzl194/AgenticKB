@@ -1,10 +1,11 @@
-"""Paradigm routing, fallback and response normalization in the MCP client.
+"""阶段 A（批次5）后的 MCP 路由与响应归一化测试。
+
+库为中心四层路由：显式范式 > 库级绑定（resolve kbIds）> 领域默认 > 官方默认；
+无 legacy 回落——unbound/resolve 失败一律报 no_paradigm_configured。
+所有 serving 调用必须携带 X-KB-User 与请求级 kbIds。
 
 Uses httpx.MockTransport rather than mocking our own functions, so the request URLs, the payloads
 and the JSON shapes the backend actually returns are all part of what is asserted.
-
-Deliberately imports only ``mcp_server.client``/``schemas`` — not ``server`` — so the suite runs
-without the ``mcp`` package installed.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ import httpx
 import pytest
 
 from mcp_server import client as mcp_client
-from mcp_server.schemas import EntityRef, SearchInput
+from mcp_server.identity import Identity
+from mcp_server.schemas import SearchInput
 
 BASE = mcp_client.BACKEND_URL
 
@@ -33,24 +35,39 @@ PARADIGM_BODY = {
     }
 }
 
-# What /api/v1/search returns: pack fields flattened, evidence_groups in snake_case.
-LEGACY_BODY = {
-    "query": {"original": "SMF 配置"},
-    "items": [{"id": "ru-9", "role": "seed"}],
-    "relations": [],
-    "sources": [],
-    "evidence_groups": [],
-    "issues": [],
-    "suggestions": [],
-}
-
-BOUND = {
+BOUND_DOMAIN = {
     "domain": "odn",
     "bound": True,
     "paradigmId": "pd-abc",
     "name": "odn-production",
     "version": 3,
+    "source": "domain",
 }
+
+BOUND_LIBRARY = {
+    **BOUND_DOMAIN,
+    "paradigmId": "pd-lib",
+    "name": "kb-default",
+    "source": "library",
+}
+
+BOUND_DEGRADED = {
+    **BOUND_DOMAIN,
+    "source": "domain",
+    "degraded": True,
+    "degradedFrom": "library",
+}
+
+
+def ident() -> Identity:
+    return Identity(
+        username="alice",
+        user_id="u-1",
+        open_kbs=(
+            {"id": "kb-1", "name": "基站手册库"},
+            {"id": "kb-2", "name": "设备手册库"},
+        ),
+    )
 
 
 @pytest.fixture
@@ -68,19 +85,13 @@ def install(monkeypatch, handler, calls):
     monkeypatch.setattr(
         mcp_client, "_client", httpx.Client(transport=httpx.MockTransport(recording))
     )
-    monkeypatch.setattr(mcp_client, "PARADIGM_ROUTING", True)
 
 
 CATALOG_PATH = "/api/v1/paradigm/mcp-catalog"
 
 
 def paths(calls):
-    """The retrieval path taken, excluding the advisory catalog fetch.
-
-    The catalog is a hint attached to the answer, not part of deciding it, and it is cached — so
-    whether it appears in a given call says nothing about routing. Tests that care about the fetch
-    itself use :func:`all_paths`.
-    """
+    """The retrieval path taken, excluding the advisory catalog fetch."""
     return [c.url.path for c in calls if c.url.path != CATALOG_PATH]
 
 
@@ -120,17 +131,17 @@ def q(**kw):
 # ── routing ──────────────────────────────────────────────────────────────
 
 
-def test_bound_domain_goes_to_its_paradigm(monkeypatch, calls):
+def test_domain_default_goes_to_its_paradigm_with_identity(monkeypatch, calls):
     install(
         monkeypatch,
         route(
-            resolve=httpx.Response(200, json=BOUND),
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
             paradigm=httpx.Response(200, json=PARADIGM_BODY),
         ),
         calls,
     )
 
-    out = mcp_client.search_knowledge(q())
+    out = mcp_client.search_knowledge(q(), ident(), ["kb-1"])
 
     assert paths(calls) == ["/api/v1/paradigm/resolve", "/api/v1/paradigm/pd-abc/search"]
     assert out["_retrieval"] == {
@@ -138,313 +149,274 @@ def test_bound_domain_goes_to_its_paradigm(monkeypatch, calls):
         "paradigm_id": "pd-abc",
         "name": "odn-production",
         "version": 3,
-        "selected_by": "domain_default",
+        "selected_by": "domain",
     }
+    # 身份透传与请求级库范围是硬契约
+    search_call = [c for c in calls if c.url.path.endswith("/search")][0]
+    assert search_call.headers["X-KB-User"] == "alice"
+    assert json.loads(search_call.content)["kbIds"] == ["kb-1"]
+    resolve_call = [c for c in calls if c.url.path.endswith("/resolve")][0]
+    assert "kbIds=kb-1" in str(resolve_call.url)
 
 
-def test_unbound_domain_uses_the_legacy_pipeline(monkeypatch, calls):
+def test_library_binding_wins_when_consistent(monkeypatch, calls):
     install(
         monkeypatch,
         route(
-            resolve=httpx.Response(200, json={"domain": "generic", "bound": False}),
-            search=httpx.Response(200, json=dict(LEGACY_BODY)),
+            resolve=httpx.Response(200, json=BOUND_LIBRARY),
+            paradigm=httpx.Response(200, json=PARADIGM_BODY),
         ),
         calls,
     )
 
-    out = mcp_client.search_knowledge(q(domain="generic"))
+    out = mcp_client.search_knowledge(q(), ident(), ["kb-1", "kb-2"])
 
-    assert paths(calls) == ["/api/v1/paradigm/resolve", "/api/v1/search"]
-    assert out["_retrieval"]["engine"] == "legacy"
+    assert out["_retrieval"]["selected_by"] == "library"
+    assert out["_retrieval"]["paradigm_id"] == "pd-lib"
 
 
-def test_resolve_failure_falls_back_instead_of_failing(monkeypatch, calls):
+def test_library_degradation_is_surfaced_in_selected_by(monkeypatch, calls):
     install(
         monkeypatch,
         route(
-            resolve=httpx.Response(503, text="control db down"),
-            search=httpx.Response(200, json=dict(LEGACY_BODY)),
+            resolve=httpx.Response(200, json=BOUND_DEGRADED),
+            paradigm=httpx.Response(200, json=PARADIGM_BODY),
         ),
         calls,
     )
 
-    out = mcp_client.search_knowledge(q())
+    out = mcp_client.search_knowledge(q(), ident(), ["kb-1"])
 
-    assert paths(calls) == ["/api/v1/paradigm/resolve", "/api/v1/search"]
-    assert out["_retrieval"]["engine"] == "legacy"
-    assert "error" not in out
+    assert out["_retrieval"]["selected_by"] == "domain(degraded_from_library)"
 
 
-def test_resolve_network_error_falls_back(monkeypatch, calls):
+def test_unbound_domain_reports_no_paradigm_configured(monkeypatch, calls):
+    """无任何绑定 → 明确报错；绝不回落 /api/v1/search（阶段 A 拍板）。"""
+    install(
+        monkeypatch,
+        route(resolve=httpx.Response(200, json={"domain": "generic", "bound": False})),
+        calls,
+    )
+
+    out = mcp_client.search_knowledge(q(domain="generic"), ident(), [])
+
+    assert paths(calls) == ["/api/v1/paradigm/resolve"]
+    assert out["error"] == "no_paradigm_configured"
+    assert out["_retrieval"]["selected_by"] == "unresolved"
+    assert out["_retrieval"]["engine"] == "none"
+
+
+def test_resolve_failure_reports_instead_of_falling_back(monkeypatch, calls):
+    install(
+        monkeypatch,
+        route(resolve=httpx.Response(503, text="control db down")),
+        calls,
+    )
+
+    out = mcp_client.search_knowledge(q(), ident(), ["kb-1"])
+
+    assert paths(calls) == ["/api/v1/paradigm/resolve"]
+    assert out["error"] == "no_paradigm_configured"
+
+
+def test_resolve_network_error_reports(monkeypatch, calls):
     def boom(request):
         if request.url.path == "/api/v1/paradigm/resolve":
-            raise httpx.ConnectError("connection refused")
-        return httpx.Response(200, json=dict(LEGACY_BODY))
+            raise httpx.ConnectError("control db down")
+        if request.url.path == CATALOG_PATH:
+            return httpx.Response(503, text="catalog not stubbed for this test")
+        raise AssertionError(f"unexpected request to {request.url.path}")
 
     install(monkeypatch, boom, calls)
 
-    out = mcp_client.search_knowledge(q())
+    out = mcp_client.search_knowledge(q(), ident(), ["kb-1"])
 
-    assert out["_retrieval"]["engine"] == "legacy"
+    assert out["error"] == "no_paradigm_configured"
+    assert "error" in out and "message" in out
 
 
-def test_kill_switch_skips_resolution_entirely(monkeypatch, calls):
-    install(
-        monkeypatch, route(resolve=None, search=httpx.Response(200, json=dict(LEGACY_BODY))), calls
+def test_explicit_paradigm_skips_resolve(monkeypatch, calls):
+    catalog = httpx.Response(
+        200,
+        json={"paradigms": [{"id": "pd-abc", "name": "odn-production", "domain": "odn"}]},
     )
-    monkeypatch.setattr(mcp_client, "PARADIGM_ROUTING", False)
-
-    out = mcp_client.search_knowledge(q())
-
-    assert paths(calls) == ["/api/v1/search"]
-    assert out["_retrieval"]["engine"] == "legacy"
-
-
-def test_paradigm_execution_failure_is_not_retried_on_legacy(monkeypatch, calls):
-    """A bound-but-broken paradigm must surface, not be masked by a silent second attempt."""
     install(
         monkeypatch,
         route(
-            resolve=httpx.Response(200, json=BOUND),
-            paradigm=httpx.Response(400, json={"error": "no_active_kb_build"}),
-        ),
-        calls,
-    )
-
-    out = mcp_client.search_knowledge(q())
-
-    assert paths(calls) == ["/api/v1/paradigm/resolve", "/api/v1/paradigm/pd-abc/search"]
-    assert out["error"] == "HTTP 400"
-    assert "no_active_kb_build" in out["raw"]
-    assert out["_retrieval"]["engine"] == "paradigm"
-
-
-def test_bound_true_without_an_id_is_treated_as_unbound(monkeypatch, calls):
-    install(
-        monkeypatch,
-        route(
-            resolve=httpx.Response(200, json={"domain": "odn", "bound": True}),
-            search=httpx.Response(200, json=dict(LEGACY_BODY)),
-        ),
-        calls,
-    )
-
-    out = mcp_client.search_knowledge(q())
-
-    assert out["_retrieval"]["engine"] == "legacy"
-
-
-# ── normalization ────────────────────────────────────────────────────────
-
-
-def test_paradigm_response_matches_the_legacy_envelope(monkeypatch, calls):
-    install(
-        monkeypatch,
-        route(
-            resolve=httpx.Response(200, json=BOUND),
+            resolve=httpx.Response(500, text="resolve must not be called"),
             paradigm=httpx.Response(200, json=PARADIGM_BODY),
-        ),
-        calls,
-    )
-
-    out = mcp_client.search_knowledge(q())
-
-    # The whole point: an agent must not be able to tell the two engines apart by shape.
-    assert set(LEGACY_BODY) <= set(out)
-    assert "contextPack" not in out
-    assert "evidenceGroups" not in out
-    assert out["evidence_groups"] == [{"documentSnapshotId": "snap-1", "itemIds": ["ru-1"]}]
-    assert out["items"][0]["id"] == "ru-1"
-    # nested field naming is untouched — both engines serialize the same records
-    assert out["items"][0]["blockType"] == "paragraph"
-
-
-def test_missing_pack_sections_default_to_empty_lists(monkeypatch, calls):
-    install(
-        monkeypatch,
-        route(
-            resolve=httpx.Response(200, json=BOUND),
-            paradigm=httpx.Response(200, json={"contextPack": {"items": []}}),
-        ),
-        calls,
-    )
-
-    out = mcp_client.search_knowledge(q())
-
-    for key in ("items", "relations", "sources", "evidence_groups", "issues", "suggestions"):
-        assert out[key] == [], key
-
-
-def test_debug_trace_is_parked_under_retrieval(monkeypatch, calls):
-    body = dict(PARADIGM_BODY)
-    body["trace"] = [{"nodeId": "dv", "operatorType": "dense_vector", "durationMs": 42}]
-    install(
-        monkeypatch,
-        route(resolve=httpx.Response(200, json=BOUND), paradigm=httpx.Response(200, json=body)),
-        calls,
-    )
-
-    out = mcp_client.search_knowledge(q(debug=True))
-
-    assert out["_retrieval"]["trace"][0]["nodeId"] == "dv"
-    assert "trace" not in out
-
-
-def test_candidate_only_paradigm_is_passed_through_and_flagged(monkeypatch, calls):
-    """Binding forbids collect-terminated paradigms; if one shows up anyway, say so."""
-    install(
-        monkeypatch,
-        route(
-            resolve=httpx.Response(200, json=BOUND),
-            paradigm=httpx.Response(200, json={"candidates": [{"id": "ru-1", "score": 0.9}]}),
-        ),
-        calls,
-    )
-
-    out = mcp_client.search_knowledge(q())
-
-    assert out["candidates"][0]["id"] == "ru-1"
-    assert out["_retrieval"]["output"] == "candidates"
-
-
-# ── ignored args ─────────────────────────────────────────────────────────
-
-
-def test_dead_tool_args_are_reported_on_the_paradigm_path(monkeypatch, calls):
-    install(
-        monkeypatch,
-        route(
-            resolve=httpx.Response(200, json=BOUND),
-            paradigm=httpx.Response(200, json=PARADIGM_BODY),
+            catalog=catalog,
         ),
         calls,
     )
 
     out = mcp_client.search_knowledge(
-        q(scope={"product": "X"}, entities=[EntityRef(name="SMF")])
+        q(paradigm="odn-production"), ident(), ["kb-1"]
     )
 
-    assert out["_retrieval"]["ignored_args"] == ["scope", "entities"]
+    assert paths(calls) == ["/api/v1/paradigm/pd-abc/search"]
+    assert out["_retrieval"]["selected_by"] == "explicit"
+    # 显式范式仍带身份与库范围（范式 scope 留空时按注入执行）
+    search_call = [c for c in calls if c.url.path.endswith("/search")][0]
+    assert search_call.headers["X-KB-User"] == "alice"
+    assert json.loads(search_call.content)["kbIds"] == ["kb-1"]
 
 
-def test_dead_tool_args_are_reported_on_the_legacy_path_too(monkeypatch, calls):
-    """They have never been consumed there either — reporting only on one path would mislead."""
+def test_explicit_unknown_paradigm_never_falls_back(monkeypatch, calls):
     install(
         monkeypatch,
         route(
-            resolve=httpx.Response(200, json={"bound": False}),
-            search=httpx.Response(200, json=dict(LEGACY_BODY)),
+            resolve=httpx.Response(500, text="resolve must not be called"),
+            paradigm=httpx.Response(500, text="search must not be called"),
+            catalog=httpx.Response(200, json={"paradigms": []}),
         ),
         calls,
     )
 
-    out = mcp_client.search_knowledge(q(scope={"product": "X"}))
+    out = mcp_client.search_knowledge(q(paradigm="ghost"), ident(), [])
 
-    assert out["_retrieval"] == {
-        "engine": "legacy",
-        "selected_by": "fallback",
-        "ignored_args": ["scope"],
-    }
+    assert out["error"] == "unknown_paradigm"
+    assert out["_retrieval"]["selected_by"] == "rejected"
+    # 缓存刷新会拉两次 catalog，但绝不发出 search/resolve
+    assert paths(calls) == []
+    assert all_paths(calls) == [CATALOG_PATH, CATALOG_PATH]
 
 
-def test_no_ignored_args_key_when_nothing_was_dropped(monkeypatch, calls):
+def test_paradigm_http_failure_is_returned_not_swallowed(monkeypatch, calls):
     install(
         monkeypatch,
         route(
-            resolve=httpx.Response(200, json=BOUND),
-            paradigm=httpx.Response(200, json=PARADIGM_BODY),
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
+            paradigm=httpx.Response(502, text="bad gateway"),
         ),
         calls,
     )
 
-    out = mcp_client.search_knowledge(q())
+    out = mcp_client.search_knowledge(q(), ident(), [])
 
-    assert "ignored_args" not in out["_retrieval"]
+    assert out["error"] == "HTTP 502"
+    assert out["_retrieval"]["engine"] == "paradigm"
 
 
 # ── request payload ──────────────────────────────────────────────────────
 
 
 def test_paradigm_request_body_carries_query_domain_debug(monkeypatch, calls):
-    import json
-
     install(
         monkeypatch,
         route(
-            resolve=httpx.Response(200, json=BOUND),
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
             paradigm=httpx.Response(200, json=PARADIGM_BODY),
         ),
         calls,
     )
 
-    mcp_client.search_knowledge(q(debug=True))
+    mcp_client.search_knowledge(q(query="端口镜像怎么配", debug=True), ident(), [])
 
-    # Selected by path, not by position: the advisory catalog fetch also lands in `calls`, and
-    # positional indexing would silently start asserting against whichever request happened to be
-    # last.
-    executed = [c for c in calls if c.url.path.endswith("/search")]
-    assert len(executed) == 1
-    body = json.loads(executed[0].content)
-    assert body == {"query": "SMF 配置", "domain": "odn", "debug": True}
-
-    resolves = [c for c in calls if c.url.path == "/api/v1/paradigm/resolve"]
-    assert resolves[0].url.params["domain"] == "odn"
+    search_call = [c for c in calls if c.url.path.endswith("/search")][0]
+    body = json.loads(search_call.content)
+    assert body == {"query": "端口镜像怎么配", "domain": "odn", "debug": True}
 
 
-# ── regression guard for the paradigm-selection change ───────────────────
-
-
-def test_request_without_a_named_paradigm_is_byte_identical(monkeypatch, calls):
-    """The no-``paradigm`` path must keep issuing exactly the requests it always did.
-
-    Written before the ``paradigm`` parameter existed and kept green through it: everything about
-    agent-visible behaviour is allowed to grow, but a caller that names no paradigm must reach the
-    same endpoints with the same bodies as before, or the change stops being additive.
-
-    Asserts the *requests*, not the response — ``_retrieval`` gains fields by design.
-    """
+def test_kb_ids_omitted_when_empty(monkeypatch, calls):
     install(
         monkeypatch,
         route(
-            resolve=httpx.Response(200, json={"domain": "generic", "bound": False}),
-            search=httpx.Response(200, json=dict(LEGACY_BODY)),
-        ),
-        calls,
-    )
-
-    mcp_client.search_knowledge(q(domain="generic", query="AA 接口"))
-
-    searches = [c for c in calls if c.url.path == "/api/v1/search"]
-    assert len(searches) == 1
-    assert json.loads(searches[0].content) == {
-        "query": "AA 接口",
-        "domain": "generic",
-        "debug": False,
-    }
-
-    resolves = [c for c in calls if c.url.path == "/api/v1/paradigm/resolve"]
-    assert len(resolves) == 1
-    assert resolves[0].url.params["domain"] == "generic"
-
-
-def test_bound_paradigm_request_is_byte_identical(monkeypatch, calls):
-    """Same guard for the domain-default path: same URL, same body."""
-    install(
-        monkeypatch,
-        route(
-            resolve=httpx.Response(200, json=BOUND),
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
             paradigm=httpx.Response(200, json=PARADIGM_BODY),
         ),
         calls,
     )
 
-    mcp_client.search_knowledge(q(query="AA 接口"))
+    mcp_client.search_knowledge(q(), ident(), [])
 
-    executed = [c for c in calls if c.url.path.endswith("/search") and "paradigm" in c.url.path]
-    assert len(executed) == 1
-    assert executed[0].url.path == "/api/v1/paradigm/pd-abc/search"
-    assert json.loads(executed[0].content) == {
-        "query": "AA 接口",
-        "domain": "odn",
-        "debug": False,
-    }
+    search_call = [c for c in calls if c.url.path.endswith("/search")][0]
+    assert "kbIds" not in json.loads(search_call.content)
+
+
+# ── response normalization ───────────────────────────────────────────────
+
+
+def test_context_pack_is_flattened_to_the_search_shape(monkeypatch, calls):
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
+            paradigm=httpx.Response(200, json=PARADIGM_BODY),
+        ),
+        calls,
+    )
+
+    out = mcp_client.search_knowledge(q(), ident(), [])
+
+    assert out["query"] == PARADIGM_BODY["contextPack"]["query"]
+    assert out["items"] == PARADIGM_BODY["contextPack"]["items"]
+    assert out["evidence_groups"] == PARADIGM_BODY["contextPack"]["evidenceGroups"]
+    for key in ("items", "relations", "sources", "evidence_groups", "issues", "suggestions"):
+        assert key in out
+
+
+def test_candidates_output_is_flagged_not_passsed_silently(monkeypatch, calls):
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
+            paradigm=httpx.Response(200, json={"candidates": [{"id": "ru-1"}]}),
+        ),
+        calls,
+    )
+
+    out = mcp_client.search_knowledge(q(), ident(), [])
+
+    assert out["_retrieval"]["output"] == "candidates"
+    assert out["candidates"] == [{"id": "ru-1"}]
+
+
+def test_missing_context_pack_is_visible(monkeypatch, calls):
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
+            paradigm=httpx.Response(200, json={}),
+        ),
+        calls,
+    )
+
+    out = mcp_client.search_knowledge(q(), ident(), [])
+
+    assert out["error"] == "empty_paradigm_result"
+
+
+# ── dead args ────────────────────────────────────────────────────────────
+
+
+def test_dead_tool_args_are_reported_on_the_paradigm_path(monkeypatch, calls):
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
+            paradigm=httpx.Response(200, json=PARADIGM_BODY),
+        ),
+        calls,
+    )
+
+    out = mcp_client.search_knowledge(
+        q(scope={"产品": "OLT"}, entities=None), ident(), []
+    )
+
+    assert out["_retrieval"]["ignored_args"] == ["scope"]
+
+
+def test_no_ignored_args_key_when_nothing_was_dropped(monkeypatch, calls):
+    install(
+        monkeypatch,
+        route(
+            resolve=httpx.Response(200, json=BOUND_DOMAIN),
+            paradigm=httpx.Response(200, json=PARADIGM_BODY),
+        ),
+        calls,
+    )
+
+    out = mcp_client.search_knowledge(q(), ident(), [])
+
+    assert "ignored_args" not in out["_retrieval"]

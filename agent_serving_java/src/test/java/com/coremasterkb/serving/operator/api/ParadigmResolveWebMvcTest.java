@@ -49,14 +49,15 @@ class ParadigmResolveWebMvcTest {
     }
 
     @Test
-    @DisplayName("bound domain returns the paradigm and its call url")
+    @DisplayName("bound domain returns the paradigm, its call url, and the resolution source")
     void boundDomain() throws Exception {
         ParadigmEntity e = new ParadigmEntity();
         e.setId("pd-abc");
         e.setName("odn-production");
         e.setDescription("ODN 生产检索链");
         e.setCurrentVersion(3);
-        when(paradigmService.resolveDefaultForDomain("odn")).thenReturn(e);
+        when(paradigmService.resolveFor("odn", null)).thenReturn(
+                new ParadigmService.Resolution(e, "domain", null));
 
         mockMvc.perform(get("/api/v1/paradigm/resolve").param("domain", "odn"))
                 .andExpect(status().isOk())
@@ -65,13 +66,31 @@ class ParadigmResolveWebMvcTest {
                 .andExpect(jsonPath("$.paradigmId").value("pd-abc"))
                 .andExpect(jsonPath("$.name").value("odn-production"))
                 .andExpect(jsonPath("$.version").value(3))
+                .andExpect(jsonPath("$.source").value("domain"))
                 .andExpect(jsonPath("$.url").value("/api/v1/paradigm/pd-abc/search"));
+    }
+
+    @Test
+    @DisplayName("library degradation is surfaced via degraded/degradedFrom")
+    void libraryDegradationIsObservable() throws Exception {
+        ParadigmEntity e = new ParadigmEntity();
+        e.setId("pd-dom");
+        e.setName("fallback");
+        e.setCurrentVersion(1);
+        when(paradigmService.resolveFor("odn", null)).thenReturn(
+                new ParadigmService.Resolution(e, "domain", "library"));
+
+        mockMvc.perform(get("/api/v1/paradigm/resolve").param("domain", "odn"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bound").value(true))
+                .andExpect(jsonPath("$.degraded").value(true))
+                .andExpect(jsonPath("$.degradedFrom").value("library"));
     }
 
     @Test
     @DisplayName("unbound domain is 200 with bound=false, never 404")
     void unboundDomainIsNotAnError() throws Exception {
-        when(paradigmService.resolveDefaultForDomain("generic")).thenReturn(null);
+        when(paradigmService.resolveFor("generic", null)).thenReturn(null);
 
         mockMvc.perform(get("/api/v1/paradigm/resolve").param("domain", "generic"))
                 .andExpect(status().isOk())
@@ -83,7 +102,7 @@ class ParadigmResolveWebMvcTest {
     @Test
     @DisplayName("/resolve is not swallowed by the /{id} route")
     void resolveOutranksThePathVariableRoute() throws Exception {
-        when(paradigmService.resolveDefaultForDomain(anyString())).thenReturn(null);
+        when(paradigmService.resolveFor(anyString(), any())).thenReturn(null);
         // If /{id} won, this would hit getOrThrow("resolve") and 404 through the advice.
         when(paradigmService.getOrThrow("resolve"))
                 .thenThrow(new ParadigmNotFoundException("paradigm not found: resolve"));
@@ -101,6 +120,6 @@ class ParadigmResolveWebMvcTest {
         mockMvc.perform(get("/api/v1/paradigm/resolve"))
                 .andExpect(status().isBadRequest());
 
-        verify(paradigmService, never()).resolveDefaultForDomain(anyString());
+        verify(paradigmService, never()).resolveFor(anyString(), any());
     }
 }

@@ -16,7 +16,12 @@ import httpx
 import pytest
 
 from mcp_server import client as mcp_client
+from mcp_server.identity import Identity
 from mcp_server.schemas import FullTextInput, SearchInput, SegmentRef
+
+def ident() -> Identity:
+    return Identity(username="alice", user_id="u-1", open_kbs=({"id": "kb-1", "name": "基站手册库"},))
+
 
 CATALOG_PATH = "/api/v1/paradigm/mcp-catalog"
 
@@ -79,7 +84,13 @@ def install(monkeypatch, handler, calls):
     monkeypatch.setattr(
         mcp_client, "_client", httpx.Client(transport=httpx.MockTransport(recording))
     )
-    monkeypatch.setattr(mcp_client, "PARADIGM_ROUTING", True)
+
+
+#: 阶段 A 后 unnamed 搜索必须有可用范式（无 legacy 回落）——默认给个 bound resolve。
+_BOUND_RESOLVE = {
+    "domain": "odn", "bound": True, "paradigmId": "pd-abc",
+    "name": "odn-production", "version": 3, "source": "domain",
+}
 
 
 def backend(*, catalog, paradigm=None, resolve=None, search=None):
@@ -90,7 +101,7 @@ def backend(*, catalog, paradigm=None, resolve=None, search=None):
         if path == CATALOG_PATH:
             return catalog(request) if callable(catalog) else catalog
         if path == "/api/v1/paradigm/resolve":
-            return resolve or httpx.Response(200, json={"bound": False})
+            return resolve or httpx.Response(200, json=_BOUND_RESOLVE)
         if path.startswith("/api/v1/paradigm/") and path.endswith("/search"):
             return paradigm or httpx.Response(200, json=PACK)
         if path == "/api/v1/segments/fulltext":
@@ -121,7 +132,7 @@ def executed_paradigm(calls):
 def test_selects_by_name(monkeypatch, calls):
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, ODN_TABLES)), calls)
 
-    out = mcp_client.search_knowledge(q(paradigm="ODN 参数表查询"))
+    out = mcp_client.search_knowledge(q(paradigm="ODN 参数表查询"), ident(), [])
 
     assert executed_paradigm(calls) == "/api/v1/paradigm/pd-9c11ab02/search"
     assert out["_retrieval"]["selected_by"] == "explicit"
@@ -131,7 +142,7 @@ def test_selects_by_name(monkeypatch, calls):
 def test_selects_by_id(monkeypatch, calls):
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, ODN_TABLES)), calls)
 
-    mcp_client.search_knowledge(q(paradigm="pd-3f2a1b7c"))
+    mcp_client.search_knowledge(q(paradigm="pd-3f2a1b7c"), ident(), [])
 
     assert executed_paradigm(calls) == "/api/v1/paradigm/pd-3f2a1b7c/search"
 
@@ -141,7 +152,7 @@ def test_matching_tolerates_copy_paste(monkeypatch, calls, named):
     """Agents copy these strings out of a previous answer; whitespace and case ride along."""
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, ODN_TABLES)), calls)
 
-    mcp_client.search_knowledge(q(paradigm=named))
+    mcp_client.search_knowledge(q(paradigm=named), ident(), [])
 
     assert executed_paradigm(calls) == "/api/v1/paradigm/pd-9c11ab02/search"
 
@@ -150,7 +161,7 @@ def test_naming_a_paradigm_skips_the_domain_default_lookup(monkeypatch, calls):
     """The tool IS the choice; re-resolving could only disagree with it."""
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
 
-    mcp_client.search_knowledge(q(paradigm="ODN 拓扑排障"))
+    mcp_client.search_knowledge(q(paradigm="ODN 拓扑排障"), ident(), [])
 
     assert "/api/v1/paradigm/resolve" not in [c.url.path for c in calls]
 
@@ -161,7 +172,7 @@ def test_naming_a_paradigm_skips_the_domain_default_lookup(monkeypatch, calls):
 def test_unknown_name_is_rejected_not_silently_redirected(monkeypatch, calls):
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
 
-    out = mcp_client.search_knowledge(q(paradigm="不存在的范式"))
+    out = mcp_client.search_knowledge(q(paradigm="不存在的范式"), ident(), [])
 
     assert out["error"] == "unknown_paradigm"
     assert "ODN 拓扑排障" in out["message"], "the agent needs the valid options to self-correct"
@@ -181,7 +192,7 @@ def test_a_freshly_published_paradigm_forces_a_refresh_before_being_declared_unk
 
     install(monkeypatch, backend(catalog=catalog), calls)
 
-    out = mcp_client.search_knowledge(q(paradigm="ODN 参数表查询"))
+    out = mcp_client.search_knowledge(q(paradigm="ODN 参数表查询"), ident(), [])
 
     assert [c.url.path for c in calls].count(CATALOG_PATH) >= 2, "stale miss must re-fetch"
     assert executed_paradigm(calls) == "/api/v1/paradigm/pd-9c11ab02/search"
@@ -192,7 +203,7 @@ def test_domain_mismatch_names_both_domains(monkeypatch, calls):
     """Executing it would fail deep inside scope_resolve as kb_not_found — a misleading error."""
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, CCN_ONLY)), calls)
 
-    out = mcp_client.search_knowledge(q(domain="odn", paradigm="核心网配置"))
+    out = mcp_client.search_knowledge(q(domain="odn", paradigm="核心网配置"), ident(), [])
 
     assert out["error"] == "paradigm_domain_mismatch"
     assert "cloud_core_network" in out["message"]
@@ -203,12 +214,12 @@ def test_domain_mismatch_names_both_domains(monkeypatch, calls):
 def test_catalog_down_passes_an_id_through_but_rejects_a_name(monkeypatch, calls):
     install(monkeypatch, backend(catalog=httpx.Response(503, text="down")), calls)
 
-    by_id = mcp_client.search_knowledge(q(paradigm="pd-3f2a1b7c"))
+    by_id = mcp_client.search_knowledge(q(paradigm="pd-3f2a1b7c"), ident(), [])
     assert executed_paradigm(calls) == "/api/v1/paradigm/pd-3f2a1b7c/search"
     assert "error" not in by_id
 
     calls.clear()
-    by_name = mcp_client.search_knowledge(q(paradigm="ODN 拓扑排障"))
+    by_name = mcp_client.search_knowledge(q(paradigm="ODN 拓扑排障"), ident(), [])
     assert by_name["error"] == "catalog_unavailable", (
         "a name cannot be resolved without the catalog, and 'unknown' would be a lie"
     )
@@ -223,7 +234,7 @@ def test_every_answer_carries_the_available_paradigms(monkeypatch, calls):
     """Discovery as a by-product: one call and the agent knows what else it could have asked for."""
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, ODN_TABLES)), calls)
 
-    out = mcp_client.search_knowledge(q())
+    out = mcp_client.search_knowledge(q(), ident(), [])
 
     assert out["_retrieval"]["available_paradigms"] == [
         {"name": "ODN 拓扑排障", "description": "查 ODN 拓扑与端口占用"},
@@ -232,21 +243,20 @@ def test_every_answer_carries_the_available_paradigms(monkeypatch, calls):
 
 
 def test_the_list_is_attached_to_errors_too(monkeypatch, calls):
-    """A domain with no active release fails its very first unnamed call. Without the list on the
-    error path the agent would have nothing to correct towards."""
+    """阶段 A：无任何范式绑定的域，第一次 unnamed 调用就报 no_paradigm_configured。
+    错误响应上仍附可用清单——agent 有东西可以纠正方向。"""
     install(
         monkeypatch,
         backend(
             catalog=catalog_of(ODN_TOPOLOGY),
-            search=httpx.Response(400, json={"error": "no_active_release"}),
+            resolve=httpx.Response(200, json={"domain": "odn", "bound": False}),
         ),
         calls,
     )
 
-    out = mcp_client.search_knowledge(q())
+    out = mcp_client.search_knowledge(q(), ident(), [])
 
-    assert out["error"] == "HTTP 400"
-    assert "no_active_release" in out["raw"]
+    assert out["error"] == "no_paradigm_configured"
     assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]
 
 
@@ -254,7 +264,7 @@ def test_the_list_is_filtered_to_this_domain(monkeypatch, calls):
     """Offering a paradigm bound elsewhere would only earn a paradigm_domain_mismatch."""
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, CCN_ONLY, ANY_DOMAIN)), calls)
 
-    out = mcp_client.search_knowledge(q(domain="odn"))
+    out = mcp_client.search_knowledge(q(domain="odn"), ident(), [])
 
     assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == [
         "ODN 拓扑排障",
@@ -266,17 +276,18 @@ def test_an_unreachable_catalog_omits_the_field_rather_than_reporting_none(monke
     """Absent and empty must not look alike: empty would read as 'there are no paradigms'."""
     install(monkeypatch, backend(catalog=httpx.Response(503, text="down")), calls)
 
-    out = mcp_client.search_knowledge(q())
+    out = mcp_client.search_knowledge(q(), ident(), [])
 
     assert "available_paradigms" not in out["_retrieval"]
     assert "error" not in out, "a hint that could not be fetched must not fail the search"
+    assert out["_retrieval"]["engine"] == "paradigm"
 
 
 def test_the_catalog_is_cached_across_calls(monkeypatch, calls):
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
 
-    mcp_client.search_knowledge(q())
-    mcp_client.search_knowledge(q())
+    mcp_client.search_knowledge(q(), ident(), [])
+    mcp_client.search_knowledge(q(), ident(), [])
 
     assert [c.url.path for c in calls].count(CATALOG_PATH) == 1
 
@@ -285,8 +296,8 @@ def test_an_expired_cache_refetches(monkeypatch, calls):
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
     monkeypatch.setattr(mcp_client, "CATALOG_TTL", 0.0)
 
-    mcp_client.search_knowledge(q())
-    mcp_client.search_knowledge(q())
+    mcp_client.search_knowledge(q(), ident(), [])
+    mcp_client.search_knowledge(q(), ident(), [])
 
     assert [c.url.path for c in calls].count(CATALOG_PATH) == 2
 
@@ -304,7 +315,8 @@ def test_fulltext_honours_an_explicit_paradigm_id(monkeypatch, calls):
             domain="odn",
             refs=[SegmentRef(type="raw_segment", id="seg-1")],
             paradigm_id="pd-9c11ab02",
-        )
+        ),
+        ident(),
     )
 
     posts = [c for c in calls if c.url.path == "/api/v1/segments/fulltext"]
@@ -325,7 +337,8 @@ def test_fulltext_without_a_paradigm_id_keeps_resolving_the_domain(monkeypatch, 
     )
 
     mcp_client.get_segment_fulltext(
-        FullTextInput(domain="odn", refs=[SegmentRef(type="raw_segment", id="seg-1")])
+        FullTextInput(domain="odn", refs=[SegmentRef(type="raw_segment", id="seg-1")]),
+        ident(),
     )
 
     posts = [c for c in calls if c.url.path == "/api/v1/segments/fulltext"]
@@ -343,7 +356,7 @@ def test_catalog_unavailable_does_not_pay_the_timeout_twice(monkeypatch, calls):
     """
     install(monkeypatch, backend(catalog=httpx.Response(503, text="down")), calls)
 
-    out = mcp_client.search_knowledge(q(paradigm="某个中文范式名"))
+    out = mcp_client.search_knowledge(q(paradigm="某个中文范式名"), ident(), [])
 
     assert out["error"] == "catalog_unavailable"
     assert [c.url.path for c in calls].count(CATALOG_PATH) == 1
@@ -354,7 +367,7 @@ def test_unknown_paradigm_still_lists_the_options(monkeypatch, calls):
     """The opposite case: the catalog is fine, so the error must carry what IS valid."""
     install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
 
-    out = mcp_client.search_knowledge(q(paradigm="不存在"))
+    out = mcp_client.search_knowledge(q(paradigm="不存在"), ident(), [])
 
     assert out["error"] == "unknown_paradigm"
     assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]
@@ -375,7 +388,7 @@ def test_malformed_catalog_entries_are_dropped_not_fatal(monkeypatch, calls):
         calls,
     )
 
-    out = mcp_client.search_knowledge(q())
+    out = mcp_client.search_knowledge(q(), ident(), [])
 
     assert "error" not in out
     assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]

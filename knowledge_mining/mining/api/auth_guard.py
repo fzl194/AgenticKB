@@ -18,6 +18,7 @@ _PUBLIC_ROUTES = frozenset({("GET", "/health")})
 _SERVICE_ONLY_ROUTES = frozenset({
     ("POST", "/api/kb/auth/identify"),
     ("POST", "/api/kb/auth/verify"),
+    ("POST", "/api/kb/auth/mcp-key-verify"),
     ("POST", "/api/kb/admin/reload-auth-config"),
 })
 

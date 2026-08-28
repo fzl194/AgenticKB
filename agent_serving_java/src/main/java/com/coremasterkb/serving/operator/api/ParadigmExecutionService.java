@@ -42,19 +42,25 @@ public class ParadigmExecutionService {
      * never read by execution itself.</p>
      */
     public record RunArgs(String query, String domain, String channel, boolean debug,
-                          String username, String paradigmId, Integer paradigmVersion) {
+                          String username, List<String> kbIds,
+                          String paradigmId, Integer paradigmVersion) {
 
         public RunArgs(String query, String domain, String channel, boolean debug) {
             this(query, domain, channel, debug, null);
         }
 
         public RunArgs(String query, String domain, String channel, boolean debug, String username) {
-            this(query, domain, channel, debug, username, null, null);
+            this(query, domain, channel, debug, username, null, null, null);
+        }
+
+        /** 阶段 A：{@code kbIds} = 请求级库范围（可空；只对图内 scope 留空的范式生效）。 */
+        public RunArgs withKbIds(List<String> kbIds) {
+            return new RunArgs(query, domain, channel, debug, username, kbIds, paradigmId, paradigmVersion);
         }
 
         /** Attach the stored-paradigm reference for query-log attribution. */
         public RunArgs withParadigm(String id, Integer version) {
-            return new RunArgs(query, domain, channel, debug, username, id, version);
+            return new RunArgs(query, domain, channel, debug, username, kbIds, id, version);
         }
     }
 
@@ -99,6 +105,7 @@ public class ParadigmExecutionService {
         ExecContext ctx = new ExecContext(
                 UUID.randomUUID().toString(), domain, channel, args.debug(), args.username());
         ctx.setQuery(args.query());
+        ctx.setRequestKbIds(args.kbIds());
         Object result = executor.execute(graph, ctx, Map.of("query", args.query()));
 
         log.info("[paradigm/exec] domain={} channel={} output={}",

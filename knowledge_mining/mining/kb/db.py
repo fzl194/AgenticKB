@@ -355,7 +355,8 @@ class KbDB:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT id, domain, name, description, owner_id, visibility, status,
-                          deleted_at, created_at, updated_at, mining_workflow_id
+                          deleted_at, created_at, updated_at, mining_workflow_id,
+                          default_paradigm_id
                    FROM knowledge_bases WHERE id = %s""" + clause,
                 [kb_id],
             )
@@ -669,7 +670,10 @@ WITH cur AS (
         return [{"date": d, **buckets[d]} for d in sorted(buckets)]
 
     # 允许 PATCH 更新的列白名单。值可为 None → 显式清空（SET NULL）。
-    _KB_UPDATABLE_COLUMNS = {"name", "description", "visibility", "mining_workflow_id"}
+    _KB_UPDATABLE_COLUMNS = {
+        "name", "description", "visibility", "mining_workflow_id",
+        "default_paradigm_id",  # 阶段 A：库级默认检索范式（跨库引用，service 层校验）
+    }
 
     async def update_kb(
         self,
@@ -694,7 +698,7 @@ WITH cur AS (
                 """UPDATE knowledge_bases SET """ + ", ".join(set_clauses) + """
                    WHERE id = %(id)s AND status = 'active'
                    RETURNING id, domain, name, description, owner_id, visibility, status,
-                             mining_workflow_id""",
+                             mining_workflow_id, default_paradigm_id""",
                 params,
             )
             row = await cur.fetchone()
@@ -711,6 +715,118 @@ WITH cur AS (
             )
             row = await cur.fetchone()
             return dict(row) if row else None
+
+    # ------------------------------------------------ MCP 用户接入（阶段 A / 批次5）
+    # 一人一钥：mcp_access 每用户至多一行；rotate 覆盖 key_hash（旧钥立即失效，无并存期）。
+
+    async def get_mcp_access(self, user_id: str) -> dict[str, Any] | None:
+        """本人视角的接入状态（无 hash；含开放库列表）。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT user_id, key_prefix, status, created_at,
+                          last_used_at, rotated_at
+                   FROM mcp_access WHERE user_id = %s""",
+                [user_id],
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            cur = await conn.execute(
+                """SELECT kb_id FROM mcp_open_kbs WHERE user_id = %s
+                   ORDER BY granted_at""",
+                [user_id],
+            )
+            result["open_kb_ids"] = [r["kb_id"] for r in await cur.fetchall()]
+            return result
+
+    async def upsert_mcp_key(
+        self, user_id: str, *, key_hash: str, key_prefix: str,
+    ) -> dict[str, Any]:
+        """生成/轮换接入密钥：覆盖 hash 即轮换（status 复位 active、旧钥立即失效）。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """INSERT INTO mcp_access (user_id, key_hash, key_prefix, rotated_at)
+                   VALUES (%(u)s, %(h)s, %(p)s, now())
+                   ON CONFLICT (user_id) DO UPDATE SET
+                     key_hash = EXCLUDED.key_hash,
+                     key_prefix = EXCLUDED.key_prefix,
+                     status = 'active',
+                     rotated_at = EXCLUDED.rotated_at
+                   RETURNING user_id, key_prefix, status, created_at, rotated_at""",
+                {"u": user_id, "h": key_hash, "p": key_prefix},
+            )
+            return dict(await cur.fetchone())  # type: ignore[arg-type]
+
+    async def verify_mcp_key(
+        self, key_hash: str, *, last_used_throttle_s: int = 60,
+    ) -> dict[str, Any] | None:
+        """按 sha256 命中 active 密钥 → {username, user_id, open_kb_ids}；miss → None。
+
+        last_used_at 节流更新（距上次 ≥60s 才写），避免每次检索一次 UPDATE。
+        开放库随响应带出——MCP 免二次查询；权限收窄由检索层 authorize 兜底。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE mcp_access a
+                   SET last_used_at = now()
+                   WHERE a.key_hash = %(h)s AND a.status = 'active'
+                     AND (a.last_used_at IS NULL
+                          OR a.last_used_at <= now() - %(throttle)s * interval '1 second')
+                   RETURNING a.user_id""",
+                {"h": key_hash, "throttle": last_used_throttle_s},
+            )
+            hit = await cur.fetchone()
+            user_id = hit["user_id"] if hit else None
+            if user_id is None:
+                # 节流窗口内或无需更新：只读校验
+                cur = await conn.execute(
+                    """SELECT user_id FROM mcp_access
+                       WHERE key_hash = %s AND status = 'active'""",
+                    [key_hash],
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    return None
+                user_id = row["user_id"]
+            cur = await conn.execute(
+                "SELECT username FROM kb_users WHERE id = %s", [user_id],
+            )
+            urow = await cur.fetchone()
+            if urow is None:
+                return None
+            cur = await conn.execute(
+                """SELECT k.id, k.name FROM mcp_open_kbs o
+                   JOIN knowledge_bases k ON k.id = o.kb_id
+                   WHERE o.user_id = %s AND k.status = 'active'
+                   ORDER BY k.name""",
+                [user_id],
+            )
+            open_kbs = [dict(r) for r in await cur.fetchall()]
+            return {
+                "user_id": user_id,
+                "username": urow["username"],
+                "open_kb_ids": [r["id"] for r in open_kbs],
+                "open_kbs": open_kbs,
+            }
+
+    async def replace_open_kbs(self, user_id: str, kb_ids: list[str]) -> list[str]:
+        """全量覆盖开放库勾选（调用方负责校验本人可见性）。返回最终列表。"""
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM mcp_open_kbs WHERE user_id = %s", [user_id],
+                )
+                for kb_id in kb_ids:
+                    await conn.execute(
+                        """INSERT INTO mcp_open_kbs (user_id, kb_id)
+                           VALUES (%s, %s) ON CONFLICT DO NOTHING""",
+                        [user_id, kb_id],
+                    )
+            cur = await conn.execute(
+                "SELECT kb_id FROM mcp_open_kbs WHERE user_id = %s ORDER BY granted_at",
+                [user_id],
+            )
+            return [r["kb_id"] for r in await cur.fetchall()]
 
     # ------------------------------------------------------------- kb mining
     # KB 中心化挖掘（融合设计 §5.2）：本库挖掘记录 + 文档当前知识（供前端「挖掘」tab / 文件多 tab）。

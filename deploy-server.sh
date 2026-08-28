@@ -526,6 +526,23 @@ show_completion() {
     echo "修改宿主机配置后，请执行：bash deploy-server.sh --apply-config"
 }
 
+sync_serving_jar() {
+    # Java 服务不走 bind-mount（Python 目录才挂载），jar 烤在镜像里。
+    # 若宿主机存在新构建的 jar（mvn -DskipTests package），容器重建后同步进去；
+    # 否则容器沿用镜像内置 jar。镜像本身重建时（docker build）同样会带上新 jar。
+    local jar
+    jar="$(ls -t agent_serving_java/target/agent-serving-*.jar 2>/dev/null | head -1 || true)"
+    if [ -n "$jar" ]; then
+        echo "=== 正在同步 serving jar: $(basename "$jar") ==="
+        # docker cp 而非 compose cp：旧版 docker-compose 无 cp 子命令，容器名固定。
+        if ! docker cp "$jar" "$APP_CONTAINER_NAME:/app/agent_serving.jar"; then
+            die "无法将 serving jar 复制进容器：$jar"
+        fi
+    else
+        echo "=== 未发现本地构建的 serving jar，沿用镜像内置版本 ==="
+    fi
+}
+
 start_and_verify() {
     local previous_ordered_startup="${CMKB_ORDERED_STARTUP-}"
     local ordered_startup_was_set="${CMKB_ORDERED_STARTUP+x}"
@@ -545,6 +562,7 @@ start_and_verify() {
     fi
     [ "$compose_result" -eq 0 ] || die "Docker Compose 无法重建应用容器。"
 
+    sync_serving_jar
     start_services_in_dependency_order
     show_completion
 }

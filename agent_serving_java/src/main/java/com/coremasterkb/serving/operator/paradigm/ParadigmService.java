@@ -27,17 +27,55 @@ public class ParadigmService {
 
     private static final Logger log = LoggerFactory.getLogger(ParadigmService.class);
 
+    /** 官方默认检索范式固定 id（resolve 第④层兜底；seeding 见 OfficialParadigmSeeder）。 */
+    public static final String OFFICIAL_DEFAULT_ID = "system-official-default";
+
+    /**
+     * 官方默认图：query_embed ‖ fts → weighted_rrf → model_rerank → assemble。
+     * 最简可发表 servable 图（assemble 终点产 ContextPack）。检索效果对齐 legacy 固定
+     * 链路要等 C 阶段四能力算子化（树导航/语义缓存/多查询扩展/级联重排），本图只保证
+     * "无任何绑定时检索可达"。scope 留空 = 运行时按请求注入库范围（菜谱+运行时范围）。
+     */
+    static final String OFFICIAL_DEFAULT_GRAPH = """
+            {
+              "schemaVersion": "1.0",
+              "nodes": [
+                {"nodeId": "qe", "operatorType": "query_embed"},
+                {"nodeId": "scope", "operatorType": "scope_resolve"},
+                {"nodeId": "dv", "operatorType": "dense_vector", "params": {"textKind": "both", "topK": 20}},
+                {"nodeId": "fts", "operatorType": "fts", "params": {"topK": 20}},
+                {"nodeId": "fuse", "operatorType": "weighted_rrf", "params": {"k": 60}},
+                {"nodeId": "rr", "operatorType": "model_rerank", "params": {"topK": 10}},
+                {"nodeId": "asm", "operatorType": "assemble", "params": {"maxItems": 10, "relationExpansion": true}}
+              ],
+              "edges": [
+                {"fromNode": "qe", "fromSlot": "queryEmbedding", "toNode": "dv", "toSlot": "queryEmbedding"},
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "dv", "toSlot": "scope"},
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "fts", "toSlot": "scope"},
+                {"fromNode": "dv", "fromSlot": "candidates", "toNode": "fuse", "toSlot": "candidates"},
+                {"fromNode": "fts", "fromSlot": "candidates", "toNode": "fuse", "toSlot": "candidates"},
+                {"fromNode": "fuse", "fromSlot": "candidates", "toNode": "rr", "toSlot": "candidates"},
+                {"fromNode": "rr", "fromSlot": "candidates", "toNode": "asm", "toSlot": "candidates"},
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "asm", "toSlot": "scope"}
+              ],
+              "output": {"nodeId": "asm", "slot": "contextPack"}
+            }
+            """;
+
     private final ParadigmMapper paradigmMapper;
     private final ParadigmVersionMapper versionMapper;
     private final ParadigmCompiler compiler;
+    private final com.coremasterkb.serving.mapper.KnowledgeBaseMapper knowledgeBaseMapper;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public ParadigmService(ParadigmMapper paradigmMapper,
                            ParadigmVersionMapper versionMapper,
-                           ParadigmCompiler compiler) {
+                           ParadigmCompiler compiler,
+                           com.coremasterkb.serving.mapper.KnowledgeBaseMapper knowledgeBaseMapper) {
         this.paradigmMapper = paradigmMapper;
         this.versionMapper = versionMapper;
         this.compiler = compiler;
+        this.knowledgeBaseMapper = knowledgeBaseMapper;
     }
 
     // ---- CRUD ----------------------------------------------------------------------------
@@ -90,6 +128,89 @@ public class ParadigmService {
             return null;
         }
         return paradigmMapper.selectDefaultByDomain(domain.trim());
+    }
+
+    // ---- 阶段 A：四层解析（library > domain > official）与官方默认 seeding ---------------
+
+    /** 解析结果：{@code source} ∈ library|domain|official；降级时附来源层。 */
+    public record Resolution(ParadigmEntity paradigm, String source, String degradedFrom) {}
+
+    /**
+     * 库为中心的四层范式解析（16 号方案 §2）。调用方（resolve 端点/MCP 路由）传目标库
+     * 列表；kbIds 为空 = 未指定库，直接走领域默认。
+     *
+     * <p>库级仅当目标库绑定<b>一致</b>（DISTINCT 恰好一个）且该范式可用时生效；绑定不一致
+     * 或范式失效 → 降级领域默认（degradedFrom=library），领域也没有 → 官方默认。全空 →
+     * null（调用方明确报"未配置检索范式"，不再回落 legacy）。</p>
+     */
+    public Resolution resolveFor(String domain, List<String> kbIds) {
+        boolean libraryEligible = kbIds != null && !kbIds.isEmpty();
+        if (libraryEligible) {
+            List<String> defaults = knowledgeBaseMapper.selectDefaultParadigmIds(domain, kbIds);
+            if (defaults.size() == 1) {
+                ParadigmEntity e = usable(paradigmMapper.selectById(defaults.get(0)));
+                if (e != null) {
+                    return new Resolution(e, "library", null);
+                }
+            }
+            if (!defaults.isEmpty()) {
+                // 有库级绑定但不可用（归档/未发布）或绑定不一致：降级，但要留痕。
+                Resolution lower = resolveDomainThenOfficial(domain);
+                return (lower == null)
+                        ? null
+                        : new Resolution(lower.paradigm(), lower.source(), "library");
+            }
+        }
+        return resolveDomainThenOfficial(domain);
+    }
+
+    private Resolution resolveDomainThenOfficial(String domain) {
+        ParadigmEntity d = usable(resolveDefaultForDomain(domain));
+        if (d != null) {
+            return new Resolution(d, "domain", null);
+        }
+        ParadigmEntity o = usable(paradigmMapper.selectById(OFFICIAL_DEFAULT_ID));
+        if (o != null) {
+            return new Resolution(o, "official", null);
+        }
+        return null;
+    }
+
+    /** 可用 = 已发布（status=active）且有当前版本；不可用（含 null 入参）返回 null。 */
+    private ParadigmEntity usable(ParadigmEntity e) {
+        if (e == null) return null;
+        if (!"active".equals(e.getStatus())) return null;
+        if (e.getCurrentVersion() <= 0) return null;
+        return e;
+    }
+
+    /**
+     * Seed the official default paradigm（固定 id，幂等）。缺失则建+发布；已存在但从未
+     * 发布（version=0）则补发布；用户归档（archived）的官方范式不复活——那是显式决定。
+     * Best-effort：控制库不可用/名称被占 → log warn，下次启动重试。
+     */
+    @Transactional
+    public void ensureOfficialDefault() {
+        ParadigmEntity existing = paradigmMapper.selectById(OFFICIAL_DEFAULT_ID);
+        if (existing == null) {
+            ParadigmEntity e = new ParadigmEntity();
+            e.setId(OFFICIAL_DEFAULT_ID);
+            e.setName("系统官方默认检索范式");
+            e.setDescription("无任何绑定时的兜底检索管线：向量+关键词混合召回、加权融合、"
+                    + "模型重排、组装上下文包。检索范围默认留空（检索时按开放库注入）。");
+            e.setDraftGraphJson(OFFICIAL_DEFAULT_GRAPH);
+            e.setCurrentVersion(0);
+            e.setStatus("draft");
+            paradigmMapper.insert(e);
+            publish(OFFICIAL_DEFAULT_ID, "system-seeder");
+            log.info("[paradigm] official default seeded: {}", OFFICIAL_DEFAULT_ID);
+        } else if (existing.getCurrentVersion() == 0) {
+            if (existing.getDraftGraphJson() == null || existing.getDraftGraphJson().isBlank()) {
+                paradigmMapper.updateDraft(OFFICIAL_DEFAULT_ID, OFFICIAL_DEFAULT_GRAPH);
+            }
+            publish(OFFICIAL_DEFAULT_ID, "system-seeder");
+            log.info("[paradigm] official default published: {}", OFFICIAL_DEFAULT_ID);
+        }
     }
 
     /** Replace the editable draft graph. */

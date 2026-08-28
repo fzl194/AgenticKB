@@ -13,6 +13,9 @@
         <el-tab-pane label="系统配置" name="system">
           <SystemConfigTab />
         </el-tab-pane>
+        <el-tab-pane label="MCP 接入" name="mcp">
+          <McpAccessTab />
+        </el-tab-pane>
         <el-tab-pane label="品牌外观" name="brand">
           <BrandAppearanceTab />
         </el-tab-pane>
@@ -47,6 +50,7 @@ import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useControlPlaneStore } from '@/stores/controlPlane'
 import SystemConfigTab from '@/components/settings/SystemConfigTab.vue'
+import McpAccessTab from '@/components/settings/McpAccessTab.vue'
 import SystemStatusTab from '@/components/settings/SystemStatusTab.vue'
 import BrandAppearanceTab from '@/components/settings/BrandAppearanceTab.vue'
 import UserManagementTab from '@/components/settings/UserManagementTab.vue'

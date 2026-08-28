@@ -33,6 +33,9 @@ class KbUpdate(BaseModel):
     description: str | None = None
     visibility: str | None = None
     mining_workflow_id: str | None = None
+    #: 阶段 A：库级默认检索范式（serving operator_paradigm id）。null = 清除，
+    #: 回落领域默认。格式校验在此，范式可用性由 resolve 运行时降级兜底。
+    default_paradigm_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class MemberAdd(BaseModel):

@@ -34,7 +34,7 @@ public class ScopeResolveOperator implements Operator {
             "kbIds":{"type":"array","items":{"type":"string"},\
             "x-widget":"kb-picker",\
             "title":"知识库范围",\
-            "description":"留空 = 全域生效发布；选择后只检索这些知识库已挖掘的内容"}}}""";
+            "description":"推荐留空 = 检索时按用户开放库/请求指定的库组合自动注入（通用范式）；写死 = 专属范式，只检索这些知识库并忽略检索请求传入的库"}}}""";
 
     private final AssetRepository assetRepository;
     private final KbAccessService kbAccessService;
@@ -57,8 +57,22 @@ public class ScopeResolveOperator implements Operator {
 
     @Override
     public SlotValues execute(SlotValues inputs, Params params, ExecContext ctx) {
+        // 阶段 A 菜谱+运行时范围：图内写死 kbIds = 专属范式优先（请求值被忽略并留痕）；
+        // 图内留空 = 通用范式，用请求现场指定的库组合；请求也未带 = 域级 release（原语义）。
+        List<String> paramKbIds = params.getStringList("kbIds");
+        List<String> requestKbIds = ctx.requestKbIds() == null ? List.of() : ctx.requestKbIds();
+        List<String> effectiveKbIds;
+        if (!paramKbIds.isEmpty()) {
+            effectiveKbIds = paramKbIds;
+            if (!requestKbIds.isEmpty()) {
+                ctx.putAttribute("ignoredRequestKbIds", requestKbIds);
+            }
+        } else {
+            effectiveKbIds = requestKbIds;
+        }
+
         List<String> kbIds =
-                kbAccessService.authorize(ctx.domain(), params.getStringList("kbIds"), ctx.username());
+                kbAccessService.authorize(ctx.domain(), effectiveKbIds, ctx.username());
 
         ActiveScope scope = assetRepository.resolveActiveScope(ctx.domain(), ctx.channel(), kbIds);
         ctx.putAttribute("releaseId", scope.releaseId());

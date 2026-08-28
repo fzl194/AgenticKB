@@ -543,6 +543,19 @@ sync_serving_jar() {
     fi
 }
 
+sync_kb_ui_dist() {
+    # 前端与 jar 同理：kb-ui-dist 烤在镜像里且无 bind-mount，重启容器不会更新。
+    # 宿主机 kb-ui/dist 存在（npm run build 产物）则整目录替换进容器（先落 .new 再原子换名）。
+    if [ -d kb-ui/dist ]; then
+        echo "=== 正在同步 kb-ui 前端产物 ==="
+        docker exec "$APP_CONTAINER_NAME" sh -c "rm -rf /app/kb-ui-dist.new && mkdir -p /app/kb-ui-dist.new" || die "容器预备目录失败"
+        docker cp kb-ui/dist/. "$APP_CONTAINER_NAME:/app/kb-ui-dist.new" || die "无法复制 kb-ui 产物"
+        docker exec "$APP_CONTAINER_NAME" sh -c "rm -rf /app/kb-ui-dist.old && mv /app/kb-ui-dist /app/kb-ui-dist.old && mv /app/kb-ui-dist.new /app/kb-ui-dist && rm -rf /app/kb-ui-dist.old" || die "无法切换 kb-ui 目录"
+    else
+        echo "=== 未发现 kb-ui/dist（先 cd kb-ui && npm run build），沿用镜像内置前端 ==="
+    fi
+}
+
 start_and_verify() {
     local previous_ordered_startup="${CMKB_ORDERED_STARTUP-}"
     local ordered_startup_was_set="${CMKB_ORDERED_STARTUP+x}"
@@ -563,6 +576,7 @@ start_and_verify() {
     [ "$compose_result" -eq 0 ] || die "Docker Compose 无法重建应用容器。"
 
     sync_serving_jar
+    sync_kb_ui_dist
     start_services_in_dependency_order
     show_completion
 }

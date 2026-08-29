@@ -232,7 +232,10 @@ def document_parse_handler(
         profile=getattr(ctx, "profile", None),
         action=getattr(ctx, "action", None),
         existing_doc=getattr(ctx, "existing_doc", None),
-        document_id=getattr(ctx, "document_id", None),
+        document_id=(
+            getattr(outcome, "document_id", None)
+            or getattr(ctx, "document_id", None)
+        ),
     )
     return _success(state, bundle, "parsed_documents")
 

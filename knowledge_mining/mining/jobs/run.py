@@ -980,6 +980,12 @@ class _WorkflowJobServices:
         # persist_document_assets 内的 commit_document 负责）。
         self.mark_document_outcome = self._mark_document_outcome
 
+    def commit_document(
+        self, run_document_id: str, document_id: str, snapshot_id: str,
+    ) -> None:
+        """批次8 M5：新链 persist 成功后回写文档身份（对齐旧 commit_document）."""
+        self.tracker.commit_document(run_document_id, document_id, snapshot_id)
+
     def _mark_document_outcome(
         self, run_document_id: str, status: str, message: str,
     ) -> None:

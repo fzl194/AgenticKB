@@ -94,6 +94,13 @@ def asset_persist_handler(
                 error_code="asset_persist_failed",
                 error_message=str(exc),
             )
+        commit_document = getattr(runtime.services, "commit_document", None)
+        if commit_document is not None and state.context.document_id:
+            commit_document(
+                state.run_document_id,
+                state.context.document_id,
+                state.context.snapshot_ref or "",
+            )
         persisted = state.context.with_updates(
             document_id=getattr(outcome, "document_id", None)
             or state.context.document_id,

@@ -85,6 +85,16 @@ services:
       # 场景包配置目录
       SCENARIO_PACKS_DIR: /app/main_control_service/config/scenario_packs
 
+      # 在线检索内部密钥：deploy-server.sh 首次部署随机生成并持久化到宿主机
+      # .env（600 权限，后续部署复用不轮换）。serving 与 mcp_server 共享
+      # SERVING_INTERNAL_AUTH_SECRET（/api/internal/* 与 MCP 结构工具）；
+      # SERVING_EVIDENCE_REF_SECRET 签发 EvidenceResponse opaque ref。
+      # 同一容器内 supervisor 子进程继承容器环境，两服务同值生效。
+      SERVING_EVIDENCE_REF_SECRET: "${SERVING_EVIDENCE_REF_SECRET:-}"
+      SERVING_INTERNAL_AUTH_SECRET: "${SERVING_INTERNAL_AUTH_SECRET:-}"
+      # mcp_server → serving 内网回调（supervisor 同容器共享网络命名空间）。
+      SERVING_INTERNAL_URL: "${SERVING_INTERNAL_URL:-http://127.0.0.1:8081}"
+
     # 加入 CoreMasterKB 专用 Docker 网络
     networks:
       - cmkb_net

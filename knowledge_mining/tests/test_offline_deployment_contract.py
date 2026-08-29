@@ -33,7 +33,9 @@ class OfflineDeploymentContractTests(unittest.TestCase):
         self.assertIn("libreoffice --headless --version", dockerfile)
         self.assertIn("import openpyxl, xlrd", dockerfile)
         self.assertIn("错误：未找到 LibreOffice", dockerfile)
-        self.assertIn("Excel 解析依赖验证通过", dockerfile)
+        # bcc5636 起构建期验证扩为整条解析链（openpyxl/xlrd 在内），成功
+        # 文案从「Excel 解析依赖验证通过」改为「解析链依赖验证通过」。
+        self.assertIn("解析链依赖验证通过", dockerfile)
 
 
     def test_offline_build_is_versioned_compressed_and_checksummed(self) -> None:

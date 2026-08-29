@@ -119,6 +119,9 @@ class EmbeddingFacade:
                 tuple(records),
                 policy.version,
                 document_key=snapshot_id,
+                # 向量本体与 records 平行传入：PG 实现落 embedding_vector_vec，
+                # memory 实现忽略（M5 前仅暂存 provenance）。
+                vectors=tuple(vectors),
             )
         ) if records else 0
         return SimpleNamespace(

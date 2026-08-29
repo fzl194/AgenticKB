@@ -397,13 +397,12 @@ def build_new_chain_services(
             PgSnapshotRepository,
         )
 
-        # M2：RepresentationStore 暂用 memory（PG 三面资产表 M5 落地）
-        from knowledge_mining.mining.retrieval_projection.persist import (
-            MemoryAssetWriter,
-        )
-        from knowledge_mining.mining.retrieval_projection.repositories_memory import (
-            MemoryEmbeddingStore,
-            MemoryRepresentationStore,
+        # 批次8 生产化：三面资产 PG 落库（retrieval_projection schema.py 的
+        # v2 DDL 首次使用时幂等建表）；memory 三件套仅供显式传入/无池测试。
+        from knowledge_mining.mining.retrieval_projection.repositories_pg import (
+            PgAssetWriter,
+            PgEmbeddingStore,
+            PgRepresentationStore,
         )
 
         storage_objects = storage_objects or PgStorageObjectRepository(repository_pool)
@@ -412,9 +411,11 @@ def build_new_chain_services(
         attempts = attempts or PgParseAttemptRepository(repository_pool)
         snapshots = snapshots or PgSnapshotRepository(repository_pool)
         segment_store = segment_store or PgSegmentStore(repository_pool)
-        representation_store = representation_store or MemoryRepresentationStore()
-        embedding_store = embedding_store or MemoryEmbeddingStore()
-        asset_writer = asset_writer or MemoryAssetWriter()
+        representation_store = representation_store or PgRepresentationStore(
+            repository_pool,
+        )
+        embedding_store = embedding_store or PgEmbeddingStore(repository_pool)
+        asset_writer = asset_writer or PgAssetWriter(repository_pool)
     else:
         from knowledge_mining.mining.file_management.repositories_memory import (
             MemoryDocumentCurrentContentRepository,

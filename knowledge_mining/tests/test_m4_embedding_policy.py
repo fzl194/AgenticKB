@@ -159,7 +159,7 @@ def test_embed_for_snapshot_groups_and_freezes_provenance(tmp_path):
     embedding_store = SimpleNamespace(written=None)
 
     class _Store:
-        async def replace_for_snapshot(self, snapshot_id, records, fingerprint, *, document_key):
+        async def replace_for_snapshot(self, snapshot_id, records, fingerprint, *, document_key, vectors=()):
             embedding_store.written = (snapshot_id, records, fingerprint)
             return len(records)
 
@@ -208,7 +208,7 @@ def test_embed_skips_none_and_respects_override(tmp_path):
     asyncio.new_event_loop().run_until_complete(seed())
 
     class _Store:
-        async def replace_for_snapshot(self, snapshot_id, records, fingerprint, *, document_key):
+        async def replace_for_snapshot(self, snapshot_id, records, fingerprint, *, document_key, vectors=()):
             return len(records)
 
     facade = EmbeddingFacade(

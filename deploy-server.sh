@@ -23,6 +23,8 @@ fi
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 HEALTH_INTERVAL="${HEALTH_INTERVAL:-2}"
 AUTH_CONFIG_PATH="main_control_service/config/system/auth.yaml"
+# serving/mcp 内部密钥的宿主机持久化文件（docker compose 插值同源读取）。
+SERVING_ENV_FILE="${SERVING_ENV_FILE:-.env}"
 TMP_CONTAINER_ACTIVE=false
 CODE_STAGE_DIR=""
 CODE_BACKUP_DIR=""
@@ -161,6 +163,41 @@ set_bootstrap_initialization_complete() {
     fi
     mv -- "$tmp_file" "$AUTH_CONFIG_PATH"
     chmod 600 -- "$AUTH_CONFIG_PATH"
+}
+
+read_serving_env_value() {
+    local key="$1"
+    sed -n -E "s|^${key}=(.+)\$|\1|p" "$SERVING_ENV_FILE" 2>/dev/null \
+        | tail -n 1 | tr -d '\r'
+}
+
+ensure_serving_secrets() {
+    # serving 与 mcp_server 的内部密钥（同容器 supervisor 子服务共享容器
+    # 环境）：首次部署随机生成，持久化到宿主机 .env（600；已 gitignore），
+    # 后续部署复用不轮换——与 auth.yaml 的 generate-once 语义一致。
+    # 重建容器（start_and_verify 的 --force-recreate）即全服务重启生效。
+    local key value
+
+    [ -L "$SERVING_ENV_FILE" ] && \
+        die "serving 密钥文件不能是符号链接：${SERVING_ENV_FILE}"
+    [ -f "$SERVING_ENV_FILE" ] || : > "$SERVING_ENV_FILE"
+    chmod 600 -- "$SERVING_ENV_FILE"
+
+    for key in SERVING_EVIDENCE_REF_SECRET SERVING_INTERNAL_AUTH_SECRET; do
+        # .env 是宿主机真相源（运维改文件即生效）；文件缺失才看进程环境，
+        # 两者皆无才生成。生成后回写，跨部署复用不轮换。
+        value="$(read_serving_env_value "$key")"
+        [ -n "$value" ] || value="${!key:-}"
+        if [ -z "$value" ]; then
+            value="$(generate_auth_secret 32)"
+            echo "已初始化 ${key}。"
+        fi
+        if ! grep -q "^${key}=" "$SERVING_ENV_FILE"; then
+            printf '%s=%s\n' "$key" "$value" >> "$SERVING_ENV_FILE"
+        fi
+        # 导出供 docker-compose.yml 变量插值（deploy 脚本必须从仓库根目录运行）。
+        export "$key=$value"
+    done
 }
 
 ensure_auth_config_secrets() {
@@ -643,6 +680,7 @@ apply_config_only() {
     echo "=== 正在应用宿主机现有配置（不会替换镜像和文件） ==="
     require_host_config
     ensure_auth_config_secrets
+    ensure_serving_secrets
     validate_compose_config
     preflight_ports
     start_and_verify
@@ -717,6 +755,7 @@ deploy_from_image() {
     cleanup_tmp_container
     require_host_config
     ensure_auth_config_secrets
+    ensure_serving_secrets
     start_and_verify
 }
 

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from typing import Any
 
@@ -75,18 +76,26 @@ class McpAccessService:
     async def replace_open_kbs(
         self, *, user_id: str, kb_ids: list[str],
     ) -> list[str]:
-        """全量覆盖开放库。勾选的每个库必须是本人当前可见库（否则整单拒绝，
-        不接受部分生效——避免勾选结果与用户预期悄悄漂移）。"""
+        """全量覆盖开放库：**静默剔除**当前不可见的库（软删/权限收走=合法演化，
+        不阻塞保存——批次7 bug：幽灵勾选整单被 not visible 拒）。返回实际生效
+        列表，调用方以响应为准刷新界面；不可见 id 不报错不生效，无存在性泄露。"""
         seen: set[str] = set()
         unique: list[str] = []
         for kb_id in kb_ids:
             if kb_id not in seen:
                 seen.add(kb_id)
                 unique.append(kb_id)
-        for kb_id in unique:
-            if not await self._db.is_visible(kb_id=kb_id, user_id=user_id):
-                raise McpAccessError(f"knowledge base not visible: {kb_id}")
-        return await self._db.replace_open_kbs(user_id, unique)
+        effective = [
+            kb_id for kb_id in unique
+            if await self._db.is_visible(kb_id=kb_id, user_id=user_id)
+        ]
+        dropped = len(unique) - len(effective)
+        if dropped:
+            logging.getLogger(__name__).info(
+                "replace_open_kbs: dropped %d stale/invisible kb(s) for user %s",
+                dropped, user_id,
+            )
+        return await self._db.replace_open_kbs(user_id, effective)
 
     # ------------------------------------------------ 批次7：工具开关 / 提示词
 

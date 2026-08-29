@@ -76,12 +76,14 @@ async def test_rotate_returns_plaintext_once_and_overwrites() -> None:
     assert db.rotated[0][1] != db.rotated[1][1]  # hash 被覆盖=旧钥立即失效
 
 
-async def test_replace_open_kbs_rejects_invisible_kb_entirely() -> None:
+async def test_replace_open_kbs_drops_invisible_kb_instead_of_failing() -> None:
+    """批次7 bug 修复：软删/权限收走的库=合法演化，静默剔除而非整单拒绝
+    （幽灵勾选曾把保存整个堵死，报 knowledge base not visible）。"""
     db = _FakeDb(visible={"kb-ok"})
     svc = McpAccessService(db)  # type: ignore[arg-type]
-    with pytest.raises(McpAccessError, match="not visible"):
-        await svc.replace_open_kbs(user_id="u1", kb_ids=["kb-ok", "kb-hidden"])
-    assert db.replaced == []  # 整单拒绝，不接受部分生效
+    final = await svc.replace_open_kbs(user_id="u1", kb_ids=["kb-ok", "kb-gone"])
+    assert final == ["kb-ok"]
+    assert db.replaced == [("u1", ["kb-ok"])]  # 失效勾选被剔除，有效项正常生效
 
 
 async def test_replace_open_kbs_dedupes() -> None:

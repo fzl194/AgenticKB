@@ -231,7 +231,10 @@ async function reload() {
     ])
     status.value = access
     myKbs.value = kbs.map(k => ({ id: k.id, name: k.name, document_count: k.document_count }))
-    selectedKbs.value = [...access.open_kb_ids]
+    // 只保留当前仍可见的库——软删/权限收走的库自动从勾选中消失，
+    // 不让幽灵 id 混进下一次保存请求（后端也会剔除，这里保证界面所见即所得）
+    const visibleIds = new Set(myKbs.value.map(k => k.id))
+    selectedKbs.value = access.open_kb_ids.filter(id => visibleIds.has(id))
     const savedOn = access.open_tools
     for (const t of ALL_TOOLS) {
       toolOn.value[t.name] = savedOn == null ? true : savedOn.includes(t.name)
@@ -279,6 +282,7 @@ async function saveOpenKbs() {
   try {
     const r = await kbApi.putMcpOpenKbs(selectedKbs.value)
     status.value = { ...(status.value ?? { configured: true, open_kb_ids: [] }), open_kb_ids: r.open_kb_ids }
+    selectedKbs.value = [...r.open_kb_ids]  // 以响应为准（后端可能剔除了失效勾选）
     ElMessage.success('开放库已更新')
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))

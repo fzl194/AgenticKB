@@ -733,9 +733,13 @@ WITH cur AS (
             if row is None:
                 return None
             result = dict(row)
+            # 开放清单只报"仍有效"的库（active ∩ 可见）——软删/权限收走的库自动消失，
+            # 不再把幽灵 id 交给前端混进下一次保存请求（批次7 bug：整单被 not visible 拒）。
             cur = await conn.execute(
-                """SELECT kb_id FROM mcp_open_kbs WHERE user_id = %s
-                   ORDER BY granted_at""",
+                """SELECT o.kb_id FROM mcp_open_kbs o
+                   JOIN knowledge_bases k ON k.id = o.kb_id
+                   WHERE o.user_id = %s AND k.status = 'active'
+                   ORDER BY o.granted_at""",
                 [user_id],
             )
             result["open_kb_ids"] = [r["kb_id"] for r in await cur.fetchall()]

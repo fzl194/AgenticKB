@@ -1,5 +1,8 @@
 import type { FullTextRef, FullTextResult, HealthStatus, SearchResult } from '@/types'
+import type { EvidenceItem, EvidenceResponse } from '@/types/operator'
 import { createProxyClient } from '@/api/proxyClient'
+
+export type { EvidenceItem, EvidenceResponse }
 
 export interface SearchOptions {
   domain?: string
@@ -26,12 +29,7 @@ export interface ParadigmResolveResult {
 }
 
 export interface ParadigmSearchResult {
-  contextPack?: {
-    query?: { original?: string }
-    items?: Array<Record<string, unknown>>
-    sources?: Array<Record<string, unknown>>
-    [k: string]: unknown
-  }
+  evidenceResponse?: EvidenceResponse
   [k: string]: unknown
 }
 

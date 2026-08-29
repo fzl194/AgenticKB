@@ -15,9 +15,10 @@ describe('mining Workflow navigation', () => {
 
     expect(wrapper.text()).toContain('挖掘范式')
     expect(wrapper.text()).toContain('检索范式')
-    expect(wrapper.text()).toContain('实体图谱')
-    expect(wrapper.text()).toContain('本体版本')
-    expect(wrapper.text()).toContain('本体图谱')
+    // 批次8：实体/本体研究线下线，产品不展示（25 号 §11.2）
+    expect(wrapper.text()).not.toContain('实体图谱')
+    expect(wrapper.text()).not.toContain('本体版本')
+    expect(wrapper.text()).not.toContain('本体图谱')
   })
 })
 

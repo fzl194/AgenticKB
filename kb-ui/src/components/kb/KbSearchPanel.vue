@@ -59,18 +59,20 @@
       </template>
     </el-alert>
 
-    <!-- 结果 -->
+    <!-- 结果（批次8 R8：EvidenceResponse 协议——type/content/source/truncated，无 score/rank） -->
     <div v-if="error" class="kb-search__error">{{ error }}</div>
-    <template v-if="items.length">
-      <div class="kb-search__meta">命中 {{ items.length }} 条</div>
+    <template v-if="evidence.length">
+      <div class="kb-search__meta">
+        证据 {{ evidence.length }} 条<span v-if="hasMore">（预算内未全列，has_more）</span>
+      </div>
       <div class="kb-search__results">
-        <div v-for="(item, i) in items" :key="String(item.id ?? i)" class="kb-search__item">
+        <div v-for="(ev, i) in evidence" :key="ev.ref ?? i" class="kb-search__item">
           <div class="kb-search__item-head">
-            <span class="kb-search__item-title">{{ itemTitle(item) || `证据 ${i + 1}` }}</span>
-            <span class="kb-search__item-score">{{ scoreOf(item) }}</span>
+            <span class="kb-search__item-type">{{ ev.type || '证据' }}</span>
+            <span v-if="ev.truncated" class="kb-search__item-trunc" title="内容被预算截断；MCP 侧可用 get_evidence 取完整原文">截断</span>
           </div>
-          <p class="kb-search__item-text">{{ itemText(item) }}</p>
-          <div v-if="sourceDocName(item)" class="kb-search__item-src">来源：{{ sourceDocName(item) }}</div>
+          <p class="kb-search__item-text">{{ ev.content }}</p>
+          <div v-if="sourceLabelOf(ev)" class="kb-search__item-src">来源：{{ sourceLabelOf(ev) }}</div>
         </div>
       </div>
     </template>
@@ -95,7 +97,7 @@ import { useServingApi, type ParadigmResolveResult } from '@/api/serving'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
 import type { KbSummary } from '@/types/kb'
-import type { ParadigmView } from '@/types/operator'
+import type { EvidenceItem, ParadigmView } from '@/types/operator'
 
 const props = defineProps<{
   kb: KbSummary
@@ -119,7 +121,8 @@ const query = ref('')
 const searching = ref(false)
 const searched = ref(false)
 const error = ref('')
-const items = ref<Array<Record<string, unknown>>>([])
+const evidence = ref<EvidenceItem[]>([])
+const hasMore = ref(false)
 const effective = ref<{ name: string; version: number; sourceLabel: string } | null>(null)
 
 const activeParadigms = computed(() => paradigms.value.filter(p => p.status === 'active'))
@@ -181,7 +184,8 @@ async function run() {
   const resolved = resolveInfo.value
   if (!resolved?.bound || !resolved.paradigmId) {
     error.value = '该知识域未配置检索范式（库级/官方默认均缺失），请联系管理员在「检索范式」页发布范式。'
-    items.value = []
+    evidence.value = []
+    hasMore.value = false
     searched.value = true
     return
   }
@@ -192,7 +196,8 @@ async function run() {
       domain: domainStore.currentDomain ?? undefined,
       kbIds: [props.kb.id],
     })
-    items.value = (out.contextPack?.items ?? []) as Array<Record<string, unknown>>
+    evidence.value = out.evidenceResponse?.evidence ?? []
+    hasMore.value = out.evidenceResponse?.has_more ?? false
     effective.value = {
       name: resolved.name ?? resolved.paradigmId,
       version: resolved.version ?? 0,
@@ -201,7 +206,8 @@ async function run() {
     searched.value = true
   } catch (e) {
     error.value = await apiErrorDetail(e)
-    items.value = []
+    evidence.value = []
+    hasMore.value = false
     searched.value = true
   } finally {
     searching.value = false
@@ -213,24 +219,16 @@ function goMine() {
   ElMessage.info('请在「挖掘」页签将挖掘范式切换为 system-full-baseline 后重新挖掘')
 }
 
-const _item = (item: Record<string, unknown>, ...keys: string[]): unknown => {
-  for (const k of keys) {
-    const v = item[k]
-    if (typeof v === 'string' && v) return v
-  }
-  return ''
-}
-const itemTitle = (item: Record<string, unknown>) => _item(item, 'title', 'name')
-const itemText = (item: Record<string, unknown>) => _item(item, 'text', 'content')
-function sourceDocName(item: Record<string, unknown>): string {
-  const src = item.source as Record<string, unknown> | undefined
-  if (src && typeof src.documentName === 'string') return src.documentName
-  if (typeof item.documentName === 'string') return item.documentName
-  return ''
-}
-function scoreOf(item: Record<string, unknown>): string {
-  const s = item.score
-  return typeof s === 'number' ? s.toFixed(3) : ''
+/** 来源行：文件名（+章节路径）；库同名时附库名。 */
+function sourceLabelOf(ev: EvidenceItem): string {
+  const src = ev.source
+  if (!src) return ''
+  const parts: string[] = []
+  if (src.file_name) parts.push(src.file_name)
+  if (src.section) parts.push(src.section)
+  const base = parts.join(' · ')
+  if (src.knowledge_base && parts.length) return `${base}（${src.knowledge_base}）`
+  return base || (src.knowledge_base ?? '')
 }
 
 watch(() => props.kb.id, reload)
@@ -319,16 +317,16 @@ onMounted(reload)
   gap: 12px;
 }
 
-.kb-search__item-title {
-  font-size: 13.5px;
+.kb-search__item-type {
+  font-size: 12px;
   font-weight: 600;
-  color: var(--kb-text-primary);
+  color: #6366f1;
+  letter-spacing: 0.02em;
 }
 
-.kb-search__item-score {
-  font-size: 12px;
-  color: var(--kb-text-tertiary);
-  font-variant-numeric: tabular-nums;
+.kb-search__item-trunc {
+  font-size: 11.5px;
+  color: #e6a23c;
 }
 
 .kb-search__item-text {

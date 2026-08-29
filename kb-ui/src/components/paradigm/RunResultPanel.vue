@@ -29,10 +29,26 @@
         </el-table>
       </div>
 
-      <!-- context pack -->
-      <div v-else-if="result.contextPack" class="runres__ok">
-        <div class="runres__head">ContextPack</div>
-        <pre class="runres__json">{{ pretty(result.contextPack) }}</pre>
+      <!-- EvidenceResponse（批次8 R6+：assemble 终点的公开协议） -->
+      <div v-else-if="result.evidenceResponse" class="runres__ok">
+        <div class="runres__head">
+          EvidenceResponse · {{ result.evidenceResponse.evidence?.length ?? 0 }} 条
+          <span v-if="result.evidenceResponse.has_more" class="runres__more">（has_more）</span>
+        </div>
+        <div
+          v-for="(ev, i) in result.evidenceResponse.evidence ?? []"
+          :key="ev.ref ?? i"
+          class="runres__ev"
+        >
+          <div class="runres__ev-head">
+            <span class="runres__ev-type">{{ ev.type ?? '—' }}</span>
+            <span v-if="ev.source?.file_name" class="runres__ev-src">
+              {{ ev.source.file_name }}<template v-if="ev.source?.section"> · {{ ev.source.section }}</template>
+            </span>
+            <span v-if="ev.truncated" class="runres__ev-trunc">截断</span>
+          </div>
+          <p class="runres__ev-text">{{ ev.content }}</p>
+        </div>
       </div>
 
       <div v-else class="runres__ok">
@@ -76,6 +92,13 @@ function pretty(v: unknown): string {
 .runres__errors ul { margin: 0; padding-left: 18px; }
 .runres__errors li { margin: 3px 0; }
 .runres__json { background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 8px; max-height: 260px; overflow: auto; font-size: 11px; line-height: 1.5; }
+.runres__more { font-weight: 400; font-size: 11px; color: var(--kb-text-tertiary); }
+.runres__ev { padding: 8px 0; border-bottom: 1px dashed var(--kb-border, #eee); }
+.runres__ev-head { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.runres__ev-type { font-weight: 600; color: #6366f1; }
+.runres__ev-src { color: var(--kb-text-tertiary); }
+.runres__ev-trunc { color: #e6a23c; }
+.runres__ev-text { margin: 4px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--kb-text-secondary); white-space: pre-wrap; word-break: break-word; }
 .runres__trace-row { display: grid; grid-template-columns: 90px 110px 60px 1fr; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--kb-border, #eee); }
 .runres__trace-node { font-weight: 600; }
 .runres__trace-type { font-family: monospace; color: #6366f1; }

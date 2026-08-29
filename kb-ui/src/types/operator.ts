@@ -3,7 +3,7 @@
 export type SlotType =
   | 'STRING' | 'INT' | 'DOUBLE' | 'BOOL' | 'VECTOR'
   | 'STRING_LIST' | 'CANDIDATE_LIST' | 'CANDIDATE_LIST_MULTI'
-  | 'SCOPE' | 'QUERY_UNDERSTANDING' | 'CONTEXT_PACK'
+  | 'SCOPE' | 'QUERY_UNDERSTANDING' | 'HYDRATED_EVIDENCE_LIST' | 'EVIDENCE_RESPONSE'
 
 export interface SlotDecl {
   name: string
@@ -152,9 +152,34 @@ export interface RunTraceStep {
   summary: string
 }
 
+/** 批次8（25 号 §5.3）：EvidenceResponse 单条公开证据。 */
+export interface EvidenceItem {
+  ref?: string
+  type?: string
+  content?: string
+  source?: {
+    knowledge_base?: string
+    file_name?: string
+    relative_path?: string
+    document_ref?: string
+    section?: string
+    page?: number
+  }
+  truncated?: boolean
+  structure_ref?: string
+}
+
+/** 批次8（25 号 §5.3）：检索唯一公开响应协议。 */
+export interface EvidenceResponse {
+  query?: string
+  evidence?: EvidenceItem[]
+  has_more?: boolean
+}
+
 export interface RunResult {
   candidates?: RunCandidate[]
-  contextPack?: unknown
+  /** 批次8 R8：assemble 终点的 EvidenceResponse（query/evidence/has_more，25 号 §5.3） */
+  evidenceResponse?: EvidenceResponse
   result?: unknown
   trace?: RunTraceStep[]
   domain?: string

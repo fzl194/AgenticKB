@@ -25,9 +25,10 @@ describe('Sidebar navigation', () => {
 
     // 保留的 admin / 探索面
     expect(wrapper.text()).toContain('检索范式')
-    expect(wrapper.text()).toContain('实体图谱')
-    expect(wrapper.text()).toContain('本体版本')
-    expect(wrapper.text()).toContain('本体图谱')
+    // 批次8：实体/本体研究线下线，产品不展示（25 号 §11.2）
+    expect(wrapper.text()).not.toContain('实体图谱')
+    expect(wrapper.text()).not.toContain('本体版本')
+    expect(wrapper.text()).not.toContain('本体图谱')
 
     // KB 中心化后砍掉的顶层入口（设计 §5.1）
     expect(wrapper.text()).not.toContain('知识资产')

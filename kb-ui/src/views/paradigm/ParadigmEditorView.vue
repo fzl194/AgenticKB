@@ -58,7 +58,7 @@
             <li><b>单入 / 多入</b>：普通输入口只接一条（再连会替换旧线）；融合 <code>candidates</code> 可接多条</li>
             <li><b>不能成环</b>：整图必须是有向无环图（DAG）</li>
             <li><b>入口</b>：<code>query</code> 输入口可不连（自动用请求查询）；检索的 <b><code>scope</code> 必须连 scope_resolve</b></li>
-            <li><b>终点</b>：用 <code>collect</code>（候选列表）或 <code>assemble</code>（ContextPack）作输出</li>
+            <li><b>终点</b>：生产范式用 <code>assemble</code>（EvidenceResponse）作输出；评测图可直接把召回算子的 <code>candidates</code> 声明为输出</li>
             <li><b>删除</b>：选中节点/连线按 <kbd>Delete</kbd>；节点也可在右侧「删除节点」</li>
           </ul>
         </div>
@@ -349,7 +349,7 @@ function isAssignable(from?: string, to?: string): boolean {
 const TYPE_LABELS: Record<string, string> = {
   STRING: '文本', INT: '整数', DOUBLE: '小数', BOOL: '布尔', VECTOR: '向量',
   STRING_LIST: '字符串列表', CANDIDATE_LIST: '候选', CANDIDATE_LIST_MULTI: '候选(多入)',
-  SCOPE: '范围', QUERY_UNDERSTANDING: '查询理解', CONTEXT_PACK: '上下文包',
+  SCOPE: '范围', QUERY_UNDERSTANDING: '查询理解', HYDRATED_EVIDENCE_LIST: '水合证据', EVIDENCE_RESPONSE: '证据响应',
 }
 function typeLabel(t?: string): string { return t ? (TYPE_LABELS[t] ?? t) : '?' }
 

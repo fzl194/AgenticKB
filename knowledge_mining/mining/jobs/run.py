@@ -838,7 +838,9 @@ def _publish_workflow_job(
     return _execute_workflow_job("publish", None, run_id=run_id, **kwargs)
 
 
-def _build_workflow_object_input_services(*, sync_pool: Any) -> Any:
+def _build_workflow_object_input_services(
+    *, sync_pool: Any, embedding_generator: Any | None = None,
+) -> Any:
     """Compose v2 KB services from the control-plane MinIO configuration.
 
     A workflow job is a production execution path.  It must use registered
@@ -862,6 +864,7 @@ def _build_workflow_object_input_services(*, sync_pool: Any) -> Any:
         bucket_prefix=config.bucket_prefix,
         object_store=make_object_store(config),
         sync_pool=sync_pool,
+        embedding_generator=embedding_generator,
     )
 
 
@@ -967,6 +970,10 @@ class _WorkflowJobServices:
         # v2 object-store service graph.
         self.document_parse_service = None
         self.segment_compile_service = None
+        # 批次8 M2/M4/M5：投影/向量/持久化服务（对象输入 Run 绑定）
+        self.retrieval_project_service = None
+        self.embedding_service = None
+        self.asset_persist_service = None
         self._object_input_services_ready = False
         # BUG-3（批次1）：document_executor 终态留痕的 sink——失败/跳过文档的
         # mining_run_documents 不再滞留 processing（成功路径由
@@ -1349,9 +1356,13 @@ class _WorkflowJobServices:
             return
         services = _build_workflow_object_input_services(
             sync_pool=self.asset_db.pool,
+            embedding_generator=self.pipeline_config.embedding_generator,
         )
         self.document_parse_service = services.document_parse_service
         self.segment_compile_service = services.segment_compile_service
+        self.retrieval_project_service = services.retrieval_project_service
+        self.embedding_service = services.embedding_service
+        self.asset_persist_service = services.asset_persist_service
         self._object_input_services_ready = True
 
 

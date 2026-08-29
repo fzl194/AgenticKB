@@ -31,6 +31,8 @@ _SPECS = (
     ("segment_compile", "document", {"parsed_documents"}, {"parsed_segments"}, "SKIP_DOCUMENT"),
     ("retrieval_unit_project", "document", {"parsed_segments"}, {"retrieval_units"}, "SKIP_DOCUMENT"),
     ("embedding", "document", {"retrieval_units"}, {"embeddings"}, "FALLBACK"),
+    ("query_expansion_generate", "document", {"retrieval_units"}, {"query_aliases"}, "FALLBACK"),
+    ("hierarchical_summary_generate", "document", {"parsed_segments"}, {"summary_aliases"}, "FALLBACK"),
     ("asset_persist", "document", {"parsed_segments"}, {"assets_persisted"}, "SKIP_DOCUMENT"),
     ("mining_finalize", "global", {"assets_persisted"}, {"finalized"}, "FAIL_FAST"),
 )
@@ -42,6 +44,8 @@ _LABELS = {
     "segment_compile": ("切片编译", "从知识快照按策略编译检索切片（表格行带表头、章节路径注入）。", "document"),
     "retrieval_unit_project": ("检索单元投影", "从结构事实确定性编译类型化搜索表示（无 LLM、无入库）。", "discourse"),
     "embedding": ("向量化", "按 representation 策略矩阵为检索单元生成向量。", "discourse"),
+    "query_expansion_generate": ("问题别名生成", "离线 Doc2Query 增强：对合格源证据生成检索别名（实验，可降级）。", "discourse"),
+    "hierarchical_summary_generate": ("层级摘要生成", "标题树自底向上生成 section/document 摘要别名（实验，可降级）。", "discourse"),
     "asset_persist": ("资产持久化", "合并能力线并原子写入文档资产。", "storage"),
     "mining_finalize": ("挖掘收尾", "执行 Build、校验、发布和 Run 收尾。", "publish"),
 }

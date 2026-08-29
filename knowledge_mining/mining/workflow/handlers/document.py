@@ -346,6 +346,109 @@ def retrieval_unit_project_handler(
     return _success(state, updated, "retrieval_units")
 
 
+def query_expansion_generate_handler(state, params, runtime) -> OperatorResult:
+    """合格源表示 → LLM 别名生成（可 SKIP）→ query_alias 暂存 + bundle 事实.
+
+    批次8 M3（24 号 §5.5）：可选实验算子；LLM 失败只 degraded
+    （query_alias_ready=false），不阻断基础资产发布。
+    """
+    from ..bundle import MiningDocumentBundle
+    from ..operators.options import QueryExpansionOptions
+
+    QueryExpansionOptions.model_validate(dict(params))
+    bundle = state.context
+    if not isinstance(bundle, MiningDocumentBundle):
+        return OperatorResult(
+            state, frozenset(), OperatorStatus.FAILED,
+            error_code="query_expansion_bad_input",
+            error_message="query_expansion_generate requires a bundle",
+        )
+    service = getattr(runtime.services, "query_expansion_service", None)
+    if service is None:
+        return _on_error(
+            state,
+            code="query_expansion_unavailable",
+            exc=RuntimeError("query_expansion service is not configured"),
+            mode=OperatorStatus.FALLBACK,
+            capability="query_aliases",
+        )
+    try:
+        outcome = service.generate_for_snapshot(
+            snapshot_id=bundle.snapshot_ref, params=dict(params),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _on_error(
+            state, code="query_expansion_failed", exc=exc,
+            mode=OperatorStatus.FALLBACK, capability="query_aliases",
+        )
+    updated = bundle.with_updates(
+        capability_facts=bundle.capability_facts | frozenset({"query_aliases"}),
+        diagnostics={
+            **dict(bundle.diagnostics),
+            "query_expansion": {
+                "aliases": len(outcome.aliases), "skipped": outcome.skipped,
+                "invalid": outcome.invalid, "degraded": outcome.degraded,
+                "query_alias_ready": bool(outcome.aliases) and not outcome.degraded,
+            },
+        },
+    )
+    if outcome.degraded:
+        return OperatorResult(
+            updated, frozenset({"query_aliases"}), OperatorStatus.FALLBACK,
+        )
+    return _success(state, updated, "query_aliases")
+
+
+def hierarchical_summary_generate_handler(state, params, runtime) -> OperatorResult:
+    """标题树自底向上摘要 → summary_alias 暂存 + bundle 事实.
+
+    批次8 M3（24 号 §5.6）：可选实验算子；LLM 失败只 degraded。
+    """
+    from ..bundle import MiningDocumentBundle
+    from ..operators.options import HierarchicalSummaryOptions
+
+    HierarchicalSummaryOptions.model_validate(dict(params))
+    bundle = state.context
+    if not isinstance(bundle, MiningDocumentBundle):
+        return OperatorResult(
+            state, frozenset(), OperatorStatus.FAILED,
+            error_code="hierarchical_summary_bad_input",
+            error_message="hierarchical_summary_generate requires a bundle",
+        )
+    service = getattr(runtime.services, "hierarchical_summary_service", None)
+    if service is None:
+        return _on_error(
+            state,
+            code="hierarchical_summary_unavailable",
+            exc=RuntimeError("hierarchical_summary service is not configured"),
+            mode=OperatorStatus.FALLBACK,
+            capability="summary_aliases",
+        )
+    try:
+        outcome = service.generate_for_snapshot(
+            snapshot_id=bundle.snapshot_ref,
+            params={**dict(params), "documentRef": bundle.document_ref},
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _on_error(
+            state, code="hierarchical_summary_failed", exc=exc,
+            mode=OperatorStatus.FALLBACK, capability="summary_aliases",
+        )
+    updated = bundle.with_updates(
+        capability_facts=bundle.capability_facts | frozenset({"summary_aliases"}),
+        diagnostics={
+            **dict(bundle.diagnostics),
+            "hierarchical_summary": {
+                "aliases": len(outcome.aliases),
+                "skipped": outcome.skipped_sections,
+                "degraded": outcome.degraded,
+                "summary_alias_ready": bool(outcome.aliases) and not outcome.degraded,
+            },
+        },
+    )
+    return _success(state, updated, "summary_aliases")
+
+
 # 批次8 M0：退役算子（enrich/discourse_line/contextual_retrieval_enrich/
 # retrieval_unit_build）与实体研究算子的 handler 已移除/隔离（research.py）。
 DOCUMENT_HANDLERS = {
@@ -353,5 +456,7 @@ DOCUMENT_HANDLERS = {
     "document_parse": document_parse_handler,
     "segment_compile": segment_compile_handler,
     "retrieval_unit_project": retrieval_unit_project_handler,
+    "query_expansion_generate": query_expansion_generate_handler,
+    "hierarchical_summary_generate": hierarchical_summary_generate_handler,
     "embedding": embedding_handler,
 }

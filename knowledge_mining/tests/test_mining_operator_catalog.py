@@ -18,6 +18,8 @@ APPROVED_OPERATOR_TYPES = {
     "document_parse",
     "segment_compile",
     "retrieval_unit_project",
+    "query_expansion_generate",
+    "hierarchical_summary_generate",
     "embedding",
     "asset_persist",
     "mining_finalize",

@@ -60,3 +60,19 @@ class MemoryEmbeddingStore:
         self, snapshot_id: str
     ) -> tuple[EmbeddingRecord, ...]:
         return self._by_snapshot.get(snapshot_id, ())
+
+
+class MemoryAliasStore:
+    """别名（query_alias/summary_alias）暂存；M5 持久化时并入搜索面."""
+
+    def __init__(self) -> None:
+        self._by_snapshot: dict[str, tuple] = {}
+
+    async def replace_for_snapshot(
+        self, snapshot_id, aliases, fingerprint, *, document_key,
+    ) -> int:
+        self._by_snapshot[snapshot_id] = tuple(aliases)
+        return len(aliases)
+
+    async def list_for_snapshot(self, snapshot_id):
+        return self._by_snapshot.get(snapshot_id, ())

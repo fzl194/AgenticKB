@@ -186,6 +186,22 @@ class DocumentParseOptions(OperatorOptions):
     )
 
 
+class QueryExpansionOptions(OperatorOptions):
+    """query_expansion_generate 参数（24 号 §5.5：资格门之上最小覆盖）."""
+
+    max_aliases_per_target: int = Field(
+        1, ge=1, le=3, alias="maxAliasesPerTarget", title="每目标别名上限",
+    )
+
+
+class HierarchicalSummaryOptions(OperatorOptions):
+    """hierarchical_summary_generate 参数（24 号 §5.6）."""
+
+    min_section_tokens: int = Field(
+        120, ge=0, le=8192, alias="minSectionTokens", title="章节摘要门槛",
+    )
+
+
 class RetrieProjectOptions(OperatorOptions):
     """retrieval_unit_project 参数（批次8 M2，24 号 §5.4）.
 
@@ -233,6 +249,8 @@ OPTIONS_BY_OPERATOR: dict[str, type[OperatorOptions]] = {
     "segment_compile": SegmentCompileOptions,
     "retrieval_unit_project": RetrieProjectOptions,
     "embedding": EmbeddingOptions,
+    "query_expansion_generate": QueryExpansionOptions,
+    "hierarchical_summary_generate": HierarchicalSummaryOptions,
     "asset_persist": EmptyOptions,
     "mining_finalize": FinalizeOptions,
 }

@@ -17,6 +17,8 @@ FORMAL_OPERATOR_TYPES = {
     "document_parse",
     "segment_compile",
     "retrieval_unit_project",  # M2 加入
+    "query_expansion_generate",  # M3 加入（实验可选）
+    "hierarchical_summary_generate",  # M3 加入（实验可选）
     "embedding",
     "asset_persist",
     "mining_finalize",
@@ -44,6 +46,8 @@ ALLOWED_DOCUMENT_HANDLER_TYPES = {
     "document_parse",
     "segment_compile",
     "retrieval_unit_project",
+    "query_expansion_generate",
+    "hierarchical_summary_generate",
     "embedding",
 }
 

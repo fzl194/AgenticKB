@@ -331,6 +331,7 @@ def test_catalog_registers_seventh_operator_and_embedding_dependency() -> None:
         "input_ingest", "document_parse", "segment_compile",
         "retrieval_unit_project", "embedding", "asset_persist",
         "mining_finalize",
+        "query_expansion_generate", "hierarchical_summary_generate",  # M3
     }
     assert "retrieval_unit_project" in DOCUMENT_HANDLERS
     assert DEPENDENCIES.get("embedding") == {"retrieval_unit_project"}

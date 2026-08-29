@@ -107,7 +107,7 @@ def test_catalog_has_6_formal_operators(
     )
 
     assert response.status_code == 200
-    assert len(response.json()["items"]) == 7
+    assert len(response.json()["items"]) == 9
     assert fake_workflow_service.calls == []
 
 

@@ -24,12 +24,17 @@ _KEY_RANDOM_BYTES = 32
 
 #: MCP 工具族六件套（批次7 定稿）——open_tools 白名单与描述键的校验基线，
 #: 与 mcp_server 的工具注册一一对应。
+# 批次8 R8：九件套（get_segment_fulltext 由 get_evidence 取代；
+# 新增证据/结构工具族经 serving internal 通道）。
 MCP_TOOL_NAMES = frozenset({
     "search_knowledge",
     "list_knowledge_bases",
     "list_documents",
     "get_document",
-    "get_segment_fulltext",
+    "get_evidence",
+    "inspect_knowledge",
+    "navigate_structure",
+    "query_structured_asset",
     "upload_document",
 })
 

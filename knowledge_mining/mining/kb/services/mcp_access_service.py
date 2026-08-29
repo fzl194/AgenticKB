@@ -21,6 +21,20 @@ class McpAccessError(KbError):
 KEY_PREFIX_TAG = "kbm_"
 _KEY_RANDOM_BYTES = 32
 
+#: MCP 工具族六件套（批次7 定稿）——open_tools 白名单与描述键的校验基线，
+#: 与 mcp_server 的工具注册一一对应。
+MCP_TOOL_NAMES = frozenset({
+    "search_knowledge",
+    "list_knowledge_bases",
+    "list_documents",
+    "get_document",
+    "get_segment_fulltext",
+    "upload_document",
+})
+
+MCP_INSTRUCTIONS_MAX = 4000
+MCP_TOOL_DESC_MAX = 2000
+
 
 def generate_mcp_key() -> tuple[str, str, str]:
     """生成 (明文, key_hash, key_prefix)。明文只此一次。"""
@@ -73,3 +87,46 @@ class McpAccessService:
             if not await self._db.is_visible(kb_id=kb_id, user_id=user_id):
                 raise McpAccessError(f"knowledge base not visible: {kb_id}")
         return await self._db.replace_open_kbs(user_id, unique)
+
+    # ------------------------------------------------ 批次7：工具开关 / 提示词
+
+    async def update_config(
+        self,
+        *,
+        user_id: str,
+        open_tools: list[str] | None = None,
+        instructions: str | None = None,
+        tool_descriptions: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """工具开关与文案配置。None = 不改；open_tools 全量白名单（至少一项，
+        至少保留一个工具）；instructions 空串=恢复默认；tool_descriptions 全量提交。"""
+        if open_tools is not None:
+            unknown = [t for t in open_tools if t not in MCP_TOOL_NAMES]
+            if unknown:
+                raise McpAccessError(f"unknown tool names: {', '.join(unknown)}")
+            if not open_tools:
+                raise McpAccessError("至少保留一个 MCP 工具")
+        if instructions is not None and len(instructions) > MCP_INSTRUCTIONS_MAX:
+            raise McpAccessError(
+                f"提示词过长（{len(instructions)}/{MCP_INSTRUCTIONS_MAX} 字符）")
+        if tool_descriptions is not None:
+            bad_keys = [k for k in tool_descriptions if k not in MCP_TOOL_NAMES]
+            if bad_keys:
+                raise McpAccessError(
+                    f"unknown tool names in descriptions: {', '.join(bad_keys)}")
+            for name, text in tool_descriptions.items():
+                if not isinstance(text, str) or len(text) > MCP_TOOL_DESC_MAX:
+                    raise McpAccessError(
+                        f"工具 {name} 描述过长（上限 {MCP_TOOL_DESC_MAX} 字符）")
+        # '' → None：空提示词即恢复默认文案
+        normalized_instructions = (
+            instructions.strip() or None if instructions is not None else None
+        )
+        await self._db.update_mcp_config(
+            user_id,
+            open_tools=open_tools,
+            instructions=normalized_instructions,
+            tool_descriptions=tool_descriptions,
+        )
+        status = await self.get_status(user_id=user_id)
+        return status or {"configured": False}

@@ -46,12 +46,20 @@ def main() -> None:
 
     from mcp_server.server import mcp
 
-    if transport in ("streamable-http", "sse"):
+    if transport in ("streamable-http", "http", "sse"):
         host = os.environ.get("MCP_HOST", "0.0.0.0")
-        port = os.environ.get("MCP_PORT", "9000")
+        port = int(os.environ.get("MCP_PORT", "9000"))
         print(f"MCP Server starting on http://{host}:{port} (transport={transport})")
+        # fastmcp 3.x 不再从 MCP_HOST/MCP_PORT env 读参（那是 1.x 构造行为），
+        # host/port 必须显式传给 run；transport 统一为 3.x 的 "http"。
+        mcp.run(
+            transport="http" if transport == "streamable-http" else transport,
+            host=host,
+            port=port,
+        )
+        return
 
-    mcp.run(transport=transport)
+    mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

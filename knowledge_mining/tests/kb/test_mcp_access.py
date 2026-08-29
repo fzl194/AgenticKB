@@ -94,6 +94,47 @@ async def test_replace_open_kbs_dedupes() -> None:
     assert db.replaced == [("u1", ["kb-a", "kb-b"])]
 
 
+# ------------------------------------------------ 批次7：config 校验（纯逻辑）
+
+class _ConfigDb(_FakeDb):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config_updates: list[tuple] = []
+
+    async def update_mcp_config(self, user_id, *, open_tools, instructions, tool_descriptions):
+        self.config_updates.append((user_id, open_tools, instructions, tool_descriptions))
+
+    async def get_mcp_access(self, user_id):
+        return None  # update_config 成功后回读状态；测试只关心写参数
+
+
+async def test_config_rejects_unknown_tool_names() -> None:
+    svc = McpAccessService(_ConfigDb())  # type: ignore[arg-type]
+    with pytest.raises(McpAccessError, match="unknown tool names"):
+        await svc.update_config(user_id="u1", open_tools=["search_knowledge", "hack_tool"])
+
+
+async def test_config_requires_at_least_one_tool() -> None:
+    svc = McpAccessService(_ConfigDb())  # type: ignore[arg-type]
+    with pytest.raises(McpAccessError, match="至少保留一个"):
+        await svc.update_config(user_id="u1", open_tools=[])
+
+
+async def test_config_normalizes_blank_instructions_to_default() -> None:
+    db = _ConfigDb()
+    svc = McpAccessService(db)  # type: ignore[arg-type]
+    await svc.update_config(user_id="u1", instructions="   ")
+    assert db.config_updates[0][2] is None  # 空白=恢复默认文案（NULL）
+
+
+async def test_config_rejects_oversized_descriptions() -> None:
+    db = _ConfigDb()
+    svc = McpAccessService(db)  # type: ignore[arg-type]
+    with pytest.raises(McpAccessError, match="描述过长"):
+        await svc.update_config(
+            user_id="u1", tool_descriptions={"search_knowledge": "x" * 5000})
+
+
 # ---------------------------------------------------------- PG 集成（async_pool）
 
 async def test_mcp_key_lifecycle(async_pool):

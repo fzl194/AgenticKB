@@ -724,7 +724,8 @@ WITH cur AS (
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT user_id, key_prefix, status, created_at,
-                          last_used_at, rotated_at
+                          last_used_at, rotated_at,
+                          open_tools, instructions, tool_descriptions
                    FROM mcp_access WHERE user_id = %s""",
                 [user_id],
             )
@@ -802,11 +803,20 @@ WITH cur AS (
                 [user_id],
             )
             open_kbs = [dict(r) for r in await cur.fetchall()]
+            cur = await conn.execute(
+                """SELECT open_tools, instructions, tool_descriptions
+                   FROM mcp_access WHERE user_id = %s""",
+                [user_id],
+            )
+            cfg = dict(await cur.fetchone())
             return {
                 "user_id": user_id,
                 "username": urow["username"],
                 "open_kb_ids": [r["id"] for r in open_kbs],
                 "open_kbs": open_kbs,
+                "open_tools": cfg.get("open_tools"),
+                "instructions": cfg.get("instructions"),
+                "tool_descriptions": cfg.get("tool_descriptions"),
             }
 
     async def replace_open_kbs(self, user_id: str, kb_ids: list[str]) -> list[str]:
@@ -827,6 +837,31 @@ WITH cur AS (
                 [user_id],
             )
             return [r["kb_id"] for r in await cur.fetchall()]
+
+    async def update_mcp_config(
+        self,
+        user_id: str,
+        *,
+        open_tools: list[str] | None,
+        instructions: str | None,
+        tool_descriptions: dict[str, str] | None,
+    ) -> None:
+        """批次7：工具开关 / 提示词 / 工具描述。None = 不改该字段；
+        open_tools 传 [] 语义上等于"全关"——由 service 层拒绝（至少留一个工具）。"""
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """UPDATE mcp_access SET
+                     open_tools = COALESCE(%(ot)s::jsonb, open_tools),
+                     instructions = COALESCE(%(ins)s, instructions),
+                     tool_descriptions = COALESCE(%(td)s::jsonb, tool_descriptions)
+                   WHERE user_id = %(u)s""",
+                {
+                    "u": user_id,
+                    "ot": _json(open_tools) if open_tools is not None else None,
+                    "ins": instructions,
+                    "td": _json(tool_descriptions) if tool_descriptions is not None else None,
+                },
+            )
 
     # ------------------------------------------------------------- kb mining
     # KB 中心化挖掘（融合设计 §5.2）：本库挖掘记录 + 文档当前知识（供前端「挖掘」tab / 文件多 tab）。

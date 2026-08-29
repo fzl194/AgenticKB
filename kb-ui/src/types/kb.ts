@@ -332,6 +332,10 @@ export interface McpAccessStatus {
   last_used_at?: string | null
   rotated_at?: string
   open_kb_ids: string[]
+  /** null = 全部工具开放；非空 = 仅这些工具可用 */
+  open_tools?: string[] | null
+  instructions?: string | null
+  tool_descriptions?: Record<string, string> | null
 }
 
 export interface McpAccessRotateResult {

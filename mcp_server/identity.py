@@ -65,16 +65,61 @@ class IdentityError(Exception):
     """无钥/错钥/后端不可达。message 面向 Agent（中文），可直接作为工具错误返回。"""
 
 
+#: MCP 工具族六件套（与 mining MCP_TOOL_NAMES 一一对应）
+TOOL_NAMES = frozenset({
+    "search_knowledge",
+    "list_knowledge_bases",
+    "list_documents",
+    "get_document",
+    "get_segment_fulltext",
+    "upload_document",
+})
+
+
 @dataclass(frozen=True)
 class Identity:
     username: str
     user_id: str
     #: 开放库 [{id, name}]——kb_names → id 的唯一解析源
     open_kbs: tuple[dict, ...]
+    #: 工具白名单（None=全部开放）；提示词与工具描述（None=服务端默认）
+    open_tools: tuple[str, ...] | None = None
+    instructions: str | None = None
+    tool_descriptions: tuple[dict, ...] = ()
 
     @property
     def open_kb_ids(self) -> list[str]:
         return [k["id"] for k in self.open_kbs]
+
+    def tool_enabled(self, name: str) -> bool:
+        return self.open_tools is None or name in self.open_tools
+
+    def enabled_tools(self) -> frozenset[str]:
+        return TOOL_NAMES if self.open_tools is None else frozenset(self.open_tools)
+
+    def tool_description(self, name: str, default: str | None) -> str | None:
+        for d in self.tool_descriptions:
+            if isinstance(d, dict) and d.get("name" if "name" in d else "tool") == name:
+                return str(d.get("description") or default or "")
+        # 兼容 {tool_name: description} 形状
+        for d in self.tool_descriptions:
+            if isinstance(d, dict) and name in d:
+                return str(d[name])
+        return default
+
+
+#: 当前请求的 identity（middleware 验明后 set，工具函数内 get）。
+from contextvars import ContextVar
+
+current_identity: ContextVar["Identity | None"] = ContextVar(
+    "mcp_current_identity", default=None)
+
+
+def require_current_identity() -> "Identity":
+    ident = current_identity.get()
+    if ident is None:
+        raise IdentityError("身份上下文缺失（中间件未注入）——这是服务端错误。")
+    return ident
 
 
 def extract_bearer_token(headers) -> str | None:
@@ -133,10 +178,25 @@ def require_identity(headers) -> Identity:
         for k in (data.get("open_kbs") or [])
         if isinstance(k, dict) and k.get("id")
     )
+    raw_tools = data.get("open_tools")
+    open_tools = (
+        None if raw_tools is None
+        else tuple(str(t) for t in raw_tools if isinstance(t, str) and t)
+    )
+    raw_descs = data.get("tool_descriptions")
+    tool_descriptions = tuple(
+        d for d in (raw_descs if isinstance(raw_descs, list) else []) if d
+    ) if isinstance(raw_descs, list) else (
+        tuple({"tool": k, "description": v} for k, v in raw_descs.items())
+        if isinstance(raw_descs, dict) else ())
+    instructions = data.get("instructions")
     return Identity(
         username=str(data["username"]),
         user_id=str(data.get("user_id") or ""),
         open_kbs=open_kbs,
+        open_tools=open_tools,
+        instructions=str(instructions) if instructions else None,
+        tool_descriptions=tool_descriptions,
     )
 
 

@@ -40,7 +40,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  Monitor, Management,
+  Monitor, Management, Key,
   Cpu, Setting, Collection, Connection, DataLine, Files,
 } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
@@ -60,6 +60,7 @@ const logoSrc = computed(() => (brand.icon.trim() ? resolveIcon(brand.icon) : ''
 const ALL_NAV = [
   { path: '/', label: '概览', icon: Monitor, requiresAdmin: false },
   { path: '/kb', label: '知识库', icon: Files, requiresAdmin: false },
+  { path: '/mcp', label: 'MCP 接入', icon: Key, requiresAdmin: false },
   { path: '/mining/workflows', label: '挖掘范式', icon: Management, requiresAdmin: true },
   { path: '/paradigm', label: '检索范式', icon: Connection, requiresAdmin: true },
   { path: '/entities', label: '实体图谱', icon: Connection, requiresAdmin: true },

@@ -65,3 +65,27 @@ async def put_open_kbs(
     except McpAccessError as exc:
         raise HTTPException(400, str(exc)) from None
     return {"open_kb_ids": final}
+
+
+# 批次7：工具开关 / 提示词 / 工具描述。None = 不改；instructions "" = 恢复默认。
+class McpConfigBody(BaseModel):
+    open_tools: list[str] | None = None
+    instructions: str | None = None
+    tool_descriptions: dict[str, str] | None = None
+
+
+@router.put("/config")
+async def put_config(
+    body: McpConfigBody,
+    user: dict[str, Any] = Depends(current_user),
+    svc: McpAccessService = Depends(_get_service),
+) -> dict[str, Any]:
+    try:
+        return await svc.update_config(
+            user_id=user["id"],
+            open_tools=body.open_tools,
+            instructions=body.instructions,
+            tool_descriptions=body.tool_descriptions,
+        )
+    except McpAccessError as exc:
+        raise HTTPException(400, str(exc)) from None

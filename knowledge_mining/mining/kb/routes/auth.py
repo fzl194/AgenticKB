@@ -157,6 +157,10 @@ async def verify_mcp_key(
         "open_kb_ids": result["open_kb_ids"],
         # kb_names → id 的解析源：开放库 id+name（软删库自动从清单消失）
         "open_kbs": result.get("open_kbs", []),
+        # 批次7：工具开关 / 提示词 / 工具描述（MCP 免二次查）
+        "open_tools": result.get("open_tools"),
+        "instructions": result.get("instructions"),
+        "tool_descriptions": result.get("tool_descriptions"),
     }
 
 

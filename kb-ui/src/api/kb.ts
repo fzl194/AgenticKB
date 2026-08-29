@@ -85,6 +85,16 @@ export function useKbApi() {
       return extractOne<{ open_kb_ids: string[] }>(data)
     },
 
+    /** 批次7：工具开关 / 提示词 / 工具描述（null=不改；instructions ""=恢复默认）。 */
+    async putMcpConfig(body: {
+      open_tools?: string[] | null
+      instructions?: string | null
+      tool_descriptions?: Record<string, string> | null
+    }): Promise<McpAccessStatus> {
+      const { data } = await client.put('/api/kb/users/me/mcp-access/config', body)
+      return extractOne<McpAccessStatus>(data)
+    },
+
     // ── 成员 ──
     async addMember(kbId: string, body: { username: string; role: KbMemberRole }): Promise<KbMember> {
       const { data } = await client.post(`/api/kb/${kbId}/members`, body)

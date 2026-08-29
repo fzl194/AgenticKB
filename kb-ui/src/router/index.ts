@@ -26,6 +26,11 @@ const router = createRouter({
           component: () => import('@/views/kb/KbListView.vue'),
         },
         {
+          path: 'mcp',
+          name: 'mcp-access',
+          component: () => import('@/views/McpAccessView.vue'),
+        },
+        {
           path: 'kb/:kbId',
           name: 'kb-detail',
           component: () => import('@/views/kb/KbDetailView.vue'),

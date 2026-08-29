@@ -72,6 +72,10 @@ _MCP_ACCESS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "008_mcp_access.
 _KB_DEFAULT_PARADIGM_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "009_kb_default_paradigm.sql"
 )
+# 批次7：MCP 用户配置扩展（工具开关/提示词/工具描述）。
+_MCP_ACCESS_CONFIG_DDL = (
+    _REPO_ROOT / "databases" / "kb" / "schemas" / "010_mcp_access_config.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -160,6 +164,7 @@ def domain_schema_paths() -> tuple[Path, ...]:
         # 阶段 A（批次5）：MCP 用户接入（依赖 kb_users/knowledge_bases，链尾安全）。
         _MCP_ACCESS_DDL,
         _KB_DEFAULT_PARADIGM_DDL,
+        _MCP_ACCESS_CONFIG_DDL,
     )
 
 

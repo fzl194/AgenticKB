@@ -13,26 +13,6 @@
             inactive-text="私有（仅成员）"
           />
         </el-form-item>
-        <el-form-item label="检索范式">
-          <el-select
-            v-model="form.default_paradigm_id"
-            :disabled="!canWrite"
-            placeholder="跟随领域默认"
-            clearable
-            style="width: 100%"
-          >
-            <el-option
-              v-for="p in paradigms"
-              :key="p.id"
-              :value="p.id"
-              :label="p.name"
-            />
-          </el-select>
-          <div class="kb-settings__hint">
-            MCP/检索搜这个库时走的管线；清除则跟随领域默认 → 官方默认。范式的检索范围
-            保持"留空"即可随库组合。
-          </div>
-        </el-form-item>
         <el-form-item label="描述">
           <el-input
             v-model="form.description"
@@ -66,33 +46,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
-import { useOperatorApi } from '@/api/operator'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { KbSummary, KbVisibility } from '@/types/kb'
-import type { ParadigmView } from '@/types/operator'
 
 const props = defineProps<{ kb: KbSummary; canWrite: boolean }>()
 const emit = defineEmits<{ updated: []; deleted: [] }>()
 
 const kbApi = useKbApi()
-const operatorApi = useOperatorApi()
 const saving = ref(false)
 const deleting = ref(false)
-const paradigms = ref<ParadigmView[]>([])
 
 const form = reactive<{
   name: string
   visibility: KbVisibility
   description: string
-  default_paradigm_id: string | null
 }>({
   name: '',
   visibility: 'private',
   description: '',
-  default_paradigm_id: null,
 })
 
 /** 「公开」开关：on=public，off=private（shared 已并入 private）。 */
@@ -105,19 +79,9 @@ function reset() {
   form.name = props.kb.name
   form.visibility = props.kb.visibility
   form.description = props.kb.description ?? ''
-  form.default_paradigm_id = props.kb.default_paradigm_id ?? null
 }
 
 watch(() => props.kb, reset, { immediate: true })
-
-onMounted(async () => {
-  // 范式列表仅用于选择器；拉取失败不阻塞设置页其余功能
-  try {
-    paradigms.value = await operatorApi.listParadigms()
-  } catch {
-    paradigms.value = []
-  }
-})
 
 async function save() {
   const name = form.name.trim()
@@ -131,7 +95,6 @@ async function save() {
       name,
       visibility: form.visibility,
       description: form.description.trim() || null,
-      default_paradigm_id: form.default_paradigm_id ?? null,
     })
     ElMessage.success('已保存')
     emit('updated')

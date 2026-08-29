@@ -104,10 +104,19 @@ class RetrievalUnitOptions(OperatorOptions):
 
 
 class EmbeddingOptions(OperatorOptions):
-    unit_types: list[Literal["raw_text", "generated_question", "table_row"]] = Field(
-        default_factory=lambda: ["raw_text", "generated_question", "table_row"],
-        alias="unitTypes",
-        title="向量化单元类型",
+    """embedding 参数（批次8 M4，24 号 §5.7）：默认矩阵之上的最小覆盖面."""
+
+    strategy_overrides: dict[str, str] = Field(
+        default_factory=dict,
+        alias="strategyOverrides",
+        title="按表示类型覆盖策略",
+        description="representation_type → skip/isolated/structural 等；默认矩阵见 emb-policy-1。",
+    )
+    strategy_fallbacks: dict[str, str] = Field(
+        default_factory=dict,
+        alias="strategyFallbacks",
+        title="按表示类型显式降级",
+        description="provider 不支持覆盖策略时的显式 fallback；未配置则编译/执行期显式失败。",
     )
 
 

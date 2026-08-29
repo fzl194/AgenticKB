@@ -42,8 +42,13 @@ def test_catalog_exposes_exactly_the_approved_operators() -> None:
 
 
 def test_option_aliases_validate_wire_parameters() -> None:
-    value = EmbeddingOptions.model_validate({"unitTypes": ["raw_text"]})
-    assert value.model_dump(by_alias=True)["unitTypes"] == ["raw_text"]
+    value = EmbeddingOptions.model_validate(
+        {"strategyOverrides": {"code_block": "structural"}}
+    )
+    dumped = value.model_dump(by_alias=True)
+    assert dumped["strategyOverrides"] == {"code_block": "structural"}
+    with pytest.raises(Exception):
+        EmbeddingOptions.model_validate({"unitTypes": ["raw_text"]})  # M4 已退役
 
 
 def test_option_models_reject_unknown_and_inconsistent_parameters() -> None:

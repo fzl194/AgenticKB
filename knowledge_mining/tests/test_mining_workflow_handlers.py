@@ -167,32 +167,38 @@ def test_handler_status_contract_covers_all_executor_outcomes() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    ("handler", "params", "stage_name", "expected_type"),
-    [
-        (
-            handlers.embedding_handler,
-            {"unitTypes": ["raw_text"]},
-            "embedding_stage",
-            EmbeddingOptions,
-        ),
-    ],
-)
-def test_document_handlers_convert_all_editable_operator_params(
-    monkeypatch, handler, params, stage_name, expected_type
-) -> None:
+def test_embedding_handler_converts_params_and_uses_service() -> None:
+    """M4：embedding 参数走 EmbeddingOptions 校验 + embedding_service 门面."""
+    from knowledge_mining.mining.workflow.bundle import MiningDocumentBundle
+
     captured = []
 
-    def stage_fn(ctx, cfg, **kwargs):
-        captured.append(kwargs.get("options"))
-        return ctx
+    class _Service:
+        def embed_for_snapshot(self, *, snapshot_id, params):
+            captured.append(params)
+            from types import SimpleNamespace
 
-    monkeypatch.setattr(handlers, stage_name, stage_fn)
+            return SimpleNamespace(records=[object()], skipped=0)
 
-    result = handler(state("doc-a"), params, runtime())
+    bundle = MiningDocumentBundle(
+        document_ref="doc:/a", run_document_id="doc-a", snapshot_ref="s1",
+        representations_count=2,
+    )
+    result = handlers.embedding_handler(
+        SimpleNamespace(
+            run_document_id="doc-a", doc_key="doc:/a", context=bundle,
+            capabilities=frozenset(), tags=(),
+            with_context=lambda ctx, capabilities=frozenset(): SimpleNamespace(
+                run_document_id="doc-a", doc_key="doc:/a", context=ctx,
+                capabilities=capabilities, tags=(),
+            ),
+        ),
+        {"strategyOverrides": {"code_block": "structural"}},
+        SimpleNamespace(services=SimpleNamespace(embedding_service=_Service())),
+    )
 
-    assert result.status in {OperatorStatus.SUCCESS, OperatorStatus.FALLBACK}
-    assert isinstance(captured[0], expected_type)
+    assert result.status is OperatorStatus.SUCCESS
+    assert captured == [{"strategyOverrides": {"code_block": "structural"}}]
 
 
 def test_research_entity_handler_preserves_param_conversion(

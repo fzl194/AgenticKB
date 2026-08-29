@@ -237,51 +237,6 @@ def test_contextual_enrichment_runs_once_and_builder_reuses_metadata() -> None:
     assert built.retrieval_units[0].llm_result_refs_json["task_id"] == "context-task"
 
 
-def test_embedding_filters_units_before_call_and_failure_keeps_units() -> None:
-    class Embeddings:
-        def __init__(self, fail: bool = False) -> None:
-            self.fail = fail
-            self.texts = []
-
-        def embed_batch(self, texts):
-            self.texts.extend(texts)
-            if self.fail:
-                raise RuntimeError("embedding unavailable")
-            return [[0.1, 0.2] for _ in texts]
-
-    units = tuple(
-        RetrievalUnitData(
-            segment_key="doc:/a#0",
-            unit_key=f"ru-{unit_type}",
-            unit_type=unit_type,
-            target_type="raw_segment",
-            text=f"{unit_type} text",
-        )
-        for unit_type in ("raw_text", "generated_question")
-    )
-    generator = Embeddings()
-    ctx = DocumentContext(retrieval_units=units)
-    result = embedding_stage(
-        ctx,
-        PipelineConfig(domain="odn", embedding_generator=generator),
-        options=EmbeddingOptions(unitTypes=["generated_question"]),
-    )
-
-    assert generator.texts == ["generated_question text"]
-    assert [item["unit_key"] for item in result.embeddings] == [
-        "ru-generated_question"
-    ]
-
-    failing = Embeddings(fail=True)
-    fallback = embedding_stage(
-        ctx,
-        PipelineConfig(domain="odn", embedding_generator=failing),
-        options=EmbeddingOptions(unitTypes=["raw_text"]),
-    )
-    assert fallback.retrieval_units == units
-    assert fallback.embeddings == ()
-
-
 def test_entity_threshold_schema_escape_and_limit_are_applied_deterministically() -> None:
     result = {
         "entities": [

@@ -4,7 +4,6 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from knowledge_mining.mining.pipeline import (
-    embedding_stage,
     parse_stage,
     segment_stage,
 )
@@ -133,42 +132,51 @@ def _document_handler(
 
 
 def embedding_handler(state, params, runtime) -> OperatorResult:
-    options = EmbeddingOptions.model_validate(dict(params))
-    result = _document_handler(
-        state,
-        params,
-        runtime,
-        options_type=EmbeddingOptions,
-        stage=embedding_stage,
-        capability="embeddings",
-        error_status=OperatorStatus.FALLBACK,
-        error_code="embedding_fallback",
-    )
-    selected = [
-        item
-        for item in state.context.retrieval_units
-        if item.text and item.unit_type in options.unit_types
-    ]
-    if (
-        result.status is OperatorStatus.SUCCESS
-        and selected
-        and not result.outputs.context.embeddings
-    ):
+    """表示暂存 → 按 policy 分策略嵌入 → bundle（计数 + capability）.
+
+    批次8 M4（24 号 §5.7）：消费 MiningDocumentBundle（representations
+    由 retrieval_unit_project 暂存）；per-representation policy 由
+    embedding_service 门面执行，向量与 provenance 落 EmbeddingStore。
+    """
+    from ..bundle import MiningDocumentBundle
+    from ..operators.options import EmbeddingOptions
+
+    EmbeddingOptions.model_validate(dict(params))
+    bundle = state.context
+    if not isinstance(bundle, MiningDocumentBundle):
+        return OperatorResult(state, frozenset(), OperatorStatus.SKIPPED)
+    if bundle.representations_count <= 0 or not bundle.snapshot_ref:
+        return OperatorResult(state, frozenset(), OperatorStatus.SKIPPED)
+    service = getattr(runtime.services, "embedding_service", None)
+    if service is None:
+        return OperatorResult(
+            state, frozenset(), OperatorStatus.FAILED,
+            error_code="embedding_unavailable",
+            error_message="embedding service is not configured on this runtime",
+        )
+    try:
+        outcome = service.embed_for_snapshot(
+            snapshot_id=bundle.snapshot_ref, params=dict(params),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _on_error(
+            state, code="embedding_failed", exc=exc,
+            mode=OperatorStatus.FAILED,
+        )
+    records = getattr(outcome, "records", ()) or ()
+    if not records:
         return _on_error(
             state,
             code="embedding_fallback",
-            exc=RuntimeError("Embedding service returned no vectors"),
+            exc=RuntimeError("Embedding produced no vectors"),
             mode=OperatorStatus.FALLBACK,
             capability="embeddings",
         )
-    return result
-
-
-
-
-# ---------------------------------------------------------------------------
-# M6 新算子（SRS §10.2）：解析与切片分离，经注入的服务组件走新链
-# ---------------------------------------------------------------------------
+    updated = bundle.with_updates(
+        embeddings_count=len(records),
+        capability_facts=bundle.capability_facts | frozenset({"embeddings"}),
+    )
+    return _success(state, updated, "embeddings")
 
 
 def document_parse_handler(

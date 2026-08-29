@@ -347,6 +347,7 @@ class NewChainServices:
     document_parse_service: DocumentParseFacade
     segment_compile_service: SegmentCompileFacade
     retrieval_project_service: RetrieProjectFacade
+    embedding_service: Any
 
 
 def build_new_chain_services(
@@ -361,6 +362,8 @@ def build_new_chain_services(
     snapshots: Any | None = None,
     segment_store: Any | None = None,
     representation_store: Any | None = None,
+    embedding_store: Any | None = None,
+    embedding_generator: Any | None = None,
     pool: Any | None = None,
     sync_pool: Any | None = None,
 ) -> NewChainServices:
@@ -394,6 +397,7 @@ def build_new_chain_services(
 
         # M2：RepresentationStore 暂用 memory（PG 三面资产表 M5 落地）
         from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+            MemoryEmbeddingStore,
             MemoryRepresentationStore,
         )
 
@@ -404,6 +408,7 @@ def build_new_chain_services(
         snapshots = snapshots or PgSnapshotRepository(repository_pool)
         segment_store = segment_store or PgSegmentStore(repository_pool)
         representation_store = representation_store or MemoryRepresentationStore()
+        embedding_store = embedding_store or MemoryEmbeddingStore()
     else:
         from knowledge_mining.mining.file_management.repositories_memory import (
             MemoryDocumentCurrentContentRepository,
@@ -420,6 +425,7 @@ def build_new_chain_services(
             MemorySnapshotRepository,
         )
         from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+            MemoryEmbeddingStore,
             MemoryRepresentationStore,
         )
 
@@ -430,6 +436,7 @@ def build_new_chain_services(
         snapshots = snapshots or MemorySnapshotRepository()
         segment_store = segment_store or MemorySegmentStore()
         representation_store = representation_store or MemoryRepresentationStore()
+        embedding_store = embedding_store or MemoryEmbeddingStore()
 
     if object_store is None:
         from knowledge_mining.mining.infra.object_store.fake import (
@@ -444,6 +451,9 @@ def build_new_chain_services(
     )
     from knowledge_mining.mining.parse_quality.gate import QualityGate
     from knowledge_mining.mining.parse_reconciler import StructuralReconciler
+    from knowledge_mining.mining.retrieval_projection.embedding import (
+        EmbeddingFacade,
+    )
     from knowledge_mining.mining.segment_compiler.service import (
         SegmentCompileService,
     )
@@ -486,11 +496,21 @@ def build_new_chain_services(
             segment_store=segment_store,
             representation_store=representation_store,
         ),
+        embedding_service=(
+            EmbeddingFacade(
+                representation_store=representation_store,
+                embedding_store=embedding_store,
+                generator=embedding_generator,
+            )
+            if embedding_generator is not None
+            else None
+        ),
     )
 
 
 __all__ = [
     "DocumentParseFacade",
+    "EmbeddingFacade",
     "NewChainServices",
     "RetrieProjectFacade",
     "SegmentCompileFacade",

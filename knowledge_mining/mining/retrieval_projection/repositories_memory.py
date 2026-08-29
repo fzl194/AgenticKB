@@ -8,6 +8,7 @@ from __future__ import annotations
 from knowledge_mining.mining.contracts.retrieval_projection import (
     RetrieRepresentation,
 )
+from knowledge_mining.mining.retrieval_projection.embedding import EmbeddingRecord
 
 
 class MemoryRepresentationStore:
@@ -34,3 +35,28 @@ class MemoryRepresentationStore:
 
     def projector_fingerprint(self, snapshot_id: str) -> str | None:
         return self._fingerprints.get(snapshot_id)
+
+
+class MemoryEmbeddingStore:
+    """向量记录暂存（M5 由三面资产入库接管；快照级替换语义）."""
+
+    def __init__(self) -> None:
+        self._by_snapshot: dict[str, tuple[EmbeddingRecord, ...]] = {}
+        self._fingerprints: dict[str, str] = {}
+
+    async def replace_for_snapshot(
+        self,
+        snapshot_id: str,
+        records: tuple[EmbeddingRecord, ...],
+        policy_version: str,
+        *,
+        document_key: str,
+    ) -> int:
+        self._by_snapshot[snapshot_id] = records
+        self._fingerprints[snapshot_id] = policy_version
+        return len(records)
+
+    async def list_for_snapshot(
+        self, snapshot_id: str
+    ) -> tuple[EmbeddingRecord, ...]:
+        return self._by_snapshot.get(snapshot_id, ())

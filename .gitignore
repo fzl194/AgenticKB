@@ -51,6 +51,8 @@
 !deploy-build.sh
 !deploy-server.sh
 !reset_db.py
+!tools/
+!tools/**
 !export_db.py
 !import_db.py
 !db_tables.py

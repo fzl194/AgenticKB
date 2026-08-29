@@ -49,7 +49,7 @@ class OperatorCatalogTest {
 
     private static OperatorRegistry realRegistry() {
         List<Operator> all = List.of(
-                new QueryEmbedOperator(null), new ScopeResolveOperator(null, null),
+                new QueryEmbedOperator(null, null), new ScopeResolveOperator(null, null),
                 new DenseVectorOperator(null), new FtsOperator(null),
                 new RrfOperator(), new ModelRerankOperator(null), new AssembleOperator(null));
         return new OperatorRegistry(all);
@@ -119,7 +119,7 @@ class OperatorCatalogTest {
             {"nodes":[
               {"nodeId":"qe","operatorType":"query_embed"},
               {"nodeId":"scope","operatorType":"scope_resolve"},
-              {"nodeId":"dv","operatorType":"dense_vector","params":{"textKind":"raw_text","topK":20}}],
+              {"nodeId":"dv","operatorType":"dense_vector","params":{"topK":20}}],
              "edges":[
               {"fromNode":"qe","fromSlot":"queryEmbedding","toNode":"dv","toSlot":"queryEmbedding"},
               {"fromNode":"scope","fromSlot":"scope","toNode":"dv","toSlot":"scope"}],

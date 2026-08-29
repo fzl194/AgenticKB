@@ -155,12 +155,18 @@ public class LlmServiceReranker implements Reranker {
     }
 
     /**
-     * Build the rerank document for one candidate: {@code "title: text"}, or whichever of
-     * title/text is present. Returns "" when both are blank — callers skip such documents
-     * (llm_service rejects empty strings). No per-document truncation: llm_service batches by
-     * total length budget and isolates oversized single documents into their own batch.
+     * Build the rerank document for one candidate. 批次8 R4（25 号 §6.7）：优先用候选的
+     * {@code rankingText}（类型化有界构造，R2 产出）；旧候选（无 rankingText）沿用
+     * {@code "title: text"} 元数据拼装。Returns "" when nothing is present — callers skip such
+     * documents (llm_service rejects empty strings). No per-document truncation here:
+     * {@code rankingText} is already bounded (2048 chars) at construction; the legacy path relies
+     * on llm_service batching by total length budget.
      */
     private String buildDocument(RetrievalCandidate c) {
+        String rankingText = c.rankingText();
+        if (rankingText != null && !rankingText.isBlank()) {
+            return rankingText;
+        }
         String text = stringFromMetadata(c, "text");
         String title = stringFromMetadata(c, "title");
         if (text != null && !text.isEmpty()) {

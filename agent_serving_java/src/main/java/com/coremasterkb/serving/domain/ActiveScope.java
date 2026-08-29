@@ -27,16 +27,35 @@ import java.util.TreeSet;
  * @param buildId             build identifier; null for KB scope (spans multiple builds)
  * @param snapshotIds         snapshot identifiers; defaults to empty list
  * @param documentSnapshotMap mapping from document id to snapshot id; defaults to empty map
+ * @param hardFilters         请求显式传入的 hard constraints（25 号 §6.2/§7.1：document_refs/
+ *                           section_refs/relative_path_prefix/asset_types/evidence_types/
+ *                           date_range/include_descendants 等，Map 形态原样透传）。默认空 map
+ *                           = 宽检索。scope_resolve 只透传，绝不从 query 推断。
  */
 public record ActiveScope(
         String releaseId,
         String buildId,
         List<String> snapshotIds,
-        Map<String, String> documentSnapshotMap
+        Map<String, String> documentSnapshotMap,
+        Map<String, Object> hardFilters
 ) {
     public ActiveScope {
         if (snapshotIds == null) snapshotIds = List.of();
         if (documentSnapshotMap == null) documentSnapshotMap = Map.of();
+        if (hardFilters == null) hardFilters = Map.of();
+    }
+
+    /** Pre-R1 4-arg shape（旧构造点）——hardFilters 默认空 = 宽检索。 */
+    public ActiveScope(
+            String releaseId, String buildId,
+            List<String> snapshotIds, Map<String, String> documentSnapshotMap) {
+        this(releaseId, buildId, snapshotIds, documentSnapshotMap, Map.of());
+    }
+
+    /** Copy with explicit hard filters (R1 channel: request 透传，非推断). */
+    public ActiveScope withHardFilters(Map<String, Object> filters) {
+        return new ActiveScope(releaseId, buildId, snapshotIds, documentSnapshotMap,
+                filters == null ? Map.of() : Map.copyOf(filters));
     }
 
     /**

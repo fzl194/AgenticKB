@@ -25,6 +25,7 @@ public final class ExecContext {
     private final String username;
     private volatile String query;
     private volatile List<String> requestKbIds;
+    private volatile Map<String, Object> requestFilters = Map.of();
     private final Map<String, Object> attributes = new ConcurrentHashMap<>();
     private final List<NodeTrace> nodeTraces = new CopyOnWriteArrayList<>();
 
@@ -53,6 +54,16 @@ public final class ExecContext {
     public List<String> requestKbIds() { return requestKbIds; }
     public void setRequestKbIds(List<String> kbIds) {
         this.requestKbIds = (kbIds == null) ? List.of() : List.copyOf(kbIds);
+    }
+
+    /**
+     * 请求显式传入的 hard filters（25 号 §7.1 within/filters，Map 形态原样透传）。
+     * R1 通道：{@code scope_resolve} 把它搬进 {@code ActiveScope.hardFilters} 供下游算子在
+     * Top-K 前下推；服务端不从 query 推断任何 filter。空 map = 未传 = 宽检索。
+     */
+    public Map<String, Object> requestFilters() { return requestFilters; }
+    public void setRequestFilters(Map<String, Object> filters) {
+        this.requestFilters = (filters == null) ? Map.of() : Map.copyOf(filters);
     }
 
     public String requestId() { return requestId; }

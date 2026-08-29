@@ -107,4 +107,50 @@ class ScopeResolveOperatorTest {
 
         verify(assetRepository, never()).resolveActiveScope(anyString(), anyString(), any());
     }
+
+    // ---- R1: explicit hard filters channel (25 号 §6.2) ------------------------------------
+
+    @Test
+    @DisplayName("R1: request filters are passed through verbatim into ActiveScope.hardFilters")
+    void requestFiltersPassThroughVerbatim() {
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
+        ExecContext c = ctx("alice");
+        Map<String, Object> filters = Map.of(
+                "document_refs", List.of("doc-1"),
+                "relative_path_prefix", "规范/接入网",
+                "date_range", Map.of("from", "2026-01-01"));
+        c.setRequestFilters(filters);
+
+        var out = operator.execute(new SlotValues(), params("{}"), c);
+
+        assertThat(out.getScope("scope").hardFilters()).isEqualTo(filters);
+        assertThat(c.attributes().get("hardFilterKeys"))
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST)
+                .containsExactlyInAnyOrder("date_range", "document_refs", "relative_path_prefix");
+    }
+
+    @Test
+    @DisplayName("R1: no request filters — hardFilters stays empty (宽检索)")
+    void noFiltersYieldsEmptyHardFilters() {
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
+        ExecContext c = ctx("alice");
+
+        var out = operator.execute(new SlotValues(), params("{}"), c);
+
+        assertThat(out.getScope("scope").hardFilters()).isEmpty();
+        assertThat(c.attributes()).doesNotContainKey("hardFilterKeys");
+    }
+
+    @Test
+    @DisplayName("R1: filters are never inferred from the query text")
+    void filtersAreNeverInferredFromQuery() {
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
+        ExecContext c = ctx("alice");
+        c.setQuery("2026年 规范/接入网 doc-1 的表格");
+
+        var out = operator.execute(new SlotValues(), params("{}"), c);
+
+        // Query mentions dates/paths/documents — none of that may become a hard filter.
+        assertThat(out.getScope("scope").hardFilters()).isEmpty();
+    }
 }

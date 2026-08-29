@@ -7,9 +7,10 @@ import com.coremasterkb.serving.repository.AssetRepository;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
 
 /**
- * {@code scope_resolve} — resolve the document snapshots a retrieval may see.
+ * {@code scope_resolve} — resolve the document snapshots a retrieval may see (25 号 §6.2).
  *
  * <p>Default: the domain + channel's active release. With the {@code kbIds} param set, the scope
  * narrows to those knowledge bases and is resolved from their builds instead — KB mining runs
@@ -20,6 +21,12 @@ import java.util.List;
  * design-time property of the paradigm: it is frozen into the stored graph rather than supplied
  * per request. The param is authorized against the caller's identity on every execution
  * regardless — a saved graph must not become a way to read a KB you cannot open.</p>
+ *
+ * <p><b>R1 hard filters 通道（批次8）：</b>请求显式传入的 within/filters（document_refs/
+ * section_refs/relative_path_prefix/asset_types/evidence_types/date_range 等）经
+ * {@link ExecContext#requestFilters()} 原样透传进 {@code ActiveScope.hardFilters}，作为下游
+ * 算子 Top-K 前下推的约束。本算子<b>只透传，不从 query 推断任何范围</b>；授权求交逻辑
+ * （批次5/6 三层解析）保持不动。</p>
  */
 @Component
 public class ScopeResolveOperator implements Operator {
@@ -48,9 +55,9 @@ public class ScopeResolveOperator implements Operator {
     public OperatorDef definition() {
         return new OperatorDef(
                 "scope_resolve", "scope", "范围解析",
-                "根据 domain/channel 解析当前生效的 release 与文档快照范围；可按知识库收窄",
+                "根据 domain/channel 解析当前生效的 release 与文档快照范围；可按知识库收窄；透传请求显式 hard filters",
                 List.of(),
-                List.of(SlotDecl.required("scope", SlotType.SCOPE, "检索范围(snapshotIds)")),
+                List.of(SlotDecl.required("scope", SlotType.SCOPE, "检索范围(snapshotIds+hardFilters)")),
                 PARAM_SCHEMA,
                 ErrorPolicy.FAIL_FAST);
     }
@@ -75,6 +82,14 @@ public class ScopeResolveOperator implements Operator {
                 kbAccessService.authorize(ctx.domain(), effectiveKbIds, ctx.username());
 
         ActiveScope scope = assetRepository.resolveActiveScope(ctx.domain(), ctx.channel(), kbIds);
+
+        // R1：显式 hard filters 透传（不推断、不改写——规范化归下游算子的确定性映射）。
+        Map<String, Object> requestFilters = ctx.requestFilters();
+        if (requestFilters != null && !requestFilters.isEmpty()) {
+            scope = scope.withHardFilters(requestFilters);
+            ctx.putAttribute("hardFilterKeys", List.copyOf(requestFilters.keySet()));
+        }
+
         ctx.putAttribute("releaseId", scope.releaseId());
         ctx.putAttribute("buildId", scope.buildId());
         ctx.putAttribute("snapshotCount", scope.snapshotIds().size());

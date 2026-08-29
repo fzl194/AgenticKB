@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+    批次8 R2 召回 SQL（v2 资产表）。DDL 真相源：mining retrieval_projection/schema.py。
+    FTS 契约：lexical_text 由 Python jieba 预分词（tokenizer_version=jieba-default-1），
+    tsvector 用 'simple' 配置；查询侧同族分词（QueryTokenizer/jieba-analysis SEARCH）后
+    空格 join 交给 plainto_tsquery('simple', ?)——两侧分词版本一致性由 build manifest 冻结。
+    所有 scope/filters 在 Top-K（LIMIT）之前下推；空结果是正常结果，由调用方透传。
+-->
+<mapper namespace="com.coremasterkb.serving.operator.mapper.AssetRetrievalUnitV2Mapper">
+
+    <resultMap id="unitV2RowMap" type="com.coremasterkb.serving.mapper.result.UnitV2Row">
+        <result column="representation_id"     property="representationId"/>
+        <result column="snapshot_id"           property="snapshotId"/>
+        <result column="representation_type"   property="representationType"/>
+        <result column="content_type"          property="contentType"/>
+        <result column="content_text"          property="contentText"/>
+        <result column="structural_context"    property="structuralContext"/>
+        <result column="target_type"           property="targetType"/>
+        <result column="target_ref"            property="targetRef"/>
+        <result column="canonical_evidence_id" property="canonicalEvidenceId"/>
+        <result column="container_ref"         property="containerRef"/>
+        <result column="ordinal"               property="ordinal"/>
+        <result column="facets_json"           property="facetsJson"/>
+        <result column="channel_score"         property="channelScore"/>
+    </resultMap>
+
+    <!-- fts 通道：只检索 lexical_eligible；scope/facets/类型/ref 过滤全部在 LIMIT 前下推。 -->
+    <sql id="unitPushdownFilters">
+        <if test="documentJsonParams != null and documentJsonParams.size() > 0">
+            <!-- facets.document 是标量 facet，多值 ref 用 OR 语义连接（参数化 JSONB containment）。 -->
+            AND (
+            <foreach collection="documentJsonParams" item="docParam" separator=" OR ">
+                facets_json @&gt; #{docParam}::jsonb
+            </foreach>
+            )
+        </if>
+        <if test="representationTypes != null and representationTypes.size() > 0">
+            AND representation_type IN
+            <foreach collection="representationTypes" item="rt" open="(" separator="," close=")">
+                #{rt}
+            </foreach>
+        </if>
+        <if test="contentTypes != null and contentTypes.size() > 0">
+            AND content_type IN
+            <foreach collection="contentTypes" item="ct" open="(" separator="," close=")">
+                #{ct}
+            </foreach>
+        </if>
+        <if test="targetRefs != null and targetRefs.size() > 0">
+            AND target_ref IN
+            <foreach collection="targetRefs" item="tr" open="(" separator="," close=")">
+                #{tr}
+            </foreach>
+        </if>
+    </sql>
+
+    <sql id="unitColumns">
+        representation_id, snapshot_id, representation_type, content_type,
+        content_text, structural_context, target_type, target_ref,
+        canonical_evidence_id, container_ref, ordinal, facets_json
+    </sql>
+
+    <select id="searchFtsV2" resultMap="unitV2RowMap">
+        SELECT
+        <include refid="unitColumns"/>,
+        ts_rank(search_vector, plainto_tsquery('simple', #{lexicalQuery})) AS channel_score
+        FROM asset_retrieval_units_v2
+        WHERE lexical_eligible = TRUE
+          AND snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+        <include refid="unitPushdownFilters"/>
+          AND search_vector @@ plainto_tsquery('simple', #{lexicalQuery})
+        ORDER BY channel_score DESC, canonical_evidence_id ASC, representation_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- dense 通道：embeddings_v2 ⋈ units_v2，dense_eligible + 维度一致；同表示多向量取最佳。 -->
+    <select id="searchDenseV2" resultMap="unitV2RowMap">
+        SELECT t.* FROM (
+            SELECT DISTINCT ON (e.representation_id)
+                   u.representation_id, u.snapshot_id, u.representation_type, u.content_type,
+                   u.content_text, u.structural_context, u.target_type, u.target_ref,
+                   u.canonical_evidence_id, u.container_ref, u.ordinal, u.facets_json,
+                   (1 - (e.embedding_vector_vec &lt;=&gt; #{queryVector}::vector)) AS channel_score
+            FROM asset_retrieval_embeddings_v2 e
+            JOIN asset_retrieval_units_v2 u ON u.representation_id = e.representation_id
+            WHERE u.dense_eligible = TRUE
+              AND e.dimension = #{dim}
+              AND e.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+                #{sid}
+            </foreach>
+            <include refid="unitPushdownFilters"/>
+            ORDER BY e.representation_id, e.embedding_vector_vec &lt;=&gt; #{queryVector}::vector
+        ) t
+        ORDER BY t.channel_score DESC, t.canonical_evidence_id ASC, t.representation_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectDistinctDimensions" resultType="int">
+        SELECT DISTINCT dimension
+        FROM asset_retrieval_embeddings_v2
+        WHERE snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+    </select>
+
+</mapper>

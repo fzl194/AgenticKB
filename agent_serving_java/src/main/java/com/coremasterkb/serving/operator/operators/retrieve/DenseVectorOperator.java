@@ -2,38 +2,46 @@ package com.coremasterkb.serving.operator.operators.retrieve;
 
 import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
-import com.coremasterkb.serving.domain.ScoreChain;
-import com.coremasterkb.serving.mapper.result.EmbeddingRow;
+import com.coremasterkb.serving.mapper.result.UnitV2Row;
 import com.coremasterkb.serving.operator.core.*;
-import com.coremasterkb.serving.operator.mapper.OperatorEmbeddingMapper;
+import com.coremasterkb.serving.operator.mapper.AssetRetrievalUnitV2Mapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
- * {@code dense_vector} — pgvector cosine retrieval with a {@code textKind} ("检索范围") parameter.
+ * {@code dense_vector} — pgvector 余弦召回（批次8 R2，25 号 §6.5）。
  *
- * <p>The defining new capability of the operator system: unlike the existing
- * {@code DenseVectorRetriever}, this filters embeddings by {@code text_kind} so raw_text / question /
- * both retrieve over different embedding sets. Uses {@link OperatorEmbeddingMapper} (new SQL).</p>
+ * <p>切到 v2 资产表（{@code asset_retrieval_embeddings_v2} ⋈ {@code asset_retrieval_units_v2}）：
+ * 旧 {@code textKind=raw_text|question|both} 参数与 {@code unit_type} 映射已删除——统一检索
+ * 活动 Build 中 {@code dense_eligible=TRUE}、维度与查询向量一致的 embeddings；representation
+ * type / content type / document / section 等全部是确定性 filter（{@link ScopeFilterPushdown}），
+ * 在 Top-K 之前下推。通道内 canonical 聚合同 fts（{@link ChannelAggregator}），alias 不重复占位。</p>
+ *
+ * <p>无向量数据（scope 内 embeddings 表为空）不是空结果：返回空候选 + capability diagnostic
+ * 留痕（ctx attribute + 日志），关键词预置不调用本算子。</p>
  */
 @Component
 public class DenseVectorOperator implements Operator {
 
-    private static final String SOURCE = "dense_vector";
+    private static final Logger log = LoggerFactory.getLogger(DenseVectorOperator.class);
+
+    /** §5.1 稳定通道标识：rrf channel weights 以此为键。 */
+    public static final String CHANNEL_ID = "dense";
+
+    static final int RECALL_MULTIPLIER = 5;
+    static final int RECALL_HARD_CAP = 1000;
 
     private static final String PARAM_SCHEMA = """
             {"type":"object","properties":{
-              "textKind":{"type":"string","enum":["raw_text","question","both"],"default":"raw_text","title":"检索范围"},
               "topK":{"type":"integer","minimum":1,"maximum":200,"default":20,"title":"返回数量"}
             }}""";
 
-    private final OperatorEmbeddingMapper mapper;
+    private final AssetRetrievalUnitV2Mapper mapper;
 
-    public DenseVectorOperator(OperatorEmbeddingMapper mapper) {
+    public DenseVectorOperator(AssetRetrievalUnitV2Mapper mapper) {
         this.mapper = mapper;
     }
 
@@ -41,10 +49,10 @@ public class DenseVectorOperator implements Operator {
     public OperatorDef definition() {
         return new OperatorDef(
                 "dense_vector", "retrieve", "向量检索",
-                "pgvector 余弦相似度检索，可按 text_kind 限定检索范围",
+                "v2 资产表 pgvector 余弦检索（dense_eligible + 维度一致 + canonical 聚合，filters Top-K 前下推）",
                 List.of(
                         SlotDecl.required("queryEmbedding", SlotType.VECTOR, "查询向量"),
-                        SlotDecl.required("scope", SlotType.SCOPE, "检索范围(snapshotIds)")),
+                        SlotDecl.required("scope", SlotType.SCOPE, "检索范围(snapshotIds+hardFilters)")),
                 List.of(SlotDecl.required("candidates", SlotType.CANDIDATE_LIST, "检索候选")),
                 PARAM_SCHEMA,
                 ErrorPolicy.SKIP_WITH_EMPTY);
@@ -57,32 +65,34 @@ public class DenseVectorOperator implements Operator {
         if (vec == null || vec.length == 0 || scope == null || scope.snapshotIds().isEmpty()) {
             return SlotValues.of("candidates", List.of());
         }
-
-        List<String> textKinds = resolveTextKinds(params.getString("textKind", "raw_text"));
         int topK = params.getInt("topK", 20);
 
-        List<EmbeddingRow> rows = mapper.selectTopKByVectorAndTextKind(
-                scope.snapshotIds(), formatVector(vec), vec.length, textKinds, List.of(), topK);
+        ScopeFilterPushdown pushdown = ScopeFilterPushdown.from(scope);
+        int recall = Math.min(RECALL_HARD_CAP, topK * RECALL_MULTIPLIER);
 
-        List<RetrievalCandidate> candidates = new ArrayList<>(rows.size());
-        for (EmbeddingRow row : rows) {
-            candidates.add(toCandidate(row));
+        List<UnitV2Row> rows = mapper.searchDenseV2(
+                formatVector(vec), vec.length, scope.snapshotIds(),
+                pushdown.documentJsonParams(), pushdown.representationTypes(),
+                pushdown.contentTypes(), pushdown.targetRefs(), recall);
+
+        if (rows.isEmpty() && mapper != null) {
+            // 空候选的能力性留痕：区分"无向量数据"（capability 缺失）与"正常无命中"。
+            List<Integer> dims = mapper.selectDistinctDimensions(scope.snapshotIds());
+            if (dims.isEmpty()) {
+                ctx.putAttribute("denseVectorDegraded", "no_embeddings_in_scope");
+                log.warn("[dense_vector] no embeddings in scope (capability degraded) snapshots={}",
+                        scope.snapshotIds().size());
+            } else if (!dims.contains(vec.length)) {
+                ctx.putAttribute("denseVectorDegraded", "dimension_mismatch");
+                log.warn("[dense_vector] query dim {} not in scope profile dims {} (capability degraded)",
+                        vec.length, dims);
+            }
         }
-        return SlotValues.of("candidates", candidates);
-    }
 
-    /**
-     * Map the "检索范围" param to concrete {@code asset_retrieval_units.unit_type} values
-     * (both = raw_text + generated_question). The asset data stores the question carrier as
-     * {@code generated_question}; embedding {@code text_kind} is uniformly 'full', so the range
-     * filter targets the unit's {@code unit_type} (see OperatorEmbeddingMapper.xml).
-     */
-    private static List<String> resolveTextKinds(String textKind) {
-        return switch (textKind) {
-            case "question" -> List.of("generated_question");
-            case "both" -> List.of("raw_text", "generated_question");
-            default -> List.of("raw_text");
-        };
+        List<RetrievalCandidate> candidates = ChannelAggregator.aggregate(rows, CHANNEL_ID, topK);
+        ctx.putAttribute("denseRowCount", rows.size());
+        ctx.putAttribute("denseCanonicalCount", candidates.size());
+        return SlotValues.of("candidates", candidates);
     }
 
     private static String formatVector(float[] vec) {
@@ -92,28 +102,5 @@ public class DenseVectorOperator implements Operator {
             sb.append(vec[i]);
         }
         return sb.append(']').toString();
-    }
-
-    private static RetrievalCandidate toCandidate(EmbeddingRow row) {
-        double score = row.getCosineScore();
-        Map<String, Object> meta = new LinkedHashMap<>();
-        putIfNotNull(meta, "document_snapshot_id", row.getDocumentSnapshotId());
-        putIfNotNull(meta, "text", row.getText());
-        putIfNotNull(meta, "title", row.getTitle());
-        putIfNotNull(meta, "block_type", row.getBlockType());
-        putIfNotNull(meta, "semantic_role", row.getSemanticRole());
-        putIfNotNull(meta, "source_refs_json", row.getSourceRefsJson());
-        putIfNotNull(meta, "facets_json", row.getFacetsJson());
-        putIfNotNull(meta, "target_type", row.getTargetType());
-        putIfNotNull(meta, "target_ref_json", row.getTargetRefJson());
-        putIfNotNull(meta, "unit_type", row.getUnitType());
-        putIfNotNull(meta, "source_segment_id", row.getSourceSegmentId());
-        return new RetrievalCandidate(
-                row.getRetrievalUnitId(), score, SOURCE, meta,
-                new ScoreChain(score, 0.0, 0.0, List.of(SOURCE)));
-    }
-
-    private static void putIfNotNull(Map<String, Object> map, String key, Object val) {
-        if (val != null) map.put(key, val);
     }
 }

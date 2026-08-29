@@ -43,7 +43,7 @@ class FullTextServiceTest {
         repo = mock(AssetRepository.class);
         scopeResolver = mock(ScopeResolver.class);
         service = new FullTextService(repo, scopeResolver,
-                new ServingProperties(null, null, DOMAIN, null, null, null, null));
+                new ServingProperties(null, null, DOMAIN, null, null, null, null, null));
     }
 
     private void scopeIs(ActiveScope scope) {

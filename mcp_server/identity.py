@@ -65,13 +65,18 @@ class IdentityError(Exception):
     """无钥/错钥/后端不可达。message 面向 Agent（中文），可直接作为工具错误返回。"""
 
 
-#: MCP 工具族六件套（与 mining MCP_TOOL_NAMES 一一对应）
+#: MCP 工具族九件套（批次8 R8，25 号 §8.1：get_segment_fulltext 被 get_evidence 取代，
+#: 新增 inspect_knowledge/navigate_structure/query_structured_asset，get_document 切
+#: document_ref 主键）。mining 侧 open_tools 白名单校验基线同步待扩（遗留项，见部署说明）。
 TOOL_NAMES = frozenset({
     "search_knowledge",
+    "get_evidence",
+    "get_document",
+    "inspect_knowledge",
+    "navigate_structure",
+    "query_structured_asset",
     "list_knowledge_bases",
     "list_documents",
-    "get_document",
-    "get_segment_fulltext",
     "upload_document",
 })
 

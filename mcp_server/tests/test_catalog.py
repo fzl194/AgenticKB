@@ -3,21 +3,22 @@
 Uses ``httpx.MockTransport`` like the other suites, so the asserted URLs and payloads are the ones
 the backend would really see.
 
+批次8 R8：成功响应是纯 EvidenceResponse（无 _retrieval）；``available_paradigms``
+提示只出现在**错误**响应上（Agent 有东西可以纠正方向，成功响应保持 §13.3 硬约束）。
+
 The theme running through every failure case: an explicit selection is never quietly served by
-another engine. The caller asserted a choice, and answering from something else looks exactly like
-having honoured it.
+another engine. The caller asserted a choice, and answering from something else looks exactly
+like having honoured it.
 """
 
 from __future__ import annotations
-
-import json
 
 import httpx
 import pytest
 
 from mcp_server import client as mcp_client
 from mcp_server.identity import Identity
-from mcp_server.schemas import FullTextInput, SearchInput, SegmentRef
+from mcp_server.schemas import SearchInput
 
 def ident() -> Identity:
     return Identity(username="alice", user_id="u-1", open_kbs=({"id": "kb-1", "name": "基站手册库"},))
@@ -58,15 +59,12 @@ ANY_DOMAIN = {
     "isDomainDefault": False,
 }
 
-PACK = {
-    "contextPack": {
-        "query": {"original": "光路不通"},
-        "items": [{"id": "ru-1", "role": "seed"}],
-        "relations": [],
-        "sources": [],
-        "evidenceGroups": [],
-        "issues": [],
-        "suggestions": [],
+EVIDENCE = {
+    "evidenceResponse": {
+        "query": "光路不通",
+        "evidence": [{"ref": "ev_1", "type": "prose", "content": "…",
+                      "source": {"document_ref": "doc_1"}, "truncated": False}],
+        "has_more": False,
     }
 }
 
@@ -93,8 +91,8 @@ _BOUND_RESOLVE = {
 }
 
 
-def backend(*, catalog, paradigm=None, resolve=None, search=None):
-    """Handler over the four endpoints this suite touches."""
+def backend(*, catalog, paradigm=None, resolve=None):
+    """Handler over the endpoints this suite touches."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -103,11 +101,7 @@ def backend(*, catalog, paradigm=None, resolve=None, search=None):
         if path == "/api/v1/paradigm/resolve":
             return resolve or httpx.Response(200, json=_BOUND_RESOLVE)
         if path.startswith("/api/v1/paradigm/") and path.endswith("/search"):
-            return paradigm or httpx.Response(200, json=PACK)
-        if path == "/api/v1/segments/fulltext":
-            return httpx.Response(200, json={"scope": {}, "items": []})
-        if path == "/api/v1/search":
-            return search or httpx.Response(200, json={"items": []})
+            return paradigm or httpx.Response(200, json=EVIDENCE)
         raise AssertionError(f"unexpected request to {path}")
 
     return handler
@@ -135,8 +129,7 @@ def test_selects_by_name(monkeypatch, calls):
     out = mcp_client.search_knowledge(q(paradigm="ODN 参数表查询"), ident(), [])
 
     assert executed_paradigm(calls) == "/api/v1/paradigm/pd-9c11ab02/search"
-    assert out["_retrieval"]["selected_by"] == "explicit"
-    assert out["_retrieval"]["paradigm_id"] == "pd-9c11ab02"
+    assert out == EVIDENCE["evidenceResponse"]
 
 
 def test_selects_by_id(monkeypatch, calls):
@@ -178,7 +171,6 @@ def test_unknown_name_is_rejected_not_silently_redirected(monkeypatch, calls):
     assert "ODN 拓扑排障" in out["message"], "the agent needs the valid options to self-correct"
     assert executed_paradigm(calls) is None
     assert "/api/v1/search" not in [c.url.path for c in calls], "must not fall back to legacy"
-    assert out["_retrieval"]["selected_by"] == "rejected"
 
 
 def test_a_freshly_published_paradigm_forces_a_refresh_before_being_declared_unknown(
@@ -199,7 +191,6 @@ def test_a_freshly_published_paradigm_forces_a_refresh_before_being_declared_unk
     assert "error" not in out
 
 
-
 def test_catalog_down_passes_an_id_through_but_rejects_a_name(monkeypatch, calls):
     install(monkeypatch, backend(catalog=httpx.Response(503, text="down")), calls)
 
@@ -216,22 +207,10 @@ def test_catalog_down_passes_an_id_through_but_rejects_a_name(monkeypatch, calls
     assert "/api/v1/search" not in [c.url.path for c in calls]
 
 
-# ── the advisory list ────────────────────────────────────────────────────
+# ── the advisory list (errors only — success stays pure EvidenceResponse) ──
 
 
-def test_every_answer_carries_the_available_paradigms(monkeypatch, calls):
-    """Discovery as a by-product: one call and the agent knows what else it could have asked for."""
-    install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY, ODN_TABLES)), calls)
-
-    out = mcp_client.search_knowledge(q(), ident(), [])
-
-    assert out["_retrieval"]["available_paradigms"] == [
-        {"name": "ODN 拓扑排障", "description": "查 ODN 拓扑与端口占用"},
-        {"name": "ODN 参数表查询", "description": "偏向表格行的检索"},
-    ]
-
-
-def test_the_list_is_attached_to_errors_too(monkeypatch, calls):
+def test_no_paradigm_configured_carries_the_available_list(monkeypatch, calls):
     """阶段 A：无任何范式绑定的域，第一次 unnamed 调用就报 no_paradigm_configured。
     错误响应上仍附可用清单——agent 有东西可以纠正方向。"""
     install(
@@ -246,7 +225,7 @@ def test_the_list_is_attached_to_errors_too(monkeypatch, calls):
     out = mcp_client.search_knowledge(q(), ident(), [])
 
     assert out["error"] == "no_paradigm_configured"
-    assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]
+    assert [e["name"] for e in out["available_paradigms"]] == ["ODN 拓扑排障"]
 
 
 def test_the_list_is_no_longer_domain_filtered(monkeypatch, calls):
@@ -255,7 +234,12 @@ def test_the_list_is_no_longer_domain_filtered(monkeypatch, calls):
 
     out = mcp_client.search_knowledge(q(domain="odn"), ident(), [])
 
-    assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == [
+    assert "error" not in out
+    # 成功响应纯 EvidenceResponse——清单只在错误上可见（§13.3）
+    assert "available_paradigms" not in out
+
+    miss = mcp_client.search_knowledge(q(domain="odn", paradigm="不存在"), ident(), [])
+    assert [e["name"] for e in miss["available_paradigms"]] == [
         "ODN 拓扑排障",
         "核心网配置",
         "通用检索",
@@ -264,75 +248,43 @@ def test_the_list_is_no_longer_domain_filtered(monkeypatch, calls):
 
 def test_an_unreachable_catalog_omits_the_field_rather_than_reporting_none(monkeypatch, calls):
     """Absent and empty must not look alike: empty would read as 'there are no paradigms'."""
-    install(monkeypatch, backend(catalog=httpx.Response(503, text="down")), calls)
+    install(
+        monkeypatch,
+        backend(
+            catalog=httpx.Response(503, text="down"),
+            resolve=httpx.Response(200, json={"domain": "odn", "bound": False}),
+        ),
+        calls,
+    )
 
     out = mcp_client.search_knowledge(q(), ident(), [])
 
-    assert "available_paradigms" not in out["_retrieval"]
-    assert "error" not in out, "a hint that could not be fetched must not fail the search"
-    assert out["_retrieval"]["engine"] == "paradigm"
+    assert out["error"] == "no_paradigm_configured"
+    assert "available_paradigms" not in out
+
+
+UNBOUND = httpx.Response(200, json={"domain": "odn", "bound": False})
 
 
 def test_the_catalog_is_cached_across_calls(monkeypatch, calls):
-    install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
+    """批次8 R8：成功响应不再拉 catalog（无 _retrieval 提示）——错误路径才用它，仍被缓存。"""
+    install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY), resolve=UNBOUND), calls)
 
     mcp_client.search_knowledge(q(), ident(), [])
     mcp_client.search_knowledge(q(), ident(), [])
 
+    # 成功路径不触发；两次 no_paradigm_configured 共享一次 catalog 拉取
     assert [c.url.path for c in calls].count(CATALOG_PATH) == 1
 
 
 def test_an_expired_cache_refetches(monkeypatch, calls):
-    install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
+    install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY), resolve=UNBOUND), calls)
     monkeypatch.setattr(mcp_client, "CATALOG_TTL", 0.0)
 
     mcp_client.search_knowledge(q(), ident(), [])
     mcp_client.search_knowledge(q(), ident(), [])
 
     assert [c.url.path for c in calls].count(CATALOG_PATH) == 2
-
-
-# ── pairing with the drill-down ──────────────────────────────────────────
-
-
-def test_fulltext_honours_an_explicit_paradigm_id(monkeypatch, calls):
-    """Without this the lookup re-resolves the domain default — a different set of knowledge
-    bases — and every id comes back found:false for a reason that reads like 're-mined'."""
-    install(monkeypatch, backend(catalog=catalog_of(ODN_TOPOLOGY)), calls)
-
-    mcp_client.get_segment_fulltext(
-        FullTextInput(
-            domain="odn",
-            refs=[SegmentRef(type="raw_segment", id="seg-1")],
-            paradigm_id="pd-9c11ab02",
-        ),
-        ident(),
-    )
-
-    posts = [c for c in calls if c.url.path == "/api/v1/segments/fulltext"]
-    assert json.loads(posts[0].content)["paradigm_id"] == "pd-9c11ab02"
-    assert "/api/v1/paradigm/resolve" not in [c.url.path for c in calls], (
-        "an explicit id needs no lookup, and a lookup could only disagree with it"
-    )
-
-
-def test_fulltext_without_a_paradigm_id_keeps_resolving_the_domain(monkeypatch, calls):
-    install(
-        monkeypatch,
-        backend(
-            catalog=catalog_of(ODN_TOPOLOGY),
-            resolve=httpx.Response(200, json={"bound": True, "paradigmId": "pd-3f2a1b7c"}),
-        ),
-        calls,
-    )
-
-    mcp_client.get_segment_fulltext(
-        FullTextInput(domain="odn", refs=[SegmentRef(type="raw_segment", id="seg-1")]),
-        ident(),
-    )
-
-    posts = [c for c in calls if c.url.path == "/api/v1/segments/fulltext"]
-    assert json.loads(posts[0].content)["paradigm_id"] == "pd-3f2a1b7c"
 
 
 # ── self-review follow-ups ───────────────────────────────────────────────
@@ -350,7 +302,7 @@ def test_catalog_unavailable_does_not_pay_the_timeout_twice(monkeypatch, calls):
 
     assert out["error"] == "catalog_unavailable"
     assert [c.url.path for c in calls].count(CATALOG_PATH) == 1
-    assert "available_paradigms" not in out["_retrieval"]
+    assert "available_paradigms" not in out
 
 
 def test_unknown_paradigm_still_lists_the_options(monkeypatch, calls):
@@ -360,7 +312,7 @@ def test_unknown_paradigm_still_lists_the_options(monkeypatch, calls):
     out = mcp_client.search_knowledge(q(paradigm="不存在"), ident(), [])
 
     assert out["error"] == "unknown_paradigm"
-    assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]
+    assert [e["name"] for e in out["available_paradigms"]] == ["ODN 拓扑排障"]
 
 
 def test_malformed_catalog_entries_are_dropped_not_fatal(monkeypatch, calls):
@@ -381,4 +333,3 @@ def test_malformed_catalog_entries_are_dropped_not_fatal(monkeypatch, calls):
     out = mcp_client.search_knowledge(q(), ident(), [])
 
     assert "error" not in out
-    assert [e["name"] for e in out["_retrieval"]["available_paradigms"]] == ["ODN 拓扑排障"]

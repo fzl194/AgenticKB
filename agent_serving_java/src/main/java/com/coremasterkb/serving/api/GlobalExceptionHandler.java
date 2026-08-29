@@ -95,6 +95,16 @@ public class GlobalExceptionHandler {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "ref_id_required", "message", "Each ref needs a non-blank id"));
         }
+        // ---- R8（25 号 §7.1）显式请求参数校验 ----
+        if ("top_k_invalid".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "top_k_invalid", "message", "top_k must be a positive integer"));
+        }
+        if ("expansion_invalid".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "expansion_invalid",
+                            "message", "expansion.mode must be one of auto/exact/window/parent/whole_document"));
+        }
         // Reached when a scope resolves to zero snapshots. Mapped explicitly because the
         // alternative — letting an empty snapshot list through — is an unfiltered read, so this
         // code existing at all is the visible half of that guard.

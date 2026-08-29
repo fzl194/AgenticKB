@@ -5,15 +5,20 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
 
 /**
- * 批次8 R0 停 seed：官方默认图依赖已退役算子（weighted_rrf 等），seeding 停用（去
- * {@code @Component}，不再被 Spring 扫描）。R8 按 25 号文档的两套新检索预置重建本类。
+ * 批次8 R8 恢复启用（25 号 §9）：startup 时 seed 两套官方检索预置——
+ * {@link ParadigmService#OFFICIAL_LEXICAL_ID system-lexical-retrieval}（关键词）与
+ * {@link ParadigmService#OFFICIAL_DEFAULT_ID system-hybrid-retrieval}（标准混合，
+ * 官方默认）。幂等：固定 id，缺失建+发布、未发布补发布、用户归档不复活；
+ * R0 退役的旧官方图 id（system-official-default）不复活。
  *
- * <p>原职责：startup 时 seed 官方默认范式（固定 id
- * {@link ParadigmService#OFFICIAL_DEFAULT_ID}），作为解析链的 "official" 层。停用后该层
- * 只读库中既有范式，resolve 在无预置时明确报"未配置检索范式"。</p>
+ * <p>R0 曾整体停用本类（旧图依赖已退役算子 weighted_rrf）；R8 的新预置全部使用
+ * 现存 7+1 算子目录（scope_resolve/query_embed/fts/dense_vector/rrf/model_rerank/
+ * evidence_hydrate/assemble），终点 {@code evidenceResponse}。</p>
  */
+@Component
 public class OfficialParadigmSeeder {
 
     private static final Logger log = LoggerFactory.getLogger(OfficialParadigmSeeder.class);
@@ -28,9 +33,9 @@ public class OfficialParadigmSeeder {
     @EventListener(ApplicationReadyEvent.class)
     public void seed() {
         try {
-            paradigmService.ensureOfficialDefault();
+            paradigmService.ensureOfficialParadigms();
         } catch (Exception e) {
-            log.warn("Official default paradigm seeding skipped ({}). Resolve will report "
+            log.warn("Official paradigm seeding skipped ({}). Resolve will report "
                     + "'no paradigm configured' until it lands on a later boot.", e.getMessage());
         }
     }

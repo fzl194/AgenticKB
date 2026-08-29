@@ -1,0 +1,428 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+    批次8 R7 结构工具族 SQL（25 号 §6.10/§6.11/§10.1）。
+    安全契约：
+    - 字段名（列 display name）只以 #{field} 绑定出现在 cells->>#{field}——白名单校验在
+      Java 侧（StructuredQueryService），SQL 层无字符串拼接插值（全文零 text-substitution 占位）；
+    - 操作符/排序方向/聚合函数是 <choose> 枚举固定分支；
+    - 深度（递归 CTE maxDepth）、limit/offset 全部参数化，SQL 内收窄。
+-->
+<mapper namespace="com.coremasterkb.serving.operator.mapper.StructureToolMapper">
+
+    <resultMap id="refRowMap" type="com.coremasterkb.serving.operator.mapper.StructureToolMapper$RefRow">
+        <constructor>
+            <arg column="snapshot_id" javaType="java.lang.String"/>
+            <arg column="ref"         javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="edgeRowMap" type="com.coremasterkb.serving.operator.mapper.StructureToolMapper$EdgeRow">
+        <constructor>
+            <arg column="snapshot_id" javaType="java.lang.String"/>
+            <arg column="relation"    javaType="java.lang.String"/>
+            <arg column="from_ref"    javaType="java.lang.String"/>
+            <arg column="to_ref"      javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="nodeMap" type="com.coremasterkb.serving.mapper.result.StructureNodeRow">
+        <result column="snapshot_id" property="snapshotId"/>
+        <result column="node_type"   property="nodeType"/>
+        <result column="ref"         property="ref"/>
+        <result column="parent_ref"  property="parentRef"/>
+        <result column="ordinal"     property="ordinal"/>
+        <result column="title"       property="title"/>
+        <result column="level"       property="level"/>
+        <result column="block_type"  property="blockType"/>
+    </resultMap>
+
+    <resultMap id="segmentMap" type="com.coremasterkb.serving.mapper.result.SegmentTextRow">
+        <result column="snapshot_id"  property="snapshotId"/>
+        <result column="ref"          property="ref"/>
+        <result column="parent_ref"   property="parentRef"/>
+        <result column="ordinal"      property="ordinal"/>
+        <result column="block_type"   property="blockType"/>
+        <result column="raw_text"     property="rawText"/>
+        <result column="token_count"  property="tokenCount"/>
+        <result column="heading_chain_json" property="headingChainJson"/>
+    </resultMap>
+
+    <resultMap id="tableAssetMap" type="com.coremasterkb.serving.mapper.result.TableAssetRow">
+        <result column="snapshot_id"    property="snapshotId"/>
+        <result column="asset_ref"      property="assetRef"/>
+        <result column="asset_type"     property="assetType"/>
+        <result column="table_ref"      property="tableRef"/>
+        <result column="columns_json"   property="columnsJson"/>
+        <result column="row_count"      property="rowCount"/>
+        <result column="readiness"      property="readiness"/>
+        <result column="schema_version" property="schemaVersion"/>
+    </resultMap>
+
+    <resultMap id="cellMap" type="com.coremasterkb.serving.mapper.result.TableCellRow">
+        <result column="snapshot_id"   property="snapshotId"/>
+        <result column="table_ref"     property="tableRef"/>
+        <result column="row_index"     property="rowIndex"/>
+        <result column="column_index"  property="columnIndex"/>
+        <result column="column_name"   property="columnName"/>
+        <result column="value"         property="value"/>
+        <result column="is_header"     property="isHeader"/>
+    </resultMap>
+
+    <resultMap id="structuredRowMap"
+               type="com.coremasterkb.serving.operator.mapper.StructureToolMapper$StructuredRow">
+        <constructor>
+            <arg column="rowIndex"  javaType="java.lang.Integer"/>
+            <arg column="cellsJson" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="aggregateRowMap"
+               type="com.coremasterkb.serving.operator.mapper.StructureToolMapper$AggregateRow">
+        <constructor>
+            <arg column="value" javaType="java.lang.Double"/>
+        </constructor>
+    </resultMap>
+
+    <!-- ======================= ref 反查候选 ======================= -->
+
+    <select id="selectStructureRefCandidates" resultMap="refRowMap">
+        SELECT snapshot_id, ref FROM (
+            SELECT n.snapshot_id, n.ref
+            FROM asset_structure_nodes n
+            WHERE n.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+            UNION ALL
+            SELECT a.snapshot_id, a.asset_ref AS ref
+            FROM asset_structured_assets a
+            WHERE a.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+        ) u
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectDocumentRefCandidates" resultMap="refRowMap">
+        SELECT n.snapshot_id, n.ref
+        FROM asset_structure_nodes n
+        WHERE n.node_type = 'document'
+          AND n.snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectCanonicalRefCandidates" resultMap="refRowMap">
+        SELECT u.snapshot_id, u.canonical_evidence_id AS ref
+        FROM (
+            SELECT DISTINCT r.snapshot_id, r.canonical_evidence_id
+            FROM asset_retrieval_units_v2 r
+            WHERE r.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+        ) u
+        LIMIT #{limit}
+    </select>
+
+    <!-- 授权 KB 的全部历史 snapshot（expired_ref 判定；不带 build 状态过滤 = 含被替换快照） -->
+    <select id="selectKbSnapshotRefs" resultMap="refRowMap">
+        SELECT DISTINCT bs.document_snapshot_id AS snapshot_id, bs.document_snapshot_id AS ref
+        FROM asset_build_document_snapshots bs
+        JOIN asset_builds    b ON b.id = bs.build_id
+        JOIN asset_documents d ON d.id = bs.document_id
+        WHERE b.kb_id = d.kb_id
+          AND d.deleted_at IS NULL
+          AND d.domain = #{domain}
+          AND d.kb_id IN
+        <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">#{kbId}</foreach>
+        LIMIT #{limit}
+    </select>
+
+    <!-- ======================= structure_navigate ======================= -->
+
+    <select id="selectNode" resultMap="nodeMap">
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM asset_structure_nodes
+        WHERE snapshot_id = #{snapshotId} AND ref = #{ref}
+    </select>
+
+    <select id="selectChildren" resultMap="nodeMap">
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM asset_structure_nodes
+        WHERE snapshot_id = #{snapshotId} AND parent_ref = #{parentRef}
+        ORDER BY ordinal ASC NULLS LAST, ref ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 递归后代：BFS 序（深度、ordinal、ref），maxDepth 参数化收窄 -->
+    <select id="selectDescendants" resultMap="nodeMap">
+        WITH RECURSIVE down(snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type, d) AS (
+            SELECT n.snapshot_id, n.node_type, n.ref, n.parent_ref, n.ordinal, n.title, n.level,
+                   n.block_type, 1
+            FROM asset_structure_nodes n
+            WHERE n.snapshot_id = #{snapshotId} AND n.parent_ref = #{rootRef}
+            UNION ALL
+            SELECT n.snapshot_id, n.node_type, n.ref, n.parent_ref, n.ordinal, n.title, n.level,
+                   n.block_type, down.d + 1
+            FROM asset_structure_nodes n
+            JOIN down ON n.snapshot_id = down.snapshot_id AND n.parent_ref = down.ref
+            WHERE down.d &lt; #{maxDepth}
+        )
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM down
+        ORDER BY d ASC, ordinal ASC NULLS LAST, ref ASC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 递归祖先：从直接父节点向上，最近优先 -->
+    <select id="selectAncestors" resultMap="nodeMap">
+        WITH RECURSIVE up(snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type, d) AS (
+            SELECT n.snapshot_id, n.node_type, n.ref, n.parent_ref, n.ordinal, n.title, n.level,
+                   n.block_type, 1
+            FROM asset_structure_nodes n
+            WHERE n.snapshot_id = #{snapshotId}
+              AND n.ref = (SELECT p.parent_ref FROM asset_structure_nodes p
+                           WHERE p.snapshot_id = #{snapshotId} AND p.ref = #{ref})
+            UNION ALL
+            SELECT n.snapshot_id, n.node_type, n.ref, n.parent_ref, n.ordinal, n.title, n.level,
+                   n.block_type, up.d + 1
+            FROM asset_structure_nodes n
+            JOIN up ON n.snapshot_id = up.snapshot_id AND n.ref = up.parent_ref
+            WHERE up.d &lt; #{maxDepth}
+        )
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM up
+        ORDER BY d ASC
+    </select>
+
+    <select id="selectSiblings" resultMap="nodeMap">
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM asset_structure_nodes
+        WHERE snapshot_id = #{snapshotId} AND parent_ref = #{parentRef}
+        ORDER BY ordinal ASC NULLS LAST, ref ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectEdges" resultMap="edgeRowMap">
+        SELECT snapshot_id, relation, from_ref, to_ref
+        FROM asset_structure_edges
+        WHERE snapshot_id = #{snapshotId} AND from_ref = #{fromRef} AND relation = #{relation}
+        LIMIT #{limit}
+    </select>
+
+    <!-- ======================= readiness / inspect ======================= -->
+
+    <select id="countNodesByType" resultType="int">
+        SELECT COUNT(*) FROM asset_structure_nodes
+        WHERE snapshot_id = #{snapshotId} AND node_type = #{nodeType}
+    </select>
+
+    <select id="countEdgesByRelation" resultType="int">
+        SELECT COUNT(*) FROM asset_structure_edges
+        WHERE snapshot_id = #{snapshotId} AND relation = #{relation}
+    </select>
+
+    <select id="countSegments" resultType="int">
+        SELECT COUNT(*) FROM asset_raw_segments WHERE snapshot_id = #{snapshotId}
+    </select>
+
+    <select id="selectSnapshotTableAssets" resultMap="tableAssetMap">
+        SELECT snapshot_id, asset_ref, asset_type, table_ref,
+               columns_json::text AS columns_json, row_count, readiness, schema_version
+        FROM asset_structured_assets
+        WHERE snapshot_id = #{snapshotId}
+        ORDER BY asset_ref ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectStructuralContext" resultType="string">
+        SELECT r.structural_context
+        FROM asset_retrieval_units_v2 r
+        WHERE r.snapshot_id = #{snapshotId}
+          AND r.container_ref = #{containerRef}
+          AND r.returnable = TRUE
+          AND r.structural_context IS NOT NULL
+          AND r.structural_context != ''
+        ORDER BY r.representation_id ASC
+        LIMIT 1
+    </select>
+
+    <!-- ======================= structured_query ======================= -->
+
+    <select id="selectTableAssetByAssetRef" resultMap="tableAssetMap">
+        SELECT snapshot_id, asset_ref, asset_type, table_ref,
+               columns_json::text AS columns_json, row_count, readiness, schema_version
+        FROM asset_structured_assets
+        WHERE snapshot_id = #{snapshotId} AND asset_ref = #{assetRef}
+    </select>
+
+    <select id="countCells" resultType="int">
+        SELECT COUNT(*) FROM asset_table_cells
+        WHERE snapshot_id = #{snapshotId} AND table_ref = #{tableRef}
+    </select>
+
+    <select id="selectCellsForTyping" resultMap="cellMap">
+        SELECT snapshot_id, table_ref, row_index, column_index, column_name, value, is_header
+        FROM asset_table_cells
+        WHERE snapshot_id = #{snapshotId} AND table_ref = #{tableRef}
+        ORDER BY is_header DESC, row_index ASC, column_index ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      行查询：pivot（jsonb_object_agg）→ criteria（参数绑定 + <choose> 枚举分支）→ 稳定排序 → 分页。
+      数值比较先去千分位逗号再 ::numeric；列能力扫描判定 numeric，扫描不完整即降级文本。
+    -->
+    <select id="selectStructuredRows" resultMap="structuredRowMap">
+        SELECT t.row_index AS rowIndex, t.cells::text AS cellsJson
+        FROM (
+            SELECT c.row_index, jsonb_object_agg(c.column_name, c.value) AS cells
+            FROM asset_table_cells c
+            WHERE c.snapshot_id = #{snapshotId} AND c.table_ref = #{tableRef} AND c.is_header = FALSE
+            GROUP BY c.row_index
+        ) t
+        <where>
+            <foreach collection="criteria" item="c" separator=" AND ">
+                <include refid="criterion"/>
+            </foreach>
+        </where>
+        <if test="orderField != null and orderField != ''">
+            ORDER BY
+            <choose>
+                <when test="numericOrder">
+                    NULLIF(REPLACE(t.cells ->> #{orderField}, ',', ''), '')::numeric
+                </when>
+                <otherwise>t.cells ->> #{orderField}</otherwise>
+            </choose>
+            <choose>
+                <when test="orderDir == 'desc'">DESC</when>
+                <otherwise>ASC</otherwise>
+            </choose>
+            , t.row_index ASC
+        </if>
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countStructuredRows" resultType="long">
+        SELECT COUNT(*)
+        FROM (
+            SELECT c.row_index, jsonb_object_agg(c.column_name, c.value) AS cells
+            FROM asset_table_cells c
+            WHERE c.snapshot_id = #{snapshotId} AND c.table_ref = #{tableRef} AND c.is_header = FALSE
+            GROUP BY c.row_index
+        ) t
+        <where>
+            <foreach collection="criteria" item="c" separator=" AND ">
+                <include refid="criterion"/>
+            </foreach>
+        </where>
+    </select>
+
+    <!-- 聚合函数是固定分支；aggField 白名单 + 参数绑定；数值聚合仅数值列（Java 判定） -->
+    <select id="aggregateStructuredRows" resultMap="aggregateRowMap">
+        SELECT
+        <choose>
+            <when test="aggOp == 'count'">COUNT(*)</when>
+            <when test="aggOp == 'sum'">
+                SUM(NULLIF(REPLACE(t.cells ->> #{aggField}, ',', ''), '')::numeric)
+            </when>
+            <when test="aggOp == 'min'">
+                MIN(NULLIF(REPLACE(t.cells ->> #{aggField}, ',', ''), '')::numeric)
+            </when>
+            <when test="aggOp == 'max'">
+                MAX(NULLIF(REPLACE(t.cells ->> #{aggField}, ',', ''), '')::numeric)
+            </when>
+            <otherwise>
+                AVG(NULLIF(REPLACE(t.cells ->> #{aggField}, ',', ''), '')::numeric)
+            </otherwise>
+        </choose>
+        AS value
+        FROM (
+            SELECT c.row_index, jsonb_object_agg(c.column_name, c.value) AS cells
+            FROM asset_table_cells c
+            WHERE c.snapshot_id = #{snapshotId} AND c.table_ref = #{tableRef} AND c.is_header = FALSE
+            GROUP BY c.row_index
+        ) t
+        <where>
+            <foreach collection="criteria" item="c" separator=" AND ">
+                <include refid="criterion"/>
+            </foreach>
+        </where>
+    </select>
+
+    <!-- 单条过滤条件：op 枚举固定分支；field/value 全参数绑定（无字符串拼接） -->
+    <sql id="criterion">
+        <choose>
+            <when test="c.op == 'eq'">
+                <choose>
+                    <when test="c.numeric">
+                        NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric = #{c.value}
+                    </when>
+                    <otherwise>t.cells ->> #{c.field} = #{c.value}</otherwise>
+                </choose>
+            </when>
+            <when test="c.op == 'ne'">
+                <choose>
+                    <when test="c.numeric">
+                        NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric != #{c.value}
+                    </when>
+                    <otherwise>t.cells ->> #{c.field} != #{c.value}</otherwise>
+                </choose>
+            </when>
+            <when test="c.op == 'lt'">
+                NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric &lt; #{c.value}
+            </when>
+            <when test="c.op == 'lte'">
+                NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric &lt;= #{c.value}
+            </when>
+            <when test="c.op == 'gt'">
+                NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric &gt; #{c.value}
+            </when>
+            <when test="c.op == 'gte'">
+                NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric &gt;= #{c.value}
+            </when>
+            <when test="c.op == 'in'">
+                <choose>
+                    <when test="c.numeric">
+                        NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric IN
+                        <foreach collection="c.values" item="v" open="(" separator="," close=")">
+                            CAST(#{v} AS numeric)
+                        </foreach>
+                    </when>
+                    <otherwise>
+                        t.cells ->> #{c.field} IN
+                        <foreach collection="c.values" item="v" open="(" separator="," close=")">
+                            #{v}
+                        </foreach>
+                    </otherwise>
+                </choose>
+            </when>
+            <when test="c.op == 'contains'">
+                t.cells ->> #{c.field} LIKE ('%' || #{c.value} || '%')
+            </when>
+            <otherwise>
+                (t.cells ->> #{c.field}) IS NULL
+            </otherwise>
+        </choose>
+    </sql>
+
+    <!-- ======================= get_document ======================= -->
+
+    <select id="selectSegmentsPage" resultMap="segmentMap">
+        SELECT n.snapshot_id, n.ref, n.parent_ref, n.ordinal, n.block_type,
+               s.raw_text, s.token_count, s.heading_chain_json
+        FROM asset_structure_nodes n
+        JOIN asset_raw_segments s
+          ON s.snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
+        WHERE n.snapshot_id = #{snapshotId} AND n.node_type = 'segment' AND n.ordinal &gt; #{afterIndex}
+        ORDER BY n.ordinal ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectSectionOutline" resultMap="nodeMap">
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM asset_structure_nodes
+        WHERE snapshot_id = #{snapshotId} AND node_type = 'section'
+        ORDER BY ref ASC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

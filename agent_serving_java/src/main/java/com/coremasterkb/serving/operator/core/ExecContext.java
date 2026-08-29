@@ -26,6 +26,8 @@ public final class ExecContext {
     private volatile String query;
     private volatile List<String> requestKbIds;
     private volatile Map<String, Object> requestFilters = Map.of();
+    private volatile Integer requestTopK;
+    private volatile String requestExpansion;
     private final Map<String, Object> attributes = new ConcurrentHashMap<>();
     private final List<NodeTrace> nodeTraces = new CopyOnWriteArrayList<>();
 
@@ -64,6 +66,30 @@ public final class ExecContext {
     public Map<String, Object> requestFilters() { return requestFilters; }
     public void setRequestFilters(Map<String, Object> filters) {
         this.requestFilters = (filters == null) ? Map.of() : Map.copyOf(filters);
+    }
+
+    /**
+     * 请求级 top_k 覆盖（25 号 §7.1，批次8 R8）：显式传入优先于节点参数（Agent 控制结果面），
+     * 各算子按自身 schema 上限 clamp。null = 未传 = 用节点参数。
+     */
+    public Integer requestTopK() { return requestTopK; }
+    public void setRequestTopK(Integer topK) {
+        this.requestTopK = (topK != null && topK > 0) ? topK : null;
+    }
+
+    /**
+     * 请求级展开模式覆盖（§7.1 expansion.mode ∈ auto/exact/window/parent/whole_document）。
+     * 仅 {@code evidence_hydrate} 消费；非法值在入参校验层拒绝（不静默回退）。
+     */
+    public String requestExpansion() { return requestExpansion; }
+    public void setRequestExpansion(String mode) { this.requestExpansion = mode; }
+
+    /** 节点参数与请求覆盖的合成：显式 top_k 优先，clamp 到该算子上限。 */
+    public int resolveTopK(int nodeValue, int max) {
+        if (requestTopK == null) {
+            return nodeValue;
+        }
+        return Math.max(1, Math.min(requestTopK, max));
     }
 
     public String requestId() { return requestId; }

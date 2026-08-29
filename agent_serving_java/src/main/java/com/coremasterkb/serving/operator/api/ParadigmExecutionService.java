@@ -43,6 +43,7 @@ public class ParadigmExecutionService {
      */
     public record RunArgs(String query, String domain, String channel, boolean debug,
                           String username, List<String> kbIds,
+                          Map<String, Object> filters, Integer topK, String expansion,
                           String paradigmId, Integer paradigmVersion) {
 
         public RunArgs(String query, String domain, String channel, boolean debug) {
@@ -50,17 +51,19 @@ public class ParadigmExecutionService {
         }
 
         public RunArgs(String query, String domain, String channel, boolean debug, String username) {
-            this(query, domain, channel, debug, username, null, null, null);
+            this(query, domain, channel, debug, username, null, null, null, null, null, null);
         }
 
         /** 阶段 A：{@code kbIds} = 请求级库范围（可空；只对图内 scope 留空的范式生效）。 */
         public RunArgs withKbIds(List<String> kbIds) {
-            return new RunArgs(query, domain, channel, debug, username, kbIds, paradigmId, paradigmVersion);
+            return new RunArgs(query, domain, channel, debug, username, kbIds, filters, topK,
+                    expansion, paradigmId, paradigmVersion);
         }
 
         /** Attach the stored-paradigm reference for query-log attribution. */
         public RunArgs withParadigm(String id, Integer version) {
-            return new RunArgs(query, domain, channel, debug, username, kbIds, id, version);
+            return new RunArgs(query, domain, channel, debug, username, kbIds, filters, topK,
+                    expansion, id, version);
         }
     }
 
@@ -106,6 +109,11 @@ public class ParadigmExecutionService {
                 UUID.randomUUID().toString(), domain, channel, args.debug(), args.username());
         ctx.setQuery(args.query());
         ctx.setRequestKbIds(args.kbIds());
+        // R8（§7.1）：显式 within/filters = hard filters（scope_resolve 透传进 ActiveScope）；
+        // 显式 top_k/expansion 覆盖节点参数（各算子按 schema 上限 clamp）。
+        ctx.setRequestFilters(args.filters());
+        ctx.setRequestTopK(args.topK());
+        ctx.setRequestExpansion(args.expansion());
         Object result = executor.execute(graph, ctx, Map.of("query", args.query()));
 
         log.info("[paradigm/exec] domain={} channel={} output={}",

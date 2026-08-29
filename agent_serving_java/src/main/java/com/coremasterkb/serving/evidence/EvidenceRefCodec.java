@@ -31,7 +31,7 @@ public class EvidenceRefCodec {
     public static final String STRUCTURE_PREFIX = "st_";
 
     /** HMAC 输出取前 12 个 Base64Url 字符（72 bit）：对不可枚举性足够，人读友好。 */
-    static final int SHORT_HASH_CHARS = 12;
+    public static final int SHORT_HASH_CHARS = 12;
 
     /** 域分隔符：ev/doc/st 三类 ref 的 HMAC 输入不同域，防跨类替换。 */
     private static final byte DOMAIN_EVIDENCE = 0x01;

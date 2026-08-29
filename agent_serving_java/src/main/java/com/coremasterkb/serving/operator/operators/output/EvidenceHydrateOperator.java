@@ -112,11 +112,11 @@ public class EvidenceHydrateOperator implements Operator {
             return SlotValues.of("hydratedEvidence", List.of());
         }
 
-        String mode = normalizedMode(params);
+        String mode = normalizedMode(params, ctx.requestExpansion());
         int windowRadius = params.getInt("windowRadius", 1);
         int maxParentTokens = params.getInt("maxParentTokens", 3000);
         int maxDocumentTokens = params.getInt("maxDocumentTokens", 8000);
-        int topN = params.getInt("topN", 50);
+        int topN = ctx.resolveTopK(params.getInt("topN", 50), 100);
 
         // canonical 去重（保序）+ topN 上限 + snapshot 授权过滤。
         Set<String> scopeSnapshots = new LinkedHashSet<>(scope.snapshotIds());
@@ -780,7 +780,15 @@ public class EvidenceHydrateOperator implements Operator {
         return snapshot instanceof String s && !s.isEmpty() ? s : null;
     }
 
-    private static String normalizedMode(Params params) {
+    /** 节点 mode + 请求级 expansion.mode 覆盖（显式请求优先；均非法则 auto）。 */
+    private static String normalizedMode(Params params, String requestMode) {
+        if (requestMode != null) {
+            switch (requestMode) {
+                case MODE_AUTO, MODE_EXACT, MODE_WINDOW, MODE_PARENT, MODE_WHOLE_DOCUMENT:
+                    return requestMode;
+                default: // 非法请求值不静默生效——按未覆盖处理
+            }
+        }
         String mode = params.getString("mode", MODE_AUTO);
         return switch (mode == null ? "" : mode) {
             case MODE_EXACT, MODE_WINDOW, MODE_PARENT, MODE_WHOLE_DOCUMENT -> mode;

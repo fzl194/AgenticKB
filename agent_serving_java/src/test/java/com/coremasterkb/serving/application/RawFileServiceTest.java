@@ -41,7 +41,7 @@ class RawFileServiceTest {
         repo = mock(AssetRepository.class);
         scopeResolver = mock(ScopeResolver.class);
         service = new RawFileService(repo, scopeResolver,
-                new ServingProperties(null, null, DOMAIN, uploadRoot.toString(), null, null, null));
+                new ServingProperties(null, null, DOMAIN, uploadRoot.toString(), null, null, null, null));
     }
 
     // ---------------------------------------------------------------- helpers
@@ -233,7 +233,7 @@ class RawFileServiceTest {
     void missingUploadRootIsDistinct() {
         RawFileService broken = new RawFileService(repo, scopeResolver,
                 new ServingProperties(null, null, DOMAIN,
-                        uploadRoot.resolve("does-not-exist").toString(), null, null, null));
+                        uploadRoot.resolve("does-not-exist").toString(), null, null, null, null));
 
         // Told apart from raw_file_unavailable on purpose: a misconfigured upload root otherwise
         // presents as "none of your documents have files", which reads like a data problem.

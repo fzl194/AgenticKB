@@ -80,7 +80,7 @@ public class AssembleOperator implements Operator {
     @Override
     public SlotValues execute(SlotValues inputs, Params params, ExecContext ctx) {
         List<HydratedEvidence> hydrated = inputs.getHydratedEvidence("hydratedEvidence");
-        int maxEvidence = params.getInt("maxEvidence", 10);
+        int maxEvidence = ctx.resolveTopK(params.getInt("maxEvidence", 10), 50);
         int maxOutputTokens = params.getInt("maxOutputTokens", 3000);
 
         String query = ctx.query() == null ? "" : ctx.query();
@@ -95,7 +95,7 @@ public class AssembleOperator implements Operator {
         List<HydratedEvidence> deduped = dedupe(merged.values());
 
         // 3+4) 预算 + 5) 投影
-        Map<String, EvidenceRefResolver.ResolvedEvidence> refIndex = new LinkedHashMap<>();
+        Map<String, EvidenceRefResolver.ResolvedRef> refIndex = new LinkedHashMap<>();
         List<EvidenceResponse.EvidenceItem> items = new ArrayList<>();
         int remaining = maxOutputTokens;
         boolean hasMore = false;
@@ -123,8 +123,8 @@ public class AssembleOperator implements Operator {
             }
 
             String ref = refCodec.encodeEvidence(e.snapshotId(), e.canonicalEvidenceId());
-            refIndex.put(ref, new EvidenceRefResolver.ResolvedEvidence(
-                    e.snapshotId(), e.canonicalEvidenceId()));
+            refIndex.put(ref, new EvidenceRefResolver.ResolvedRef(
+                    e.snapshotId(), EvidenceRefResolver.RefKind.EVIDENCE, e.canonicalEvidenceId()));
             if (itemTruncated) {
                 truncatedCount++;
             }

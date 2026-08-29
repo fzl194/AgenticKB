@@ -27,8 +27,64 @@ public class ParadigmService {
 
     private static final Logger log = LoggerFactory.getLogger(ParadigmService.class);
 
-    /** 官方默认检索范式固定 id（resolve 第④层兜底）。 */
-    public static final String OFFICIAL_DEFAULT_ID = "system-official-default";
+    /** 官方默认检索范式固定 id（resolve 官方层兜底）——批次8 R8 新 id，旧 id 不复活。 */
+    public static final String OFFICIAL_DEFAULT_ID = "system-hybrid-retrieval";
+
+    /** 关键词证据检索预置（§9.1：不要求 embedding 服务）。 */
+    public static final String OFFICIAL_LEXICAL_ID = "system-lexical-retrieval";
+
+    /** §9.1 关键词证据检索：scope → fts → evidence_hydrate → assemble。 */
+    static final String OFFICIAL_LEXICAL_GRAPH = """
+            {
+              "schemaVersion": "1.0",
+              "nodes": [
+                {"nodeId": "scope", "operatorType": "scope_resolve"},
+                {"nodeId": "fts", "operatorType": "fts", "params": {"topK": 20}},
+                {"nodeId": "hyd", "operatorType": "evidence_hydrate",
+                 "params": {"mode": "auto", "topN": 50}},
+                {"nodeId": "asm", "operatorType": "assemble",
+                 "params": {"maxEvidence": 10, "maxOutputTokens": 3000}}
+              ],
+              "edges": [
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "fts", "toSlot": "scope"},
+                {"fromNode": "fts", "fromSlot": "candidates", "toNode": "hyd", "toSlot": "candidates"},
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "hyd", "toSlot": "scope"},
+                {"fromNode": "hyd", "fromSlot": "hydratedEvidence", "toNode": "asm", "toSlot": "hydratedEvidence"}
+              ],
+              "output": {"nodeId": "asm", "slot": "evidenceResponse"}
+            }
+            """;
+
+    /** §9.2 标准混合证据检索（官方默认）：scope+query_embed → fts‖dense → rrf → model_rerank → hydrate → assemble。 */
+    static final String OFFICIAL_HYBRID_GRAPH = """
+            {
+              "schemaVersion": "1.0",
+              "nodes": [
+                {"nodeId": "qe", "operatorType": "query_embed"},
+                {"nodeId": "scope", "operatorType": "scope_resolve"},
+                {"nodeId": "fts", "operatorType": "fts", "params": {"topK": 20}},
+                {"nodeId": "dv", "operatorType": "dense_vector", "params": {"topK": 20}},
+                {"nodeId": "fuse", "operatorType": "rrf", "params": {"k": 60}},
+                {"nodeId": "rr", "operatorType": "model_rerank", "params": {"topN": 50, "topK": 10}},
+                {"nodeId": "hyd", "operatorType": "evidence_hydrate",
+                 "params": {"mode": "auto", "topN": 50}},
+                {"nodeId": "asm", "operatorType": "assemble",
+                 "params": {"maxEvidence": 10, "maxOutputTokens": 3000}}
+              ],
+              "edges": [
+                {"fromNode": "qe", "fromSlot": "queryEmbedding", "toNode": "dv", "toSlot": "queryEmbedding"},
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "dv", "toSlot": "scope"},
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "fts", "toSlot": "scope"},
+                {"fromNode": "dv", "fromSlot": "candidates", "toNode": "fuse", "toSlot": "candidates"},
+                {"fromNode": "fts", "fromSlot": "candidates", "toNode": "fuse", "toSlot": "candidates"},
+                {"fromNode": "fuse", "fromSlot": "candidates", "toNode": "rr", "toSlot": "candidates"},
+                {"fromNode": "rr", "fromSlot": "candidates", "toNode": "hyd", "toSlot": "candidates"},
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "hyd", "toSlot": "scope"},
+                {"fromNode": "hyd", "fromSlot": "hydratedEvidence", "toNode": "asm", "toSlot": "hydratedEvidence"}
+              ],
+              "output": {"nodeId": "asm", "slot": "evidenceResponse"}
+            }
+            """;
 
     private final ParadigmMapper paradigmMapper;
     private final ParadigmVersionMapper versionMapper;
@@ -133,12 +189,50 @@ public class ParadigmService {
     }
 
     /**
-     * 批次8 R0 停 seed：官方默认图（依赖已退役算子 weighted_rrf）不再创建/发布，本方法改为
-     * 幂等 no-op（保留签名避免调用方编译错）。R8 按 25 号文档的两套新检索预置重建 seeding。
+     * 批次8 R8 恢复 seeding（25 号 §9）：两套官方检索预置——
+     * {@link #OFFICIAL_LEXICAL_ID system-lexical-retrieval}（关键词，不要求 embedding）与
+     * {@link #OFFICIAL_DEFAULT_ID system-hybrid-retrieval}（标准混合，官方默认/resolve 兜底）。
+     *
+     * <p>幂等：缺失则建+发布；已存在但从未发布（version=0）则补发布；用户显式归档
+     * （archived）的官方范式<b>不复活</b>——那是运营决定。固定 id；R0 退役的旧 id
+     * {@code system-official-default} 不复活。Best-effort：控制库不可用/名称被占 →
+     * log warn，下次启动重试。</p>
      */
     @Transactional
-    public void ensureOfficialDefault() {
-        // no-op（R8 重建两套新预置）
+    public void ensureOfficialParadigms() {
+        ensureSeeded(OFFICIAL_LEXICAL_ID, "系统关键词证据检索",
+                "官方预置（§9.1）：scope_resolve → fts → evidence_hydrate → assemble。"
+                        + "不要求 embedding 服务；配套轻量关键词资产。检索范围留空"
+                        + "（检索时按开放库/请求注入）。",
+                OFFICIAL_LEXICAL_GRAPH);
+        ensureSeeded(OFFICIAL_DEFAULT_ID, "系统标准混合证据检索（官方默认）",
+                "官方默认预置（§9.2）：scope_resolve + query_embed → fts‖dense → rrf → "
+                        + "model_rerank → evidence_hydrate → assemble。rerank 失败自动保序降级；"
+                        + "配套标准混合资产。检索范围留空（检索时按开放库/请求注入）。",
+                OFFICIAL_HYBRID_GRAPH);
+    }
+
+    private void ensureSeeded(String id, String name, String description, String graph) {
+        ParadigmEntity existing = paradigmMapper.selectById(id);
+        if (existing == null) {
+            ParadigmEntity e = new ParadigmEntity();
+            e.setId(id);
+            e.setName(name);
+            e.setDescription(description);
+            e.setDraftGraphJson(graph);
+            e.setCurrentVersion(0);
+            e.setStatus("draft");
+            paradigmMapper.insert(e);
+            publish(id, "system-seeder");
+            log.info("[paradigm] official paradigm seeded: {}", id);
+        } else if (existing.getCurrentVersion() == 0) {
+            if (existing.getDraftGraphJson() == null || existing.getDraftGraphJson().isBlank()) {
+                paradigmMapper.updateDraft(id, graph);
+            }
+            publish(id, "system-seeder");
+            log.info("[paradigm] official paradigm published: {}", id);
+        }
+        // active（已发布）或 archived（用户显式下线）都不动——幂等且尊重运营决定。
     }
 
     /** Replace the editable draft graph. */

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -17,53 +17,37 @@ class HealthResult(BaseModel):
     error: str = ""
 
 
-# --- search_knowledge input ---
-
-class EntityRef(BaseModel):
-    type: str = ""
-    name: str
-    normalized_name: str = ""
-
+# --- search_knowledge input (25 号 §7.1，批次8 R8) ---
 
 DomainId = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
 ]
 
+ExpansionMode = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True),
+]
+
 
 class SearchInput(BaseModel):
-    query: str
-    domain: DomainId
-    #: Name (as listed in ``_retrieval.available_paradigms``) or id of a specific retrieval
-    #: paradigm. Omitted = the domain's default, i.e. exactly the pre-existing behaviour.
-    paradigm: str | None = None
-    scope: dict | None = None
-    entities: list[EntityRef] | None = None
-    debug: bool = False
+    """search_knowledge 入参（§7.1）。
 
-
-# --- get_segment_fulltext input ---
-
-class SegmentRef(BaseModel):
-    """One thing to expand, taken straight off a search result item.
-
-    ``type`` is the item's ``kind`` (``retrieval_unit`` for seeds, ``raw_segment`` for the context
-    and support items around them) and ``id`` is its ``id``. Required rather than inferred: ids
-    carry no reliable prefix, and guessing wrong searches the wrong table and reports a miss.
+    Agent 明确传入的 constraints 是 hard filters（FTS/dense 之前下推）；服务端不从
+    query 自动推断任何约束。未传 = 宽检索，Agent 从结果与 inspect 反馈后再收窄。
     """
 
-    type: str
-    id: str
-
-
-class FullTextInput(BaseModel):
+    query: str
     domain: DomainId
-    refs: list[SegmentRef]
-    #: The paradigm whose corpus produced these ids, copied verbatim from the search result's
-    #: ``_retrieval.paradigm_id``. Id only, never a name: this is a machine hand-back, and every
-    #: additional accepted form is another way for it to fail to resolve. Omitted = look up the
-    #: domain's default paradigm, which is right only when the search did the same.
-    paradigm_id: str | None = None
-    #: ``window`` 额外带回前后相邻片段。切分边界常把一句话劈成两段，只看命中段读起来是断的。
-    granularity: Literal["segment", "window"] = "segment"
-    window_radius: int = Field(default=1, ge=1, le=5)
+    #: Name (as listed in error hints) or id of a specific retrieval paradigm.
+    #: Omitted = the KB binding / official default, i.e. exactly the pre-existing behaviour.
+    paradigm: str | None = None
+    #: §7.1 within：document_refs/section_refs/structure_ref/include_descendants 等
+    within: dict | None = None
+    #: §7.1 filters：relative_path_prefix/asset_types/evidence_types/date_range 等
+    filters: dict | None = None
+    #: §7.1 expansion：{"mode": auto|exact|window|parent|whole_document}
+    expansion: dict | None = None
+    #: §7.1 top_k：结果面上限（服务端按各阶段上限 clamp）
+    top_k: int | None = Field(default=None, ge=1, le=200)
+    debug: bool = False

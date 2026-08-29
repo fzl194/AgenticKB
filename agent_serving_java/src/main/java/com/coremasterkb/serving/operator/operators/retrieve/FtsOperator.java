@@ -67,7 +67,7 @@ public class FtsOperator implements Operator {
         if (query == null || query.isBlank() || scope == null || scope.snapshotIds().isEmpty()) {
             return SlotValues.of("candidates", List.of());
         }
-        int topK = params.getInt("topK", 20);
+        int topK = ctx.resolveTopK(params.getInt("topK", 20), 200);
 
         // 查询侧同源分词 → plainto_tsquery('simple', ?)；无 token = 正常空结果。
         String lexicalQuery = QueryTokenizer.toLexicalQuery(query);

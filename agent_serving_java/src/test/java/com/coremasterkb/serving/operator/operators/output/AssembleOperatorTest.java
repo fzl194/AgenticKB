@@ -344,9 +344,9 @@ class AssembleOperatorTest {
             Object index = ctx.attributes().get(AssembleOperator.REF_INDEX_ATTRIBUTE);
             assertThat(index).isInstanceOf(Map.class);
             @SuppressWarnings("unchecked")
-            Map<String, EvidenceRefResolver.ResolvedEvidence> map = (Map<String, EvidenceRefResolver.ResolvedEvidence>) index;
+            Map<String, EvidenceRefResolver.ResolvedRef> map = (Map<String, EvidenceRefResolver.ResolvedRef>) index;
             assertThat(map).containsKey(resp.evidence().get(0).ref());
-            assertThat(map.get(resp.evidence().get(0).ref()).canonicalEvidenceId())
+            assertThat(map.get(resp.evidence().get(0).ref()).internalRef())
                     .isEqualTo("doc:/a#seg:1");
         }
 

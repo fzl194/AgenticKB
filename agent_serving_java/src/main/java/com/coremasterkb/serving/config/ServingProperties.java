@@ -10,7 +10,8 @@ public record ServingProperties(
     String uploadRoot,
     LlmConfig llm,
     MainControl mainControl,
-    EvidenceRef evidenceRef
+    EvidenceRef evidenceRef,
+    InternalAuth internalAuth
 ) {
     public record LlmConfig(String baseUrl) {
         public LlmConfig {
@@ -49,6 +50,17 @@ public record ServingProperties(
         }
     }
 
+    /**
+     * 内部端点共享密钥（批次8 R7 {@code /api/internal/*}，对齐 mining 批次7
+     * X-Internal-Auth 模式）。生产经 {@code SERVING_INTERNAL_AUTH_SECRET} 注入（mcp_server
+     * 容器同值）；留空 = 内部端点整体 503（拒绝服务而非无鉴权放行）。
+     */
+    public record InternalAuth(String secret) {
+        public InternalAuth {
+            if (secret == null) secret = "";
+        }
+    }
+
     public ServingProperties {
         // 域配置的真相源是 main_control（HTTP）。下面两个本地路径只是 main_control
         // 不可达时的兜底（IntelliJ / 测试），指向它所拥有的同一份文件。
@@ -64,5 +76,6 @@ public record ServingProperties(
         if (llm == null) llm = new LlmConfig("");
         if (mainControl == null) mainControl = new MainControl("http://localhost:8910", Boolean.TRUE);
         if (evidenceRef == null) evidenceRef = new EvidenceRef("");
+        if (internalAuth == null) internalAuth = new InternalAuth("");
     }
 }

@@ -1,30 +1,36 @@
 package com.coremasterkb.serving.evidence;
 
+import java.util.List;
+
 /**
- * Opaque evidence ref 的解析接口（25 号 §8.1 {@code get_evidence}，批次8 R8 实装留口）。
+ * Opaque public ref 的解析接口（25 号 §8.1，批次8 R7 实装）。
  *
- * <p>resolve(opaqueRef) → 授权校验 → (snapshotId, canonicalEvidenceId)。实现必须：
+ * <p>resolve(opaqueRef) → 授权校验 → (snapshotId, refKind, internalRef)。实现必须：
  * 解析后再次校验用户开放 KB、active snapshot/build 与对象类型（§10.1）；ref 非法/过期返回
  * 稳定 typed error（{@code invalid_ref/expired_ref}），未授权返回 {@code out_of_scope}
  * 且不泄漏对象真实归属。</p>
  *
- * <p>R6 的 assemble 在每次执行的 {@code ExecContext} 中内置了 ref→(snapshot, canonical)
- * 的请求级解析缓存（attribute {@code evidenceRefIndex}）；R8 的实现可先查该同请求缓存，
- * 再走持久解析（同一 HMAC 密钥下由 ref 反查需要 ref 索引存储或重新绑定）。</p>
+ * <p>实现：{@code structure.StructureRefService}——同一 HMAC 密钥下对授权 snapshot 集内
+ * 的候选内部 ref 枚举重编码匹配（72 bit 短哈希，碰撞概率可忽略），活动快照未命中再走有界
+ * 历史快照扫描判定 {@code expired_ref}。</p>
  */
 public interface EvidenceRefResolver {
 
-    /** 解析结果：opaque ref 绑定的不可变快照与 canonical 证据身份。 */
-    record ResolvedEvidence(String snapshotId, String canonicalEvidenceId) {}
+    /** ref 类别（与 {@link EvidenceRefCodec} 三前缀一一对应）。 */
+    enum RefKind { EVIDENCE, DOCUMENT, STRUCTURE }
+
+    /** 解析结果：opaque ref 绑定的不可变快照与内部身份（evidence=canonical id）。 */
+    record ResolvedRef(String snapshotId, RefKind kind, String internalRef) {}
 
     /**
      * 授权校验后的 ref 解析。
      *
-     * @param opaqueRef EvidenceResponse.evidence[].ref（ev_ 前缀）
-     * @param username  调用者身份（X-KB-User；null = anonymous，仅公开库）
-     * @return 绑定的 (snapshotId, canonicalEvidenceId)
-     * @throws com.coremasterkb.serving.operator.core.exceptions.OperatorException
-     *         R8 实装时以稳定错误码（invalid_ref/expired_ref/out_of_scope）抛出
+     * @param opaqueRef ev_/doc_/st_ 前缀 opaque ref
+     * @param domain    知识域（路由 DB）
+     * @param kbIds     请求级库范围（必须非空——内部端点由 MCP 按开放库注入）
+     * @param username  调用者身份（X-KB-User 透传；null = anonymous）
+     * @throws com.coremasterkb.serving.structure.StructureToolException
+     *         稳定错误码（invalid_ref/expired_ref/out_of_scope）
      */
-    ResolvedEvidence resolve(String opaqueRef, String username);
+    ResolvedRef resolve(String opaqueRef, String domain, List<String> kbIds, String username);
 }

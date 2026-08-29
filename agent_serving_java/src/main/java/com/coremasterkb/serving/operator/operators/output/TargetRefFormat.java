@@ -14,7 +14,7 @@ package com.coremasterkb.serving.operator.operators.output;
  *
  * <p>纯函数、容错：不合式输入返回 {@code null} 载荷，调用方按候选留痕跳过，绝不抛出。</p>
  */
-final class TargetRefFormat {
+public final class TargetRefFormat {
 
     static final String SEGMENT = "segment";
     static final String SECTION = "section";
@@ -25,9 +25,9 @@ final class TargetRefFormat {
     private TargetRefFormat() {}
 
     /** 解析结果：targetType ∈ SEGMENT/SECTION/DOCUMENT/TABLE/TABLE_ROW；payload 为类型化余部。 */
-    record Parsed(String documentRef, String targetType, String payload) {}
+    public record Parsed(String documentRef, String targetType, String payload) {}
 
-    static Parsed parse(String targetRef) {
+    public static Parsed parse(String targetRef) {
         if (targetRef == null || targetRef.isEmpty()) {
             return null;
         }
@@ -68,7 +68,7 @@ final class TargetRefFormat {
     }
 
     /** table_row payload = {tableRef}:{rowIndex}；tableRef 自身可含 ':'，故从尾部切分。 */
-    static String tableRefOf(Parsed parsed) {
+    public static String tableRefOf(Parsed parsed) {
         if (parsed == null) {
             return null;
         }
@@ -100,7 +100,7 @@ final class TargetRefFormat {
     }
 
     /** 章节 path（section target 的标题面包屑，'/' 连接）。 */
-    static String sectionPathOf(Parsed parsed) {
+    public static String sectionPathOf(Parsed parsed) {
         return parsed != null && SECTION.equals(parsed.targetType()) ? parsed.payload() : null;
     }
 

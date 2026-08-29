@@ -66,7 +66,7 @@ public class ModelRerankOperator implements Operator {
         String query = inputs.getString("query");
 
         int topN = params.getInt("topN", 50);
-        int topK = params.getInt("topK", 10);
+        int topK = ctx.resolveTopK(params.getInt("topK", 10), 200);
 
         // 只送 Top-N（RRF 顺序的前缀）；N 之外的候选不参与重排但保留在尾部。
         List<RetrievalCandidate> workingSet = candidates.subList(0, Math.min(topN, candidates.size()));

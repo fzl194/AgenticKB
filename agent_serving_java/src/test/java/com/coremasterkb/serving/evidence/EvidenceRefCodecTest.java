@@ -60,7 +60,7 @@ class EvidenceRefCodecTest {
     @DisplayName("serving.evidence-ref.secret is honored when configured")
     void honorsConfiguredSecret() {
         ServingProperties props = new ServingProperties(null, null, null, null, null, null,
-                new ServingProperties.EvidenceRef("configured-secret"));
+                new ServingProperties.EvidenceRef("configured-secret"), null);
         EvidenceRefCodec fromProps = new EvidenceRefCodec(props);
         assertThat(fromProps.encodeEvidence("snap", "c"))
                 .isEqualTo(EvidenceRefCodec.forSecret("configured-secret").encodeEvidence("snap", "c"));

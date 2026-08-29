@@ -65,7 +65,7 @@ public class DenseVectorOperator implements Operator {
         if (vec == null || vec.length == 0 || scope == null || scope.snapshotIds().isEmpty()) {
             return SlotValues.of("candidates", List.of());
         }
-        int topK = params.getInt("topK", 20);
+        int topK = ctx.resolveTopK(params.getInt("topK", 20), 200);
 
         ScopeFilterPushdown pushdown = ScopeFilterPushdown.from(scope);
         int recall = Math.min(RECALL_HARD_CAP, topK * RECALL_MULTIPLIER);

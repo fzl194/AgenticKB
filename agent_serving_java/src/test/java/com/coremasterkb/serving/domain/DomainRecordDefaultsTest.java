@@ -29,41 +29,6 @@ class DomainRecordDefaultsTest {
     }
 
     @Nested
-    @DisplayName("ContextPack")
-    class ContextPackTests {
-        @Test
-        @DisplayName("null collections default to empty")
-        void nullCollectionsDefaultToEmpty() {
-            var pack = new ContextPack(null, null, null, null, null, null, null, null);
-            assertThat(pack.items()).isEmpty();
-            assertThat(pack.relations()).isEmpty();
-            assertThat(pack.sources()).isEmpty();
-            assertThat(pack.evidenceGroups()).isEmpty();
-            assertThat(pack.issues()).isEmpty();
-            assertThat(pack.suggestions()).isEmpty();
-            assertThat(pack.debug()).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("ContextItem")
-    class ContextItemTests {
-        @Test
-        @DisplayName("null fields default correctly")
-        void nullFieldsDefaultCorrectly() {
-            var item = new ContextItem("id", "kind", "role", "text", 0.5,
-                    "title", null, null, "srcId", null, null, null, null, null, null, null);
-            assertThat(item.blockType()).isEqualTo("unknown");
-            assertThat(item.semanticRole()).isEqualTo("unknown");
-            assertThat(item.sourceRefs()).isEmpty();
-            assertThat(item.metadata()).isEmpty();
-            assertThat(item.routeSources()).isEmpty();
-            assertThat(item.evidenceRole()).isEmpty();
-            assertThat(item.citation()).isEmpty();
-        }
-    }
-
-    @Nested
     @DisplayName("ActiveScope")
     class ActiveScopeTests {
         @Test
@@ -80,7 +45,7 @@ class DomainRecordDefaultsTest {
     class ScoreChainTests {
         @Test
         @DisplayName("null routeSources defaults to empty list")
-        void nullRouteSourcesDefaultsToEmpty() {
+        void nullRouteSourcesDefaultsToEmptyList() {
             var chain = new ScoreChain(0.5, 0.3, 0.4, null);
             assertThat(chain.routeSources()).isEmpty();
         }
@@ -94,23 +59,6 @@ class DomainRecordDefaultsTest {
         void nullMetadataDefaultsToEmptyMap() {
             var cand = new RetrievalCandidate("unit1", 0.9, "bm25", null, null);
             assertThat(cand.metadata()).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("RetrievalRoutePlan")
-    class RetrievalRoutePlanTests {
-        @Test
-        @DisplayName("null fields default correctly")
-        void nullFieldsDefaultCorrectly() {
-            var plan = new RetrievalRoutePlan(null, null, null, null, null, null);
-            assertThat(plan.routes()).isEmpty();
-            assertThat(plan.filters()).isEmpty();
-            assertThat(plan.fusion()).isNotNull();
-            assertThat(plan.fusion().k()).isEqualTo(60);
-            assertThat(plan.rerank()).isNotNull();
-            assertThat(plan.assembly()).isNotNull();
-            assertThat(plan.expansion()).isNotNull();
         }
     }
 
@@ -129,71 +77,6 @@ class DomainRecordDefaultsTest {
             assertThat(qu.evidenceNeed()).isNotNull();
             assertThat(qu.ambiguities()).isEmpty();
             assertThat(qu.source()).isEqualTo("rule");
-        }
-    }
-
-    @Nested
-    @DisplayName("Issue")
-    class IssueTests {
-        @Test
-        @DisplayName("null detail defaults to empty map")
-        void nullDetailDefaultsToEmptyMap() {
-            var issue = new Issue("warning", "msg", null);
-            assertThat(issue.detail()).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("Trace")
-    class TraceTests {
-        @Test
-        @DisplayName("null stages default to empty list")
-        void nullStagesDefaultToEmpty() {
-            var trace = new Trace("req1", null, 0);
-            assertThat(trace.stages()).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("OrchestratorResult")
-    class OrchestratorResultTests {
-        @Test
-        @DisplayName("empty factory returns empty result")
-        void emptyFactory() {
-            var result = OrchestratorResult.empty();
-            assertThat(result.candidates()).isEmpty();
-            assertThat(result.routeTraces()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("null fields default to empty")
-        void nullFieldsDefaultToEmpty() {
-            var result = new OrchestratorResult(null, null);
-            assertThat(result.candidates()).isEmpty();
-            assertThat(result.routeTraces()).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("FusionConfig")
-    class FusionConfigTests {
-        @Test
-        @DisplayName("null method defaults to weighted_rrf")
-        void nullMethodDefaultsToWeightedRrf() {
-            var config = new FusionConfig(null, 60);
-            assertThat(config.method()).isEqualTo("weighted_rrf");
-        }
-    }
-
-    @Nested
-    @DisplayName("RerankConfig")
-    class RerankConfigTests {
-        @Test
-        @DisplayName("null fields default to score")
-        void nullFieldsDefaultToScore() {
-            var config = new RerankConfig(null, null);
-            assertThat(config.method()).isEqualTo("score");
-            assertThat(config.fallback()).isEqualTo("score");
         }
     }
 
@@ -234,18 +117,6 @@ class DomainRecordDefaultsTest {
     }
 
     @Nested
-    @DisplayName("EvidenceGroup")
-    class EvidenceGroupTests {
-        @Test
-        @DisplayName("null lists default to empty")
-        void nullListsDefaultToEmpty() {
-            var group = new EvidenceGroup("snap1", null, null);
-            assertThat(group.itemIds()).isEmpty();
-            assertThat(group.relationIds()).isEmpty();
-        }
-    }
-
-    @Nested
     @DisplayName("EvidenceNeed")
     class EvidenceNeedTests {
         @Test
@@ -271,6 +142,45 @@ class DomainRecordDefaultsTest {
             assertThat(query.subQueries()).isEmpty();
             assertThat(query.intent()).isEqualTo("general");
             assertThat(query.scope()).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("HydratedEvidence (批次8 R5)")
+    class HydratedEvidenceTests {
+        @Test
+        @DisplayName("null collections default to empty; contentText joins fragments in order")
+        void nullCollectionsDefaultToEmpty() {
+            var evidence = new HydratedEvidence("snap", "doc:/a#seg:1", "segment",
+                    "doc:/a#seg:1", "prose", "doc:/a", null, 1, 1, 1,
+                    null, null, null, false, false, 0, null, null);
+            assertThat(evidence.orderedFragments()).isEmpty();
+            assertThat(evidence.structureRefs()).isEmpty();
+            assertThat(evidence.provenance()).isEmpty();
+            assertThat(evidence.contentText()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("contentText joins fragments with newline, preserving order")
+        void contentTextJoinsInOrder() {
+            var evidence = new HydratedEvidence("snap", "c", "segment", "r", "prose",
+                    "doc:/a", null, 1, 1, 1,
+                    List.of(new HydratedEvidence.EvidenceFragment("window", "前文", null, null, null),
+                            new HydratedEvidence.EvidenceFragment("exact", "命中", null, null, null)),
+                    "window", List.of(), false, false, 0, null, Map.of());
+            assertThat(evidence.contentText()).isEqualTo("前文\n命中");
+        }
+    }
+
+    @Nested
+    @DisplayName("EvidenceResponse (批次8 R6)")
+    class EvidenceResponseTests {
+        @Test
+        @DisplayName("null evidence defaults to empty list")
+        void nullEvidenceDefaultsToEmpty() {
+            var resp = new EvidenceResponse("q", null, false);
+            assertThat(resp.evidence()).isEmpty();
+            assertThat(resp.hasMore()).isFalse();
         }
     }
 }

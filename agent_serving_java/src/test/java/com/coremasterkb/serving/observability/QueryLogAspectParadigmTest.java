@@ -1,6 +1,6 @@
 package com.coremasterkb.serving.observability;
 
-import com.coremasterkb.serving.domain.ContextPack;
+import com.coremasterkb.serving.domain.EvidenceResponse;
 import com.coremasterkb.serving.domain.SearchRequest;
 import com.coremasterkb.serving.operator.api.ParadigmExecutionService.RunArgs;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -24,7 +24,7 @@ import static org.mockito.Mockito.*;
  * <p>Its whole reason for existing is that {@code serving_query_logs} had no coverage of the
  * paradigm path — so the assertions here are mostly "a row is still written", including on the
  * paths where it is tempting to skip: an execution that threw, and one that produced candidates
- * rather than a ContextPack.</p>
+ * rather than an EvidenceResponse.</p>
  */
 @DisplayName("QueryLogAspect — paradigm path")
 class QueryLogAspectParadigmTest {
@@ -41,9 +41,9 @@ class QueryLogAspectParadigmTest {
     @Test
     @DisplayName("attributes the row to the paradigm and its effective version")
     void recordsParadigmAttribution() throws Throwable {
-        ContextPack pack = emptyPack();
+        EvidenceResponse response = emptyResponse();
         ProceedingJoinPoint pjp = jp(args("SMF 配置", "odn", "pd-abc", 3),
-                Map.of("contextPack", pack));
+                Map.of("evidenceResponse", response));
 
         aspect.logParadigmSearch(pjp);
 
@@ -51,23 +51,36 @@ class QueryLogAspectParadigmTest {
         assertEquals("paradigm", meta.get("engine"));
         assertEquals("pd-abc", meta.get("paradigm_id"));
         assertEquals(3, meta.get("paradigm_version"));
-        assertEquals("contextPack", meta.get("output"));
+        assertEquals("evidenceResponse", meta.get("output"));
+        assertFalse((Boolean) meta.get("has_more"));
 
-        assertSame(pack, capturedPack(), "the ContextPack must be unwrapped from the shaped map");
+        assertSame(response, capturedResponse(), "the EvidenceResponse must be unwrapped from the shaped map");
         SearchRequest req = capturedRequest();
         assertEquals("SMF 配置", req.query());
         assertEquals("odn", req.domain());
     }
 
     @Test
-    @DisplayName("a collect-terminated run is still logged, with no pack")
+    @DisplayName("has_more=true is carried into the log metadata")
+    void carriesHasMore() throws Throwable {
+        EvidenceResponse response = new EvidenceResponse("q", List.of(), true);
+        ProceedingJoinPoint pjp = jp(args("q", "odn", "pd-abc", 3),
+                Map.of("evidenceResponse", response));
+
+        aspect.logParadigmSearch(pjp);
+
+        assertEquals(true, capturedMetadata().get("has_more"));
+    }
+
+    @Test
+    @DisplayName("a candidate-only run is still logged, with no response")
     void recordsCandidateOnlyRun() throws Throwable {
         ProceedingJoinPoint pjp = jp(args("q", "odn", "pd-eval", 1),
                 Map.of("candidates", List.of(Map.of("id", "ru-1"))));
 
         aspect.logParadigmSearch(pjp);
 
-        assertNull(capturedPack());
+        assertNull(capturedResponse());
         assertEquals("candidates", capturedMetadata().get("output"));
     }
 
@@ -81,7 +94,7 @@ class QueryLogAspectParadigmTest {
         var ex = assertThrows(IllegalStateException.class, () -> aspect.logParadigmSearch(pjp));
         assertEquals("boom", ex.getMessage());
 
-        assertNull(capturedPack());
+        assertNull(capturedResponse());
         assertEquals("none", capturedMetadata().get("output"));
     }
 
@@ -89,7 +102,7 @@ class QueryLogAspectParadigmTest {
     @DisplayName("inline runs carry no paradigm id, only the engine tag")
     void inlineRunHasNoParadigmId() throws Throwable {
         RunArgs inline = new RunArgs("q", "odn", "prod", false, null);
-        ProceedingJoinPoint pjp = jp(inline, Map.of("contextPack", emptyPack()));
+        ProceedingJoinPoint pjp = jp(inline, Map.of("evidenceResponse", emptyResponse()));
 
         aspect.logParadigmSearch(pjp);
 
@@ -136,9 +149,8 @@ class QueryLogAspectParadigmTest {
         return pjp;
     }
 
-    private static ContextPack emptyPack() {
-        return new ContextPack(null, List.of(), List.of(), List.of(),
-                List.of(), List.of(), List.of(), Map.of());
+    private static EvidenceResponse emptyResponse() {
+        return new EvidenceResponse("q", List.of(), false);
     }
 
     @SuppressWarnings("unchecked")
@@ -148,8 +160,8 @@ class QueryLogAspectParadigmTest {
         return cap.getValue();
     }
 
-    private ContextPack capturedPack() {
-        ArgumentCaptor<ContextPack> cap = ArgumentCaptor.forClass(ContextPack.class);
+    private EvidenceResponse capturedResponse() {
+        ArgumentCaptor<EvidenceResponse> cap = ArgumentCaptor.forClass(EvidenceResponse.class);
         verify(queryLogService).record(anyString(), any(), cap.capture(), anyLong(), any());
         return cap.getValue();
     }

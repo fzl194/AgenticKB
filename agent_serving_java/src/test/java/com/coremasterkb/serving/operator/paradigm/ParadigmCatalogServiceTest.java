@@ -36,7 +36,7 @@ class ParadigmCatalogServiceTest {
 
     private static final String SERVABLE_GRAPH = """
             {"nodes":[{"nodeId":"asm","operatorType":"assemble"}],
-             "output":{"nodeId":"asm","slot":"contextPack"}}""";
+             "output":{"nodeId":"asm","slot":"evidenceResponse"}}""";
 
     private static final String COLLECT_GRAPH = """
             {"nodes":[{"nodeId":"out","operatorType":"collect"}],

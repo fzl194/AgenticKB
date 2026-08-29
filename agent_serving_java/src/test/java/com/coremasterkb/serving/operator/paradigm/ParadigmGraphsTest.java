@@ -117,17 +117,26 @@ class ParadigmGraphsTest {
     class Servable {
 
         @Test
-        @DisplayName("assemble terminus (contextPack) is servable")
+        @DisplayName("assemble terminus (evidenceResponse) is servable")
         void assembleIsServable() {
             JsonNode g = graph("""
                     {"nodes":[{"nodeId":"asm","operatorType":"assemble"}],
-                     "output":{"nodeId":"asm","slot":"contextPack"}}""");
+                     "output":{"nodeId":"asm","slot":"evidenceResponse"}}""");
             assertThat(ParadigmGraphs.isServable(g)).isTrue();
-            assertThat(ParadigmGraphs.outputSlotOf(g)).isEqualTo("contextPack");
+            assertThat(ParadigmGraphs.outputSlotOf(g)).isEqualTo("evidenceResponse");
         }
 
         @Test
-        @DisplayName("collect terminus is not servable — bare candidates are evaluation-only")
+        @DisplayName("the retired contextPack terminus is no longer servable")
+        void contextPackIsNotServable() {
+            JsonNode g = graph("""
+                    {"nodes":[{"nodeId":"asm","operatorType":"assemble"}],
+                     "output":{"nodeId":"asm","slot":"contextPack"}}""");
+            assertThat(ParadigmGraphs.isServable(g)).isFalse();
+        }
+
+        @Test
+        @DisplayName("a candidates terminus is not servable — bare candidates are evaluation-only")
         void collectIsNotServable() {
             JsonNode g = graph("""
                     {"nodes":[{"nodeId":"out","operatorType":"collect"}],
@@ -143,7 +152,7 @@ class ParadigmGraphsTest {
             for (String json : List.of("{}", """
                     {"output":{}}""", """
                     {"output":{"slot":null}}""", """
-                    {"output":"contextPack"}""")) {
+                    {"output":"evidenceResponse"}""")) {
                 JsonNode g = graph(json);
                 assertThat(ParadigmGraphs.isServable(g)).as(json).isFalse();
                 assertThat(ParadigmGraphs.outputSlotOf(g)).as(json).isNull();

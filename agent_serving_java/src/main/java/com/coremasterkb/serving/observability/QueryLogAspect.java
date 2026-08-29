@@ -1,6 +1,6 @@
 package com.coremasterkb.serving.observability;
 
-import com.coremasterkb.serving.domain.ContextPack;
+import com.coremasterkb.serving.domain.EvidenceResponse;
 import com.coremasterkb.serving.domain.SearchRequest;
 import com.coremasterkb.serving.operator.api.ParadigmExecutionService.RunArgs;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -20,7 +20,8 @@ import java.util.UUID;
  * operator-paradigm execution. No business code is aware of this aspect.
  *
  * <p>批次8 R0：旧固定链 {@code SearchService.search()} 的 advice 随固定链删除；本切面只保留
- * 范式执行路径的日志（25号 §11.1）。</p>
+ * 范式执行路径的日志（25号 §11.1）。批次8 R6：终点协议从 ContextPack 换成
+ * {@link EvidenceResponse}（§5.3），本切面随之改取 {@code evidenceResponse}。</p>
  */
 @Aspect
 @Component
@@ -39,7 +40,7 @@ public class QueryLogAspect {
      * served query would be absent from {@code serving_query_logs} entirely.
      *
      * <p>Paradigms may terminate in a non-{@code assemble} node, in which case there is no
-     * ContextPack; those rows are still recorded, just with null result detail. That is
+     * EvidenceResponse; those rows are still recorded, just with null result detail. That is
      * intentional — a missing row and a candidate-only row mean very different things.</p>
      */
     @Around("execution(* com.coremasterkb.serving.operator.api.ParadigmExecutionService.run(..))")
@@ -84,8 +85,12 @@ public class QueryLogAspect {
             if (runArgs.paradigmId() != null) metadata.put("paradigm_id", runArgs.paradigmId());
             if (runArgs.paradigmVersion() != null) metadata.put("paradigm_version", runArgs.paradigmVersion());
             metadata.put("output", outputKind(result));
+            EvidenceResponse response = extractEvidence(result);
+            if (response != null) {
+                metadata.put("has_more", response.hasMore());
+            }
 
-            queryLogService.record(queryId, request, extractPack(result), durationMs, metadata);
+            queryLogService.record(queryId, request, response, durationMs, metadata);
         } catch (Exception e) {
             // SearchRequest's compact constructor rejects a blank query, and a paradigm run can be
             // rejected for exactly that reason before anything else happens. Logging must not
@@ -94,16 +99,16 @@ public class QueryLogAspect {
         }
     }
 
-    private static ContextPack extractPack(Object result) {
-        if (result instanceof Map<?, ?> m && m.get("contextPack") instanceof ContextPack pack) {
-            return pack;
+    private static EvidenceResponse extractEvidence(Object result) {
+        if (result instanceof Map<?, ?> m && m.get("evidenceResponse") instanceof EvidenceResponse er) {
+            return er;
         }
         return null;
     }
 
     private static String outputKind(Object result) {
         if (!(result instanceof Map<?, ?> m)) return "none";
-        if (m.containsKey("contextPack")) return "contextPack";
+        if (m.containsKey("evidenceResponse")) return "evidenceResponse";
         if (m.containsKey("candidates")) return "candidates";
         return "none";
     }

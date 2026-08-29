@@ -29,8 +29,11 @@ public final class ParadigmGraphs {
 
     private static final String SCOPE_RESOLVE = "scope_resolve";
 
-    /** The only output slot whose value is a ContextPack, i.e. the only servable terminus. */
-    private static final String CONTEXT_PACK_SLOT = "contextPack";
+    /**
+     * The only output slot whose value is an {@code EvidenceResponse} (25 号 §5.3/§6.9, 批次8
+     * R6) — i.e. the only servable terminus. Paradigms must end in {@code assemble}.
+     */
+    private static final String SERVABLE_OUTPUT_SLOT = "evidenceResponse";
 
     private ParadigmGraphs() {
     }
@@ -84,13 +87,13 @@ public final class ParadigmGraphs {
 
     /**
      * Whether this graph's result can be served to a caller — i.e. it terminates in {@code assemble}
-     * (output slot {@code contextPack}).
+     * (output slot {@code evidenceResponse}).
      *
-     * <p>{@code collect} exists for the evaluation harness: it returns bare candidates that never
-     * went through {@code ContextAssembler}'s source drill-down, graph expansion, evidence grouping
-     * and compression. Serving those is both lower quality and a different response shape.</p>
+     * <p>A graph ending anywhere else returns bare candidates or internal values that never went
+     * through {@code evidence_hydrate} + assemble's protocol projection. Serving those is both
+     * lower quality and a different response shape.</p>
      */
     public static boolean isServable(JsonNode graph) {
-        return CONTEXT_PACK_SLOT.equals(outputSlotOf(graph));
+        return SERVABLE_OUTPUT_SLOT.equals(outputSlotOf(graph));
     }
 }

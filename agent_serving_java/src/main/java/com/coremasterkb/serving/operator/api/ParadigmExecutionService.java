@@ -1,7 +1,7 @@
 package com.coremasterkb.serving.operator.api;
 
 import com.coremasterkb.serving.config.ServingProperties;
-import com.coremasterkb.serving.domain.ContextPack;
+import com.coremasterkb.serving.domain.EvidenceResponse;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
 import com.coremasterkb.serving.domainpack.DomainPoolManager;
 import com.coremasterkb.serving.domainpack.DomainRegistry;
@@ -109,15 +109,17 @@ public class ParadigmExecutionService {
         Object result = executor.execute(graph, ctx, Map.of("query", args.query()));
 
         log.info("[paradigm/exec] domain={} channel={} output={}",
-                domain, channel, result instanceof List<?> l ? (l.size() + " candidates") : "contextPack");
+                domain, channel,
+                result instanceof EvidenceResponse er ? (er.evidence().size() + " evidence")
+                        : result instanceof List<?> l ? (l.size() + " candidates") : "other");
         return shape(result, ctx, args.debug(), domain, channel);
     }
 
     private static Map<String, Object> shape(
             Object result, ExecContext ctx, boolean debug, String domain, String channel) {
         Map<String, Object> resp = new LinkedHashMap<>();
-        if (result instanceof ContextPack pack) {
-            resp.put("contextPack", pack);
+        if (result instanceof EvidenceResponse evidenceResponse) {
+            resp.put("evidenceResponse", evidenceResponse);
         } else if (result instanceof List<?> list) {
             resp.put("candidates", toCandidateDtos(list));
         } else {

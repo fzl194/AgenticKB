@@ -7,15 +7,12 @@ import com.coremasterkb.serving.domainpack.DomainRoutingDataSource;
 import com.coremasterkb.serving.infrastructure.EmbeddingClient;
 import com.coremasterkb.serving.infrastructure.LlmClient;
 import com.coremasterkb.serving.infrastructure.MainControlClient;
-import com.coremasterkb.serving.mapper.AssetRawSegmentMapper;
-import com.coremasterkb.serving.mapper.AssetRawSegmentRelationMapper;
 import com.coremasterkb.serving.mapper.AssetRetrievalEmbeddingMapper;
 import com.coremasterkb.serving.mapper.AssetRetrievalUnitMapper;
 import com.coremasterkb.serving.rerank.LlmServiceReranker;
 import com.coremasterkb.serving.retrieval.DenseVectorRetriever;
 import com.coremasterkb.serving.retrieval.EntityExactRetriever;
 import com.coremasterkb.serving.retrieval.FtsRetriever;
-import com.coremasterkb.serving.retrieval.GraphExpander;
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,7 +39,7 @@ import java.util.concurrent.Executors;
  * Explicit wiring for plain-Java components that are not annotated with
  * {@code @Component}/{@code @Service}/{@code @Repository}.
  *
- * <p>Components already picked up by component scanning (ContextAssembler, DomainPackReader,
+ * <p>Components already picked up by component scanning (DomainPackReader,
  * QueryLogService, QueryLogAspect, AssetRepository) are NOT declared here.</p>
  */
 @Configuration
@@ -259,12 +256,8 @@ public class ServingBeans {
         return new EntityExactRetriever(retrievalUnitMapper);
     }
 
-    @Bean
-    public GraphExpander graphExpander(
-            AssetRawSegmentRelationMapper relationMapper,
-            AssetRawSegmentMapper segmentMapper) {
-        return new GraphExpander(relationMapper, segmentMapper);
-    }
+    // 批次8 R6：GraphExpander（旧 segment relation expander）随 ContextAssembler 一起删除
+    // （25 号 §11.1——assemble 不再做关系扩展）。
 
     @Bean
     public Executor pipelineExecutor() {

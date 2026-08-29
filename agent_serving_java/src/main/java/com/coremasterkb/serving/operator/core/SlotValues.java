@@ -1,6 +1,7 @@
 package com.coremasterkb.serving.operator.core;
 
 import com.coremasterkb.serving.domain.ActiveScope;
+import com.coremasterkb.serving.domain.HydratedEvidence;
 import com.coremasterkb.serving.domain.QueryUnderstanding;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
 import com.coremasterkb.serving.operator.core.exceptions.SlotTypeMismatchException;
@@ -100,5 +101,11 @@ public final class SlotValues {
     public List<RetrievalCandidate> getCandidates(String slotName) {
         Object v = values.get(slotName);
         return v instanceof List<?> list ? (List<RetrievalCandidate>) list : List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<HydratedEvidence> getHydratedEvidence(String slotName) {
+        Object v = values.get(slotName);
+        return v instanceof List<?> list ? (List<HydratedEvidence>) list : List.of();
     }
 }

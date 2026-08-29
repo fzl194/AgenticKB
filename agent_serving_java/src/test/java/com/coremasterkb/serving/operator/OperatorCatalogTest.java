@@ -6,6 +6,7 @@ import com.coremasterkb.serving.operator.core.exceptions.ParadigmCompileExceptio
 import com.coremasterkb.serving.operator.engine.ParadigmCompiler;
 import com.coremasterkb.serving.operator.operators.fuse.RrfOperator;
 import com.coremasterkb.serving.operator.operators.output.AssembleOperator;
+import com.coremasterkb.serving.operator.operators.output.EvidenceHydrateOperator;
 import com.coremasterkb.serving.operator.operators.output.ScopeResolveOperator;
 import com.coremasterkb.serving.operator.operators.query.QueryEmbedOperator;
 import com.coremasterkb.serving.operator.operators.rerank.ModelRerankOperator;
@@ -26,20 +27,21 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Validates the official operator catalog (批次8 R0, 25 号文档 §4/§11.1): exactly the seven
- * production operators may exist — anything else must not be Spring-scanned and must not be
- * constructible into a registry. Also keeps the PRD's example paradigms (plus a full production
- * paradigm ending in {@code assemble}) compiling against the real operator definitions.
- * Operators are instantiated with null dependencies — only {@code definition()} is exercised
- * (it never touches injected deps), so no Spring/DB is needed.
+ * Validates the official operator catalog (批次8 R0+R5/R6, 25 号文档 §4/§11.1): exactly the
+ * eight production operators may exist — anything else must not be Spring-scanned and must not
+ * be constructible into a registry. Also keeps the PRD's example paradigms (plus full production
+ * paradigms ending in {@code evidence_hydrate}+{@code assemble}) compiling against the real
+ * operator definitions. Operators are instantiated with null dependencies — only
+ * {@code definition()} is exercised (it never touches injected deps), so no Spring/DB is needed.
  */
 class OperatorCatalogTest {
 
     private static final ObjectMapper M = new ObjectMapper();
 
-    /** The exact official catalog after R0 clean break (25 号 §4 生命周期总表). */
+    /** The exact official catalog after R0 clean break + R5 evidence_hydrate (25 号 §4 生命周期总表). */
     private static final Set<String> OFFICIAL_CATALOG = Set.of(
-            "scope_resolve", "query_embed", "fts", "dense_vector", "rrf", "model_rerank", "assemble");
+            "scope_resolve", "query_embed", "fts", "dense_vector", "rrf", "model_rerank",
+            "evidence_hydrate", "assemble");
 
     /** Retired in R0 (deleted) or research-isolated (entity line) — must never register. */
     private static final Set<String> RETIRED_TYPES = Set.of(
@@ -51,7 +53,8 @@ class OperatorCatalogTest {
         List<Operator> all = List.of(
                 new QueryEmbedOperator(null, null), new ScopeResolveOperator(null, null),
                 new DenseVectorOperator(null), new FtsOperator(null),
-                new RrfOperator(), new ModelRerankOperator(null), new AssembleOperator(null));
+                new RrfOperator(), new ModelRerankOperator(null),
+                new EvidenceHydrateOperator(null), new AssembleOperator(null));
         return new OperatorRegistry(all);
     }
 
@@ -64,7 +67,7 @@ class OperatorCatalogTest {
     }
 
     @Test
-    void catalogIsExactlyTheOfficialSeven() {
+    void catalogIsExactlyTheOfficialEight() {
         OperatorRegistry reg = realRegistry();
         List<OperatorDef> defs = reg.allDefinitions();
         assertEquals(OFFICIAL_CATALOG.size(), defs.size());
@@ -88,7 +91,7 @@ class OperatorCatalogTest {
 
     /**
      * The registry is fed by Spring constructor injection of every {@code Operator} bean, so the
-     * real gate is component scanning: the operators package may carry exactly the seven official
+     * real gate is component scanning: the operators package may carry exactly the eight official
      * {@code @Component} operator classes. This is what keeps research-isolated source (entity
      * line) out of the production catalog without deleting it.
      */
@@ -108,9 +111,10 @@ class OperatorCatalogTest {
                 "com.coremasterkb.serving.operator.operators.retrieve.FtsOperator",
                 "com.coremasterkb.serving.operator.operators.fuse.RrfOperator",
                 "com.coremasterkb.serving.operator.operators.rerank.ModelRerankOperator",
+                "com.coremasterkb.serving.operator.operators.output.EvidenceHydrateOperator",
                 "com.coremasterkb.serving.operator.operators.output.AssembleOperator");
         assertEquals(expected, scanned,
-                "operators 包 Spring 扫描结果必须恰好等于官方 7 算子（研究隔离类不得带 @Component）");
+                "operators 包 Spring 扫描结果必须恰好等于官方 8 算子（研究隔离类不得带 @Component）");
     }
 
     @Test
@@ -160,7 +164,7 @@ class OperatorCatalogTest {
     }
 
     @Test
-    void productionParadigm_withAssemble_compiles() {
+    void productionParadigm_hydrateAssemble_compiles() {
         assertDoesNotThrow(() -> compiler().compile(json("""
             {"nodes":[
               {"nodeId":"qe","operatorType":"query_embed"},
@@ -169,6 +173,7 @@ class OperatorCatalogTest {
               {"nodeId":"fts","operatorType":"fts"},
               {"nodeId":"fuse","operatorType":"rrf"},
               {"nodeId":"rr","operatorType":"model_rerank"},
+              {"nodeId":"hyd","operatorType":"evidence_hydrate"},
               {"nodeId":"asm","operatorType":"assemble"}],
              "edges":[
               {"fromNode":"qe","fromSlot":"queryEmbedding","toNode":"dv","toSlot":"queryEmbedding"},
@@ -177,15 +182,17 @@ class OperatorCatalogTest {
               {"fromNode":"dv","fromSlot":"candidates","toNode":"fuse","toSlot":"candidates"},
               {"fromNode":"fts","fromSlot":"candidates","toNode":"fuse","toSlot":"candidates"},
               {"fromNode":"fuse","fromSlot":"candidates","toNode":"rr","toSlot":"candidates"},
-              {"fromNode":"rr","fromSlot":"candidates","toNode":"asm","toSlot":"candidates"},
-              {"fromNode":"scope","fromSlot":"scope","toNode":"asm","toSlot":"scope"}],
-             "output":{"nodeId":"asm","slot":"contextPack"}}""")));
+              {"fromNode":"rr","fromSlot":"candidates","toNode":"hyd","toSlot":"candidates"},
+              {"fromNode":"scope","fromSlot":"scope","toNode":"hyd","toSlot":"scope"},
+              {"fromNode":"hyd","fromSlot":"hydratedEvidence","toNode":"asm","toSlot":"hydratedEvidence"}],
+             "output":{"nodeId":"asm","slot":"evidenceResponse"}}""")));
     }
 
     /**
-     * The cheapest servable graph: terminates in {@code assemble} — so it is bindable — yet is a
-     * pure vector paradigm with no extra pipeline stages. The {@code understanding} slot is gone
-     * with {@code query_understanding} (R0), so nothing here taxes the graph with an LLM call.
+     * The cheapest servable graph: terminates in {@code evidence_hydrate}+{@code assemble} — so it
+     * is bindable — yet is a pure vector paradigm with no extra pipeline stages. The
+     * {@code understanding} slot is gone with {@code query_understanding} (R0), so nothing here
+     * taxes the graph with an LLM call.
      */
     @Test
     void servableParadigm_pureVector_compiles() {
@@ -194,33 +201,37 @@ class OperatorCatalogTest {
               {"nodeId":"qe","operatorType":"query_embed"},
               {"nodeId":"scope","operatorType":"scope_resolve"},
               {"nodeId":"dv","operatorType":"dense_vector"},
-              {"nodeId":"asm","operatorType":"assemble","params":{"relationExpansion":false,"maxExpanded":0}}],
+              {"nodeId":"hyd","operatorType":"evidence_hydrate"},
+              {"nodeId":"asm","operatorType":"assemble","params":{"maxEvidence":5}}],
              "edges":[
               {"fromNode":"qe","fromSlot":"queryEmbedding","toNode":"dv","toSlot":"queryEmbedding"},
               {"fromNode":"scope","fromSlot":"scope","toNode":"dv","toSlot":"scope"},
-              {"fromNode":"dv","fromSlot":"candidates","toNode":"asm","toSlot":"candidates"},
-              {"fromNode":"scope","fromSlot":"scope","toNode":"asm","toSlot":"scope"}],
-             "output":{"nodeId":"asm","slot":"contextPack"}}""")));
+              {"fromNode":"dv","fromSlot":"candidates","toNode":"hyd","toSlot":"candidates"},
+              {"fromNode":"scope","fromSlot":"scope","toNode":"hyd","toSlot":"scope"},
+              {"fromNode":"hyd","fromSlot":"hydratedEvidence","toNode":"asm","toSlot":"hydratedEvidence"}],
+             "output":{"nodeId":"asm","slot":"evidenceResponse"}}""")));
     }
 
-    /** {@code scope} stays required — dropping it is what {@code ENTRY_SLOTS} deliberately prevents. */
+    /** {@code scope} stays required on hydrate — dropping it is what {@code ENTRY_SLOTS} deliberately prevents. */
     @Test
-    void assembleWithoutScope_failsToCompile() {
+    void hydrateWithoutScope_failsToCompile() {
         var e = assertThrows(ParadigmCompileException.class, () -> compiler().compile(json("""
             {"nodes":[
               {"nodeId":"qe","operatorType":"query_embed"},
               {"nodeId":"scope","operatorType":"scope_resolve"},
               {"nodeId":"dv","operatorType":"dense_vector"},
+              {"nodeId":"hyd","operatorType":"evidence_hydrate"},
               {"nodeId":"asm","operatorType":"assemble"}],
              "edges":[
               {"fromNode":"qe","fromSlot":"queryEmbedding","toNode":"dv","toSlot":"queryEmbedding"},
               {"fromNode":"scope","fromSlot":"scope","toNode":"dv","toSlot":"scope"},
-              {"fromNode":"dv","fromSlot":"candidates","toNode":"asm","toSlot":"candidates"}],
-             "output":{"nodeId":"asm","slot":"contextPack"}}""")));
+              {"fromNode":"dv","fromSlot":"candidates","toNode":"hyd","toSlot":"candidates"},
+              {"fromNode":"hyd","fromSlot":"hydratedEvidence","toNode":"asm","toSlot":"hydratedEvidence"}],
+             "output":{"nodeId":"asm","slot":"evidenceResponse"}}""")));
         assertTrue(e.errors().stream().anyMatch(
                         err -> "missing_required_input".equals(err.kind())
-                                && "asm".equals(err.nodeId())
+                                && "hyd".equals(err.nodeId())
                                 && err.message().contains("scope")),
-                "expected a missing_required_input error on 'asm' naming scope, got: " + e.errors());
+                "expected a missing_required_input error on 'hyd' naming scope, got: " + e.errors());
     }
 }

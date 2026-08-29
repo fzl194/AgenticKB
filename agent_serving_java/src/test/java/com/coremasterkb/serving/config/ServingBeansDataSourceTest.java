@@ -49,7 +49,7 @@ class ServingBeansDataSourceTest {
     /** Production shape: the default DataSource takes its address from main_control. */
     private static ServingProperties servingProps(boolean defaultDatabaseEnabled) {
         return new ServingProperties(null, null, null, null, null,
-                new ServingProperties.MainControl("http://localhost:8910", defaultDatabaseEnabled));
+                new ServingProperties.MainControl("http://localhost:8910", defaultDatabaseEnabled), null);
     }
 
     @Nested

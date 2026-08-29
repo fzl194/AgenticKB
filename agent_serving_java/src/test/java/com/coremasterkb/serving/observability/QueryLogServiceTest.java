@@ -1,6 +1,7 @@
 package com.coremasterkb.serving.observability;
 
-import com.coremasterkb.serving.domain.*;
+import com.coremasterkb.serving.domain.EvidenceResponse;
+import com.coremasterkb.serving.domain.SearchRequest;
 import com.coremasterkb.serving.entity.ServingQueryLog;
 import com.coremasterkb.serving.mapper.ServingQueryLogMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,14 +32,9 @@ class QueryLogServiceTest {
         return new SearchRequest(query, Map.of(), List.of(), false, domain, channel, "evidence");
     }
 
-    private ContextQuery ctxQuery(String intent, String source,
-                                   String releaseId, String buildId, int snapshotCount) {
-        return new ContextQuery("q", "q", intent, List.of(), Map.of(), List.of(),
-                source, releaseId, buildId, snapshotCount);
-    }
-
-    private ContextPack packWith(ContextQuery q, List<ContextItem> items) {
-        return new ContextPack(q, items, List.of(), List.of(), List.of(), List.of(), List.of(), Map.of());
+    private EvidenceResponse.EvidenceItem item(String ref, String type, String fileName) {
+        return new EvidenceResponse.EvidenceItem(ref, type, "content", new EvidenceResponse.EvidenceSource(
+                "kb", fileName, null, "doc_x", null, null), false, null);
     }
 
     @Nested
@@ -74,54 +70,57 @@ class QueryLogServiceTest {
     }
 
     @Nested
-    @DisplayName("scope fields from ContextQuery")
-    class ScopeFields {
+    @DisplayName("result fields from EvidenceResponse")
+    class ResultFields {
         @Test
-        @DisplayName("releaseId, buildId, snapshotCount, normalizerSource are populated from pack.query()")
-        void scopeFieldsPopulated() {
-            var q = ctxQuery("command_usage", "llm", "rel-42", "build-7", 3);
-            var pack = packWith(q, List.of());
+        @DisplayName("evidence count, intent and hasResult computed from the response")
+        void evidenceCountAndHasResult() {
+            var response = new EvidenceResponse("q",
+                    List.of(item("ev_a", "prose", "a.md"), item("ev_b", "table_row", "b.xlsx")),
+                    true);
 
-            service.record("id4", req("q", "d", "prod"), pack, 50);
+            service.record("id4", req("q", "d", "prod"), response, 50);
 
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
             ServingQueryLog entry = captor.getValue();
-            assertThat(entry.getReleaseId()).isEqualTo("rel-42");
-            assertThat(entry.getBuildId()).isEqualTo("build-7");
-            assertThat(entry.getSnapshotCount()).isEqualTo(3);
-            assertThat(entry.getNormalizerSource()).isEqualTo("llm");
-            assertThat(entry.getIntent()).isEqualTo("command_usage");
+            assertThat(entry.getResultItemCount()).isEqualTo(2);
+            assertThat(entry.getResultSeedCount()).isEqualTo(2);
+            assertThat(entry.getResultHasResult()).isTrue();
+            assertThat(entry.getIntent()).isEqualTo("evidence");
+            // 条目日志只含公开协议字段（ref/type/truncated/source），不落全文
+            assertThat(entry.getResultItemsJson()).contains("ev_a").contains("table_row")
+                    .doesNotContain("content");
         }
-    }
 
-    @Nested
-    @DisplayName("result fields")
-    class ResultFields {
         @Test
-        @DisplayName("seed count and hasResult computed correctly")
-        void seedCount() {
-            var item = new ContextItem("u1", "retrieval_unit", "seed", "text", 0.9,
-                    null, "para", "unknown", null, null, Map.of(), Map.of(), List.of(), null, "", Map.of());
-            var pack = packWith(ctxQuery("general", "rule", "", "", 1), List.of(item));
+        @DisplayName("distinct sources are logged once per document")
+        void distinctSourcesLogged() throws Exception {
+            var response = new EvidenceResponse("q",
+                    List.of(item("ev_a", "prose", "a.md"), item("ev_b", "prose", "a.md")), false);
 
-            service.record("id5", req("q", "d", "prod"), pack, 20);
+            service.record("id5", req("q", "d", "prod"), response, 20);
 
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
-            assertThat(captor.getValue().getResultSeedCount()).isEqualTo(1);
-            assertThat(captor.getValue().getResultHasResult()).isTrue();
+            String sourcesJson = captor.getValue().getResultSourcesJson();
+            assertThat(sourcesJson).contains("a.md");
+            // 同文档两条证据 → source 去重后只有一条
+            int sourceCount = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(sourcesJson, List.class).size();
+            assertThat(sourceCount).isEqualTo(1);
         }
 
         @Test
-        @DisplayName("null pack sets hasResult=false and skips scope fields")
-        void nullPack() {
+        @DisplayName("null response sets hasResult=false and skips result fields")
+        void nullResponse() {
             service.record("id6", req("q", "d", "prod"), null, 10);
 
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
             assertThat(captor.getValue().getResultHasResult()).isFalse();
-            assertThat(captor.getValue().getReleaseId()).isNull();
+            // 历史语义：无结果时计数字段留空（与批次8 之前的空 pack 行一致）
+            assertThat(captor.getValue().getResultItemCount()).isNull();
         }
     }
 

@@ -51,3 +51,8 @@ serving:
   upload-root: ${SERVING_UPLOAD_ROOT:/app/uploads}
   llm:
     base-url: ${LLM_SERVICE_URL:http://localhost:8900}
+  # EvidenceResponse opaque ref（ev_/doc_/st_ 前缀 HMAC 短哈希）签名密钥。
+  # 生产由部署侧注入随机值（SERVING_EVIDENCE_REF_SECRET，与 main_control auth.yaml
+  # 的 jwt_secret 同级管理）；留空 = 进程内随机遇 boot 密钥（重启后 ref 变化，仅开发/测试）。
+  evidence-ref:
+    secret: ${SERVING_EVIDENCE_REF_SECRET:}

@@ -9,7 +9,8 @@ public record ServingProperties(
     String defaultDomain,
     String uploadRoot,
     LlmConfig llm,
-    MainControl mainControl
+    MainControl mainControl,
+    EvidenceRef evidenceRef
 ) {
     public record LlmConfig(String baseUrl) {
         public LlmConfig {
@@ -35,6 +36,19 @@ public record ServingProperties(
         }
     }
 
+    /**
+     * EvidenceResponse opaque ref（ev_/doc_/st_ 前缀 HMAC 短哈希）的签名密钥。
+     *
+     * <p>生产经 {@code SERVING_EVIDENCE_REF_SECRET} 注入（建议与 main_control
+     * {@code auth.yaml} 的 jwt_secret 同级的随机值，由部署脚本生成）；留空 = 进程内
+     * 随机遇 boot 密钥（refs 重启后变化，仅适合开发/测试）。</p>
+     */
+    public record EvidenceRef(String secret) {
+        public EvidenceRef {
+            if (secret == null) secret = "";
+        }
+    }
+
     public ServingProperties {
         // 域配置的真相源是 main_control（HTTP）。下面两个本地路径只是 main_control
         // 不可达时的兜底（IntelliJ / 测试），指向它所拥有的同一份文件。
@@ -49,5 +63,6 @@ public record ServingProperties(
         if (uploadRoot == null || uploadRoot.isBlank()) uploadRoot = "/app/uploads";
         if (llm == null) llm = new LlmConfig("");
         if (mainControl == null) mainControl = new MainControl("http://localhost:8910", Boolean.TRUE);
+        if (evidenceRef == null) evidenceRef = new EvidenceRef("");
     }
 }

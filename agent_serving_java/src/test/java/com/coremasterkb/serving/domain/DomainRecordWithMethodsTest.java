@@ -71,33 +71,4 @@ class DomainRecordWithMethodsTest {
             assertThat(modified.scoreChain().rawScore()).isEqualTo(0.8);
         }
     }
-
-    @Nested
-    @DisplayName("AssemblyConfig")
-    class AssemblyConfigDefaultsTest {
-        @Test
-        @DisplayName("defaults() provides expected values")
-        void defaultsProvidesExpectedValues() {
-            var defaults = AssemblyConfig.defaults();
-            assertThat(defaults.sourceDrilldown()).isTrue();
-            assertThat(defaults.relationExpansion()).isTrue();
-            assertThat(defaults.maxItems()).isEqualTo(10);
-            assertThat(defaults.maxExpanded()).isEqualTo(20);
-            assertThat(defaults.maxRelationDepth()).isEqualTo(2);
-            assertThat(defaults.relationTypes()).isNotEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("ExpansionConfig")
-    class ExpansionConfigDefaultsTest {
-        @Test
-        @DisplayName("defaults() provides expected values")
-        void defaultsProvidesExpectedValues() {
-            var defaults = ExpansionConfig.defaults();
-            assertThat(defaults.enableRelationExpansion()).isTrue();
-            assertThat(defaults.maxRelationDepth()).isEqualTo(2);
-            assertThat(defaults.relationTypes()).isNotEmpty();
-        }
-    }
 }

@@ -352,8 +352,8 @@ public class FullTextService {
     }
 
     /**
-     * A unit's underlying segments, following the same precedence
-     * {@code ContextAssembler.resolveCandidateSources} uses so both surfaces agree on provenance.
+     * A unit's underlying segments, following the same precedence the retired
+     * {@code ContextAssembler.resolveCandidateSources} used, so both surfaces agree on provenance.
      */
     private static List<String> resolveUnitSegmentIds(FtsResultRow unit) {
         List<String> fromSourceRefs = JsonUtils.parseSourceRefs(unit.getSourceRefsJson());

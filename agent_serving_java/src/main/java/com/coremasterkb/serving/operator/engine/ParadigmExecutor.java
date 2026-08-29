@@ -178,7 +178,8 @@ public class ParadigmExecutor {
         SlotValues sv = new SlotValues();
         for (SlotDecl slot : def.outputSlots()) {
             SlotType t = slot.type();
-            if (t == SlotType.CANDIDATE_LIST || t == SlotType.CANDIDATE_LIST_MULTI || t == SlotType.STRING_LIST) {
+            if (t == SlotType.CANDIDATE_LIST || t == SlotType.CANDIDATE_LIST_MULTI
+                    || t == SlotType.STRING_LIST || t == SlotType.HYDRATED_EVIDENCE_LIST) {
                 sv.put(slot.name(), new ArrayList<>());
             }
         }

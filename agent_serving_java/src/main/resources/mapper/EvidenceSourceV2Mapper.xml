@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+    批次8 R5 evidence_hydrate 批量回源 SQL（25 号 §6.8/§10.2）。
+    全部查询按 snapshot_id 分组批量（IN 下推）；章节/文档/表格展开以 row_number()
+    PARTITION BY 分组截断保证每组行数有界；邻窗在 SQL 内按锚点 BETWEEN 收窄——
+    禁止 candidate N+1、禁止全库扫描。DDL 真相源：mining retrieval_projection/schema.py。
+-->
+<mapper namespace="com.coremasterkb.serving.operator.mapper.EvidenceSourceV2Mapper">
+
+    <!-- exact 内容：returnable=TRUE 的源表示；alias（returnable=FALSE）天然排除 = 回源 -->
+    <select id="selectCanonicalRepresentations"
+            resultType="com.coremasterkb.serving.mapper.result.UnitV2Row">
+        SELECT representation_id     AS representationId,
+               snapshot_id           AS snapshotId,
+               representation_type   AS representationType,
+               content_type          AS contentType,
+               content_text          AS contentText,
+               structural_context    AS structuralContext,
+               target_type           AS targetType,
+               target_ref            AS targetRef,
+               canonical_evidence_id AS canonicalEvidenceId,
+               container_ref         AS containerRef,
+               ordinal               AS ordinal,
+               facets_json           AS facetsJson
+        FROM asset_retrieval_units_v2
+        WHERE snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+          AND canonical_evidence_id IN
+        <foreach collection="canonicalIds" item="cid" open="(" separator="," close=")">
+            #{cid}
+        </foreach>
+          AND returnable = TRUE
+        ORDER BY canonical_evidence_id ASC, representation_id ASC
+    </select>
+
+    <resultMap id="structureNodeMap" type="com.coremasterkb.serving.mapper.result.StructureNodeRow">
+        <result column="snapshot_id" property="snapshotId"/>
+        <result column="node_type"   property="nodeType"/>
+        <result column="ref"         property="ref"/>
+        <result column="parent_ref"  property="parentRef"/>
+        <result column="ordinal"     property="ordinal"/>
+        <result column="title"       property="title"/>
+        <result column="level"       property="level"/>
+        <result column="block_type"  property="blockType"/>
+    </resultMap>
+
+    <select id="selectStructureNodes" resultMap="structureNodeMap">
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM asset_structure_nodes
+        WHERE snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+          AND ref IN
+        <foreach collection="refs" item="r" open="(" separator="," close=")">
+            #{r}
+        </foreach>
+    </select>
+
+    <resultMap id="segmentTextMap" type="com.coremasterkb.serving.mapper.result.SegmentTextRow">
+        <result column="snapshot_id"  property="snapshotId"/>
+        <result column="ref"          property="ref"/>
+        <result column="parent_ref"   property="parentRef"/>
+        <result column="ordinal"      property="ordinal"/>
+        <result column="block_type"   property="blockType"/>
+        <result column="raw_text"     property="rawText"/>
+        <result column="token_count"  property="tokenCount"/>
+        <result column="heading_chain_json" property="headingChainJson"/>
+    </resultMap>
+
+    <!-- 有界邻窗：每锚点 BETWEEN 收窄（radius 已在参数中折算为上下界），一次批量覆盖全部锚点 -->
+    <select id="selectWindowSegments" resultMap="segmentTextMap">
+        SELECT n.snapshot_id, n.ref, n.parent_ref, n.ordinal, n.block_type,
+               s.raw_text, s.token_count, s.heading_chain_json
+        FROM asset_structure_nodes n
+        JOIN asset_raw_segments s
+          ON s.snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
+        WHERE n.node_type = 'segment'
+          AND (
+        <foreach collection="anchors" item="a" separator=" OR ">
+            (n.snapshot_id = #{a.snapshotId}
+             AND n.parent_ref = #{a.parentRef}
+             AND n.ordinal BETWEEN #{a.centerOrdinal} - #{a.radius} AND #{a.centerOrdinal} + #{a.radius})
+        </foreach>
+          )
+        ORDER BY n.snapshot_id ASC, n.parent_ref ASC, n.ordinal ASC
+    </select>
+
+    <!-- 章节/文档直接子 segment：row_number 分组截断，每 parent 至多 maxRowsPerSection 行 -->
+    <select id="selectSectionSegments" resultMap="segmentTextMap">
+        SELECT t.snapshot_id, t.ref, t.parent_ref, t.ordinal, t.block_type,
+               t.raw_text, t.token_count, t.heading_chain_json
+        FROM (
+            SELECT n.snapshot_id, n.ref, n.parent_ref, n.ordinal, n.block_type,
+                   s.raw_text, s.token_count, s.heading_chain_json,
+                   row_number() OVER (PARTITION BY n.snapshot_id, n.parent_ref ORDER BY n.ordinal) AS rn
+            FROM asset_structure_nodes n
+            JOIN asset_raw_segments s
+              ON s.snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
+            WHERE n.node_type = 'segment'
+              AND n.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+                #{sid}
+            </foreach>
+              AND n.parent_ref IN
+            <foreach collection="parentRefs" item="p" open="(" separator="," close=")">
+                #{p}
+            </foreach>
+        ) t
+        WHERE t.rn &lt;= #{maxRowsPerSection}
+        ORDER BY t.snapshot_id ASC, t.parent_ref ASC, t.ordinal ASC
+    </select>
+
+    <!-- 整文 segment：row_number 分组截断，每 snapshot 至多 maxRowsPerDocument 行 -->
+    <select id="selectDocumentSegments" resultMap="segmentTextMap">
+        SELECT t.snapshot_id, t.ref, t.parent_ref, t.ordinal, t.block_type,
+               t.raw_text, t.token_count, t.heading_chain_json
+        FROM (
+            SELECT n.snapshot_id, n.ref, n.parent_ref, n.ordinal, n.block_type,
+                   s.raw_text, s.token_count, s.heading_chain_json,
+                   row_number() OVER (PARTITION BY n.snapshot_id ORDER BY n.ordinal) AS rn
+            FROM asset_structure_nodes n
+            JOIN asset_raw_segments s
+              ON s.snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
+            WHERE n.node_type = 'segment'
+              AND n.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+                #{sid}
+            </foreach>
+        ) t
+        WHERE t.rn &lt;= #{maxRowsPerDocument}
+        ORDER BY t.snapshot_id ASC, t.ordinal ASC
+    </select>
+
+    <!-- record 行：构造器映射（record 无 setter） -->
+    <resultMap id="snapshotTokensMap"
+               type="com.coremasterkb.serving.operator.mapper.EvidenceSourceV2Mapper$SnapshotTokensRow">
+        <constructor>
+            <arg column="snapshotId"  javaType="java.lang.String"/>
+            <arg column="totalTokens" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <select id="selectDocumentTokenTotals" resultMap="snapshotTokensMap">
+        SELECT snapshot_id AS snapshotId, SUM(COALESCE(token_count, 0)) AS totalTokens
+        FROM asset_raw_segments
+        WHERE snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+        GROUP BY snapshot_id
+    </select>
+
+    <resultMap id="tableAssetMap" type="com.coremasterkb.serving.mapper.result.TableAssetRow">
+        <result column="snapshot_id"    property="snapshotId"/>
+        <result column="asset_ref"      property="assetRef"/>
+        <result column="asset_type"     property="assetType"/>
+        <result column="table_ref"      property="tableRef"/>
+        <result column="columns_json"   property="columnsJson"/>
+        <result column="row_count"      property="rowCount"/>
+        <result column="readiness"      property="readiness"/>
+        <result column="schema_version" property="schemaVersion"/>
+    </resultMap>
+
+    <select id="selectTableAssets" resultMap="tableAssetMap">
+        SELECT snapshot_id, asset_ref, asset_type, table_ref,
+               columns_json::text AS columns_json, row_count, readiness, schema_version
+        FROM asset_structured_assets
+        WHERE snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+          AND table_ref IN
+        <foreach collection="tableRefs" item="tr" open="(" separator="," close=")">
+            #{tr}
+        </foreach>
+    </select>
+
+    <resultMap id="tableCellMap" type="com.coremasterkb.serving.mapper.result.TableCellRow">
+        <result column="snapshot_id"   property="snapshotId"/>
+        <result column="table_ref"     property="tableRef"/>
+        <result column="row_index"     property="rowIndex"/>
+        <result column="column_index"  property="columnIndex"/>
+        <result column="column_name"   property="columnName"/>
+        <result column="value"         property="value"/>
+        <result column="is_header"     property="isHeader"/>
+    </resultMap>
+
+    <!-- 表格 cells：row_number 分组截断（每表至多 maxCellsPerTable），表头行优先 -->
+    <select id="selectTableCells" resultMap="tableCellMap">
+        SELECT t.snapshot_id, t.table_ref, t.row_index, t.column_index,
+               t.column_name, t.value, t.is_header
+        FROM (
+            SELECT c.snapshot_id, c.table_ref, c.row_index, c.column_index,
+                   c.column_name, c.value, c.is_header,
+                   row_number() OVER (PARTITION BY c.snapshot_id, c.table_ref
+                                      ORDER BY c.is_header DESC, c.row_index, c.column_index) AS rn
+            FROM asset_table_cells c
+            WHERE c.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+                #{sid}
+            </foreach>
+              AND c.table_ref IN
+            <foreach collection="tableRefs" item="tr" open="(" separator="," close=")">
+                #{tr}
+            </foreach>
+        ) t
+        WHERE t.rn &lt;= #{maxCellsPerTable}
+        ORDER BY t.snapshot_id ASC, t.table_ref ASC, t.is_header DESC, t.row_index ASC, t.column_index ASC
+    </select>
+
+    <resultMap id="evidenceDocumentMap" type="com.coremasterkb.serving.mapper.result.EvidenceDocumentRow">
+        <result column="snapshot_id"    property="snapshotId"/>
+        <result column="document_key"   property="documentKey"/>
+        <result column="document_name"  property="documentName"/>
+        <result column="kb_id"          property="kbId"/>
+        <result column="kb_name"        property="kbName"/>
+        <result column="relative_path"  property="relativePath"/>
+    </resultMap>
+
+    <!-- snapshot 主键回查文档/库投影：document_key 非全局唯一，跨库同名路径只能靠 snapshot 消歧 -->
+    <select id="selectDocumentSources" resultMap="evidenceDocumentMap">
+        SELECT l.document_snapshot_id AS snapshot_id,
+               d.document_key,
+               d.document_name,
+               d.kb_id,
+               k.name AS kb_name,
+               l.relative_path
+        FROM asset_document_snapshot_links l
+        JOIN asset_documents d ON d.id = l.document_id AND d.deleted_at IS NULL
+        LEFT JOIN knowledge_bases k ON k.id = d.kb_id
+        WHERE l.document_snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+    </select>
+
+</mapper>

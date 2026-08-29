@@ -9,7 +9,6 @@ from psycopg.errors import UniqueViolation
 from .compiler import WorkflowCompileException, WorkflowCompiler
 from .graph import WorkflowGraph
 from .operators.catalog import builtin_catalog
-from .paradigms import ORDINARY_WORKFLOW_PARADIGMS
 from .templates import builtin_templates
 from .v2_migration import upgrade_graph_to_v2
 
@@ -29,16 +28,21 @@ def _self_heal_schema_version(graph: dict) -> dict:
 
 def _build_initial_draft(
     *,
-    template_key: str,
+    template_key: str | None,
     schema_version: str,
     graph: dict | None,
 ) -> dict:
-    """create 的初始草稿：显式图优先，否则按版本选模板（M6 v2）."""
+    """create 的初始草稿：显式图优先；模板为空直到 M6 新预置落地。"""
     if graph is not None:
         return WorkflowGraph.from_dict(graph).to_dict()
     if str(schema_version) != "2.0":
         raise ValueError("Only workflow schema_version '2.0' is supported")
     templates = builtin_templates()
+    if template_key is None:
+        raise ValueError(
+            "No builtin template available (batch8 M0 retired legacy presets); "
+            "provide an explicit graph until M6 presets land"
+        )
     try:
         return templates[template_key].to_dict()
     except KeyError as exc:
@@ -117,7 +121,7 @@ class WorkflowService:
         *,
         name: str,
         description: str | None = None,
-        template_key: str = "full",
+        template_key: str | None = None,
         schema_version: str = "2.0",
         graph: dict | None = None,
         created_by: str | None = None,
@@ -337,73 +341,21 @@ class WorkflowService:
             raise WorkflowNotFound(f"{selected_id} has no published version")
         return await self.get_version(selected_id, selected_version)
 
-    async def ensure_system_workflows(self) -> dict:
-        workflow = await self.repository.get_workflow("system-full-baseline")
-        if workflow is None:
-            try:
-                workflow = await self.create(
-                    workflow_id="system-full-baseline",
-                    name="system-full-baseline",
-                    description="System FULL mining workflow baseline",
-                    template_key="full",
-                    is_system=True,
-                    is_system_default=True,
-                )
-            except WorkflowNameConflict:
-                workflow = await self.repository.get_workflow(
-                    "system-full-baseline"
-                )
-                if workflow is None:
-                    raise
-        if workflow["current_version"] is None:
-            workflow = await self._ensure_initial_publication(
-                workflow,
-                release_notes="Initial FULL baseline",
-            )
-        return workflow
-
-    async def ensure_workflow_library(self) -> dict:
-        """Create missing published paradigms without owning their lifecycle.
-
-        The compatibility default remains a system Workflow. Every additional
-        paradigm is inserted exactly like an ordinary user-created Workflow:
-        it receives a regular generated ID and can be edited or archived. An
-        existing name, including an archived one, is never changed or revived.
+    async def ensure_system_workflows(self) -> dict | None:
+        """批次8 M0（24 号 §8/§10.1）：旧预置（system-full-baseline 含实体/
+        本体归纳人审链）停止 seed；M6 由 4 套新预置取代。已存在的旧条目
+        由受保护 reset 流程清理，本方法不再创建或复活任何旧范式。
         """
-        default = await self.ensure_system_workflows()
-        for paradigm in ORDINARY_WORKFLOW_PARADIGMS:
-            workflow = await self.repository.get_by_name(paradigm.name)
-            if workflow is None:
-                try:
-                    workflow = await self.create(
-                        name=paradigm.name,
-                        description=paradigm.description,
-                        template_key=paradigm.template_key,
-                        metadata_json={
-                            _PARADIGM_SEED_METADATA_KEY: paradigm.template_key
-                        },
-                    )
-                except WorkflowNameConflict:
-                    # A concurrent startup may have inserted the same name
-                    # after the existence check. Only continue initialization
-                    # when that winner is one of our own ordinary seeds.
-                    workflow = await self.repository.get_by_name(paradigm.name)
-            if workflow is None:
-                continue
-            if (
-                workflow["status"] != "active"
-                or workflow["current_version"] is not None
-                or workflow.get("metadata_json", {}).get(
-                    _PARADIGM_SEED_METADATA_KEY
-                )
-                != paradigm.template_key
-            ):
-                continue
-            await self._ensure_initial_publication(
-                workflow,
-                release_notes="初始范式版本",
-            )
-        return default
+        return await self.repository.get_workflow("system-full-baseline")
+
+    async def ensure_workflow_library(self) -> dict | None:
+        """批次8 M0（24 号 §8）：旧 7 类挖掘预置全部停止 seed。
+
+        M6 将按 4 套新预置（轻量关键词/标准混合/问题别名增强/长文档全局
+        增强）重建 seeding；在此之前本方法不创建任何 Workflow，只回读
+        兼容默认（若存在）供启动流程不炸。
+        """
+        return await self.ensure_system_workflows()
 
     async def _ensure_initial_publication(
         self,

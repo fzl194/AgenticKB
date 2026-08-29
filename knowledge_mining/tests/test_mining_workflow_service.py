@@ -10,7 +10,7 @@ from knowledge_mining.mining.workflow.service import (
     WorkflowNotFound,
     WorkflowService,
 )
-from knowledge_mining.mining.workflow.templates import builtin_templates
+from knowledge_mining.tests.formal_chain_helper import formal_chain_graph_dict
 
 
 class MemoryWorkflowRepository:
@@ -105,68 +105,6 @@ class MemoryWorkflowRepository:
         return deepcopy(item)
 
 
-class DefaultCreateRaceRepository(MemoryWorkflowRepository):
-    def __init__(self) -> None:
-        super().__init__()
-        self.simulated = False
-
-    async def insert_workflow(self, record: dict) -> dict:
-        if record["id"] == "system-full-baseline" and not self.simulated:
-            self.simulated = True
-            self.workflows[record["id"]] = deepcopy(record)
-            raise RuntimeError("duplicate workflow")
-        return await super().insert_workflow(record)
-
-
-class DefaultPublishRaceRepository(MemoryWorkflowRepository):
-    def __init__(self) -> None:
-        super().__init__()
-        self.simulated = False
-
-    async def insert_version_and_advance(
-        self,
-        workflow_id: str,
-        *,
-        expected_revision: int,
-        version_record: dict,
-    ) -> dict | None:
-        if workflow_id == "system-full-baseline" and not self.simulated:
-            self.simulated = True
-            stored = deepcopy(version_record)
-            stored["workflow_id"] = workflow_id
-            self.versions[(workflow_id, version_record["version"])] = stored
-            self.workflows[workflow_id]["current_version"] = version_record["version"]
-            return None
-        return await super().insert_version_and_advance(
-            workflow_id,
-            expected_revision=expected_revision,
-            version_record=version_record,
-        )
-
-
-class FailFirstParadigmPublishRepository(MemoryWorkflowRepository):
-    def __init__(self) -> None:
-        super().__init__()
-        self.failed = False
-
-    async def insert_version_and_advance(
-        self,
-        workflow_id: str,
-        *,
-        expected_revision: int,
-        version_record: dict,
-    ) -> dict | None:
-        workflow = self.workflows[workflow_id]
-        if workflow["name"] == "基础文档入库" and not self.failed:
-            self.failed = True
-            raise RuntimeError("simulated publish outage")
-        return await super().insert_version_and_advance(
-            workflow_id,
-            expected_revision=expected_revision,
-            version_record=version_record,
-        )
-
-
 @pytest.fixture
 def memory_workflow_repo() -> MemoryWorkflowRepository:
     return MemoryWorkflowRepository()
@@ -208,7 +146,8 @@ async def test_publish_is_immutable_and_restore_creates_a_new_draft(
 ) -> None:
     service = WorkflowService(memory_workflow_repo)
     created = await service.create(
-        name="custom", description="demo", template_key="minimal", created_by="tester"
+        name="custom", description="demo",
+        graph=formal_chain_graph_dict(), created_by="tester",
     )
     v1 = await service.publish(
         created["id"],
@@ -236,7 +175,7 @@ async def test_stale_draft_revision_is_rejected(
     memory_workflow_repo: MemoryWorkflowRepository,
 ) -> None:
     service = WorkflowService(memory_workflow_repo)
-    created = await service.create(name="custom", template_key="minimal")
+    created = await service.create(name="custom", graph=formal_chain_graph_dict())
     await service.save_draft(
         created["id"],
         graph=created["draft_graph_json"],
@@ -253,129 +192,37 @@ async def test_stale_draft_revision_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_seed_creates_one_global_full_default_idempotently(
+async def test_ensure_system_workflows_no_longer_seeds_legacy_default(
     memory_workflow_repo: MemoryWorkflowRepository,
 ) -> None:
+    """批次8 M0：system-full-baseline 停止 seed——只回读，不创建不复活。"""
     service = WorkflowService(memory_workflow_repo)
 
-    await service.ensure_system_workflows()
-    await service.ensure_system_workflows()
-
-    items = await service.list(include_archived=True)
-    defaults = [item for item in items if item["is_system_default"]]
-    assert [(item["id"], item["current_version"]) for item in defaults] == [
-        ("system-full-baseline", 1)
-    ]
-    assert len(
-        (await service.get_version("system-full-baseline", 1))["graph_json"]["nodes"]
-        ) == 17
+    assert await service.ensure_system_workflows() is None
+    assert await service.ensure_system_workflows() is None
+    assert await service.list(include_archived=True) == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "repository",
-    [DefaultCreateRaceRepository(), DefaultPublishRaceRepository()],
-)
-async def test_system_default_tolerates_concurrent_create_and_publish_winners(
-    repository: MemoryWorkflowRepository,
-) -> None:
-    service = WorkflowService(repository)
-
-    workflow = await service.ensure_system_workflows()
-
-    assert workflow["id"] == "system-full-baseline"
-    assert workflow["current_version"] == 1
-
-
-@pytest.mark.asyncio
-async def test_workflow_library_seeds_six_published_ordinary_paradigms_once(
+async def test_ensure_workflow_library_seeds_nothing_and_preserves_existing(
     memory_workflow_repo: MemoryWorkflowRepository,
 ) -> None:
-    service = WorkflowService(memory_workflow_repo)
-
-    await service.ensure_workflow_library()
-    await service.ensure_workflow_library()
-
-    items = await service.list(include_archived=True)
-    ordinary = [item for item in items if not item["is_system_default"]]
-    assert {item["name"] for item in ordinary} == {
-        "基础文档入库",
-        "快速向量检索",
-        "篇章增强检索",
-        "固定本体图谱构建",
-        "检索与图谱联合构建",
-        "本体演化专项",
-    }
-    assert all(item["is_system"] is False for item in ordinary)
-    assert all(item["is_system_default"] is False for item in ordinary)
-    assert all(item["current_version"] == 1 for item in ordinary)
-    for item in ordinary:
-        assert len(await service.list_versions(item["id"])) == 1
-    assert len(await service.published_options()) == 7
-    expected_templates = {
-        "基础文档入库": "minimal",
-        "快速向量检索": "fast_retrieval",
-        "篇章增强检索": "discourse_only",
-        "固定本体图谱构建": "entity_graph",
-        "检索与图谱联合构建": "hybrid_knowledge",
-        "本体演化专项": "ontology_only",
-    }
-    for item in ordinary:
-        version = await service.get_version(item["id"], 1)
-        assert version["graph_json"] == builtin_templates()[
-            expected_templates[item["name"]]
-        ].to_dict()
-
-
-@pytest.mark.asyncio
-async def test_workflow_library_resumes_its_own_unpublished_seed_after_failure() -> None:
-    repository = FailFirstParadigmPublishRepository()
-    service = WorkflowService(repository)
-
-    with pytest.raises(RuntimeError, match="simulated publish outage"):
-        await service.ensure_workflow_library()
-
-    partial = await repository.get_by_name("基础文档入库")
-    assert partial is not None
-    assert partial["current_version"] is None
-    assert partial["metadata_json"] == {"workflowParadigmSeed": "minimal"}
-
-    await service.ensure_workflow_library()
-
-    recovered = await service.get(partial["id"])
-    assert recovered["current_version"] == 1
-    assert len(await service.list(include_archived=True)) == 7
-
-
-@pytest.mark.asyncio
-async def test_workflow_library_preserves_existing_same_name_and_archived_items(
-    memory_workflow_repo: MemoryWorkflowRepository,
-) -> None:
+    """批次8 M0：旧 7 类预置停止 seed；已有条目不被触碰（M6 由新预置取代）。"""
     service = WorkflowService(memory_workflow_repo)
     existing = await service.create(
-        name="基础文档入库",
+        name="快速向量检索",
         description="人工维护的同名草稿",
-        template_key="minimal",
+        graph=formal_chain_graph_dict(),
         created_by="owner",
     )
 
+    await service.ensure_workflow_library()
     await service.ensure_workflow_library()
 
     preserved = await service.get(existing["id"])
     assert preserved["description"] == "人工维护的同名草稿"
     assert preserved["current_version"] is None
-    fast = next(
-        item
-        for item in await service.list(include_archived=True)
-        if item["name"] == "快速向量检索"
-    )
-    await service.archive(fast["id"], updated_by="owner")
-
-    await service.ensure_workflow_library()
-
-    archived = await service.get(fast["id"])
-    assert archived["status"] == "archived"
-    assert len(await service.list_versions(fast["id"])) == 1
+    assert len(await service.list(include_archived=True)) == 1
 
 
 @pytest.mark.asyncio
@@ -383,7 +230,7 @@ async def test_clone_can_start_from_an_exact_historical_version(
     memory_workflow_repo: MemoryWorkflowRepository,
 ) -> None:
     service = WorkflowService(memory_workflow_repo)
-    source = await service.create(name="source", template_key="minimal")
+    source = await service.create(name="source", graph=formal_chain_graph_dict())
     await service.publish(source["id"], expected_revision=0)
 
     clone = await service.clone(
@@ -402,10 +249,15 @@ async def test_system_default_cannot_be_archived(
     memory_workflow_repo: MemoryWorkflowRepository,
 ) -> None:
     service = WorkflowService(memory_workflow_repo)
-    await service.ensure_system_workflows()
+    created = await service.create(
+        name="system-default",
+        graph=formal_chain_graph_dict(),
+        is_system=True,
+        is_system_default=True,
+    )
 
     with pytest.raises(WorkflowArchived):
-        await service.archive("system-full-baseline", updated_by="tester")
+        await service.archive(created["id"], updated_by="tester")
 
 
 @pytest.mark.asyncio
@@ -413,10 +265,17 @@ async def test_published_options_and_exact_version_resolution(
     memory_workflow_repo: MemoryWorkflowRepository,
 ) -> None:
     service = WorkflowService(memory_workflow_repo)
-    await service.ensure_system_workflows()
-    custom = await service.create(name="custom", template_key="minimal")
+    system_default = await service.create(
+        name="system-default",
+        workflow_id="system-default",
+        graph=formal_chain_graph_dict(),
+        is_system=True,
+        is_system_default=True,
+    )
+    await service.publish(system_default["id"], expected_revision=0)
+    custom = await service.create(name="custom", graph=formal_chain_graph_dict())
     await service.publish(custom["id"], expected_revision=0)
-    draft_only = await service.create(name="draft-only", template_key="minimal")
+    draft_only = await service.create(name="draft-only", graph=formal_chain_graph_dict())
 
     options = await service.published_options()
     exact = await service.resolve_published_version(
@@ -425,16 +284,16 @@ async def test_published_options_and_exact_version_resolution(
     default = await service.resolve_published_version(
         workflow_id=None,
         workflow_version=None,
-        default_workflow_id="system-full-baseline",
+        default_workflow_id="system-default",
     )
 
     assert {item["id"] for item in options} == {
-        "system-full-baseline",
+        "system-default",
         custom["id"],
     }
     assert exact["workflow_id"] == custom["id"]
     assert exact["version"] == 1
-    assert default["workflow_id"] == "system-full-baseline"
+    assert default["workflow_id"] == "system-default"
     with pytest.raises(WorkflowNotFound):
         await service.resolve_published_version(
             workflow_id=draft_only["id"], workflow_version=None
@@ -442,15 +301,19 @@ async def test_published_options_and_exact_version_resolution(
 
 
 @pytest.mark.asyncio
-async def test_create_uses_the_only_supported_v2_parse_template(
+async def test_create_requires_explicit_graph_until_m6_presets_land(
     memory_workflow_repo: MemoryWorkflowRepository,
 ):
-    """新建范式固定使用 document_parse→segment_compile 骨架。"""
+    """M0 后无内置模板：不给 graph 必须显式失败；显式链图正常建。"""
     service = WorkflowService(memory_workflow_repo)
+
+    with pytest.raises(ValueError, match="No builtin template"):
+        await service.create(name="no-template")
+
     created = await service.create(
-        name="v2-chain", template_key="minimal", schema_version="2.0",
+        name="v2-chain", graph=formal_chain_graph_dict(), schema_version="2.0",
     )
-    draft = created["draft_graph_json"]  # memory repo 保 dict；PG 为 str
+    draft = created["draft_graph_json"]
     if isinstance(draft, str):
         import json as _j
 
@@ -470,7 +333,7 @@ async def test_save_draft_self_heals_schema_version_mismatch(
 
     service = WorkflowService(memory_workflow_repo)
     created = await service.create(
-        name="heal", template_key="minimal", schema_version="2.0",
+        name="heal", graph=formal_chain_graph_dict(), schema_version="2.0",
     )
     bad = _j.loads(created["draft_graph_json"]) if isinstance(
         created["draft_graph_json"], str) else dict(created["draft_graph_json"])

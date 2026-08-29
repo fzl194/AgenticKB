@@ -200,22 +200,16 @@ class SegmentCompileOptions(OperatorOptions):
     )
 
 
+# 批次8 M0（24 号 §11）：正式算子参数面只覆盖目录内算子。
+# 退役算子（enrich/discourse_line/contextual_retrieval_enrich/retrieval_unit_build）
+# 与研究算子（entity/ontology/graph_write）的 Options 类暂保留定义——
+# pipeline 阶段实现与实体研究代码仍引用，随 M1/M2 bundle 重构与
+# retrieval_unit_project 落地后一并清除；此处仅断开注册映射。
 OPTIONS_BY_OPERATOR: dict[str, type[OperatorOptions]] = {
     "input_ingest": EmptyOptions,
     "document_parse": DocumentParseOptions,
     "segment_compile": SegmentCompileOptions,
-    "enrich": EnrichOptions,
-    "discourse_line": DiscourseOptions,
-    "contextual_retrieval_enrich": EmptyOptions,
-    "retrieval_unit_build": RetrievalUnitOptions,
     "embedding": EmbeddingOptions,
-    "entity_extract": EntityExtractOptions,
-    "entity_resolve": EntityResolveOptions,
-    "entity_relation_extract": EntityRelationOptions,
     "asset_persist": EmptyOptions,
-    "entity_review_gate": EmptyOptions,
-    "ontology_induction": EmptyOptions,
-    "ontology_review_gate": EmptyOptions,
-    "graph_write": EmptyOptions,
     "mining_finalize": FinalizeOptions,
 }

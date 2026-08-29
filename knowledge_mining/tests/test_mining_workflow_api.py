@@ -98,15 +98,16 @@ def client_for(fake_service: FakeWorkflowService) -> TestClient:
     return TestClient(app)
 
 
-def test_catalog_has_17_v2_global_operators(
+def test_catalog_has_6_formal_operators(
     fake_workflow_service: FakeWorkflowService,
 ) -> None:
+    """批次8 M0：正式目录收敛到零 LLM 默认线骨架 6 算子。"""
     response = client_for(fake_workflow_service).get(
         "/api/mining-operators/catalog?domain=odn"
     )
 
     assert response.status_code == 200
-    assert len(response.json()["items"]) == 17
+    assert len(response.json()["items"]) == 6
     assert fake_workflow_service.calls == []
 
 

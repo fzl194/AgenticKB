@@ -21,16 +21,10 @@ from knowledge_mining.mining.workflow.handler_registry import (
     resolve_effective_parameters,
 )
 from knowledge_mining.mining.workflow.handlers import document as handlers
-from knowledge_mining.mining.workflow.handlers.document import enrich_handler
+from knowledge_mining.mining.workflow.handlers import research as research_handlers
 from knowledge_mining.mining.workflow.operators.options import (
-    DiscourseOptions,
     EmbeddingOptions,
-    EmptyOptions,
-    EnrichOptions,
     EntityExtractOptions,
-    EntityRelationOptions,
-    EntityResolveOptions,
-    RetrievalUnitOptions,
 )
 
 
@@ -158,23 +152,6 @@ def test_effective_parameter_precedence_and_override_allowlist() -> None:
         )
 
 
-def test_enrich_handler_returns_fallback_without_losing_segments() -> None:
-    class Enricher:
-        def enrich_batch(self, segments):
-            raise RuntimeError("llm unavailable")
-
-    source = state("doc-a")
-    result = enrich_handler(
-        source,
-        {"minEnrichTokens": 10},
-        runtime(enricher=Enricher()),
-    )
-
-    assert result.status is OperatorStatus.FALLBACK
-    assert result.outputs.context.segments == source.context.segments
-    assert result.warnings[0].code == "enrich_fallback"
-
-
 def test_handler_status_contract_covers_all_executor_outcomes() -> None:
     values = {
         OperatorResult(None, frozenset(), status).status
@@ -193,48 +170,11 @@ def test_handler_status_contract_covers_all_executor_outcomes() -> None:
 @pytest.mark.parametrize(
     ("handler", "params", "stage_name", "expected_type"),
     [
-        (handlers.enrich_handler, {"minEnrichTokens": 11}, "enrich_stage", EnrichOptions),
-        (
-            handlers.discourse_line_handler,
-            {"windowSize": 4, "minConfidence": 0.7},
-            "discourse_stage",
-            DiscourseOptions,
-        ),
-        (
-            handlers.contextual_retrieval_enrich_handler,
-            {},
-            "contextual_retrieval_stage",
-            EmptyOptions,
-        ),
-        (
-            handlers.retrieval_unit_build_handler,
-            {"maxQuestionsPerSegment": 1},
-            "retrieval_units_stage",
-            RetrievalUnitOptions,
-        ),
         (
             handlers.embedding_handler,
             {"unitTypes": ["raw_text"]},
             "embedding_stage",
             EmbeddingOptions,
-        ),
-        (
-            handlers.entity_extract_handler,
-            {"minConfidence": 0.8},
-            "entity_extract_stage",
-            EntityExtractOptions,
-        ),
-        (
-            handlers.entity_resolve_handler,
-            {"autoResolveAliases": False},
-            "resolve_stage",
-            EntityResolveOptions,
-        ),
-        (
-            handlers.entity_relation_extract_handler,
-            {"requireResolvedEntities": True},
-            "entity_relations_stage",
-            EntityRelationOptions,
         ),
     ],
 )
@@ -255,8 +195,29 @@ def test_document_handlers_convert_all_editable_operator_params(
     assert isinstance(captured[0], expected_type)
 
 
+def test_research_entity_handler_preserves_param_conversion(
+    monkeypatch,
+) -> None:
+    """研究隔离区的实体 handler 保留参数转换行为，但不进正式注册面。"""
+
+    captured = []
+
+    def stage_fn(ctx, cfg, **kwargs):
+        captured.append(kwargs.get("options"))
+        return ctx
+
+    monkeypatch.setattr(research_handlers, "entity_extract_stage", stage_fn)
+
+    result = research_handlers.entity_extract_handler(
+        state("doc-a"), {"minConfidence": 0.8}, runtime()
+    )
+
+    assert result.status in {OperatorStatus.SUCCESS, OperatorStatus.FALLBACK}
+    assert isinstance(captured[0], EntityExtractOptions)
+
+
 def test_ontology_document_handler_is_not_applicable_without_frozen_ontology() -> None:
-    result = handlers.entity_extract_handler(
+    result = research_handlers.entity_extract_handler(
         state("doc-a"), {}, runtime(ontology_version_id=None)
     )
 

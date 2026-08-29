@@ -1,39 +1,29 @@
-import json
-
 import pytest
 from pydantic import ValidationError
 
 from knowledge_mining.mining.workflow.core import EditPolicy, ErrorPolicy
 from knowledge_mining.mining.workflow.operators.catalog import builtin_catalog
 from knowledge_mining.mining.workflow.operators.options import (
+    EmbeddingOptions,
     OPTIONS_BY_OPERATOR,
-    RetrievalUnitOptions,
 )
 from knowledge_mining.mining.workflow.templates import builtin_templates
 
 
+# 批次8 M0（24 号 §11）：正式目录收敛到零 LLM 默认线骨架。
+# enrich/discourse_line/contextual_retrieval_enrich/retrieval_unit_build 删除；
+# 实体/本体七算子研究隔离（operators/research.py）。
 APPROVED_OPERATOR_TYPES = {
     "input_ingest",
     "document_parse",
     "segment_compile",
-    "enrich",
-    "discourse_line",
-    "contextual_retrieval_enrich",
-    "retrieval_unit_build",
     "embedding",
-    "entity_extract",
-    "entity_resolve",
-    "entity_relation_extract",
     "asset_persist",
-    "entity_review_gate",
-    "ontology_induction",
-    "ontology_review_gate",
-    "graph_write",
     "mining_finalize",
 }
 
 
-def test_catalog_exposes_exactly_the_approved_v2_operators() -> None:
+def test_catalog_exposes_exactly_the_approved_operators() -> None:
     catalog = builtin_catalog()
     assert set(catalog) == APPROVED_OPERATOR_TYPES
     assert {
@@ -46,28 +36,18 @@ def test_catalog_exposes_exactly_the_approved_v2_operators() -> None:
         key
         for key, value in catalog.items()
         if value.edit_policy is EditPolicy.PROTECTED
-    } == {"entity_review_gate", "ontology_review_gate", "graph_write"}
-    assert catalog["graph_write"].error_policy is ErrorPolicy.FAIL_FAST
+    } == set()
     assert catalog["mining_finalize"].error_policy is ErrorPolicy.FAIL_FAST
 
 
 def test_option_aliases_validate_wire_parameters() -> None:
-    value = RetrievalUnitOptions.model_validate(
-        {
-            "rawTextUnit": True,
-            "generatedQuestionUnit": False,
-            "tableRowUnit": True,
-            "maxQuestionsPerSegment": 0,
-            "minQuestionworthyTokens": 80,
-        }
-    )
-    assert value.generated_question_unit is False
-    assert value.model_dump(by_alias=True)["minQuestionworthyTokens"] == 80
+    value = EmbeddingOptions.model_validate({"unitTypes": ["raw_text"]})
+    assert value.model_dump(by_alias=True)["unitTypes"] == ["raw_text"]
 
 
 def test_option_models_reject_unknown_and_inconsistent_parameters() -> None:
     with pytest.raises(ValidationError):
-        RetrievalUnitOptions.model_validate({"unknownOption": True})
+        EmbeddingOptions.model_validate({"unknownOption": True})
 
 
 def test_every_operator_schema_comes_from_its_typed_option_model() -> None:
@@ -81,87 +61,12 @@ def test_every_operator_schema_comes_from_its_typed_option_model() -> None:
         model.model_validate(model().model_dump(by_alias=True))
 
 
-def test_all_seven_templates_are_global_and_full_contains_all_operators() -> None:
-    templates = builtin_templates()
-    assert set(templates) == {
-        "minimal",
-        "fast_retrieval",
-        "discourse_only",
-        "entity_graph",
-        "hybrid_knowledge",
-        "ontology_only",
-        "full",
-    }
-    assert {
-        node.operator_type for node in templates["full"].nodes
-    } == APPROVED_OPERATOR_TYPES
-    assert all(
-        '"domain"' not in json.dumps(graph.to_dict()).lower()
-        for graph in templates.values()
-    )
+def test_legacy_templates_retired_until_m6_presets_land() -> None:
+    """旧 7 类模板已退役；M6 前内置模板为空，新建 Workflow 必须显式给图。"""
+    assert builtin_templates() == {}
 
 
-def test_template_editable_nodes_match_the_approved_capability_sets() -> None:
+def test_catalog_results_cannot_mutate_the_singletons() -> None:
     catalog = builtin_catalog()
-    templates = builtin_templates()
-
-    def editable(template_name: str) -> set[str]:
-        return {
-            node.operator_type
-            for node in templates[template_name].nodes
-            if catalog[node.operator_type].edit_policy is EditPolicy.EDITABLE
-        }
-
-    assert editable("full") == {
-        "enrich",
-        "discourse_line",
-        "contextual_retrieval_enrich",
-        "retrieval_unit_build",
-        "embedding",
-        "entity_extract",
-        "entity_resolve",
-        "entity_relation_extract",
-        "ontology_induction",
-    }
-    assert editable("discourse_only") == {
-        "enrich",
-        "discourse_line",
-        "contextual_retrieval_enrich",
-        "retrieval_unit_build",
-        "embedding",
-    }
-    assert editable("fast_retrieval") == {
-        "retrieval_unit_build",
-        "embedding",
-    }
-    assert editable("entity_graph") == {
-        "entity_extract",
-        "entity_resolve",
-        "entity_relation_extract",
-    }
-    assert editable("hybrid_knowledge") == {
-        "enrich",
-        "discourse_line",
-        "contextual_retrieval_enrich",
-        "retrieval_unit_build",
-        "embedding",
-        "entity_extract",
-        "entity_resolve",
-        "entity_relation_extract",
-    }
-    assert editable("ontology_only") == {
-        "entity_extract",
-        "entity_resolve",
-        "entity_relation_extract",
-        "ontology_induction",
-    }
-    assert editable("minimal") == set()
-
-
-def test_catalog_and_template_results_cannot_mutate_the_singletons() -> None:
-    catalog = builtin_catalog()
-    templates = builtin_templates()
     catalog.pop("input_ingest")
-    templates.pop("full")
-    assert len(builtin_catalog()) == 17
-    assert "full" in builtin_templates()
+    assert len(builtin_catalog()) == len(APPROVED_OPERATOR_TYPES)

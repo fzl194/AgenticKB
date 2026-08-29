@@ -8,17 +8,17 @@ from knowledge_mining.mining.workflow.manifest import (
     value_hash,
 )
 from knowledge_mining.mining.workflow.operators.catalog import builtin_catalog
-from knowledge_mining.mining.workflow.templates import builtin_templates
+from knowledge_mining.tests.formal_chain_helper import formal_chain_workflow_graph
 
 
 def _full_plan():
     return WorkflowCompiler(builtin_catalog()).compile(
-        builtin_templates()["full"], mode="publish"
+        formal_chain_workflow_graph(), mode="publish"
     ).require_plan()
 
 
 def test_publish_hash_is_deterministic_and_run_binding_does_not_change_it() -> None:
-    graph = builtin_templates()["full"]
+    graph = formal_chain_workflow_graph()
     plan = WorkflowCompiler(builtin_catalog()).compile(
         graph, mode="publish"
     ).require_plan()
@@ -51,7 +51,6 @@ def test_manifest_serializes_frozen_plan_and_parameter_hashes() -> None:
     assert manifest["catalogVersion"] == "1"
     assert manifest["executionPlan"]["documentOrder"][-1] == "asset_persist"
     parse = next(node for node in manifest["nodes"] if node["type"] == "segment_compile")
-    assert parse["params"]["maxTokens"] == 2048
     assert parse["paramsHash"] == value_hash(parse["params"])
     assert "domain" not in canonical_json(manifest).lower()
 

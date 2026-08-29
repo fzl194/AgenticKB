@@ -41,7 +41,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Monitor, Management, Key,
-  Cpu, Setting, Collection, Connection, DataLine, Files,
+  Cpu, Setting, Connection, Files,
 } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useBrandStore, resolveIcon } from '@/stores/brand'
@@ -57,15 +57,17 @@ const logoSrc = computed(() => (brand.icon.trim() ? resolveIcon(brand.icon) : ''
 
 // 导航项：requiresAdmin 标记管理类项，member 不渲染。
 // 批次6：独立"检索"菜单下线——检索入口收进知识库详情的"检索" tab（全走检索范式）。
+// 批次8 M0（24 号 §5.10-§5.16）：实体图谱/本体版本/本体图谱三菜单注释下线
+// （研究线代码保留，路由与视图不动；未来启用需重新闭环设计）。
 const ALL_NAV = [
   { path: '/', label: '概览', icon: Monitor, requiresAdmin: false },
   { path: '/kb', label: '知识库', icon: Files, requiresAdmin: false },
   { path: '/mcp', label: 'MCP 接入', icon: Key, requiresAdmin: false },
   { path: '/mining/workflows', label: '挖掘范式', icon: Management, requiresAdmin: true },
   { path: '/paradigm', label: '检索范式', icon: Connection, requiresAdmin: true },
-  { path: '/entities', label: '实体图谱', icon: Connection, requiresAdmin: true },
-  { path: '/ontology', label: '本体版本', icon: Collection, requiresAdmin: true },
-  { path: '/ontology/graph', label: '本体图谱', icon: DataLine, requiresAdmin: true },
+  // { path: '/entities', label: '实体图谱', icon: Connection, requiresAdmin: true },
+  // { path: '/ontology', label: '本体版本', icon: Collection, requiresAdmin: true },
+  // { path: '/ontology/graph', label: '本体图谱', icon: DataLine, requiresAdmin: true },
   { path: '/llm', label: 'LLM 服务', icon: Cpu, requiresAdmin: true },
   { path: '/settings', label: '系统设置', icon: Setting, requiresAdmin: true },
 ]
@@ -76,9 +78,6 @@ const navItems = computed(() =>
 
 function isActive(path: string): boolean {
   if (path === '/') return route.path === '/'
-  if (path === '/ontology') {
-    return route.path === '/ontology'
-  }
   return route.path === path || route.path.startsWith(path + '/')
 }
 </script>

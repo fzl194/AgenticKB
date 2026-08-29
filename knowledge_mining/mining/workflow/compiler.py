@@ -22,23 +22,9 @@ FIXED_TYPES_V2 = {
 def _fixed_types_for(schema_version: str) -> set[str]:
     del schema_version
     return FIXED_TYPES_V2
-DEPENDENCIES = {
-    "embedding": {"retrieval_unit_build"},
-    "entity_resolve": {"entity_extract"},
-    "entity_relation_extract": {"entity_extract"},
-    "ontology_induction": {"entity_review_gate"},
-    "ontology_review_gate": {"ontology_induction"},
-    "graph_write": {"entity_review_gate"},
-}
-ONTOLOGY_GUARDED_TYPES = {
-    "entity_extract",
-    "entity_resolve",
-    "entity_relation_extract",
-    "entity_review_gate",
-    "ontology_induction",
-    "ontology_review_gate",
-    "graph_write",
-}
+# 批次8 M0：研究算子依赖与 guard 全部移除（24 号 §5.12-§5.16）。
+# embedding 的上游依赖随 M2 retrieval_unit_project 落地时重建。
+DEPENDENCIES: dict[str, set[str]] = {}
 
 
 @dataclass(frozen=True)
@@ -229,11 +215,7 @@ class WorkflowCompiler:
                 ),
                 provides=definitions[node_id].provides,
                 error_policy=definitions[node_id].error_policy.value,
-                guard=(
-                    "ontology_applicable"
-                    if enabled[node_id].operator_type in ONTOLOGY_GUARDED_TYPES
-                    else None
-                ),
+                guard=None,
             )
             for node_id in topological_order
         )
@@ -253,13 +235,6 @@ class WorkflowCompiler:
             if definitions[node_id].zone is ExecutionZone.GLOBAL
         )
         required_completion = {"assets_persisted", "finalized"}
-        enabled_types = {node.operator_type for node in enabled.values()}
-        if "entity_review_gate" in enabled_types:
-            required_completion.add("entity_review_approved")
-        if "ontology_review_gate" in enabled_types:
-            required_completion.add("ontology_review_approved")
-        if "graph_write" in enabled_types:
-            required_completion.add("graph_written")
         return CompileResult(
             plan=ExecutionPlan(
                 graph=normalized,
@@ -297,31 +272,8 @@ class WorkflowCompiler:
                         node_id=nodes_by_type[operator_type].node_id,
                     )
                 )
-        enabled_types = {
-            node.operator_type for node in graph.nodes if not node.disabled
-        }
-        required = set(required_protected_types(enabled_types))
-        for node in graph.nodes:
-            if node.operator_type in required and node.disabled:
-                errors.append(
-                    CompileError(
-                        "disabled_protected_operator",
-                        f"Protected operator '{node.operator_type}' cannot be disabled",
-                        node_id=node.node_id,
-                    )
-                )
-            if (
-                node.operator_type
-                in {"entity_review_gate", "ontology_review_gate", "graph_write"}
-                and node.operator_type not in required
-            ):
-                errors.append(
-                    CompileError(
-                        "unexpected_protected_operator",
-                        f"Protected operator '{node.operator_type}' has no matching branch",
-                        node_id=node.node_id,
-                    )
-                )
+        # 批次8 M0：protected 算子自动注入与校验路径整体移除；
+        # 研究算子类型不再出现在正式图中，出现即按未知算子失败。
         return errors
 
     def _validate_edges(

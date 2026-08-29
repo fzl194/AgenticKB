@@ -43,35 +43,46 @@ def test_catalog_defines_document_parse_and_segment_compile() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_v2_templates_compile_with_split_parse_operators() -> None:
-    from knowledge_mining.mining.workflow.templates import (
-        builtin_templates_v2,
+def _node(operator_type: str) -> NodeDef:
+    return NodeDef(node_id=operator_type, operator_type=operator_type, params={})
+
+
+def _formal_chain_graph() -> WorkflowGraph:
+    """批次8 M0 后的最小正式固定链（模板已清空，合成图验证编译骨架）。"""
+    from knowledge_mining.mining.workflow.graph import OutputDef
+
+    types = (
+        "input_ingest",
+        "document_parse",
+        "segment_compile",
+        "asset_persist",
+        "mining_finalize",
+    )
+    edges = [
+        EdgeDef("input_ingest", "rawFiles", "document_parse", "rawFiles"),
+        EdgeDef("document_parse", "documents", "segment_compile", "documents"),
+        EdgeDef("segment_compile", "documents", "asset_persist", "documents"),
+        EdgeDef("asset_persist", "finalizeInput", "mining_finalize", "finalizeInput"),
+    ]
+    return WorkflowGraph(
+        schema_version="2.0",
+        nodes=tuple(_node(t) for t in types),
+        edges=tuple(edges),
+        output=OutputDef("mining_finalize", "result"),
     )
 
-    templates = builtin_templates_v2()
-    assert set(templates) == set(
-        __import__(
-            "knowledge_mining.mining.workflow.templates", fromlist=["x"]
-        ).builtin_templates()
-    )
-    for name, graph in templates.items():
-        result = _compile(graph)
-        assert result.valid is True, (
-            f"{name}: {[e.kind for e in result.errors]}"
-        )
-        order = result.require_plan().document_order
-        assert order[0] == "document_parse", (name, order)
-        assert order[1] == "segment_compile", (name, order)
-        assert "parse_segment" not in order
+
+def test_formal_chain_compiles_with_split_parse_operators() -> None:
+    result = _compile(_formal_chain_graph())
+    assert result.valid is True, [e.kind for e in result.errors]
+    order = result.require_plan().document_order
+    assert order[0] == "document_parse", order
+    assert order[1] == "segment_compile", order
+    assert "parse_segment" not in order
 
 
-def _v2_graph_without_segment_compile() -> WorkflowGraph:
-    """v2 full 骨架删掉 segment_compile（保留其余）——应报固定算子缺失."""
-    from knowledge_mining.mining.workflow.templates import (
-        builtin_templates_v2,
-    )
-
-    graph = builtin_templates_v2()["full"]
+def test_missing_segment_compile_is_fixed_error() -> None:
+    graph = _formal_chain_graph()
     kept_nodes = tuple(
         n for n in graph.nodes if n.operator_type != "segment_compile"
     )
@@ -80,41 +91,29 @@ def _v2_graph_without_segment_compile() -> WorkflowGraph:
         e for e in graph.edges
         if e.from_node in kept_ids and e.to_node in kept_ids
     )
-    return WorkflowGraph(
+    broken = WorkflowGraph(
         schema_version=graph.schema_version, nodes=kept_nodes,
         edges=kept_edges, output=graph.output,
     )
-
-
-def test_v2_missing_segment_compile_is_fixed_error() -> None:
-    result = _compile(_v2_graph_without_segment_compile())
+    result = _compile(broken)
     assert result.valid is False
     codes = [e.kind for e in result.errors]
     assert "missing_fixed_operator" in codes
     assert any("segment_compile" in e.message for e in result.errors)
 
 
-def test_v2_does_not_require_parse_segment() -> None:
-    """v2 骨架不再要求旧算子（替换式演进，§10.2）."""
-    from knowledge_mining.mining.workflow.templates import (
-        builtin_templates_v2,
-    )
-
-    graph = builtin_templates_v2()["full"]
-    result = _compile(graph)
+def test_formal_chain_does_not_require_parse_segment() -> None:
+    """正式骨架不要求旧 parse_segment 算子（批次8 收口后目录里也没有它）。"""
+    result = _compile(_formal_chain_graph())
     assert result.valid is True
     assert not any(
         "parse_segment" in e.message for e in result.errors
     )
 
 
-def test_v2_order_document_parse_before_segment_compile() -> None:
-    """A11：document_parse → segment_compile 完整固定骨架（顺序校验）."""
-    from knowledge_mining.mining.workflow.templates import (
-        builtin_templates_v2,
-    )
-
-    graph = builtin_templates_v2()["full"]
+def test_order_document_parse_before_segment_compile() -> None:
+    """document_parse → segment_compile 固定骨架顺序校验（交换必须失败）."""
+    graph = _formal_chain_graph()
     swapped = []
     for node in graph.nodes:
         if node.operator_type == "document_parse":

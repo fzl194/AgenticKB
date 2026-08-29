@@ -24,7 +24,7 @@ from knowledge_mining.mining.workflow.runtime import (
     InvalidWorkflowManifest,
     MiningWorkflowRuntime,
 )
-from knowledge_mining.mining.workflow.templates import builtin_templates_v2
+from knowledge_mining.tests.formal_chain_helper import formal_chain_workflow_graph
 
 
 class RuntimeRepository:
@@ -85,7 +85,7 @@ class RuntimeRepository:
 
 
 def minimal_manifest(*, max_tokens=800):
-    graph = builtin_templates_v2()["minimal"]
+    graph = formal_chain_workflow_graph()
     graph = replace(
         graph,
         nodes=tuple(

@@ -66,16 +66,15 @@ def resolve_effective_parameters(
 def builtin_handler_registry() -> HandlerRegistry:
     from .handlers.document import DOCUMENT_HANDLERS
     from .handlers.finalize import mining_finalize_handler
-    from .handlers.global_nodes import GLOBAL_HANDLERS
     from .handlers.input import input_ingest_handler
     from .handlers.persist import asset_persist_handler
 
+    # 批次8 M0：研究算子（entity/ontology/graph_write）的 handler
+    # 隔离在 handlers/research.py，不在此注册。
     registry = HandlerRegistry()
     registry.register("input_ingest", "1", input_ingest_handler)
     for operator_type, handler in DOCUMENT_HANDLERS.items():
         registry.register(operator_type, "1", handler)
     registry.register("asset_persist", "1", asset_persist_handler)
-    for operator_type, handler in GLOBAL_HANDLERS.items():
-        registry.register(operator_type, "1", handler)
     registry.register("mining_finalize", "1", mining_finalize_handler)
     return registry

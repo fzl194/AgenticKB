@@ -94,9 +94,6 @@ def graph_write_handler(
     return _success(state, "graph_written")
 
 
-GLOBAL_HANDLERS = {
-    "entity_review_gate": entity_review_gate_handler,
-    "ontology_induction": ontology_induction_handler,
-    "ontology_review_gate": ontology_review_gate_handler,
-    "graph_write": graph_write_handler,
-}
+# 批次8 M0：正式 map GLOBAL_HANDLERS 已移除。四个 handler 函数保留为
+# 研究代码，由 handlers/research.py 集中导出（RESEARCH_GLOBAL_HANDLERS），
+# 不接入 builtin_handler_registry。

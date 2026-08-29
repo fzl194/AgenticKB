@@ -40,6 +40,7 @@ public class EvidenceRefCodec {
 
     private final byte[] secret;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public EvidenceRefCodec(ServingProperties properties) {
         this(bootSecret(properties));
     }

@@ -171,53 +171,17 @@ def embedding_handler(state, params, runtime) -> OperatorResult:
 # ---------------------------------------------------------------------------
 
 
-class ParsedViaNewChain:
-    """document_parse 的产出上下文：新链解析结果指针（快照/IR）.
-
-    冻结 dataclass 风格的轻量容器（与 DocumentContext 同 immutable 约定）。
-    """
-
-    __slots__ = (
-        "run_id", "snapshot_id", "parse_ir_storage_object_id",
-        "parser_fingerprint", "quality_status", "raw_file", "profile",
-        "action", "existing_doc", "document_id",
-    )
-
-    def __init__(
-        self,
-        *,
-        run_id: str,
-        snapshot_id: str | None,
-        parse_ir_storage_object_id: str | None,
-        parser_fingerprint: str | None,
-        quality_status: str | None,
-        raw_file: Any,
-        profile: Any,
-        action: str | None,
-        existing_doc: dict[str, Any] | None,
-        document_id: str | None,
-    ) -> None:
-        self.run_id = run_id
-        self.snapshot_id = snapshot_id
-        self.parse_ir_storage_object_id = parse_ir_storage_object_id
-        self.parser_fingerprint = parser_fingerprint
-        self.quality_status = quality_status
-        self.raw_file = raw_file
-        self.profile = profile
-        self.action = action
-        self.existing_doc = existing_doc
-        self.document_id = document_id
-
-
 def document_parse_handler(
     state: DocumentState, params: Mapping[str, Any], runtime: Any
 ) -> OperatorResult:
-    """冻结输入 → 新链解析（质量门控 + 快照转正）→ 解析指针上下文.
+    """冻结输入 → 新链解析（质量门控 + 快照转正）→ 版本化 bundle.
 
+    批次8 M1（24 号 §5.2）：直接产出 ``MiningDocumentBundle``（快照/IR
+    指针 + 文档生命周期事实），不做 legacy DocumentContext 投影。
     服务组件（``runtime.services.document_parse_service``，同步门面）由
-    组合根注入；未接线时显式 FAILED——v2 骨架下不静默回落旧解析，
-    保证「任何知识线都有解析事实与快照」的一致性（SRS §10.2）。
+    组合根注入；未接线时显式 FAILED——不静默回落旧解析。
     """
+    from ..bundle import MiningDocumentBundle
     from ..operators.options import DocumentParseOptions
 
     options = DocumentParseOptions.model_validate(dict(params))
@@ -249,12 +213,11 @@ def document_parse_handler(
         )
     if outcome is None:
         return OperatorResult(state, frozenset(), OperatorStatus.SKIPPED)
-    parsed = ParsedViaNewChain(
-        run_id=getattr(outcome, "run_id", None) or outcome.id,
-        snapshot_id=getattr(outcome, "snapshot_id", None),
-        parse_ir_storage_object_id=getattr(
-            outcome, "parse_ir_storage_object_id", None
-        ),
+    bundle = MiningDocumentBundle(
+        document_ref=state.doc_key,
+        run_document_id=state.run_document_id,
+        snapshot_ref=getattr(outcome, "snapshot_id", None),
+        parse_ir_ref=getattr(outcome, "parse_ir_storage_object_id", None),
         parser_fingerprint=getattr(outcome, "parser_fingerprint", None),
         quality_status=getattr(outcome, "quality_status", None),
         raw_file=raw_file,
@@ -263,29 +226,30 @@ def document_parse_handler(
         existing_doc=getattr(ctx, "existing_doc", None),
         document_id=getattr(ctx, "document_id", None),
     )
-    return _success(state, parsed, "parsed_documents")
+    return _success(state, bundle, "parsed_documents")
 
 
 def segment_compile_handler(
     state: DocumentState, params: Mapping[str, Any], runtime: Any
 ) -> OperatorResult:
-    """快照 IR + 参数档位 → 切片 → 兼容投影进 DocumentContext.segments.
+    """快照 IR + 参数档位 → 切片 → 续写 bundle（编译计数 + 文档事实）.
 
-    下游（enrich/检索单元/向量化）消费的 ``ctx.segments`` 形状不变，
-    零改动复用；元素映射与表格行细节保留在 source_offsets_json /
-    structure_json（§4.12/§2.3 兼容不变量）。
+    批次8 M1（24 号 §5.3）：切片本体由 SegmentStore 持有（按
+    snapshot_ref 读），bundle 只携带计数与确定性统计——**兼容投影
+    （to_raw_segment_data → DocumentContext.segments）已删除**。
     """
+    from ..bundle import MiningDocumentBundle, compute_document_facts
     from ..operators.options import SegmentCompileOptions
 
     options = SegmentCompileOptions.model_validate(dict(params))
-    parsed = state.context
-    if not isinstance(parsed, ParsedViaNewChain):
+    bundle = state.context
+    if not isinstance(bundle, MiningDocumentBundle):
         return OperatorResult(
             state, frozenset(), OperatorStatus.FAILED,
             error_code="segment_compile_bad_input",
             error_message=(
-                "segment_compile requires upstream document_parse output "
-                f"(got {type(parsed).__name__})"
+                "segment_compile requires upstream document_parse bundle "
+                f"(got {type(bundle).__name__})"
             ),
         )
     service = getattr(runtime.services, "segment_compile_service", None)
@@ -299,8 +263,8 @@ def segment_compile_handler(
         )
     try:
         compiled = service.compile_for_snapshot(
-            snapshot_id=parsed.snapshot_id,
-            parse_ir_storage_object_id=parsed.parse_ir_storage_object_id,
+            snapshot_id=bundle.snapshot_ref,
+            parse_ir_storage_object_id=bundle.parse_ir_ref,
             params=options.model_dump(by_alias=True),
         )
     except Exception as exc:  # noqa: BLE001
@@ -312,34 +276,13 @@ def segment_compile_handler(
     if not segments:
         return OperatorResult(state, frozenset(), OperatorStatus.SKIPPED)
 
-    from knowledge_mining.mining.segment_compiler.projection import (
-        to_raw_segment_data,
+    updated = bundle.with_updates(
+        compiled_segment_count=len(segments),
+        compiler_fingerprint=getattr(compiled, "compiler_fingerprint", None),
+        document_facts=compute_document_facts(segments),
     )
-    from knowledge_mining.mining.pipeline import DocumentContext  # noqa: F401
+    return _success(state, updated, "parsed_segments")
 
-    document_key = getattr(
-        getattr(parsed.raw_file, "document_key", None), "document_key", None
-    ) or getattr(parsed.raw_file, "document_key", None) or state.doc_key
-    projected = tuple(
-        to_raw_segment_data(seg, document_key=document_key)
-        for seg in segments
-    )
-    seg_ids = {
-        seg.segment_index: f"{document_key}#{seg.segment_index}"
-        for seg in segments
-    }
-    ctx = DocumentContext(
-        raw_file=parsed.raw_file,
-        profile=parsed.profile,
-        segments=projected,
-        seg_ids=seg_ids,
-        run_document_id=state.run_document_id,
-        action=parsed.action,
-        existing_doc=parsed.existing_doc,
-        document_id=parsed.document_id,
-        snapshot_id=parsed.snapshot_id,
-    )
-    return _success(state, ctx, "parsed_segments")
 
 # 批次8 M0：退役算子（enrich/discourse_line/contextual_retrieval_enrich/
 # retrieval_unit_build）与实体研究算子的 handler 已移除/隔离（research.py）。

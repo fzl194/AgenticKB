@@ -1,40 +1,28 @@
-"""M6.2 新算子 handler 接线（RED 先行，SRS §10.2/§4.12）.
+"""document_parse / segment_compile handler 接线（批次8 M1 更新版）.
 
 - document_parse handler：经注入的服务组件执行新链解析（冻结输入→
-  质量门控→快照转正），产出 ``ParsedViaNewChain`` 上下文（快照/IR 指针）。
-- segment_compile handler：从快照 IR 按参数档位编译切片，兼容投影为
-  ``DocumentContext.segments``（RawSegmentData）——**下游算子零改动**。
-- 组件未接线 → 显式 FAILED（v2 骨架下不静默混跑旧解析，保证快照一致性）。
+  质量门控→快照转正），产出**版本化 MiningDocumentBundle**（快照/IR 指针
+  + 文档生命周期事实）；
+- segment_compile handler：从快照 IR 按参数档位编译切片，续写 bundle
+  （compiled 计数 + document_facts）——legacy DocumentContext 兼容投影
+  已在 M1 删除（24 号 §2.1/§5.3）；
+- 组件未接线 → 显式 FAILED（不静默混跑旧解析，保证快照一致性）；
 - 参数映射：SegmentCompileOptions → SegmentPolicy（面板档位生效）。
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
 
+from knowledge_mining.mining.contracts.models import DocumentProfile
 from knowledge_mining.mining.contracts.segment_compiler import (
     CompiledSegment,
     SegmentElementLink,
 )
-from knowledge_mining.mining.contracts.models import DocumentProfile
 from knowledge_mining.mining.pipeline import DocumentContext
-from knowledge_mining.mining.workflow.core import DocumentState
 
 
 def _runtime(**services):
     return SimpleNamespace(services=SimpleNamespace(**services))
-
-
-def _parsed(snapshot_id="snap_1", ir_id="so_ir", raw_file=None):
-    from knowledge_mining.mining.workflow.handlers.document import (
-        ParsedViaNewChain,
-    )
-
-    return ParsedViaNewChain(
-        run_id="parse_1", snapshot_id=snapshot_id,
-        parse_ir_storage_object_id=ir_id, parser_fingerprint="fp",
-        quality_status="PASS", raw_file=raw_file, profile=None, action=None,
-        existing_doc=None, document_id=None,
-    )
 
 
 def _state(context):
@@ -86,8 +74,7 @@ class _FakeCompileService:
         })
         return SimpleNamespace(
             snapshot_id=snapshot_id, segment_count=len(self._segments),
-            compiler_fingerprint="segc-test",
-            segments=self._segments,
+            compiler_fingerprint="segc-test", segments=self._segments,
         )
 
 
@@ -98,6 +85,7 @@ def _segments() -> tuple[CompiledSegment, ...]:
             heading_chain=((1, "章一"),),
             element_ids=("e0",),
             links=(SegmentElementLink(element_id="e0"),),
+            token_count=100,
         ),
         CompiledSegment(
             segment_index=1, block_type="table_row", raw_text="A-101\t风扇停转",
@@ -105,8 +93,28 @@ def _segments() -> tuple[CompiledSegment, ...]:
             element_ids=("t0",),
             links=(SegmentElementLink(element_id="t0"),),
             metadata={"table_header": ["告警码", "原因"]},
+            token_count=20,
         ),
     )
+
+
+def _parsed_state(**context_extra):
+    from knowledge_mining.mining.workflow.handlers.document import (
+        document_parse_handler,
+    )
+
+    raw = SimpleNamespace(file_type="markdown", document_key="doc.md")
+    source = DocumentContext(
+        raw_file=raw,
+        profile=DocumentProfile(document_key="doc.md"),
+        run_document_id="rd-1",
+        **context_extra,
+    )
+    result = document_parse_handler(
+        _state(source), {}, _runtime(document_parse_service=_FakeParseService()),
+    )
+    assert result.status.value == "success"
+    return _state(result.outputs.context), result
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +122,8 @@ def _segments() -> tuple[CompiledSegment, ...]:
 # ---------------------------------------------------------------------------
 
 
-def test_document_parse_invokes_service_and_yields_new_chain_context():
+def test_document_parse_invokes_service_and_yields_bundle():
+    from knowledge_mining.mining.workflow.bundle import MiningDocumentBundle
     from knowledge_mining.mining.workflow.handlers.document import (
         document_parse_handler,
     )
@@ -129,10 +138,11 @@ def test_document_parse_invokes_service_and_yields_new_chain_context():
     assert result.status.value == "success"
     assert "parsed_documents" in result.capabilities
     assert svc.calls and svc.calls[0]["params"]["qualityProfile"] == "strict"
-    parsed = result.outputs.context
-    assert parsed.run_id == "parse_1"
-    assert parsed.snapshot_id == "snap_1"
-    assert parsed.parse_ir_storage_object_id == "so_ir"
+    bundle = result.outputs.context
+    assert isinstance(bundle, MiningDocumentBundle)
+    assert bundle.snapshot_ref == "snap_1"
+    assert bundle.parse_ir_ref == "so_ir"
+    assert bundle.parser_fingerprint == "native_pdf@2.0.0"
 
 
 def test_document_parse_without_service_fails_explicitly():
@@ -164,72 +174,57 @@ def test_document_parse_missing_raw_file_skips():
 # ---------------------------------------------------------------------------
 
 
-def test_segment_compile_projects_compat_segments_into_context():
+def test_segment_compile_writes_counts_and_facts_into_bundle():
+    from knowledge_mining.mining.workflow.bundle import MiningDocumentBundle
     from knowledge_mining.mining.workflow.handlers.document import (
         segment_compile_handler,
     )
 
     compile_svc = _FakeCompileService(_segments())
-    runtime = _runtime(segment_compile_service=compile_svc)
-    raw = SimpleNamespace(file_type="markdown", document_key="doc.md")
-    parsed = _parsed(raw_file=raw)
-    state = _state(parsed)
+    state, _ = _parsed_state()
 
     result = segment_compile_handler(
-        state, {"tableView": "rows", "maxTokens": 256}, runtime,
+        state, {"tableView": "rows", "maxTokens": 256},
+        _runtime(segment_compile_service=compile_svc),
     )
 
     assert result.status.value == "success"
     assert "parsed_segments" in result.capabilities
     # 参数档位透传给服务（面板 → SegmentPolicy 映射在服务侧）
     assert compile_svc.calls[0]["params"]["tableView"] == "rows"
-    ctx = result.outputs.context
-    # 兼容投影：下游消费的 ctx.segments 是 RawSegmentData，字段语义对齐
-    assert len(ctx.segments) == 2
-    first = ctx.segments[0]
-    assert first.section_title == "章一"
-    assert first.block_type in ("paragraph", "heading")  # 白名单内
-    row = ctx.segments[1]
-    assert row.block_type == "table"  # table_row 收敛到 legacy 白名单
-    assert row.structure_json["table_header"] == ["告警码", "原因"]
-    assert row.source_offsets_json["element_links"]
-    # 原始 raw_file 透传（后续环节可用）
-    assert ctx.raw_file is parsed.raw_file
+    bundle = result.outputs.context
+    assert isinstance(bundle, MiningDocumentBundle)
+    assert bundle.compiled_segment_count == 2
+    assert bundle.compiler_fingerprint == "segc-test"
+    assert bundle.document_facts["segment_count"] == 2
+    assert bundle.document_facts["token_total"] == 120
+    assert bundle.document_facts["block_type_counts"]["table_row"] == 1
+    # 兼容投影已删：bundle 上没有 legacy segments
+    assert not hasattr(bundle, "segments")
 
 
-def test_v2_parse_compile_preserves_document_lifecycle_and_snapshot_context():
-    """v2 parse/compile must not discard preflight identity for asset_persist."""
+def test_parse_compile_preserves_document_lifecycle_in_bundle():
+    """parse→compile 必须在 bundle 中保留 asset_persist 需要的生命周期事实."""
     from knowledge_mining.mining.workflow.handlers.document import (
-        document_parse_handler,
         segment_compile_handler,
     )
 
-    raw = SimpleNamespace(file_type="markdown", document_key="doc.md")
-    source = DocumentContext(
-        raw_file=raw,
-        profile=DocumentProfile(document_key="doc.md", title="source title"),
+    state, _ = _parsed_state(
         action="UPDATE",
         existing_doc={"id": "document-existing"},
         document_id="document-existing",
-        run_document_id="rd-1",
-    )
-    parsed = document_parse_handler(
-        _state(source), {}, _runtime(document_parse_service=_FakeParseService()),
     )
 
     result = segment_compile_handler(
-        DocumentState("rd-1", "doc.md", parsed.outputs.context),
-        {},
-        _runtime(segment_compile_service=_FakeCompileService(_segments())),
+        state, {}, _runtime(segment_compile_service=_FakeCompileService(_segments())),
     )
 
     assert result.status.value == "success"
-    context = result.outputs.context
-    assert context.profile is source.profile
-    assert context.action == "UPDATE"
-    assert context.existing_doc == {"id": "document-existing"}
-    assert context.document_id == "document-existing"
-    assert context.snapshot_id == "snap_1"
+    bundle = result.outputs.context
+    assert bundle.action == "UPDATE"
+    assert bundle.existing_doc == {"id": "document-existing"}
+    assert bundle.document_id == "document-existing"
+    assert bundle.snapshot_ref == "snap_1"
 
 
 def test_segment_compile_without_service_fails_explicitly():
@@ -238,7 +233,7 @@ def test_segment_compile_without_service_fails_explicitly():
     )
 
     runtime = _runtime()
-    state = _state(_parsed())
+    state, _ = _parsed_state()
     result = segment_compile_handler(state, {}, runtime)
     assert result.status.value == "failed"
     assert result.error_code == "segment_compile_unavailable"
@@ -251,7 +246,7 @@ def test_segment_compile_empty_segments_skips():
 
     compile_svc = _FakeCompileService(())
     runtime = _runtime(segment_compile_service=compile_svc)
-    state = _state(_parsed())
+    state, _ = _parsed_state()
     result = segment_compile_handler(state, {}, runtime)
     assert result.status.value == "skipped"
 

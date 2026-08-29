@@ -60,6 +60,19 @@ def asset_persist_handler(
                 OperatorStatus.SUCCESS,
             )
 
+        # 批次8 M1：bundle 到达 persist 而 M5 三面持久化未落地前，显式
+        # clean-fail——不把 bundle 喂给 legacy persister 造成 AttributeError。
+        from ..bundle import MiningDocumentBundle
+
+        if isinstance(state.context, MiningDocumentBundle):
+            return OperatorResult(
+                state, frozenset(), OperatorStatus.FAILED,
+                error_code="asset_persist_bundle_unsupported",
+                error_message=(
+                    "asset_persist for MiningDocumentBundle lands in M5 "
+                    "(three-projection persistence); legacy persister removed"
+                ),
+            )
         persister = getattr(
             runtime.services, "persist_document_assets", persist_document_assets
         )

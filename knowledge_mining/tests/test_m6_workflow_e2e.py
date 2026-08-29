@@ -1,10 +1,11 @@
-"""M6.3 工作流级端到端：真组件门面 × handler 级联 × 兼容投影.
+"""M6.3 工作流级端到端：真组件门面 × handler 级联 × 版本化 bundle.
 
-模拟 v2 骨架的文档处理段（input 之后）：document_parse → segment_compile
-两 handler 经组合根门面驱动真服务（解析→门控→快照→切片→落库），断言：
+批次8 M1：document_parse → segment_compile 两 handler 经组合根门面驱动
+真服务（解析→门控→快照→切片→落库），断言：
 - 快照与切片真实落库（memory 组件）；
-- 产出的 DocumentContext.segments 是下游零改动可消费的 RawSegmentData
-  （白名单类型 + structure_json 细节 + source_offsets_json 映射）。
+- 产出 MiningDocumentBundle（计数 + document_facts），legacy 投影已删；
+- 切片本体从 SegmentStore 按 snapshot_ref 回读，结构细节（表头/元素
+  映射/标题链）完整保留。
 """
 from __future__ import annotations
 
@@ -37,6 +38,9 @@ def _run(coro):
 
 
 def _harness(tmp_path):
+    from knowledge_mining.mining.segment_compiler.repositories_memory import (
+        MemorySegmentStore,
+    )
     from knowledge_mining.mining.workflow.new_chain_services import (
         build_new_chain_services,
     )
@@ -44,13 +48,15 @@ def _harness(tmp_path):
     store = FakeObjectStore(str(tmp_path / "objects"))
     objects = MemoryStorageObjectRepository()
     documents = MemoryDocumentCurrentContentRepository()
+    segment_store = MemorySegmentStore()
     services = build_new_chain_services(
         bucket_prefix="m6e2e-",
         object_store=store,
         storage_objects=objects,
         documents=documents,
+        segment_store=segment_store,
     )
-    return store, objects, documents, services
+    return store, objects, documents, services, segment_store
 
 
 async def _seed(store, objects, documents, doc_id="doc-m6"):
@@ -95,7 +101,7 @@ def test_workflow_chain_parse_then_compile(tmp_path):
             segment_compile_handler,
         )
 
-        store, objects, documents, services = _harness(tmp_path)
+        store, objects, documents, services, segment_store = _harness(tmp_path)
         raw = await _seed(store, objects, documents)
         runtime = SimpleNamespace(
             services=SimpleNamespace(
@@ -116,19 +122,21 @@ def test_workflow_chain_parse_then_compile(tmp_path):
             {"tableView": "both", "mergeAdjacentParagraphs": False}, runtime,
         )
         assert compiled.status.value == "success", compiled.error_message
-        ctx = compiled.outputs.context
-        # 兼容投影断言：下游零改动消费
-        blocks = [s.block_type for s in ctx.segments]
+        bundle = compiled.outputs.context
+        # M1 契约：bundle 只带计数与事实，切片本体从 SegmentStore 回读
+        assert bundle.compiled_segment_count >= 2
+        assert "paragraph" in bundle.document_facts["block_type_counts"]
+        assert not hasattr(bundle, "segments")
+        segments = await segment_store.list_for_snapshot(bundle.snapshot_ref)
+        blocks = [s.block_type for s in segments]
         assert "paragraph" in blocks and "table" in blocks
-        row = next(
-            s for s in ctx.segments if s.structure_json.get("table_header")
-        )
-        assert row.structure_json["table_header"] == ["告警码", "原因"]
-        assert row.source_offsets_json["element_links"]
-        assert [n["title"] for n in row.section_path] == ["运维手册"]
-        return ctx, services
+        row = next(s for s in segments if s.metadata.get("table_header"))
+        assert row.metadata["table_header"] == ["告警码", "原因"]
+        assert row.links  # 元素映射（source_offsets 的结构真相）
+        assert [title for _lvl, title in row.heading_chain] == ["运维手册"]
+        return bundle, services
 
-    ctx, services = _run(scene())
+    bundle, services = _run(scene())
 
     # 落库断言（同步视角复跑查询）
     async def verify():

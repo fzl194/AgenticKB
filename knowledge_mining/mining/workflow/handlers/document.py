@@ -284,11 +284,66 @@ def segment_compile_handler(
     return _success(state, updated, "parsed_segments")
 
 
+def retrieval_unit_project_handler(
+    state: DocumentState, params: Mapping[str, Any], runtime: Any
+) -> OperatorResult:
+    """结构事实 → 类型化搜索表示 → bundle（计数）+ 暂存写入.
+
+    批次8 M2（24 号 §5.4）：纯投影（无 LLM、无资产入库）；表示本体写
+    RepresentationStore 暂存（asset_persist/M5 正式入库），bundle 只带
+    representations_count 与 capability 事实。
+    """
+    from ..bundle import MiningDocumentBundle
+    from ..operators.options import RetrieProjectOptions
+
+    options = RetrieProjectOptions.model_validate(dict(params))
+    bundle = state.context
+    if not isinstance(bundle, MiningDocumentBundle):
+        return OperatorResult(
+            state, frozenset(), OperatorStatus.FAILED,
+            error_code="retrieval_unit_project_bad_input",
+            error_message=(
+                "retrieval_unit_project requires upstream document_parse bundle "
+                f"(got {type(bundle).__name__})"
+            ),
+        )
+    service = getattr(runtime.services, "retrieval_project_service", None)
+    if service is None:
+        return OperatorResult(
+            state, frozenset(), OperatorStatus.FAILED,
+            error_code="retrieval_unit_project_unavailable",
+            error_message=(
+                "retrieval_project service is not configured on this runtime"
+            ),
+        )
+    try:
+        projected = service.project_for_snapshot(
+            snapshot_id=bundle.snapshot_ref,
+            document_ref=bundle.document_ref,
+            params=options.model_dump(by_alias=True),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _on_error(
+            state, code="retrieval_unit_project_failed", exc=exc,
+            mode=OperatorStatus.FAILED,
+        )
+    representations = getattr(projected, "representations", ()) or ()
+    if not representations:
+        return OperatorResult(state, frozenset(), OperatorStatus.SKIPPED)
+
+    updated = bundle.with_updates(
+        representations_count=len(representations),
+        capability_facts=bundle.capability_facts | frozenset({"retrieval_units"}),
+    )
+    return _success(state, updated, "retrieval_units")
+
+
 # 批次8 M0：退役算子（enrich/discourse_line/contextual_retrieval_enrich/
 # retrieval_unit_build）与实体研究算子的 handler 已移除/隔离（research.py）。
 DOCUMENT_HANDLERS = {
     "parse_segment": parse_segment_handler,
     "document_parse": document_parse_handler,
     "segment_compile": segment_compile_handler,
+    "retrieval_unit_project": retrieval_unit_project_handler,
     "embedding": embedding_handler,
 }

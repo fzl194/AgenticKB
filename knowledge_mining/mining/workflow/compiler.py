@@ -22,9 +22,11 @@ FIXED_TYPES_V2 = {
 def _fixed_types_for(schema_version: str) -> set[str]:
     del schema_version
     return FIXED_TYPES_V2
-# 批次8 M0：研究算子依赖与 guard 全部移除（24 号 §5.12-§5.16）。
-# embedding 的上游依赖随 M2 retrieval_unit_project 落地时重建。
-DEPENDENCIES: dict[str, set[str]] = {}
+# 批次8 M2：embedding 依赖恢复（retrieval_unit_project 提供检索表示）。
+# 研究算子依赖保持移除（24 号 §5.12-§5.16）。
+DEPENDENCIES: dict[str, set[str]] = {
+    "embedding": {"retrieval_unit_project"},
+}
 
 
 @dataclass(frozen=True)

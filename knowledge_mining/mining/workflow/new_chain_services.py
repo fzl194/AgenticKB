@@ -293,12 +293,60 @@ class SegmentCompileFacade:
         )
 
 
+class RetrieProjectFacade:
+    """retrieval_unit_project 同步门面：读切片 → 纯投影 → 表示暂存.
+
+    批次8 M2（24 号 §5.4）：projector 纯函数零副作用；本门面只做
+    store 编排（SegmentStore 读 / RepresentationStore 快照级替换写）。
+    """
+
+    def __init__(self, segment_store: Any, representation_store: Any) -> None:
+        self._segments = segment_store
+        self._representations = representation_store
+
+    def project_for_snapshot(
+        self, *, snapshot_id: str | None, document_ref: str, params: dict,
+    ) -> Any:
+        from knowledge_mining.mining.contracts.retrieval_projection import (
+            PROJECTOR_VERSION,
+        )
+        from knowledge_mining.mining.retrieval_projection.projector import (
+            project_representations,
+        )
+
+        if not snapshot_id:
+            from types import SimpleNamespace
+
+            return SimpleNamespace(representations=(), representation_count=0)
+        segments = _run_sync(self._segments.list_for_snapshot(snapshot_id))
+        representations = project_representations(
+            segments,
+            document_ref=document_ref,
+            snapshot_ref=snapshot_id,
+            include_sections=bool(params.get("includeSections", False)),
+        )
+        count = _run_sync(
+            self._representations.replace_for_snapshot(
+                snapshot_id, representations, PROJECTOR_VERSION,
+                document_key=document_ref,
+            )
+        )
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            representations=representations,
+            representation_count=count,
+            projector_fingerprint=PROJECTOR_VERSION,
+        )
+
+
 @dataclass(frozen=True)
 class NewChainServices:
     """注入 ``runtime.services`` 的同步门面包（handler 只认这两个属性）."""
 
     document_parse_service: DocumentParseFacade
     segment_compile_service: SegmentCompileFacade
+    retrieval_project_service: RetrieProjectFacade
 
 
 def build_new_chain_services(
@@ -312,6 +360,7 @@ def build_new_chain_services(
     attempts: Any | None = None,
     snapshots: Any | None = None,
     segment_store: Any | None = None,
+    representation_store: Any | None = None,
     pool: Any | None = None,
     sync_pool: Any | None = None,
 ) -> NewChainServices:
@@ -343,12 +392,18 @@ def build_new_chain_services(
             PgSnapshotRepository,
         )
 
+        # M2：RepresentationStore 暂用 memory（PG 三面资产表 M5 落地）
+        from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+            MemoryRepresentationStore,
+        )
+
         storage_objects = storage_objects or PgStorageObjectRepository(repository_pool)
         documents = documents or PgDocumentCurrentContentRepository(repository_pool)
         parse_runs = parse_runs or PgParseRunRepository(repository_pool)
         attempts = attempts or PgParseAttemptRepository(repository_pool)
         snapshots = snapshots or PgSnapshotRepository(repository_pool)
         segment_store = segment_store or PgSegmentStore(repository_pool)
+        representation_store = representation_store or MemoryRepresentationStore()
     else:
         from knowledge_mining.mining.file_management.repositories_memory import (
             MemoryDocumentCurrentContentRepository,
@@ -364,6 +419,9 @@ def build_new_chain_services(
         from knowledge_mining.mining.snapshot_store.repositories_memory import (
             MemorySnapshotRepository,
         )
+        from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+            MemoryRepresentationStore,
+        )
 
         storage_objects = storage_objects or MemoryStorageObjectRepository()
         documents = documents or MemoryDocumentCurrentContentRepository()
@@ -371,6 +429,7 @@ def build_new_chain_services(
         attempts = attempts or MemoryParseAttemptRepository()
         snapshots = snapshots or MemorySnapshotRepository()
         segment_store = segment_store or MemorySegmentStore()
+        representation_store = representation_store or MemoryRepresentationStore()
 
     if object_store is None:
         from knowledge_mining.mining.infra.object_store.fake import (
@@ -423,12 +482,17 @@ def build_new_chain_services(
         segment_compile_service=SegmentCompileFacade(
             compiler=compiler, segment_store=segment_store,
         ),
+        retrieval_project_service=RetrieProjectFacade(
+            segment_store=segment_store,
+            representation_store=representation_store,
+        ),
     )
 
 
 __all__ = [
     "DocumentParseFacade",
     "NewChainServices",
+    "RetrieProjectFacade",
     "SegmentCompileFacade",
     "build_new_chain_services",
 ]

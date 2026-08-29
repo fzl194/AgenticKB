@@ -177,6 +177,19 @@ class DocumentParseOptions(OperatorOptions):
     )
 
 
+class RetrieProjectOptions(OperatorOptions):
+    """retrieval_unit_project 参数（批次8 M2，24 号 §5.4）.
+
+    只表达投影开关；类型矩阵与 eligibility 默认固定在契约层（versioned
+    default），用户可覆盖项收敛到最小集。
+    """
+
+    include_sections: bool = Field(
+        False, alias="includeSections", title="生成章节表示",
+        description="按真实标题树聚合有界直接内容（不生成 LLM 摘要）。",
+    )
+
+
 class SegmentCompileOptions(OperatorOptions):
     """segment_compile 参数（SRS §10.2：只表达分段策略；M6/R2 档位）.
 
@@ -209,6 +222,7 @@ OPTIONS_BY_OPERATOR: dict[str, type[OperatorOptions]] = {
     "input_ingest": EmptyOptions,
     "document_parse": DocumentParseOptions,
     "segment_compile": SegmentCompileOptions,
+    "retrieval_unit_project": RetrieProjectOptions,
     "embedding": EmbeddingOptions,
     "asset_persist": EmptyOptions,
     "mining_finalize": FinalizeOptions,

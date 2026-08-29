@@ -17,6 +17,7 @@ APPROVED_OPERATOR_TYPES = {
     "input_ingest",
     "document_parse",
     "segment_compile",
+    "retrieval_unit_project",
     "embedding",
     "asset_persist",
     "mining_finalize",

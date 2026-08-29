@@ -16,6 +16,7 @@ FORMAL_OPERATOR_TYPES = {
     "input_ingest",
     "document_parse",
     "segment_compile",
+    "retrieval_unit_project",  # M2 加入
     "embedding",
     "asset_persist",
     "mining_finalize",
@@ -42,6 +43,7 @@ ALLOWED_DOCUMENT_HANDLER_TYPES = {
     "parse_segment",
     "document_parse",
     "segment_compile",
+    "retrieval_unit_project",
     "embedding",
 }
 

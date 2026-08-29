@@ -110,8 +110,32 @@ class EmbeddingFacade:
         if records:
             inputs = [record.strategy_input for record in records]
             embedded = self._generator.embed_batch(inputs) or []
-            for record, vector in zip(records, embedded):
-                vectors[records.index(record)] = list(vector)
+            meta_dimension = int(meta.get("dimension", 0) or 0)
+            for idx, (record, vector) in enumerate(zip(records, embedded)):
+                vectors[idx] = list(vector)
+                # provider 未实现 describe() 时以首个真实向量长度为准（维度>0 才合法）
+                if meta_dimension <= 0 and idx == 0 and vector:
+                    meta = {**meta, "dimension": len(vector)}
+            # 统一回填 dimension（describe 缺失时）
+            effective_dim = int(meta.get("dimension", 0) or 0)
+            if effective_dim > 0:
+                records = [
+                    EmbeddingRecord(
+                        embedding_id=r.embedding_id,
+                        representation_id=r.representation_id,
+                        strategy=r.strategy,
+                        strategy_input=r.strategy_input,
+                        input_hash=r.input_hash,
+                        policy_version=r.policy_version,
+                        provider=r.provider,
+                        model=r.model,
+                        model_version=r.model_version,
+                        dimension=effective_dim,
+                        context_group_hash=r.context_group_hash,
+                        fallback_from=r.fallback_from,
+                    )
+                    for r in records
+                ]
 
         written = run_sync(
             self._embeddings.replace_for_snapshot(

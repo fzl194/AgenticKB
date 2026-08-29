@@ -8,6 +8,10 @@
 
 set -Eeuo pipefail
 
+# Git Bash（MSYS）会把 docker exec 的容器绝对路径改写成宿主机路径，
+# 导致配置校验误判——部署脚本对路径转换自防护。
+export MSYS_NO_PATHCONV=1
+
 IMAGE_ARCHIVE="${IMAGE_ARCHIVE:-}"
 CHECKSUM_FILE=""
 IMAGE_NAME="${IMAGE_NAME:-coremasterkb-app:latest}"

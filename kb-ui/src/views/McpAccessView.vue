@@ -183,6 +183,9 @@ const configJson = computed(() => {
   const generic = {
     mcpServers: {
       knowledge: {
+        // 显式声明传输类型：Claude 等客户端要求远程服务带 type，
+        // 缺省时部分客户端按 stdio 解析而报错
+        type: 'http',
         url,
         headers: { Authorization: `Bearer ${key}` },
       },
@@ -316,7 +319,17 @@ async function copy(text: string) {
     await navigator.clipboard.writeText(text)
     ElMessage.success('已复制')
   } catch {
-    ElMessage.warning('复制失败，请手动选择复制')
+    // http://公网IP 等非安全上下文没有 navigator.clipboard，走 execCommand 兜底
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (ok) ElMessage.success('已复制')
+    else ElMessage.warning('复制失败，请手动选择复制')
   }
 }
 

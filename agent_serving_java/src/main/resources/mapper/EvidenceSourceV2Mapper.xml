@@ -75,10 +75,10 @@
     <!-- 有界邻窗：每锚点 BETWEEN 收窄（radius 已在参数中折算为上下界），一次批量覆盖全部锚点 -->
     <select id="selectWindowSegments" resultMap="segmentTextMap">
         SELECT n.snapshot_id, n.ref, n.parent_ref, n.ordinal, n.block_type,
-               s.raw_text, s.token_count, s.heading_chain_json
+               s.raw_text, s.token_count, s.section_path::text AS heading_chain_json
         FROM asset_structure_nodes n
         JOIN asset_raw_segments s
-          ON s.snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
+          ON s.document_snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
         WHERE n.node_type = 'segment'
           AND (
         <foreach collection="anchors" item="a" separator=" OR ">
@@ -96,11 +96,11 @@
                t.raw_text, t.token_count, t.heading_chain_json
         FROM (
             SELECT n.snapshot_id, n.ref, n.parent_ref, n.ordinal, n.block_type,
-                   s.raw_text, s.token_count, s.heading_chain_json,
+                   s.raw_text, s.token_count, s.section_path::text AS heading_chain_json,
                    row_number() OVER (PARTITION BY n.snapshot_id, n.parent_ref ORDER BY n.ordinal) AS rn
             FROM asset_structure_nodes n
             JOIN asset_raw_segments s
-              ON s.snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
+              ON s.document_snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
             WHERE n.node_type = 'segment'
               AND n.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
@@ -121,11 +121,11 @@
                t.raw_text, t.token_count, t.heading_chain_json
         FROM (
             SELECT n.snapshot_id, n.ref, n.parent_ref, n.ordinal, n.block_type,
-                   s.raw_text, s.token_count, s.heading_chain_json,
+                   s.raw_text, s.token_count, s.section_path::text AS heading_chain_json,
                    row_number() OVER (PARTITION BY n.snapshot_id ORDER BY n.ordinal) AS rn
             FROM asset_structure_nodes n
             JOIN asset_raw_segments s
-              ON s.snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
+              ON s.document_snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
             WHERE n.node_type = 'segment'
               AND n.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
@@ -146,13 +146,13 @@
     </resultMap>
 
     <select id="selectDocumentTokenTotals" resultMap="snapshotTokensMap">
-        SELECT snapshot_id AS snapshotId, SUM(COALESCE(token_count, 0)) AS totalTokens
+        SELECT document_snapshot_id AS snapshotId, SUM(COALESCE(token_count, 0)) AS totalTokens
         FROM asset_raw_segments
-        WHERE snapshot_id IN
+        WHERE document_snapshot_id IN
         <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
             #{sid}
         </foreach>
-        GROUP BY snapshot_id
+        GROUP BY document_snapshot_id
     </select>
 
     <resultMap id="tableAssetMap" type="com.coremasterkb.serving.mapper.result.TableAssetRow">

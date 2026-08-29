@@ -221,7 +221,7 @@
     </select>
 
     <select id="countSegments" resultType="int">
-        SELECT COUNT(*) FROM asset_raw_segments WHERE snapshot_id = #{snapshotId}
+        SELECT COUNT(*) FROM asset_raw_segments WHERE document_snapshot_id = #{snapshotId}
     </select>
 
     <select id="selectSnapshotTableAssets" resultMap="tableAssetMap">
@@ -408,10 +408,10 @@
 
     <select id="selectSegmentsPage" resultMap="segmentMap">
         SELECT n.snapshot_id, n.ref, n.parent_ref, n.ordinal, n.block_type,
-               s.raw_text, s.token_count, s.heading_chain_json
+               s.raw_text, s.token_count, s.section_path::text AS heading_chain_json
         FROM asset_structure_nodes n
         JOIN asset_raw_segments s
-          ON s.snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
+          ON s.document_snapshot_id = n.snapshot_id AND s.segment_index = n.ordinal
         WHERE n.snapshot_id = #{snapshotId} AND n.node_type = 'segment' AND n.ordinal &gt; #{afterIndex}
         ORDER BY n.ordinal ASC
         LIMIT #{limit}

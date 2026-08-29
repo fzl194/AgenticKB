@@ -11,7 +11,6 @@ import com.coremasterkb.serving.operator.engine.ParadigmCompiler;
 import com.coremasterkb.serving.operator.engine.ParadigmExecutor;
 import com.coremasterkb.serving.operator.engine.ParadigmGraph;
 import com.coremasterkb.serving.operator.operators.fuse.RrfOperator;
-import com.coremasterkb.serving.operator.operators.output.CollectOperator;
 import com.coremasterkb.serving.operator.registry.OperatorRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,8 +23,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Pure unit tests for the operator DAG engine (compiler + executor) — no Spring, no DB.
- * Uses real dependency-free operators ({@link RrfOperator}, {@link CollectOperator}) plus mock
- * seed/throwing operators to drive topology, fusion, entry binding, and error policy.
+ * Uses the real dependency-free {@link RrfOperator} plus mock seed/collect/throwing operators to
+ * drive topology, fusion, entry binding, and error policy.
  */
 class OperatorEngineTest {
 
@@ -43,6 +42,24 @@ class OperatorEngineTest {
             }
             public SlotValues execute(SlotValues in, Params p, ExecContext c) {
                 return SlotValues.of("candidates", List.of(out));
+            }
+        };
+    }
+
+    /**
+     * Test terminus standing in for the retired {@code collect} operator (批次8 R0): requires
+     * candidates on input, passes them through unchanged on output.
+     */
+    private static Operator collect() {
+        return new Operator() {
+            public OperatorDef definition() {
+                return new OperatorDef("collect", "output", "collect", "",
+                        List.of(SlotDecl.required("candidates", SlotType.CANDIDATE_LIST, "")),
+                        List.of(SlotDecl.required("candidates", SlotType.CANDIDATE_LIST, "")),
+                        "{}", ErrorPolicy.FAIL_FAST);
+            }
+            public SlotValues execute(SlotValues in, Params p, ExecContext c) {
+                return SlotValues.of("candidates", in.getCandidates("candidates"));
             }
         };
     }
@@ -96,7 +113,7 @@ class OperatorEngineTest {
 
     @Test
     void compilesValidGraph() {
-        var reg = new OperatorRegistry(List.of(seed("s", "s", cand("u1", 1, "s")), new CollectOperator()));
+        var reg = new OperatorRegistry(List.of(seed("s", "s", cand("u1", 1, "s")), collect()));
         var compiler = new ParadigmCompiler(reg);
         ParadigmGraph g = compiler.compile(json("""
                 {"nodes":[{"nodeId":"s","operatorType":"s"},{"nodeId":"out","operatorType":"collect"}],
@@ -108,7 +125,7 @@ class OperatorEngineTest {
 
     @Test
     void rejectsUnknownOperator() {
-        var reg = new OperatorRegistry(List.of(new CollectOperator()));
+        var reg = new OperatorRegistry(List.of(collect()));
         var compiler = new ParadigmCompiler(reg);
         var ex = assertThrows(ParadigmCompileException.class, () -> compiler.compile(json("""
                 {"nodes":[{"nodeId":"x","operatorType":"nope"}],"edges":[],
@@ -119,7 +136,7 @@ class OperatorEngineTest {
     @Test
     void rejectsMissingRequiredInput() {
         // collect needs 'candidates' (not an entry slot) but has no incoming edge
-        var reg = new OperatorRegistry(List.of(new CollectOperator()));
+        var reg = new OperatorRegistry(List.of(collect()));
         var compiler = new ParadigmCompiler(reg);
         var ex = assertThrows(ParadigmCompileException.class, () -> compiler.compile(json("""
                 {"nodes":[{"nodeId":"out","operatorType":"collect"}],"edges":[],
@@ -129,7 +146,7 @@ class OperatorEngineTest {
 
     @Test
     void rejectsCycle() {
-        var reg = new OperatorRegistry(List.of(new RrfOperator(), new CollectOperator()));
+        var reg = new OperatorRegistry(List.of(new RrfOperator(), collect()));
         var compiler = new ParadigmCompiler(reg);
         // rrf -> collect -> ... no second variadic; build a 2-node cycle via two rrf nodes
         var reg2 = new OperatorRegistry(List.of(new RrfOperator()));
@@ -144,7 +161,7 @@ class OperatorEngineTest {
 
     @Test
     void rejectsBadOutputSlot() {
-        var reg = new OperatorRegistry(List.of(seed("s", "s", cand("u1", 1, "s")), new CollectOperator()));
+        var reg = new OperatorRegistry(List.of(seed("s", "s", cand("u1", 1, "s")), collect()));
         var compiler = new ParadigmCompiler(reg);
         var ex = assertThrows(ParadigmCompileException.class, () -> compiler.compile(json("""
                 {"nodes":[{"nodeId":"s","operatorType":"s"},{"nodeId":"out","operatorType":"collect"}],
@@ -161,7 +178,7 @@ class OperatorEngineTest {
         var reg = new OperatorRegistry(List.of(
                 seed("seedA", "a", cand("u1", 0.9, "a"), cand("u2", 0.8, "a")),
                 seed("seedB", "b", cand("u2", 0.95, "b"), cand("u3", 0.7, "b")),
-                new RrfOperator(), new CollectOperator()));
+                new RrfOperator(), collect()));
         var graph = new ParadigmCompiler(reg).compile(json("""
                 {"nodes":[{"nodeId":"a","operatorType":"seedA"},{"nodeId":"b","operatorType":"seedB"},
                           {"nodeId":"f","operatorType":"rrf"},{"nodeId":"out","operatorType":"collect"}],
@@ -182,7 +199,7 @@ class OperatorEngineTest {
 
     @Test
     void bindsQueryEntrySlot() {
-        var reg = new OperatorRegistry(List.of(queryEcho("qe"), new CollectOperator()));
+        var reg = new OperatorRegistry(List.of(queryEcho("qe"), collect()));
         var graph = new ParadigmCompiler(reg).compile(json("""
                 {"nodes":[{"nodeId":"qe","operatorType":"qe"},{"nodeId":"out","operatorType":"collect"}],
                  "edges":[{"fromNode":"qe","fromSlot":"candidates","toNode":"out","toSlot":"candidates"}],
@@ -196,7 +213,7 @@ class OperatorEngineTest {
 
     @Test
     void skipWithEmptyDoesNotAbort() {
-        var reg = new OperatorRegistry(List.of(throwing("bad", ErrorPolicy.SKIP_WITH_EMPTY), new CollectOperator()));
+        var reg = new OperatorRegistry(List.of(throwing("bad", ErrorPolicy.SKIP_WITH_EMPTY), collect()));
         var graph = new ParadigmCompiler(reg).compile(json("""
                 {"nodes":[{"nodeId":"bad","operatorType":"bad"},{"nodeId":"out","operatorType":"collect"}],
                  "edges":[{"fromNode":"bad","fromSlot":"candidates","toNode":"out","toSlot":"candidates"}],
@@ -208,7 +225,7 @@ class OperatorEngineTest {
 
     @Test
     void failFastAborts() {
-        var reg = new OperatorRegistry(List.of(throwing("bad", ErrorPolicy.FAIL_FAST), new CollectOperator()));
+        var reg = new OperatorRegistry(List.of(throwing("bad", ErrorPolicy.FAIL_FAST), collect()));
         var graph = new ParadigmCompiler(reg).compile(json("""
                 {"nodes":[{"nodeId":"bad","operatorType":"bad"},{"nodeId":"out","operatorType":"collect"}],
                  "edges":[{"fromNode":"bad","fromSlot":"candidates","toNode":"out","toSlot":"candidates"}],

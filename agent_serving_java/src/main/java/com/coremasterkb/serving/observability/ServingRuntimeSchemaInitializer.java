@@ -17,29 +17,29 @@ import java.util.IdentityHashMap;
 import java.util.Set;
 
 /**
- * Creates the serving-owned runtime tables ({@code serving_query_logs},
- * {@code serving_query_cache}) in every database this service can route to.
+ * Creates the serving-owned runtime tables ({@code serving_query_logs}) in every database this
+ * service can route to.
  *
  * <p>Unlike {@code ParadigmSchemaInitializer} — whose tables are global control
- * state pinned to the non-routed default DataSource — these two are written
+ * state pinned to the non-routed default DataSource — these are written
  * through the {@code @Primary} DomainRoutingDataSource, so a domain carrying its
  * own inline {@code database:} block writes them into <em>that</em> database.
  * Hence this runs both at startup (default DataSource) and via
  * {@link DomainSchemaEnsurer} on each per-domain pool creation.</p>
  *
- * <p>Each script is applied independently and all failures are swallowed: both
- * features (query logging, semantic cache) already degrade silently when their
- * table is missing, and a schema problem must never block retrieval.</p>
+ * <p>批次8 R0：语义缓存表（{@code serving_query_cache}）随固定链删除（25号 §11.1）。</p>
+ *
+ * <p>Each script is applied independently and all failures are swallowed: query logging already
+ * degrades silently when its table is missing, and a schema problem must never block
+ * retrieval.</p>
  */
 @Component
 public class ServingRuntimeSchemaInitializer implements DomainSchemaEnsurer {
 
     private static final Logger log = LoggerFactory.getLogger(ServingRuntimeSchemaInitializer.class);
 
-    /** Applied in order, independently — 002 needs pgvector and may legitimately fail. */
     private static final String[] SCRIPTS = {
             "db/serving/001_serving_query_logs.sql",
-            "db/serving/002_serving_query_cache.sql",
     };
 
     private final DataSource defaultDataSource;

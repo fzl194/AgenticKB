@@ -1,6 +1,5 @@
 package com.coremasterkb.serving.config;
 
-import com.coremasterkb.serving.application.SearchService;
 import com.coremasterkb.serving.domainpack.DatabaseConfig;
 import com.coremasterkb.serving.domainpack.DomainPackReader;
 import com.coremasterkb.serving.domainpack.DomainPoolManager;
@@ -12,15 +11,11 @@ import com.coremasterkb.serving.mapper.AssetRawSegmentMapper;
 import com.coremasterkb.serving.mapper.AssetRawSegmentRelationMapper;
 import com.coremasterkb.serving.mapper.AssetRetrievalEmbeddingMapper;
 import com.coremasterkb.serving.mapper.AssetRetrievalUnitMapper;
-import com.coremasterkb.serving.pipeline.RetrievalOrchestrator;
-import com.coremasterkb.serving.rerank.*;
+import com.coremasterkb.serving.rerank.LlmServiceReranker;
 import com.coremasterkb.serving.retrieval.DenseVectorRetriever;
 import com.coremasterkb.serving.retrieval.EntityExactRetriever;
-import com.coremasterkb.serving.retrieval.EntityGraphRetriever;
-import com.coremasterkb.serving.retrieval.EntityGraphRouteRetriever;
 import com.coremasterkb.serving.retrieval.FtsRetriever;
 import com.coremasterkb.serving.retrieval.GraphExpander;
-import com.coremasterkb.serving.retrieval.Retriever;
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,8 +35,6 @@ import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.core5.util.Timeout;
 
 import javax.sql.DataSource;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
@@ -49,8 +42,7 @@ import java.util.concurrent.Executors;
  * Explicit wiring for plain-Java components that are not annotated with
  * {@code @Component}/{@code @Service}/{@code @Repository}.
  *
- * <p>Components already picked up by component scanning (QueryUnderstandingEngine,
- * RetrievalRouter, ContextAssembler, SearchService, DomainPackReader,
+ * <p>Components already picked up by component scanning (ContextAssembler, DomainPackReader,
  * QueryLogService, QueryLogAspect, AssetRepository) are NOT declared here.</p>
  */
 @Configuration
@@ -274,33 +266,9 @@ public class ServingBeans {
         return new GraphExpander(relationMapper, segmentMapper);
     }
 
-    /**
-     * Adapts the {@code @Component} {@link EntityGraphRetriever} to the {@link Retriever} contract
-     * so ontology-graph recall can run as the {@code entity_graph} route in the legacy orchestrator.
-     */
-    @Bean
-    public EntityGraphRouteRetriever entityGraphRouteRetriever(EntityGraphRetriever entityGraphRetriever) {
-        return new EntityGraphRouteRetriever(entityGraphRetriever);
-    }
-
     @Bean
     public Executor pipelineExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
-    }
-
-    @Bean
-    public RetrievalOrchestrator retrievalOrchestrator(
-            FtsRetriever ftsRetriever,
-            DenseVectorRetriever denseVectorRetriever,
-            EntityExactRetriever entityExactRetriever,
-            EntityGraphRouteRetriever entityGraphRouteRetriever,
-            Executor pipelineExecutor) {
-        Map<String, Retriever> retrievers = new LinkedHashMap<>();
-        retrievers.put("lexical_bm25", ftsRetriever);
-        retrievers.put("dense_vector", denseVectorRetriever);
-        retrievers.put("entity_exact", entityExactRetriever);
-        retrievers.put("entity_graph", entityGraphRouteRetriever);
-        return new RetrievalOrchestrator(retrievers, pipelineExecutor);
     }
 
     // -------------------------------------------------------------------------
@@ -308,26 +276,8 @@ public class ServingBeans {
     // -------------------------------------------------------------------------
 
     @Bean
-    public ScoreReranker scoreReranker() {
-        return new ScoreReranker();
-    }
-
-    @Bean
-    public LlmReranker llmReranker(LlmClient llmClient) {
-        return new LlmReranker(llmClient);
-    }
-
-    @Bean
     public LlmServiceReranker llmServiceReranker(LlmClient llmClient) {
         return new LlmServiceReranker(llmClient);
-    }
-
-    @Bean
-    public RerankPipeline rerankPipeline(
-            LlmServiceReranker llmServiceReranker,
-            LlmReranker llmReranker,
-            ScoreReranker scoreReranker) {
-        return new RerankPipeline(llmServiceReranker, llmReranker, scoreReranker);
     }
 
 }

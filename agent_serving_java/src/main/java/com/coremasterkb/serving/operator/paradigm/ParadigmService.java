@@ -27,40 +27,8 @@ public class ParadigmService {
 
     private static final Logger log = LoggerFactory.getLogger(ParadigmService.class);
 
-    /** 官方默认检索范式固定 id（resolve 第④层兜底；seeding 见 OfficialParadigmSeeder）。 */
+    /** 官方默认检索范式固定 id（resolve 第④层兜底）。 */
     public static final String OFFICIAL_DEFAULT_ID = "system-official-default";
-
-    /**
-     * 官方默认图：query_embed ‖ fts → weighted_rrf → model_rerank → assemble。
-     * 最简可发表 servable 图（assemble 终点产 ContextPack）。检索效果对齐 legacy 固定
-     * 链路要等 C 阶段四能力算子化（树导航/语义缓存/多查询扩展/级联重排），本图只保证
-     * "无任何绑定时检索可达"。scope 留空 = 运行时按请求注入库范围（菜谱+运行时范围）。
-     */
-    static final String OFFICIAL_DEFAULT_GRAPH = """
-            {
-              "schemaVersion": "1.0",
-              "nodes": [
-                {"nodeId": "qe", "operatorType": "query_embed"},
-                {"nodeId": "scope", "operatorType": "scope_resolve"},
-                {"nodeId": "dv", "operatorType": "dense_vector", "params": {"textKind": "both", "topK": 20}},
-                {"nodeId": "fts", "operatorType": "fts", "params": {"topK": 20}},
-                {"nodeId": "fuse", "operatorType": "weighted_rrf", "params": {"k": 60}},
-                {"nodeId": "rr", "operatorType": "model_rerank", "params": {"topK": 10}},
-                {"nodeId": "asm", "operatorType": "assemble", "params": {"maxItems": 10, "relationExpansion": true}}
-              ],
-              "edges": [
-                {"fromNode": "qe", "fromSlot": "queryEmbedding", "toNode": "dv", "toSlot": "queryEmbedding"},
-                {"fromNode": "scope", "fromSlot": "scope", "toNode": "dv", "toSlot": "scope"},
-                {"fromNode": "scope", "fromSlot": "scope", "toNode": "fts", "toSlot": "scope"},
-                {"fromNode": "dv", "fromSlot": "candidates", "toNode": "fuse", "toSlot": "candidates"},
-                {"fromNode": "fts", "fromSlot": "candidates", "toNode": "fuse", "toSlot": "candidates"},
-                {"fromNode": "fuse", "fromSlot": "candidates", "toNode": "rr", "toSlot": "candidates"},
-                {"fromNode": "rr", "fromSlot": "candidates", "toNode": "asm", "toSlot": "candidates"},
-                {"fromNode": "scope", "fromSlot": "scope", "toNode": "asm", "toSlot": "scope"}
-              ],
-              "output": {"nodeId": "asm", "slot": "contextPack"}
-            }
-            """;
 
     private final ParadigmMapper paradigmMapper;
     private final ParadigmVersionMapper versionMapper;
@@ -165,32 +133,12 @@ public class ParadigmService {
     }
 
     /**
-     * Seed the official default paradigm（固定 id，幂等）。缺失则建+发布；已存在但从未
-     * 发布（version=0）则补发布；用户归档（archived）的官方范式不复活——那是显式决定。
-     * Best-effort：控制库不可用/名称被占 → log warn，下次启动重试。
+     * 批次8 R0 停 seed：官方默认图（依赖已退役算子 weighted_rrf）不再创建/发布，本方法改为
+     * 幂等 no-op（保留签名避免调用方编译错）。R8 按 25 号文档的两套新检索预置重建 seeding。
      */
     @Transactional
     public void ensureOfficialDefault() {
-        ParadigmEntity existing = paradigmMapper.selectById(OFFICIAL_DEFAULT_ID);
-        if (existing == null) {
-            ParadigmEntity e = new ParadigmEntity();
-            e.setId(OFFICIAL_DEFAULT_ID);
-            e.setName("系统官方默认检索范式");
-            e.setDescription("无任何绑定时的兜底检索管线：向量+关键词混合召回、加权融合、"
-                    + "模型重排、组装上下文包。检索范围默认留空（检索时按开放库注入）。");
-            e.setDraftGraphJson(OFFICIAL_DEFAULT_GRAPH);
-            e.setCurrentVersion(0);
-            e.setStatus("draft");
-            paradigmMapper.insert(e);
-            publish(OFFICIAL_DEFAULT_ID, "system-seeder");
-            log.info("[paradigm] official default seeded: {}", OFFICIAL_DEFAULT_ID);
-        } else if (existing.getCurrentVersion() == 0) {
-            if (existing.getDraftGraphJson() == null || existing.getDraftGraphJson().isBlank()) {
-                paradigmMapper.updateDraft(OFFICIAL_DEFAULT_ID, OFFICIAL_DEFAULT_GRAPH);
-            }
-            publish(OFFICIAL_DEFAULT_ID, "system-seeder");
-            log.info("[paradigm] official default published: {}", OFFICIAL_DEFAULT_ID);
-        }
+        // no-op（R8 重建两套新预置）
     }
 
     /** Replace the editable draft graph. */

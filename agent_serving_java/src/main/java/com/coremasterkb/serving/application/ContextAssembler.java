@@ -489,13 +489,34 @@ public class ContextAssembler {
         Map<String, String> map = new LinkedHashMap<>();
         for (var seg : segments) {
             if (seg.getId() != null) {
-                String prefix = TreeNavigator.prefixOf(seg.getSectionPath());
+                String prefix = sectionPrefixOf(seg.getSectionPath());
                 if (prefix != null) {
                     map.put(seg.getId(), prefix);
                 }
             }
         }
         return map;
+    }
+
+    /**
+     * Lower-cased top-level {@code section_path} title, or null when the path is empty/unparseable.
+     * Inlined from the retired {@code TreeNavigator.prefixOf} (批次8 R0：TreeNavigator 随固定链删除).
+     */
+    private static String sectionPrefixOf(String sectionPathJson) {
+        if (sectionPathJson == null || sectionPathJson.isBlank() || "[]".equals(sectionPathJson)) {
+            return null;
+        }
+        try {
+            List<Map<String, Object>> path =
+                    MAPPER.readValue(sectionPathJson, new TypeReference<List<Map<String, Object>>>() {});
+            if (path.isEmpty()) return null;
+            Object title = path.get(0).get("title");
+            if (title == null) return null;
+            String s = title.toString().trim();
+            return s.isEmpty() ? null : s.toLowerCase();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** Section prefix of a seed's first resolvable source segment; null if none. */

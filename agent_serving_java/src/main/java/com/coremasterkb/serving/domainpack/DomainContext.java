@@ -6,7 +6,8 @@ import java.util.function.Supplier;
 /**
  * Thread-local carrier for the active domain during a search request.
  *
- * <p>Set by {@code SearchService} before any DB operation and cleared in a
+ * <p>Set by the entry services ({@code FullTextService}/{@code RawFileService}/
+ * {@code ParadigmExecutor}) before any DB operation and cleared in a
  * finally block. {@code DomainRoutingDataSource} reads this value to pick the
  * correct connection pool for every JDBC call on the current thread.
  *

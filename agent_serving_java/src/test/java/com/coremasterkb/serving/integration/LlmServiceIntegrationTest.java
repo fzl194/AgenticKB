@@ -1,7 +1,5 @@
 package com.coremasterkb.serving.integration;
 
-import com.coremasterkb.serving.application.QueryUnderstandingEngine;
-import com.coremasterkb.serving.domain.QueryUnderstanding;
 import com.coremasterkb.serving.infrastructure.EmbeddingClient;
 import com.coremasterkb.serving.infrastructure.LlmClient;
 import com.coremasterkb.serving.rerank.LlmServiceReranker;
@@ -267,34 +265,6 @@ class LlmServiceIntegrationTest {
 
         System.out.println("Rerank OK: top_score=" + topScore);
         results.forEach(r -> System.out.println("  idx=" + r.get("index") + " score=" + r.get("relevance_score")));
-    }
-
-    // =========================================================================
-    // Test 6: QueryUnderstandingEngine with real LLM client
-    // =========================================================================
-
-    @Test
-    @EnabledIf("isLlmServiceAvailable")
-    @DisplayName("QueryUnderstandingEngine uses LLM path after response parsing fix")
-    void queryUnderstandingEngine_usesLlmPath() {
-        LlmClient llmClient = new LlmClient(restTemplate, BASE_URL);
-        assumeThat(llmClient.isAvailable()).isTrue();  // now just checks baseUrl != blank
-
-        QueryUnderstandingEngine engine = new QueryUnderstandingEngine(llmClient);
-        QueryUnderstanding result = engine.understand("SMF是什么网元", null);
-
-        System.out.println("=== QueryUnderstandingEngine result ===");
-        System.out.println("  source: " + result.source());
-        System.out.println("  intent: " + result.intent());
-        System.out.println("  entities: " + result.entities().size());
-        System.out.println("  keywords: " + result.keywords());
-
-        // After fix: source should be "llm"
-        assertThat(result.source())
-                .as("After fix, QU engine should use LLM path (source=llm)")
-                .isEqualTo("llm");
-        assertThat(result.intent()).isNotNull();
-        assertThat(result.entities()).isNotEmpty();
     }
 
     // =========================================================================

@@ -6,16 +6,16 @@ import com.coremasterkb.serving.domain.RetrievalCandidate;
 import com.coremasterkb.serving.domain.RetrievalQuery;
 import com.coremasterkb.serving.operator.core.*;
 import com.coremasterkb.serving.retrieval.EntityExactRetriever;
-import org.springframework.stereotype.Component;
 
 import java.util.List;
 
 /**
- * {@code entity_exact} — exact entity-name match via JSONB containment. Reuses the existing
+ * 批次8 R0 研究隔离：实体线暂不上线，不注册正式目录（25号 §4/§11.1）。
+ *
+ * <p>{@code entity_exact} — exact entity-name match via JSONB containment. Reuses the existing
  * {@link EntityExactRetriever} (fixed high-confidence score). Takes the query understanding so it
- * can match on extracted entity names (falls back to keywords inside the retriever).
+ * can match on extracted entity names (falls back to keywords inside the retriever).</p>
  */
-@Component
 public class EntityExactOperator implements Operator {
 
     private static final String PARAM_SCHEMA = """

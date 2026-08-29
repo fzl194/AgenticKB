@@ -16,8 +16,11 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Intercepts {@code SearchService.search()} to record query logs.
- * No business code is aware of this aspect.
+ * Intercepts {@code ParadigmExecutionService.run()} to record query logs for every
+ * operator-paradigm execution. No business code is aware of this aspect.
+ *
+ * <p>批次8 R0：旧固定链 {@code SearchService.search()} 的 advice 随固定链删除；本切面只保留
+ * 范式执行路径的日志（25号 §11.1）。</p>
  */
 @Aspect
 @Component
@@ -31,47 +34,12 @@ public class QueryLogAspect {
         this.queryLogService = queryLogService;
     }
 
-    @Around("execution(* com.coremasterkb.serving.application.SearchService.search(..))")
-    public Object logSearch(ProceedingJoinPoint pjp) throws Throwable {
-        long startMs = System.currentTimeMillis();
-        String queryId = UUID.randomUUID().toString();
-        SearchRequest request = (SearchRequest) pjp.getArgs()[0];
-
-        log.info("[search] start id={} domain={} query=\"{}\"",
-                queryId, request.domain(), abbreviate(request.query(), 60));
-
-        ContextPack pack = null;
-        Throwable thrown = null;
-        try {
-            Object result = pjp.proceed();
-            if (result instanceof ContextPack cp) {
-                pack = cp;
-            }
-            return result;
-        } catch (Throwable t) {
-            thrown = t;
-            throw t;
-        } finally {
-            long durationMs = System.currentTimeMillis() - startMs;
-            if (thrown != null) {
-                log.warn("[search] error id={} domain={} duration={}ms error={}",
-                        queryId, request.domain(), durationMs, thrown.getMessage());
-            }
-            queryLogService.record(queryId, request, pack, durationMs);
-        }
-    }
-
     /**
-     * Same treatment for the operator-paradigm engine, which is a completely separate execution
-     * path — without this, every query served by a bound paradigm (i.e. all MCP traffic once
-     * auto-matching is on) would be absent from {@code serving_query_logs} entirely.
+     * The operator-paradigm engine is the only search execution path — without this advice every
+     * served query would be absent from {@code serving_query_logs} entirely.
      *
-     * <p>A second advice rather than a widened pointcut: the two methods share no signature. This
-     * one takes {@code (JsonNode, RunArgs)} and returns a shaped {@code Map}, so the legacy
-     * advice's {@code (SearchRequest) getArgs()[0]} cast would fail outright.</p>
-     *
-     * <p>Paradigms may terminate in {@code collect} instead of {@code assemble}, in which case
-     * there is no ContextPack; those rows are still recorded, just with null result detail. That is
+     * <p>Paradigms may terminate in a non-{@code assemble} node, in which case there is no
+     * ContextPack; those rows are still recorded, just with null result detail. That is
      * intentional — a missing row and a candidate-only row mean very different things.</p>
      */
     @Around("execution(* com.coremasterkb.serving.operator.api.ParadigmExecutionService.run(..))")

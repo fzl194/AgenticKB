@@ -3,7 +3,6 @@ package com.coremasterkb.serving.operator.paradigm;
 import com.coremasterkb.serving.operator.core.*;
 import com.coremasterkb.serving.operator.core.exceptions.ParadigmCompileException;
 import com.coremasterkb.serving.operator.engine.ParadigmCompiler;
-import com.coremasterkb.serving.operator.operators.output.CollectOperator;
 import com.coremasterkb.serving.operator.paradigm.mapper.ParadigmMapper;
 import com.coremasterkb.serving.operator.paradigm.mapper.ParadigmVersionMapper;
 import com.coremasterkb.serving.operator.registry.OperatorRegistry;
@@ -50,7 +49,19 @@ class ParadigmServiceTest {
                 return SlotValues.of("candidates", List.of());
             }
         };
-        OperatorRegistry registry = new OperatorRegistry(List.of(seed, new CollectOperator()));
+        // 批次8 R0 后 collect 算子已删，这里用同形内联 stub 充当 VALID_GRAPH 的终点
+        Operator collect = new Operator() {
+            public OperatorDef definition() {
+                return new OperatorDef("collect", "output", "collect", "",
+                        List.of(SlotDecl.required("candidates", SlotType.CANDIDATE_LIST, "")),
+                        List.of(SlotDecl.required("candidates", SlotType.CANDIDATE_LIST, "")),
+                        "{}", ErrorPolicy.FAIL_FAST);
+            }
+            public SlotValues execute(SlotValues in, Params p, ExecContext c) {
+                return SlotValues.of("candidates", in.getCandidates("candidates"));
+            }
+        };
+        OperatorRegistry registry = new OperatorRegistry(List.of(seed, collect));
         ParadigmCompiler compiler = new ParadigmCompiler(registry);
         service = new ParadigmService(paradigmMapper, versionMapper, compiler,
                 mock(com.coremasterkb.serving.mapper.KnowledgeBaseMapper.class));

@@ -47,10 +47,9 @@ public class QueryLogService {
     /**
      * As above, plus engine attribution written to {@code metadata_json}.
      *
-     * <p>Needed because two different engines now write to this table: the legacy
-     * {@code SearchService} pipeline and the operator-paradigm executor. Without a discriminator
-     * any analysis over {@code serving_query_logs} silently averages the two together — the same
-     * trap {@code agent_llm_tasks} has with its two independent persistence paths.</p>
+     * <p>Kept because {@code serving_query_logs} historically carried two engines (the retired
+     * legacy fixed-chain pipeline and the operator-paradigm executor); the discriminator stays so
+     * rows written before 批次8 R0 remain interpretable alongside paradigm rows.</p>
      *
      * @param metadata engine attribution (e.g. {@code engine}, {@code paradigm_id}); may be empty
      */

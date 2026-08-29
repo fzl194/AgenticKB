@@ -4,12 +4,13 @@ import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.domain.QueryUnderstanding;
 import com.coremasterkb.serving.operator.core.*;
 import com.coremasterkb.serving.retrieval.EntityGraphRetriever;
-import org.springframework.stereotype.Component;
 
 import java.util.List;
 
 /**
- * {@code entity_graph} — ontology-graph recall. Links the query's entities to canonical ontology
+ * 批次8 R0 研究隔离：实体线暂不上线，不注册正式目录（25号 §4/§11.1）。
+ *
+ * <p>{@code entity_graph} — ontology-graph recall. Links the query's entities to canonical ontology
  * entities, traverses the entity relation graph up to {@code maxHop} hops, and returns the
  * evidence retrieval units of the reached entities, scored by hop-distance decay × path
  * confidence. Reuses {@link EntityGraphRetriever}.
@@ -18,7 +19,6 @@ import java.util.List;
  * candidates), so it drops straight into any retrieval paradigm and feeds the fusion node.
  * Domain comes from {@link ExecContext#domain()}; the DB is already domain-routed for the request.</p>
  */
-@Component
 public class EntityGraphOperator implements Operator {
 
     private static final String PARAM_SCHEMA = """

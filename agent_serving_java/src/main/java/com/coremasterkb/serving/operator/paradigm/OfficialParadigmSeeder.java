@@ -5,17 +5,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 
 /**
- * Seeds the official default paradigm (固定 id {@link ParadigmService#OFFICIAL_DEFAULT_ID})
- * on startup — the "official" rung of the four-tier resolution ladder (16 号方案 §2).
+ * 批次8 R0 停 seed：官方默认图依赖已退役算子（weighted_rrf 等），seeding 停用（去
+ * {@code @Component}，不再被 Spring 扫描）。R8 按 25 号文档的两套新检索预置重建本类。
  *
- * <p>Runs after {@link ParadigmSchemaInitializer} (higher {@code @Order} value = later).
- * Best-effort: control DB unavailable or name collision → log warn and retry next boot;
- * the resolve ladder simply reports "no paradigm configured" until the seed lands.</p>
+ * <p>原职责：startup 时 seed 官方默认范式（固定 id
+ * {@link ParadigmService#OFFICIAL_DEFAULT_ID}），作为解析链的 "official" 层。停用后该层
+ * 只读库中既有范式，resolve 在无预置时明确报"未配置检索范式"。</p>
  */
-@Component
 public class OfficialParadigmSeeder {
 
     private static final Logger log = LoggerFactory.getLogger(OfficialParadigmSeeder.class);

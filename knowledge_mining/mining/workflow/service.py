@@ -9,6 +9,10 @@ from psycopg.errors import UniqueViolation
 from .compiler import WorkflowCompileException, WorkflowCompiler
 from .graph import WorkflowGraph
 from .operators.catalog import builtin_catalog
+from .presets import (
+    DEFAULT_WORKFLOW_ID,
+    MINING_PRESETS,
+)
 from .templates import builtin_templates
 from .v2_migration import upgrade_graph_to_v2
 
@@ -332,7 +336,7 @@ class WorkflowService:
         *,
         workflow_id: str | None,
         workflow_version: int | None,
-        default_workflow_id: str = "system-full-baseline",
+        default_workflow_id: str = DEFAULT_WORKFLOW_ID,
     ) -> dict:
         selected_id = workflow_id or default_workflow_id
         workflow = await self._require_active(selected_id)
@@ -342,19 +346,47 @@ class WorkflowService:
         return await self.get_version(selected_id, selected_version)
 
     async def ensure_system_workflows(self) -> dict | None:
-        """批次8 M0（24 号 §8/§10.1）：旧预置（system-full-baseline 含实体/
-        本体归纳人审链）停止 seed；M6 由 4 套新预置取代。已存在的旧条目
-        由受保护 reset 流程清理，本方法不再创建或复活任何旧范式。
-        """
-        return await self.repository.get_workflow("system-full-baseline")
+        """批次8 M6（24 号 §8）：seed 4 套官方挖掘预置（幂等，归档不复活）."""
+        seeded: dict[str, dict] = {}
+        for preset in MINING_PRESETS:
+            workflow = await self.repository.get_workflow(preset.workflow_id)
+            if workflow is None:
+                try:
+                    workflow = await self.create(
+                        workflow_id=preset.workflow_id,
+                        name=preset.name,
+                        description=preset.description,
+                        template_key=preset.template_key,
+                        is_system=True,
+                        is_system_default=preset.is_system_default,
+                    )
+                except WorkflowNameConflict:
+                    workflow = await self.repository.get_workflow(
+                        preset.workflow_id
+                    )
+                    if workflow is None:
+                        raise
+            if workflow is None:
+                continue
+            seeded[preset.workflow_id] = workflow
+        default = seeded.get(DEFAULT_WORKFLOW_ID)
+        return default
 
     async def ensure_workflow_library(self) -> dict | None:
-        """批次8 M0（24 号 §8）：旧 7 类挖掘预置全部停止 seed。
-
-        M6 将按 4 套新预置（轻量关键词/标准混合/问题别名增强/长文档全局
-        增强）重建 seeding；在此之前本方法不创建任何 Workflow，只回读
-        兼容默认（若存在）供启动流程不炸。
-        """
+        """M6：4 套预置幂等 seed + 首版发布（只补自己的未发布种子）."""
+        for preset in MINING_PRESETS:
+            workflow = await self.repository.get_workflow(preset.workflow_id)
+            if workflow is None:
+                continue
+            if (
+                workflow["status"] != "active"
+                or workflow["current_version"] is not None
+            ):
+                continue
+            await self._ensure_initial_publication(
+                workflow,
+                release_notes="批次8 官方预置初始版本",
+            )
         return await self.ensure_system_workflows()
 
     async def _ensure_initial_publication(

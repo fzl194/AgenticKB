@@ -192,37 +192,28 @@ async def test_stale_draft_revision_is_rejected(
 
 
 @pytest.mark.asyncio
-async def test_ensure_system_workflows_no_longer_seeds_legacy_default(
+async def test_ensure_workflow_library_seeds_four_presets_and_preserves_user_workflows(
     memory_workflow_repo: MemoryWorkflowRepository,
 ) -> None:
-    """批次8 M0：system-full-baseline 停止 seed——只回读，不创建不复活。"""
-    service = WorkflowService(memory_workflow_repo)
-
-    assert await service.ensure_system_workflows() is None
-    assert await service.ensure_system_workflows() is None
-    assert await service.list(include_archived=True) == []
-
-
-@pytest.mark.asyncio
-async def test_ensure_workflow_library_seeds_nothing_and_preserves_existing(
-    memory_workflow_repo: MemoryWorkflowRepository,
-) -> None:
-    """批次8 M0：旧 7 类预置停止 seed；已有条目不被触碰（M6 由新预置取代）。"""
+    """批次8 M6：seed 恰好 4 套官方预置（M6_presets 测试展开断言）；
+    用户已有 Workflow 不被触碰；旧 system-full-baseline 永不复活。"""
     service = WorkflowService(memory_workflow_repo)
     existing = await service.create(
-        name="快速向量检索",
-        description="人工维护的同名草稿",
+        name="我的自定义范式",
+        description="人工维护草稿",
         graph=formal_chain_graph_dict(),
         created_by="owner",
     )
 
-    await service.ensure_workflow_library()
+    default = await service.ensure_workflow_library()
     await service.ensure_workflow_library()
 
+    assert default is not None and default["id"] == "system-hybrid-assets"
     preserved = await service.get(existing["id"])
-    assert preserved["description"] == "人工维护的同名草稿"
     assert preserved["current_version"] is None
-    assert len(await service.list(include_archived=True)) == 1
+    ids = {item["id"] for item in await service.list(include_archived=True)}
+    assert "system-full-baseline" not in ids
+    assert len(ids) == 5  # 4 预置 + 1 用户草稿
 
 
 @pytest.mark.asyncio

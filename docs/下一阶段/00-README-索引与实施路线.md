@@ -152,3 +152,53 @@
 现状调研报告（双链路/范式模型/KB scope/MCP 全貌）见调研结论存档于本会话；关键锚点：
 范式表 `operator_paradigm(_version)`+域绑定 002 DDL；范围算子 kbIds 设计期冻结 ScopeResolveOperator.java:17-22；
 MCP 零鉴权匿名（仅 public KB）mcp_server/server.py；固定链路四能力缺口=树导航/语义缓存/多查询扩展/级联重排。
+
+---
+
+## 10. 批次8 挖掘×检索算子重审（2026-08-29，需求定稿）
+
+| 文档 | 定位 | 当前效力 |
+|---|---|---|
+| [21-批次8-挖掘检索配套范式库-需求说明](21-批次8-挖掘检索配套范式库-需求说明-2026-08-29.md) | 原始需求、背景和历史初案 | 保留需求来源；方案部分不得直接实施 |
+| [22-批次8-算子全景与两类配套端到端](22-批次8-算子全景与两类配套端到端-2026-08-29.md) | 第一轮算子盘点和历史讨论稿 | 部分结论已推翻，仅作分析材料 |
+| [23-批次8-挖掘检索算子重审-决策与待讨论清单](23-批次8-挖掘检索算子重审-决策与待讨论清单-2026-08-29.md) | 历史决策账本/多轮恢复锚点 | 用于追溯“为什么”；不替代实施契约 |
+| [24-批次8-挖掘侧算子与配套范式-需求设计](24-批次8-挖掘侧算子与配套范式-需求设计-2026-08-29.md) | **挖掘侧实施事实源** | 算子总账、逐算子契约、三面资产、4 套预置、clean break 和验收 |
+| [25-批次8-检索侧算子与Agentic工具-需求设计](25-批次8-检索侧算子与Agentic工具-需求设计-2026-08-29.md) | **检索侧实施事实源** | 算子总账、逐算子契约、EvidenceResponse、Agentic MCP、2 套预置和验收 |
+
+当前已锁定：通用默认挖掘线不含生成式 LLM；`enrich`、`discourse_line`、当前 contextual 算子退出默认正式线；`retrieval_unit_build` 向确定性 `retrieval_unit_project` 重构；不新增独立 `document_profile_build`；查询不逐文件遍历，命中后才按候选文件结构决定全文/父章节/邻段等返回粒度。
+
+最新确认：检索表示与原始证据分层；取消 `document_route` 名称；召回后的 canonical target 解析、原文读取和父章节/邻段/表头扩展由 `evidence_hydrate` 负责，再交给 `assemble` 合并预算。
+
+最新确认：embedding 不是 pipeline 级单一 mode，而是一套可配置 policy；系统为不同 retrieval unit 类型提供固定默认 strategy，用户可在算子参数中覆盖。一个 embedding 节点可按类型执行 `skip/isolated/structural/contextualized/late_chunking`，并冻结每条向量的真实策略和 profile。
+
+最新确认：新增可选 `query_expansion_generate`；按 unit 类型使用固定默认 eligibility 并允许参数覆盖；每个 alias 必须有可验证 answer span、绑定 canonical source target，且只能作为 FTS/dense 搜索入口，命中后由 `evidence_hydrate` 返回源证据。默认不进入零 LLM 基础线。
+
+最新确认：全文/父块/邻窗统一作为 `evidence_hydrate` 的可配置 expansion policy；不写死文档大小。新增可选 `hierarchical_summary_generate`，基于真实标题树生成带 source refs 的 summary alias，仅用于长文档全局增强。真正 RAPTOR 暂不建设，也不得用普通结构摘要冒充。
+
+最新确认：本批不建设 GraphRAG；实体/本体研究代码保留但产品不呈现、不进预置；`discourse_line` 与当前段关系版 `graph_expand` 成对退役并在本次 clean break 中直接删除；确定性结构扩展统一由 `evidence_hydrate` 负责，`assemble` 删除隐藏关系扩展。
+
+最新确认：当前只有一个文本 embedding 模型，query 每次只向量化一次；不同检索单元仅改变知识侧 input strategy，不建设多模型/profile 分路召回。
+
+最新确认：FTS 与 dense 都保留并默认并行，按 eligibility 召回统一检索单元，通道内按 canonical evidence 聚合；融合层收敛为一个带可选静态权重的 RRF，`weighted_rrf` 合并、`identity` 退役；重排保留专用 `model_rerank`，`llm_rerank` 仅留实验代码且产品不呈现，`score_rerank/rerank_post` 不进入正式能力。
+
+最新确认：`evidence_hydrate` 只对 Top-N 按证据类型、确定性结构和 token 预算物化原段/父块/邻窗/表格/全文等内部证据；`assemble` 才是 MCP 最终输出投影。正常 MCP 响应收敛为 `query + evidence[] + has_more`，暴露知识库名、文件名、库内路径、章节/页码及不透明 evidence/document ref，不暴露点、边、切片/检索单元 ID、score chain 和 evidence groups；通过 `get_evidence(ref)` / `get_document(document_ref)` 渐进式获取准确原文或更多文件内容。
+
+最新确认：结构化知识采用“搜索表示、结构化投影、原始证据”三面并存。检索单元用于模糊发现，但不是唯一消费形态；表格等稳定 schema 资产还需通过 `asset_ref + schema-bound DSL` 直接查询。metadata 作为 FTS/dense 的确定性 filter，不另设 `metadata_filter` 算子；`asset_persist` 同时持久化搜索表示、结构索引、typed asset 和 readiness 能力事实。
+
+最新确认：采用用户本地 Agent 驱动的渐进式闭环，不在服务端增加 LLM `query_plan` 或自然语言转 SQL/DSL。Agent 先用 `search_knowledge` 模糊发现，再用 `inspect_knowledge` 获取真实 schema、关系和能力，随后调用 `navigate_structure` 或 `query_structured_asset`，并根据结构化错误继续修正。服务端新增确定性 `structure_navigate` 和 `structured_query`；不新增召回前猜章节的 `tree_navigate`，legacy `TreeNavigator` 随固定链退役；不新增统一 `retrieval_route`。
+
+最新确认：现有 `query_understanding` 直接删除，产品和官方预置不再呈现，也不建设替代算子。基础输入清洗归 API 边界，分词/同义词归 FTS analyzer，query embedding 归 `query_embed`，复杂问题拆解、歧义判断、显式 filters 和工具选择归用户本地 Agent；runtime intent 不再驱动线上隐藏路由。
+
+最新确认：本批检索运行时不承担生成式 LLM。`multi_query`、HyDE、`llm_rerank` 及其提示词/模板/预置直接删除，不建设服务端替代或 fallback；`query_embed` 和专用 `model_rerank` 不属于生成式 LLM，继续保留。本地 Agent 通过多轮 `search_knowledge` 完成问题拆解、改写和反馈式再检索；挖掘侧两个可选离线 LLM 算子不受影响。
+
+最新确认：`collect` 不是多路收集或正式输出算子，只做候选截断，本次 clean break 直接从代码、算子目录和所有范式中删除。评测范式直接声明 FTS/dense/RRF/model rerank 的 candidates slot 为输出，`eval_at_k` 由 evaluation harness 管理；多路融合继续只由 RRF 负责，MCP 分页不属于 `collect`。
+
+最新确认：保留 `assemble` 名称但整体重写为零外部读取、零 LLM 的确定性最终证据投影。输入改为 hydrated evidence，输出改为极简 `EVIDENCE_RESPONSE`；只做 canonical/source-span/父子包含合并、顺序保持、最终条数/token 预算、opaque ref 与授权来源投影。旧 ContextPack、回库、图/RST、意图分类、冲突、suggestions 和字符相关性压缩退出。
+
+最新确认：`search_knowledge` 本批不增加 offset/page/cursor。`evidence.truncated` 表示应按 ref 取完整原文，顶层 `has_more` 只表示有已知其他证据因最终预算未返回；Agent 通过更明确 query、filters、within、get_evidence/get_document 或结构工具继续取证。稳定列表和结构化结果在各自工具中分页。
+
+最新确认：冷启动库收敛为 4 套挖掘范式、2 套检索范式。轻量关键词资产配关键词证据检索；标准混合资产配标准混合证据检索并作为默认；问题别名增强和长文档全局增强复用标准混合检索并标记实验。small-to-big、表格直查、结构导航是通用策略/工具，纯向量等只作评测图，不按资产类型排列组合复制生产范式。具体字段和参数不再逐项要求用户确认，进入最终实施指南。
+
+最新确认：当前尚未生产且测试数据库可清理，P8 不建设正式晋级制度，P9 采用 clean break。无需 deprecated 周期、兼容层、旧 manifest/资产迁移、双链路或旧链 fallback；直接删除退役实现和旧数据，以新 schema、新 seed、4+2 范式全量重建并重新挖掘测试库。entity/ontology/GraphRAG 研究代码按此前决定保留但不呈现、不消费；所有清库操作必须有严格测试环境保护。
+
+下一步：产品级讨论和实施需求定稿已经完成。后续开发按 24（挖掘）与 25（检索）分侧实施；跨侧字段、readiness、public ref 和 4+2 范式必须联调，不得按 21/22 旧方案恢复已退役能力。

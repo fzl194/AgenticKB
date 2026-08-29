@@ -265,7 +265,8 @@ def test_segment_compile_empty_segments_skips() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_asset_persist_fails_cleanly_on_bundle_before_m5() -> None:
+def test_asset_persist_without_service_fails_explicitly() -> None:
+    """M5：bundle 到达而持久化服务未接线 → asset_persist_unavailable。"""
     from knowledge_mining.mining.workflow.bundle import MiningDocumentBundle
     from knowledge_mining.mining.workflow.handlers.persist import (
         asset_persist_handler,
@@ -282,5 +283,4 @@ def test_asset_persist_fails_cleanly_on_bundle_before_m5() -> None:
     result = asset_persist_handler(_state(bundle), {}, runtime)
 
     assert result.status.value == "failed"
-    assert result.error_code == "asset_persist_bundle_unsupported"
-    assert "M5" in (result.error_message or "")
+    assert result.error_code == "asset_persist_unavailable"

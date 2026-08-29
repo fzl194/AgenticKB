@@ -385,37 +385,41 @@ class FakeRuntimeRepository:
 
 
 def test_asset_persist_handler_is_idempotent_after_committed_marker() -> None:
+    """M5：bundle + 已提交 marker → 早退 SUCCESS，不再触碰持久化服务."""
+    from knowledge_mining.mining.workflow.bundle import MiningDocumentBundle
+
     repository = FakeRuntimeRepository()
+    repository.committed["doc-1"] = ("document-1", "snapshot-1")
     calls = []
 
-    def persist(context, config, **kwargs):
-        calls.append(context.run_document_id)
-        repository.committed[context.run_document_id] = ("document-1", "snapshot-1")
-        return context.with_updates(
-            document_id="document-1", snapshot_id="snapshot-1"
-        )
+    def _must_not_persist(**kwargs):
+        calls.append(kwargs)
+        raise AssertionError("marker path must not call persist service")
 
     runtime = SimpleNamespace(
         domain="odn",
         ontology_version_id="ontology-v1",
         runtime_repository=repository,
         services=SimpleNamespace(
-            pipeline_config=PipelineConfig(domain="odn"),
-            persist_document_assets=persist,
-            document_persist_lock=None,
+            asset_persist_service=SimpleNamespace(
+                persist_for_snapshot=_must_not_persist,
+            ),
         ),
         manifest={"runId": "run-1"},
     )
-    state = DocumentState("doc-1", "doc:/a.md", complete_context())
+    bundle = MiningDocumentBundle(
+        document_ref="doc:/a.md", run_document_id="doc-1", snapshot_ref="s1",
+    )
+    state = DocumentState("doc-1", "doc:/a.md", bundle)
 
     first = asset_persist_handler(state, {}, runtime)
     second = asset_persist_handler(state, {}, runtime)
 
     assert first.status is OperatorStatus.SUCCESS
     assert second.status is OperatorStatus.SUCCESS
-    assert calls == ["doc-1"]
-    assert second.outputs.context.document_id == "document-1"
-    assert second.outputs.context.snapshot_id == "snapshot-1"
+    assert calls == []
+    assert "assets_persisted" in second.outputs.context.capability_facts
+
 
 
 def test_retry_replaces_only_same_document_candidate_evidence() -> None:

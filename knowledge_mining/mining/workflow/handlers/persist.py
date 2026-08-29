@@ -4,8 +4,6 @@ from contextlib import contextmanager
 from threading import Lock, RLock
 from typing import Any, Mapping
 
-from knowledge_mining.mining.pipeline import persist_document_assets
-
 from ..core import DocumentState, OperatorResult, OperatorStatus, OperatorWarning
 
 
@@ -50,7 +48,9 @@ def asset_persist_handler(
             document_id, snapshot_id = marker
             context = state.context.with_updates(
                 document_id=document_id,
-                snapshot_id=snapshot_id,
+                snapshot_ref=snapshot_id,
+                capability_facts=state.context.capability_facts
+                | frozenset({"assets_persisted"}),
             )
             return OperatorResult(
                 state.with_context(
@@ -60,31 +60,30 @@ def asset_persist_handler(
                 OperatorStatus.SUCCESS,
             )
 
-        # 批次8 M1：bundle 到达 persist 而 M5 三面持久化未落地前，显式
-        # clean-fail——不把 bundle 喂给 legacy persister 造成 AttributeError。
+        # 批次8 M5（24 号 §5.8）：bundle → 三面资产持久化服务；legacy
+        # persist_document_assets 已随兼容 DocumentContext 链退役。
         from ..bundle import MiningDocumentBundle
 
-        if isinstance(state.context, MiningDocumentBundle):
+        if not isinstance(state.context, MiningDocumentBundle):
             return OperatorResult(
                 state, frozenset(), OperatorStatus.FAILED,
-                error_code="asset_persist_bundle_unsupported",
+                error_code="asset_persist_bad_input",
                 error_message=(
-                    "asset_persist for MiningDocumentBundle lands in M5 "
-                    "(three-projection persistence); legacy persister removed"
+                    "asset_persist requires a MiningDocumentBundle "
+                    f"(got {type(state.context).__name__})"
                 ),
             )
-        persister = getattr(
-            runtime.services, "persist_document_assets", persist_document_assets
-        )
+        service = getattr(runtime.services, "asset_persist_service", None)
+        if service is None:
+            return OperatorResult(
+                state, frozenset(), OperatorStatus.FAILED,
+                error_code="asset_persist_unavailable",
+                error_message="asset_persist service is not configured on this runtime",
+            )
         try:
-            context = persister(
-                state.context,
-                runtime.services.pipeline_config,
-                strict_embeddings=True,
-                graph_store=getattr(runtime.services, "graph_store", None),
-                ontology_store=getattr(runtime.services, "ontology_store", None),
-                run_id=run_id,
-                node_id="asset_persist",
+            outcome = service.persist_for_snapshot(
+                snapshot_id=state.context.snapshot_ref,
+                document_ref=state.context.document_ref,
             )
         except Exception as exc:
             return OperatorResult(
@@ -95,10 +94,22 @@ def asset_persist_handler(
                 error_code="asset_persist_failed",
                 error_message=str(exc),
             )
+        persisted = state.context.with_updates(
+            document_id=getattr(outcome, "document_id", None)
+            or state.context.document_id,
+            capability_facts=state.context.capability_facts
+            | frozenset({"assets_persisted"}),
+            diagnostics={
+                **dict(state.context.diagnostics),
+                "readiness": dict(getattr(outcome, "readiness", {}) or {}),
+                "schema_version": getattr(outcome, "schema_version", None),
+                "tokenizer_version": getattr(outcome, "tokenizer_version", None),
+            },
+        )
 
         capability = frozenset({"assets_persisted"})
         return OperatorResult(
-            state.with_context(context, capabilities=capability),
+            state.with_context(persisted, capabilities=capability),
             capability,
             OperatorStatus.SUCCESS,
         )

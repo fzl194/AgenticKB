@@ -348,6 +348,7 @@ class NewChainServices:
     segment_compile_service: SegmentCompileFacade
     retrieval_project_service: RetrieProjectFacade
     embedding_service: Any
+    asset_persist_service: Any
 
 
 def build_new_chain_services(
@@ -364,6 +365,7 @@ def build_new_chain_services(
     representation_store: Any | None = None,
     embedding_store: Any | None = None,
     embedding_generator: Any | None = None,
+    asset_writer: Any | None = None,
     pool: Any | None = None,
     sync_pool: Any | None = None,
 ) -> NewChainServices:
@@ -396,6 +398,9 @@ def build_new_chain_services(
         )
 
         # M2：RepresentationStore 暂用 memory（PG 三面资产表 M5 落地）
+        from knowledge_mining.mining.retrieval_projection.persist import (
+            MemoryAssetWriter,
+        )
         from knowledge_mining.mining.retrieval_projection.repositories_memory import (
             MemoryEmbeddingStore,
             MemoryRepresentationStore,
@@ -409,6 +414,7 @@ def build_new_chain_services(
         segment_store = segment_store or PgSegmentStore(repository_pool)
         representation_store = representation_store or MemoryRepresentationStore()
         embedding_store = embedding_store or MemoryEmbeddingStore()
+        asset_writer = asset_writer or MemoryAssetWriter()
     else:
         from knowledge_mining.mining.file_management.repositories_memory import (
             MemoryDocumentCurrentContentRepository,
@@ -424,6 +430,9 @@ def build_new_chain_services(
         from knowledge_mining.mining.snapshot_store.repositories_memory import (
             MemorySnapshotRepository,
         )
+        from knowledge_mining.mining.retrieval_projection.persist import (
+            MemoryAssetWriter,
+        )
         from knowledge_mining.mining.retrieval_projection.repositories_memory import (
             MemoryEmbeddingStore,
             MemoryRepresentationStore,
@@ -437,6 +446,7 @@ def build_new_chain_services(
         segment_store = segment_store or MemorySegmentStore()
         representation_store = representation_store or MemoryRepresentationStore()
         embedding_store = embedding_store or MemoryEmbeddingStore()
+        asset_writer = asset_writer or MemoryAssetWriter()
 
     if object_store is None:
         from knowledge_mining.mining.infra.object_store.fake import (
@@ -453,6 +463,9 @@ def build_new_chain_services(
     from knowledge_mining.mining.parse_reconciler import StructuralReconciler
     from knowledge_mining.mining.retrieval_projection.embedding import (
         EmbeddingFacade,
+    )
+    from knowledge_mining.mining.retrieval_projection.persist import (
+        AssetPersistService,
     )
     from knowledge_mining.mining.segment_compiler.service import (
         SegmentCompileService,
@@ -504,6 +517,12 @@ def build_new_chain_services(
             )
             if embedding_generator is not None
             else None
+        ),
+        asset_persist_service=AssetPersistService(
+            segment_store=segment_store,
+            representation_store=representation_store,
+            embedding_store=embedding_store,
+            writer=asset_writer,
         ),
     )
 

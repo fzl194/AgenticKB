@@ -12,7 +12,7 @@ class FakeWorkflowService:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.current_versions = {
-            "system-full-baseline": 4,
+            "system-hybrid-assets": 4,
             "wf": 7,
         }
 
@@ -77,7 +77,8 @@ async def test_missing_workflow_binds_system_full_current_version(
         upload_batch_id="abcdef123456",
     )
 
-    assert binding.workflow_id == "system-full-baseline"
+    # 批次8 M6：兜底范式切 system-hybrid-assets（旧 full-baseline 退役）
+    assert binding.workflow_id == "system-hybrid-assets"
     assert binding.workflow_version == 4
     assert binding.manifest["runtimeBinding"] == {
         "domain": "odn",

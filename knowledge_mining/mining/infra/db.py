@@ -878,6 +878,14 @@ class AssetCoreDB(_DB):
         )
 
     def count_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> int:
+        # 批次8 M5：优先 v2 表示；存量旧表兜底（clean break 后应为 0）。
+        row = self._fetchone(
+            "SELECT COUNT(*) AS n FROM asset_retrieval_units_v2 "
+            "WHERE snapshot_id = %s",
+            (document_snapshot_id,),
+        )
+        if row and int(row["n"]) > 0:
+            return int(row["n"])
         row = self._fetchone(
             "SELECT COUNT(*) AS n FROM asset_retrieval_units "
             "WHERE document_snapshot_id = %s",
@@ -886,6 +894,14 @@ class AssetCoreDB(_DB):
         return int(row["n"]) if row else 0
 
     def count_embeddings_by_snapshot(self, document_snapshot_id: str) -> int:
+        # 批次8 M5：优先 v2 向量资产；存量旧表兜底（clean break 后应为 0）。
+        row = self._fetchone(
+            """SELECT COUNT(*) AS n FROM asset_retrieval_embeddings_v2
+               WHERE snapshot_id = %s""",
+            (document_snapshot_id,),
+        )
+        if row and int(row["n"]) > 0:
+            return int(row["n"])
         row = self._fetchone(
             """SELECT COUNT(*) AS n FROM asset_retrieval_embeddings e
                JOIN asset_retrieval_units u ON u.id = e.retrieval_unit_id

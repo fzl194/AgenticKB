@@ -37,10 +37,12 @@ class WorkflowRunBinder:
         upload_batch_id: str | None,
         run_overrides: dict[str, Any] | None = None,
     ) -> WorkflowRunBinding:
+        from .presets import DEFAULT_WORKFLOW_ID
+
         version = await self.workflow_service.resolve_published_version(
             workflow_id=workflow_id,
             workflow_version=workflow_version,
-            default_workflow_id="system-full-baseline",
+            default_workflow_id=DEFAULT_WORKFLOW_ID,
         )
         ontology_version_id = await self.ontology_lookup(domain)
         manifest = bind_run_manifest(

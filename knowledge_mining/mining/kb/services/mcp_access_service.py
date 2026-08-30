@@ -47,6 +47,19 @@ MCP_NEW_TOOLS = (
     "query_structured_asset",
 )
 
+def normalize_legacy_open_tools(open_tools: list[str]) -> list[str] | None:
+    """29号（未完成 E）：历史 open_tools 迁移的纯函数。
+
+    含已退役工具名（如 get_segment_fulltext）的集合 → 剔除退役名 + 补齐
+    新四结构工具（用户从未见过它们，不构成"误开启"；显式关闭的既有工具
+    保持关闭）。非 legacy 集合（全部在当前白名单内）返回 None = 无需迁移。
+    """
+    if not open_tools or all(t in MCP_TOOL_NAMES for t in open_tools):
+        return None
+    kept = [t for t in open_tools if t in MCP_TOOL_NAMES]
+    return kept + [t for t in MCP_NEW_TOOLS if t not in kept]
+
+
 MCP_INSTRUCTIONS_MAX = 4000
 MCP_TOOL_DESC_MAX = 2000
 

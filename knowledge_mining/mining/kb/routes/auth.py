@@ -24,8 +24,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from knowledge_mining.mining.kb.services.mcp_access_service import (
-    MCP_NEW_TOOLS,
-    MCP_TOOL_NAMES,
+    normalize_legacy_open_tools,
 )
 from knowledge_mining.mining.kb.services.user_service import (
     DuplicateUser, InvalidRole, UserError, UserNotFound, UserService, WrongPassword,
@@ -164,26 +163,19 @@ async def verify_mcp_key(
     # 工具（用户从未见过它们，不存在"误开启"；显式关闭的既有工具保持
     # 关闭）。规范化并回写一次，UI/runtime 后续读到即为终态。
     open_tools = result.get("open_tools")
-    if open_tools and any(
-        t not in MCP_TOOL_NAMES for t in open_tools
-    ):
-        kept = [t for t in open_tools if t in MCP_TOOL_NAMES]
-        normalized = kept + [
-            t for t in MCP_NEW_TOOLS
-            if t not in kept
-        ]
+    normalized = normalize_legacy_open_tools(open_tools or [])
+    if open_tools and normalized is not None:
         if normalized:
+            retired = [t for t in open_tools if t not in normalized]
+            added = [t for t in normalized if t not in (open_tools or [])]
             try:
                 await svc.update_config(
                     user_id=result["user_id"], open_tools=normalized,
                 )
-                open_tools = normalized
                 logger.info(
                     "[mcp-tools] migrated legacy open_tools for %s: "
                     "retired=%s added=%s",
-                    result["username"],
-                    [t for t in open_tools if t not in MCP_TOOL_NAMES],
-                    [t for t in MCP_NEW_TOOLS if t not in kept],
+                    result["username"], retired, added,
                 )
             except Exception:  # noqa: BLE001
                 logger.warning(
@@ -192,7 +184,7 @@ async def verify_mcp_key(
                     result["username"],
                     exc_info=True,
                 )
-                open_tools = normalized
+        open_tools = normalized
 
     return {
         "ok": True,

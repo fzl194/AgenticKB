@@ -36,7 +36,7 @@ def _segments() -> tuple[CompiledSegment, ...]:
             token_count=100,
         ),
         CompiledSegment(
-            segment_index=1, block_type="table_row", raw_text="A-101\t30",
+            segment_index=1, block_type="table_row", raw_text="告警码=A-101；功耗=30",
             heading_chain=((1, "运维手册"), (2, "告警表")),
             element_ids=("t0",), links=(SegmentElementLink(element_id="t0"),),
             metadata={

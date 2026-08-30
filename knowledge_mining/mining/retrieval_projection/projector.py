@@ -55,15 +55,16 @@ def _document_representation(
         None,
     ) or document_ref
     target_ref = f"{document_ref}#document"
+    representation_id = f"{snapshot_ref}:document:0"
     return RetrievalRepresentation(
-        representation_id=f"{document_ref}:{snapshot_ref}:document:0",
+        representation_id=representation_id,
         representation_type="document",
         content_type="document",
         content_text=title,
         structural_context="",
         target_type="document",
         target_ref=target_ref,
-        canonical_evidence_id=target_ref,
+        canonical_evidence_id=representation_id,
         source_refs=(),
         container_ref=None,
         context_group_id=document_ref,
@@ -151,27 +152,28 @@ def _representation_for(
         target_ref = f"{document_ref}#seg:{segment.segment_index}"
         container_ref = None
 
+    # table_row 的 raw_text 本身已是自描述行文本（compiler `_row_text`：
+    # "列名=值；列名=值"——行脱离表头仍有语义），直接作为检索文本，不再
+    # 二次编码（此前按 \t 切分重组成"列名为值"会产生"告警码为告警码=…"）。
     content_text = segment.raw_text
-    if representation_type == "table_row" and header:
-        # 行文本序列化带列头（"列为值"），保证 FTS/dense 可独立理解
-        columns = [str(col) for col in header]
-        values = content_text.split("\t")
-        pairs = [
-            f"{col}为{val.strip()}"
-            for col, val in zip(columns, values)
-            if val.strip()
-        ]
-        content_text = "；".join(pairs) if pairs else content_text
 
+    # 27号审查修复（E2E 追溯发现）：representation_id 与 canonical 锚定
+    # snapshot 而非 document_ref——同内容多文档共享快照时 doc_key 不同的
+    # 重挖会改写 units 的 id，而 embeddings 仍挂旧 id，dense 联接断裂
+    # （dense_ready=false / covered=0）。target_ref 保持文档锚定（展示与
+    # within 过滤语义），文档归属由 asset_document_snapshot_links 提供。
+    representation_id = (
+        f"{snapshot_ref}:{representation_type}:{segment.segment_index}"
+    )
     return RetrievalRepresentation(
-        representation_id=f"{document_ref}:{snapshot_ref}:{representation_type}:{segment.segment_index}",
+        representation_id=representation_id,
         representation_type=representation_type,
         content_type=content_type,
         content_text=content_text,
         structural_context=structural_context,
         target_type=target_type,
         target_ref=target_ref,
-        canonical_evidence_id=target_ref,
+        canonical_evidence_id=representation_id,
         source_refs=_source_refs(segment),
         container_ref=container_ref,
         context_group_id=(
@@ -222,16 +224,17 @@ def _section_representations(
         if not parts:
             continue
         target_ref = f"{document_ref}#section:{'/'.join(t for _l, t in path)}"
+        representation_id = f"{snapshot_ref}:section:{order}"
         reps.append(
             RetrievalRepresentation(
-                representation_id=f"{document_ref}:{snapshot_ref}:section:{order}",
+                representation_id=representation_id,
                 representation_type="section",
                 content_type="section",
                 content_text=f"{title}\n" + "\n".join(parts),
                 structural_context=_breadcrumb(path[:-1]),
                 target_type="section",
                 target_ref=target_ref,
-                canonical_evidence_id=target_ref,
+                canonical_evidence_id=representation_id,
                 source_refs=(
                     {"segment_index": child.segment_index} for child in children
                 ),

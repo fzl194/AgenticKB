@@ -47,7 +47,7 @@ def _segments() -> tuple[CompiledSegment, ...]:
             token_count=100,
         ),
         CompiledSegment(
-            segment_index=1, block_type="table_row", raw_text="A-101\t风扇停转",
+            segment_index=1, block_type="table_row", raw_text="告警码=A-101；原因=风扇停转",
             heading_chain=((1, "运维手册"), (2, "告警表")),
             element_ids=("t0",), links=(SegmentElementLink(element_id="t0"),),
             metadata={"table_header": ["告警码", "原因"], "table_ref": "tbl-1"},
@@ -143,7 +143,7 @@ def test_same_source_canonical_rules() -> None:
             token_count=40,
         ),
         CompiledSegment(
-            segment_index=1, block_type="table_row", raw_text="v1\tv2",
+            segment_index=1, block_type="table_row", raw_text="A=v1；B=v2",
             heading_chain=((1, "章"),),
             metadata={"table_header": ["A", "B"], "table_ref": "tbl-9",
                       "row_index": 0},

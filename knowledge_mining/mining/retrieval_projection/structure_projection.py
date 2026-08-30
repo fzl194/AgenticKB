@@ -27,6 +27,26 @@ def _section_ref(document_ref: str, path: Sequence[tuple[int, str]]) -> str:
     return f"{document_ref}#section:{'/'.join(title for _lvl, title in path)}"
 
 
+def _row_cells(raw_text: str, header: Sequence[str]) -> list[tuple[str, str]]:
+    """解析自描述行文本（compiler ``_row_text``："列名=值；列名=值"）.
+
+    27号审查修复（E2E 追溯发现）：table_row 的 raw_text 是"列名=值"自描述
+    格式而非 \\t 分隔——按表头名对齐恢复逐列 cell；无表头对应的片段
+    （如 "[caption] " 前缀、表头未覆盖的裸值）跳过。值内含 "；" 属罕见
+    边界，接受尽力恢复语义。
+    """
+    header_set = set(header)
+    out: list[tuple[str, str]] = []
+    for part in raw_text.split("；"):
+        part = part.strip()
+        if not part:
+            continue
+        name, sep, value = part.partition("=")
+        if sep and name.strip() in header_set:
+            out.append((name.strip(), value))
+    return out
+
+
 def project_structure(
     segments: Iterable[CompiledSegment],
     *,
@@ -96,14 +116,15 @@ def project_structure(
                 if segment.heading_chain else document_ref,
             })
         if segment.block_type == "table_row" and header:
-            values = segment.raw_text.split("\t")
             row_index = int(metadata.get("row_index", len(cells)))
-            for col_idx, (column, value) in enumerate(zip(header, values)):
+            col_idx_of = {name: i for i, name in enumerate(header)}
+            for name, value in _row_cells(segment.raw_text, header):
                 if not value.strip():
                     continue
                 cells.append({
-                    "table_ref": table_ref, "row": row_index, "column_index": col_idx,
-                    "column": column, "value": value.strip(),
+                    "table_ref": table_ref, "row": row_index,
+                    "column_index": col_idx_of.get(name, -1),
+                    "column": name, "value": value.strip(),
                     "is_header": False,
                 })
             for asset in table_assets:

@@ -145,6 +145,29 @@ def test_create_uses_strict_request_model(
 @pytest.mark.parametrize(
     "template_key",
     [
+        "hybrid_assets",
+        "lexical_assets",
+        "query_alias_assets",
+        "longdoc_assets",
+    ],
+)
+def test_create_accepts_official_four_template_keys(
+    fake_workflow_service: FakeWorkflowService,
+    template_key: str,
+) -> None:
+    """29号 R01：四套官方预置经真实 HTTP DTO 创建成功（旧七套已退役）。"""
+    response = client_for(fake_workflow_service).post(
+        "/api/mining-workflows",
+        json={"name": f"workflow-{template_key}", "template_key": template_key},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["template_key"] == template_key
+
+
+@pytest.mark.parametrize(
+    "template_key",
+    [
         "minimal",
         "fast_retrieval",
         "discourse_only",
@@ -154,7 +177,7 @@ def test_create_uses_strict_request_model(
         "full",
     ],
 )
-def test_create_accepts_all_seven_paradigm_template_keys(
+def test_create_rejects_retired_template_keys_with_stable_error(
     fake_workflow_service: FakeWorkflowService,
     template_key: str,
 ) -> None:
@@ -163,8 +186,40 @@ def test_create_accepts_all_seven_paradigm_template_keys(
         json={"name": f"workflow-{template_key}", "template_key": template_key},
     )
 
-    assert response.status_code == 201
-    assert response.json()["template_key"] == template_key
+    assert response.status_code == 422
+    assert "template_retired:" + template_key in response.text
+    assert fake_workflow_service.calls == []
+
+
+def test_template_key_contract_across_layers() -> None:
+    """29号 R01 验收：UI 类型 = API DTO = builtin templates 同一 key 集合。
+
+    直接解析 kb-ui 的 MiningTemplateKey 联合类型（防三处再次漂移）。
+    """
+    import re
+    from pathlib import Path
+
+    from knowledge_mining.mining.api.models.workflows import (
+        _RETIRED_TEMPLATE_KEYS,
+    )
+    from knowledge_mining.mining.workflow.templates import builtin_templates
+
+    builtin = set(builtin_templates())
+    assert builtin == {
+        "hybrid_assets", "lexical_assets", "query_alias_assets", "longdoc_assets",
+    }
+    assert _RETIRED_TEMPLATE_KEYS.isdisjoint(builtin)
+
+    ui_file = (
+        Path(__file__).resolve().parents[2]
+        / "kb-ui" / "src" / "types" / "miningWorkflow.ts"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r"export type MiningTemplateKey\s*=\s*([^;]+);", ui_file,
+    )
+    assert match, "MiningTemplateKey union not found in kb-ui types"
+    ui_keys = set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    assert ui_keys == builtin, f"UI/后端模板键漂移: {ui_keys ^ builtin}"
 
 
 def test_save_draft_requires_expected_revision(

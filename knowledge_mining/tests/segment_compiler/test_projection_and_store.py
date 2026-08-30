@@ -310,3 +310,28 @@ async def test_recompile_reuses_ir_and_creates_new_snapshot(tmp_path) -> None:
     # 新快照下有切片；旧快照 id 下没有
     assert await seg_store.list_for_snapshot(new_snap.id)
     assert not await seg_store.list_for_snapshot(first.snapshot.id)
+
+
+def test_projection_preserves_source_block_type() -> None:
+    """27号审查修复：raw 面 block_type 被 legacy 白名单收敛时，真实类型存
+    structure_json（source_block_type），供 PgSegmentStore.list_for_snapshot
+    读回还原——table_row/list_item/figure 不因 DB 往返丢失粒度。"""
+    from knowledge_mining.mining.segment_compiler.projection import (
+        to_raw_segment_data,
+    )
+
+    seg = CompiledSegment(
+        segment_index=3, block_type="table_row", raw_text="A-101\t2",
+        heading_chain=((1, "规格表"),),
+        metadata={
+            "table_ref": "tbl:1", "table_header": ("型号", "数量"),
+            "row_index": 0,
+        },
+        token_count=4,
+    )
+    rsd = to_raw_segment_data(seg, document_key="d.md")
+    assert rsd.block_type == "table"  # 002 DDL 白名单收敛（既有行为）
+    assert rsd.structure_json["source_block_type"] == "table_row"
+    # 原 metadata 完整保留（table_ref 等行细节不丢）
+    assert rsd.structure_json["table_ref"] == "tbl:1"
+    assert rsd.structure_json["row_index"] == 0

@@ -110,11 +110,24 @@ class EmbeddingFacade:
         if records:
             inputs = [record.strategy_input for record in records]
             embedded = self._generator.embed_batch(inputs) or []
+            # 完整性硬校验：zip 截断会让空占位向量以 NULL 落库并虚报
+            # dense_ready——数量不符/空向量一律显式失败，由算子 FAILED
+            # 暴露供应商契约破坏，可重试。
+            if len(embedded) != len(records):
+                raise RuntimeError(
+                    f"embedding provider returned {len(embedded)} vectors "
+                    f"for {len(records)} inputs"
+                )
             meta_dimension = int(meta.get("dimension", 0) or 0)
-            for idx, (record, vector) in enumerate(zip(records, embedded)):
+            for idx, vector in enumerate(embedded):
+                if not vector:
+                    raise RuntimeError(
+                        f"embedding provider returned an empty vector "
+                        f"at index {idx}"
+                    )
                 vectors[idx] = list(vector)
                 # provider 未实现 describe() 时以首个真实向量长度为准（维度>0 才合法）
-                if meta_dimension <= 0 and idx == 0 and vector:
+                if meta_dimension <= 0 and idx == 0:
                     meta = {**meta, "dimension": len(vector)}
             # 统一回填 dimension（describe 缺失时）
             effective_dim = int(meta.get("dimension", 0) or 0)

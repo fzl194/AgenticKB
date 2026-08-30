@@ -26,12 +26,12 @@ _POSITIONS = {
 }
 
 
-def _node(operator_type: str) -> NodeDef:
+def _node(operator_type: str, params: dict | None = None) -> NodeDef:
     x, y = _POSITIONS[operator_type]
     return NodeDef(
         node_id=operator_type,
         operator_type=operator_type,
-        params={},
+        params=params or {},
         ui={"x": x, "y": y},
     )
 
@@ -42,6 +42,16 @@ def _template(
     with_query_expansion: bool = False,
     with_summary: bool = False,
 ) -> WorkflowGraph:
+    # 表格行拆分（tableView=both）是标准资产契约的一部分（24 号 §8：
+    # "table/code/list/结构导航不是独立范式，是标准资产契约的一部分"）——
+    # 四套预置全部显式开启，table_row 表示与 table_cells 由默认链产出。
+    node_params: dict[str, dict] = {
+        "segment_compile": {"tableView": "both"},
+    }
+    if with_embedding:
+        # 标准混合家族追加章节表示（§5.4 矩阵 section 默认 FTS/dense 开）
+        node_params["retrieval_unit_project"] = {"includeSections": True}
+
     types = ["input_ingest", "document_parse", "segment_compile",
              "retrieval_unit_project"]
     if with_query_expansion:
@@ -76,7 +86,7 @@ def _template(
 
     return WorkflowGraph(
         schema_version="2.0",
-        nodes=tuple(_node(t) for t in types),
+        nodes=tuple(_node(t, node_params.get(t)) for t in types),
         edges=tuple(edges),
         output=OutputDef("mining_finalize", "result"),
     )

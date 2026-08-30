@@ -100,11 +100,14 @@ def test_kb_workflow_prepares_document_states_from_object_storage_identities(mon
     v2_services = SimpleNamespace(
         document_parse_service=object(),
         segment_compile_service=object(),
+        retrieval_project_service=object(),
+        embedding_service=object(),
+        asset_persist_service=object(),
     )
     monkeypatch.setattr(
         run_job,
         "_build_workflow_object_input_services",
-        lambda *, sync_pool: v2_services,
+        lambda *, sync_pool, embedding_generator=None: v2_services,
     )
     monkeypatch.setattr(
         run_job,
@@ -173,6 +176,8 @@ def test_kb_workflow_services_use_control_plane_object_store_config(monkeypatch)
         "bucket_prefix": "agentickb-test-",
         "object_store": object_store,
         "sync_pool": "sync-pool",
+        # 批次8 联调（feea1b0）：组合根透传 embedding_generator（None=无向量线）
+        "embedding_generator": None,
     }
 
 

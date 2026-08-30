@@ -21,18 +21,62 @@ from knowledge_mining.mining.contracts.retrieval_projection import (
 from knowledge_mining.mining.contracts.segment_compiler import CompiledSegment
 
 # block_type → (representation_type, content_type)
+# 词表以编译器实际产出为准（compiler.py：paragraph/list_item/code/quote/
+# table/table_row/figure/heading/…）；list/figure_caption 为同义历史键保留。
 _BLOCK_TYPE_MATRIX: Mapping[str, tuple[str, str]] = {
     "paragraph": ("prose", "paragraph"),
     "table": ("table", "table"),
     "table_row": ("table_row", "table_row"),
     "code": ("code_block", "code"),
     "list": ("list_group", "list"),
+    "list_item": ("list_group", "list"),
     "formula": ("formula", "formula"),
+    "figure": ("figure_caption", "figure"),
     "figure_caption": ("figure_caption", "figure_caption"),
 }
 # heading / navigation 及未知类型不单独形成正文表示（矩阵默认行为）
 
 MAX_SECTION_DIRECT_TOKENS = 1600
+
+
+def _document_representation(
+    segments: Sequence[CompiledSegment],
+    *,
+    document_ref: str,
+    snapshot_ref: str,
+) -> RetrieRepresentation:
+    """文档级表示（24 号 §5.4 矩阵）：文件名/标题等来源事实，不做 LLM 摘要.
+
+    标题取首个 heading 切片（可追溯），缺失时回落 document_ref 本身；
+    canonical target = document。
+    """
+    title = next(
+        (seg.raw_text for seg in segments if seg.block_type == "heading"),
+        None,
+    ) or document_ref
+    target_ref = f"{document_ref}#document"
+    return RetrieRepresentation(
+        representation_id=f"{document_ref}:{snapshot_ref}:document:0",
+        representation_type="document",
+        content_type="document",
+        content_text=title,
+        structural_context="",
+        target_type="document",
+        target_ref=target_ref,
+        canonical_evidence_id=target_ref,
+        source_refs=(),
+        container_ref=None,
+        context_group_id=document_ref,
+        ordinal=-1,
+        facets={
+            "document": document_ref,
+            "content_type": "document",
+        },
+        provenance={
+            "projector": PROJECTOR_NAME,
+            "projector_version": PROJECTOR_VERSION,
+        },
+    )
 
 
 def _breadcrumb(heading_chain: Sequence[tuple[int, str]]) -> str:
@@ -77,7 +121,10 @@ def _representation_for(
     metadata: Mapping[str, Any] = segment.metadata or {}
     table_ref = str(metadata.get("table_ref") or "")
     header = metadata.get("table_header") or ()
-    caption = str(metadata.get("caption") or "")
+    # figure 切片的 caption 在 metadata.figure_caption（compiler.py 惯例）
+    caption = str(
+        metadata.get("caption") or metadata.get("figure_caption") or ""
+    )
 
     if representation_type == "table_row":
         structural_context = " | ".join(
@@ -95,7 +142,12 @@ def _representation_for(
         target_ref = f"{document_ref}#table:{table_ref or segment.segment_index}"
         container_ref = None
     else:
-        structural_context = _breadcrumb(segment.heading_chain)
+        # figure_caption 用原始 caption 作结构上下文（§5.4：原始 caption/附近
+        # mention）；其余类型走标题面包屑。caption 缺失时不改变原行为。
+        structural_context = (
+            f"{caption} | {_breadcrumb(segment.heading_chain)}".strip(" |")
+            if caption else _breadcrumb(segment.heading_chain)
+        )
         target_ref = f"{document_ref}#seg:{segment.segment_index}"
         container_ref = None
 
@@ -210,7 +262,12 @@ def project_representations(
 ) -> tuple[RetrieRepresentation, ...]:
     """从编译切片确定性投影类型化搜索表示（纯函数）."""
     materialized = tuple(segments)
-    reps: list[RetrieRepresentation] = []
+    reps: list[RetrieRepresentation] = [
+        # 文档级表示始终生成（§5.4 矩阵默认 FTS/dense/returnable 全开）
+        _document_representation(
+            materialized, document_ref=document_ref, snapshot_ref=snapshot_ref,
+        )
+    ]
     for segment in materialized:
         rep = _representation_for(
             segment, document_ref=document_ref, snapshot_ref=snapshot_ref

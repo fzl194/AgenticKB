@@ -146,6 +146,12 @@ class PgSegmentStore:
             rows = await cur.fetchall()
         out: list[CompiledSegment] = []
         for r in rows:
+            metadata = _as_dict(r.get("structure_json"))
+            # 还原兼容投影前的真实 block_type（projection.py 写入的
+            # source_block_type）；无该键的存量行回落列值本身。
+            block_type = metadata.pop("source_block_type", None) or str(
+                r["block_type"]
+            )
             offsets = _as_dict(r.get("source_offsets_json"))
             chain = tuple(
                 (int(n.get("level", 0)), str(n.get("title", "")))
@@ -166,12 +172,12 @@ class PgSegmentStore:
             )
             out.append(CompiledSegment(
                 segment_index=int(r["segment_index"]),
-                block_type=str(r["block_type"]),
+                block_type=block_type,
                 raw_text=str(r["raw_text"]),
                 heading_chain=chain,
                 element_ids=tuple(l.element_id for l in links),
                 links=links,
-                metadata=_as_dict(r.get("structure_json")),
+                metadata=metadata,
                 token_count=r.get("token_count"),
                 semantic_role=str(r.get("semantic_role") or "unknown"),
             ))

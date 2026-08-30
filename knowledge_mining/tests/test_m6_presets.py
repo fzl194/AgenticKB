@@ -89,3 +89,28 @@ def test_legacy_preset_names_never_return() -> None:
     for legacy in ("minimal", "fast_retrieval", "discourse_only",
                    "entity_graph", "hybrid_knowledge", "ontology_only", "full"):
         assert legacy not in joined
+
+
+def test_official_presets_enable_table_rows_and_sections() -> None:
+    """27号审查修复：表格行拆分（tableView=both）是标准资产契约的一部分，
+    四套预置显式开启；标准混合家族（hybrid）追加章节表示。"""
+    from knowledge_mining.mining.workflow.templates import builtin_templates
+
+    templates = builtin_templates()
+    for key, graph in templates.items():
+        compile_node = next(
+            n for n in graph.nodes if n.operator_type == "segment_compile"
+        )
+        assert compile_node.params.get("tableView") == "both", key
+
+    hybrid = templates["hybrid_assets"]
+    project_node = next(
+        n for n in hybrid.nodes if n.operator_type == "retrieval_unit_project"
+    )
+    assert project_node.params.get("includeSections") is True
+
+    lexical = templates["lexical_assets"]
+    lexical_project = next(
+        n for n in lexical.nodes if n.operator_type == "retrieval_unit_project"
+    )
+    assert not lexical_project.params.get("includeSections")

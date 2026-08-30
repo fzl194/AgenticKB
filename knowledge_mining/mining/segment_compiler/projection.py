@@ -79,7 +79,13 @@ def to_raw_segment_data(
         content_hash=hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
         normalized_hash=hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
         token_count=segment.token_count,
-        structure_json=dict(segment.metadata),
+        # 兼容投影保真：raw 面 block_type 受 002 DDL 白名单约束会被收敛
+        # （table_row→table 等）；真实类型存 structure_json，list_for_snapshot
+        # 读回时优先还原——新链投影器/结构面不因 legacy 词表丢失行级粒度。
+        structure_json={
+            **dict(segment.metadata or {}),
+            "source_block_type": segment.block_type,
+        },
         source_offsets_json={"element_links": element_links},
         metadata_json={"compiler": "segment-compiler"},
     )

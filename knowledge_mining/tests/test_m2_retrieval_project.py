@@ -178,7 +178,11 @@ def test_heading_does_not_become_standalone_representation() -> None:
     reps = project_representations(
         segments, document_ref="d.md", snapshot_ref="s1",
     )
-    assert reps == ()  # heading/navigation 默认不单独形成正文表示
+    # heading/navigation 默认不单独形成正文表示；文档级表示（§5.4 矩阵，
+    # 标题恰好取自首个 heading）是唯一产物。
+    assert [r.representation_type for r in reps] == ["document"]
+    assert reps[0].content_text == "第一章"
+    assert reps[0].target_ref == "d.md#document"
 
 
 def test_section_representation_aggregates_direct_children_bounded() -> None:
@@ -373,3 +377,31 @@ def test_project_then_embedding_chain_compiles() -> None:
     )
     result = WorkflowCompiler(builtin_catalog()).compile(graph, mode="publish")
     assert result.valid is True, [e.kind for e in result.errors]
+
+
+def test_compiler_vocabulary_maps_into_type_matrix() -> None:
+    """27号审查修复：编译器真实词表（list_item/figure）进入投影矩阵，
+    与 PG 往返还原（source_block_type）配合后默认链可产出 list/figure 表示。"""
+    from knowledge_mining.mining.retrieval_projection.projector import (
+        project_representations,
+    )
+
+    segments = (
+        CompiledSegment(
+            segment_index=1, block_type="list_item", raw_text="先断电",
+            token_count=3,
+        ),
+        CompiledSegment(
+            segment_index=2, block_type="figure", raw_text="图1 风扇结构",
+            metadata={"figure_caption": "风扇结构图"},
+            token_count=4,
+        ),
+    )
+    reps = project_representations(
+        segments, document_ref="d.md", snapshot_ref="s1",
+    )
+    by_type = {r.representation_type for r in reps}
+    assert "list_group" in by_type
+    assert "figure_caption" in by_type
+    fig = next(r for r in reps if r.representation_type == "figure_caption")
+    assert "风扇结构图" in fig.structural_context

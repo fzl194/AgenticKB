@@ -281,3 +281,51 @@ def test_embedding_handler_requires_bundle_with_representations():
         state, {}, SimpleNamespace(services=SimpleNamespace()),
     )
     assert result.status.value == "skipped"
+
+
+def test_embed_rejects_short_or_empty_vectors(tmp_path) -> None:
+    """27号审查修复：embed_batch 短返/空向量必须显式失败——zip 截断会让
+    空占位向量以 NULL 落库并虚报 dense_ready。"""
+    import asyncio
+
+    from knowledge_mining.mining.retrieval_projection.embedding import (
+        EmbeddingFacade,
+    )
+    from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+        MemoryRepresentationStore,
+    )
+
+    reps = (_rep("prose"), _rep("code_block"))
+    store = MemoryRepresentationStore()
+
+    async def seed():
+        await store.replace_for_snapshot(
+            "s1", reps, "proj-v1", document_key="d",
+        )
+
+    asyncio.new_event_loop().run_until_complete(seed())
+
+    def _generator(batch):
+        # describe 提供 dimension=8；embed_batch 按注入行为返回
+        return SimpleNamespace(
+            capabilities=("skip", "isolated", "structural"),
+            describe=lambda: {
+                "provider": "x", "model": "m", "version": "1",
+                "dimension": 8,
+            },
+            embed_batch=lambda inputs: batch(len(inputs)),
+        )
+
+    short = _generator(lambda n: [[0.0] * 8 for _ in range(n - 1)])
+    with pytest.raises(RuntimeError, match="vectors"):
+        EmbeddingFacade(
+            representation_store=store, embedding_store=SimpleNamespace(),
+            generator=short,
+        ).embed_for_snapshot(snapshot_id="s1", params={})
+
+    with_empty = _generator(lambda n: [[0.0] * 8] + [[]] * (n - 1))
+    with pytest.raises(RuntimeError, match="empty vector"):
+        EmbeddingFacade(
+            representation_store=store, embedding_store=SimpleNamespace(),
+            generator=with_empty,
+        ).embed_for_snapshot(snapshot_id="s1", params={})

@@ -95,10 +95,18 @@
             FROM asset_structure_nodes n
             WHERE n.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
-            UNION ALL
+            UNION
             SELECT a.snapshot_id, a.asset_ref AS ref
             FROM asset_structured_assets a
             WHERE a.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+            UNION
+            <!-- 27号审查修复（E2E 追溯）：hydrate 的 st_ 按证据 target_ref 编码
+                 （如 #document / #table_row:…，并非都是结构节点 ref）——候选
+                 空间并入 units 的 target_ref 才能解析回内部范围。 -->
+            SELECT DISTINCT r.snapshot_id, r.target_ref AS ref
+            FROM asset_retrieval_units_v2 r
+            WHERE r.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
         ) u
         ORDER BY u.snapshot_id ASC, u.ref ASC

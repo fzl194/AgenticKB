@@ -60,7 +60,14 @@ public class StructureRefService implements EvidenceRefResolver {
         if (kind == null) {
             throw StructureToolException.invalidRef("ref 前缀非法（期望 ev_/doc_/st_）");
         }
-        String hash = opaqueRef.substring(3);
+        // 27号审查修复（E2E 追溯）：doc_ 是 4 字符前缀——按各类前缀实际长度
+        // 切 hash（此前固定 substring(3) 让 doc_ ref 恒带前导下划线被判非法）。
+        String prefix = switch (kind) {
+            case EVIDENCE -> EvidenceRefCodec.EVIDENCE_PREFIX;
+            case DOCUMENT -> EvidenceRefCodec.DOCUMENT_PREFIX;
+            case STRUCTURE -> EvidenceRefCodec.STRUCTURE_PREFIX;
+        };
+        String hash = opaqueRef.substring(prefix.length());
         if (hash.length() != EvidenceRefCodec.SHORT_HASH_CHARS) {
             throw StructureToolException.invalidRef("ref 格式非法");
         }

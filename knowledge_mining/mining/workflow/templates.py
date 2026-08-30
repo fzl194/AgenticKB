@@ -45,8 +45,12 @@ def _template(
     # 表格行拆分（tableView=both）是标准资产契约的一部分（24 号 §8：
     # "table/code/list/结构导航不是独立范式，是标准资产契约的一部分"）——
     # 四套预置全部显式开启，table_row 表示与 table_cells 由默认链产出。
+    # maxTokens/minTokens 与 v2_migration._NEW_SEGMENT_DEFAULTS 同值显式
+    # 烤死——否则启动迁移每次补缺省键、漂移刷新又还原，版本无限乒乓。
     node_params: dict[str, dict] = {
-        "segment_compile": {"tableView": "both"},
+        "segment_compile": {
+            "maxTokens": 2048, "minTokens": 512, "tableView": "both",
+        },
     }
     if with_embedding:
         # 标准混合家族追加章节表示（§5.4 矩阵 section 默认 FTS/dense 开）

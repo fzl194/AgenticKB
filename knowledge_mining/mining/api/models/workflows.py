@@ -20,7 +20,9 @@ class WorkflowRequest(BaseModel):
 
 class CreateWorkflowRequest(WorkflowRequest):
     name: str = Field(min_length=1, max_length=120)
-    schema_version: str = "1.0"
+    # 29号 R01 验收补充：唯一支持的是 2.0——默认值即可用值（此前默认 1.0，
+    # 不带该键的创建请求必被 service 拒绝）
+    schema_version: str = "2.0"
     description: str | None = None
     template_key: str = "hybrid_assets"
     graph: dict[str, Any] | None = None

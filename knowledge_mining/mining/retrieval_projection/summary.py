@@ -12,7 +12,7 @@ from typing import Any
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
     PROJECTOR_VERSION,
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 from knowledge_mining.mining.contracts.segment_compiler import CompiledSegment
 
@@ -22,7 +22,7 @@ _MIN_SECTION_TOKENS = 120
 
 @dataclass(frozen=True)
 class SummaryOutcome:
-    aliases: tuple[RetrieRepresentation, ...]
+    aliases: tuple[RetrievalRepresentation, ...]
     skipped_sections: int
     llm_failures: int
     degraded: bool
@@ -31,8 +31,8 @@ class SummaryOutcome:
 def _summary_alias(
     *, document_ref: str, snapshot_ref: str, target_type: str, target_ref: str,
     title: str, summary_text: str, source_refs: tuple[Mapping, ...], ordinal: int,
-) -> RetrieRepresentation:
-    return RetrieRepresentation(
+) -> RetrievalRepresentation:
+    return RetrievalRepresentation(
         representation_id=f"{document_ref}:{snapshot_ref}:summary:{ordinal}",
         representation_type="summary_alias",
         content_type="summary_alias",
@@ -88,7 +88,7 @@ class HierarchicalSummaryFacade:
         # 也要上卷成 document 摘要，不能因"无无标题段落"而缺失文档摘要。
         by_path.setdefault((), [])
 
-        aliases: list[RetrieRepresentation] = []
+        aliases: list[RetrievalRepresentation] = []
         skipped = failures = 0
         ordinal = 0
         # 27号审查修复：真自底向上——父章节输入 = 直接子段 + 立即子章节的

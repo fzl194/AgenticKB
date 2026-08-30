@@ -13,7 +13,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 from knowledge_mining.mining.retrieval_projection.structure_projection import (
     StructureProjection,

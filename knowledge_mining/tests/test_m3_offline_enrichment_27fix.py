@@ -10,13 +10,13 @@ from __future__ import annotations
 import asyncio
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 
 
 def _rep(rep_type="prose", *, text="一段足够长的正文内容用于通过资格门审查。" * 6,
          canonical="d#seg:0", ordinal=0):
-    return RetrieRepresentation(
+    return RetrievalRepresentation(
         representation_id=f"d:s1:{rep_type}:{ordinal}",
         representation_type=rep_type,
         content_type=rep_type,

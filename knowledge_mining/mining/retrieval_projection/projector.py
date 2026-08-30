@@ -16,7 +16,7 @@ from typing import Any
 from knowledge_mining.mining.contracts.retrieval_projection import (
     PROJECTOR_NAME,
     PROJECTOR_VERSION,
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 from knowledge_mining.mining.contracts.segment_compiler import CompiledSegment
 
@@ -44,7 +44,7 @@ def _document_representation(
     *,
     document_ref: str,
     snapshot_ref: str,
-) -> RetrieRepresentation:
+) -> RetrievalRepresentation:
     """文档级表示（24 号 §5.4 矩阵）：文件名/标题等来源事实，不做 LLM 摘要.
 
     标题取首个 heading 切片（可追溯），缺失时回落 document_ref 本身；
@@ -55,7 +55,7 @@ def _document_representation(
         None,
     ) or document_ref
     target_ref = f"{document_ref}#document"
-    return RetrieRepresentation(
+    return RetrievalRepresentation(
         representation_id=f"{document_ref}:{snapshot_ref}:document:0",
         representation_type="document",
         content_type="document",
@@ -111,7 +111,7 @@ def _representation_for(
     *,
     document_ref: str,
     snapshot_ref: str,
-) -> RetrieRepresentation | None:
+) -> RetrievalRepresentation | None:
     mapped = _BLOCK_TYPE_MATRIX.get(segment.block_type)
     if mapped is None:
         return None
@@ -163,7 +163,7 @@ def _representation_for(
         ]
         content_text = "；".join(pairs) if pairs else content_text
 
-    return RetrieRepresentation(
+    return RetrievalRepresentation(
         representation_id=f"{document_ref}:{snapshot_ref}:{representation_type}:{segment.segment_index}",
         representation_type=representation_type,
         content_type=content_type,
@@ -197,7 +197,7 @@ def _section_representations(
     document_ref: str,
     snapshot_ref: str,
     max_direct_tokens: int = MAX_SECTION_DIRECT_TOKENS,
-) -> tuple[RetrieRepresentation, ...]:
+) -> tuple[RetrievalRepresentation, ...]:
     """真实章节标题 + 有界直接内容投影（不生成 LLM 摘要）."""
     by_path: dict[tuple[tuple[int, str], ...], list[CompiledSegment]] = {}
     for segment in segments:
@@ -207,7 +207,7 @@ def _section_representations(
             continue
         by_path.setdefault(tuple(segment.heading_chain), []).append(segment)
 
-    reps: list[RetrieRepresentation] = []
+    reps: list[RetrievalRepresentation] = []
     for order, (path, children) in enumerate(
         sorted(by_path.items(), key=lambda item: item[1][0].segment_index)
     ):
@@ -223,7 +223,7 @@ def _section_representations(
             continue
         target_ref = f"{document_ref}#section:{'/'.join(t for _l, t in path)}"
         reps.append(
-            RetrieRepresentation(
+            RetrievalRepresentation(
                 representation_id=f"{document_ref}:{snapshot_ref}:section:{order}",
                 representation_type="section",
                 content_type="section",
@@ -259,10 +259,10 @@ def project_representations(
     document_ref: str,
     snapshot_ref: str,
     include_sections: bool = False,
-) -> tuple[RetrieRepresentation, ...]:
+) -> tuple[RetrievalRepresentation, ...]:
     """从编译切片确定性投影类型化搜索表示（纯函数）."""
     materialized = tuple(segments)
-    reps: list[RetrieRepresentation] = [
+    reps: list[RetrievalRepresentation] = [
         # 文档级表示始终生成（§5.4 矩阵默认 FTS/dense/returnable 全开）
         _document_representation(
             materialized, document_ref=document_ref, snapshot_ref=snapshot_ref,

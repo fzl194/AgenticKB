@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
     PROJECTOR_VERSION,
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 
 # 资格门默认（versioned；§5.5）：prose 归一化 ≥80 tokens；
@@ -24,7 +24,7 @@ _DEFAULT_ENABLED_TYPES = frozenset({"prose", "table_row", "list_group"})
 _MIN_PROSE_CHARS = 80
 
 
-def is_eligible(representation: RetrieRepresentation) -> bool:
+def is_eligible(representation: RetrievalRepresentation) -> bool:
     if representation.representation_type not in _DEFAULT_ENABLED_TYPES:
         return False
     text = normalize_text(representation.content_text)
@@ -66,9 +66,9 @@ def dedup_aliases(drafts: list[AliasDraft]) -> list[AliasDraft]:
 
 
 def _alias_representation(
-    base: RetrieRepresentation, question: str, ordinal: int
-) -> RetrieRepresentation:
-    return RetrieRepresentation(
+    base: RetrievalRepresentation, question: str, ordinal: int
+) -> RetrievalRepresentation:
+    return RetrievalRepresentation(
         representation_id=f"{base.representation_id}:alias:{ordinal}",
         representation_type="query_alias",
         content_type="query_alias",
@@ -94,7 +94,7 @@ def _alias_representation(
 
 @dataclass(frozen=True)
 class ExpansionOutcome:
-    aliases: tuple[RetrieRepresentation, ...]
+    aliases: tuple[RetrievalRepresentation, ...]
     skipped: int
     invalid: int
     llm_failures: int

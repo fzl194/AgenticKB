@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 from knowledge_mining.mining.retrieval_projection.embedding_policy import (
     EmbeddingPolicy,
@@ -75,7 +75,7 @@ class EmbeddingFacade:
 
         from .async_bridge import run_sync
 
-        representations: tuple[RetrieRepresentation, ...] = run_sync(
+        representations: tuple[RetrievalRepresentation, ...] = run_sync(
             self._representations.list_for_snapshot(snapshot_id)
         )
         records: list[EmbeddingRecord] = []

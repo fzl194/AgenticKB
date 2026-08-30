@@ -225,7 +225,7 @@ class PgRepresentationStore(_PgSchemaBound):
 
     async def list_for_snapshot(self, snapshot_id: str) -> tuple:
         from knowledge_mining.mining.contracts.retrieval_projection import (
-            RetrieRepresentation,
+            RetrievalRepresentation,
         )
 
         async with self._pool.connection() as conn:
@@ -233,7 +233,7 @@ class PgRepresentationStore(_PgSchemaBound):
             cursor = await conn.execute(_UNITS_SELECT, [snapshot_id])
             rows = await cursor.fetchall()
         return tuple(
-            RetrieRepresentation(
+            RetrievalRepresentation(
                 representation_id=str(row["representation_id"]),
                 representation_type=str(row["representation_type"]),
                 content_type=str(row["content_type"]),

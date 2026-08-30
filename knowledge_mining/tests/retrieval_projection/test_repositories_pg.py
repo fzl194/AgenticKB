@@ -111,7 +111,7 @@ def find_statement(
 
 def _representation(representation_id: str = "d:s1:prose:0", **overrides: Any):
     from knowledge_mining.mining.contracts.retrieval_projection import (
-        RetrieRepresentation,
+        RetrievalRepresentation,
     )
 
     fields: dict[str, Any] = dict(
@@ -132,7 +132,7 @@ def _representation(representation_id: str = "d:s1:prose:0", **overrides: Any):
         provenance={"projector": "retrieval_unit_project", "projector_version": "1"},
     )
     fields.update(overrides)
-    return RetrieRepresentation(**fields)
+    return RetrievalRepresentation(**fields)
 
 
 def _embedding_record(

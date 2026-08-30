@@ -6,20 +6,20 @@
 from __future__ import annotations
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 from knowledge_mining.mining.retrieval_projection.embedding import EmbeddingRecord
 
 
 class MemoryRepresentationStore:
     def __init__(self) -> None:
-        self._by_snapshot: dict[str, tuple[RetrieRepresentation, ...]] = {}
+        self._by_snapshot: dict[str, tuple[RetrievalRepresentation, ...]] = {}
         self._fingerprints: dict[str, str] = {}
 
     async def replace_for_snapshot(
         self,
         snapshot_id: str,
-        representations: tuple[RetrieRepresentation, ...],
+        representations: tuple[RetrievalRepresentation, ...],
         projector_fingerprint: str,
         *,
         document_key: str,
@@ -30,13 +30,13 @@ class MemoryRepresentationStore:
 
     async def list_for_snapshot(
         self, snapshot_id: str
-    ) -> tuple[RetrieRepresentation, ...]:
+    ) -> tuple[RetrievalRepresentation, ...]:
         return self._by_snapshot.get(snapshot_id, ())
 
     async def replace_aliases_for_snapshot(
         self,
         snapshot_id: str,
-        aliases: tuple[RetrieRepresentation, ...],
+        aliases: tuple[RetrievalRepresentation, ...],
         fingerprint: str,
         *,
         document_key: str,

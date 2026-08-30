@@ -70,12 +70,12 @@ def _segments() -> tuple[CompiledSegment, ...]:
 def test_representation_contract_fields_and_types() -> None:
     from knowledge_mining.mining.contracts.retrieval_projection import (
         REPRESENTATION_TYPES,
-        RetrieRepresentation,
+        RetrievalRepresentation,
     )
 
     assert "prose" in REPRESENTATION_TYPES
     assert {"query_alias", "summary_alias"} <= set(REPRESENTATION_TYPES)
-    rep = RetrieRepresentation(
+    rep = RetrievalRepresentation(
         representation_id="manual.md:snap:prose:0",
         representation_type="prose",
         content_type="paragraph",

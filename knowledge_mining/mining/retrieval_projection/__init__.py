@@ -1,1 +1,1 @@
-"""搜索投影层（批次8 M2）：CompiledSegment → RetrieRepresentation."""
+"""搜索投影层（批次8 M2）：CompiledSegment → RetrievalRepresentation."""

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 
 
@@ -25,8 +25,8 @@ def _rep(
     content_text: str = "正文",
     structural_context: str = "章一",
     ordinal: int = 0,
-) -> RetrieRepresentation:
-    return RetrieRepresentation(
+) -> RetrievalRepresentation:
+    return RetrievalRepresentation(
         representation_id=f"d:s:{rep_type}:{ordinal}",
         representation_type=rep_type,
         content_type=rep_type,
@@ -38,7 +38,7 @@ def _rep(
     )
 
 
-def _reps() -> tuple[RetrieRepresentation, ...]:
+def _reps() -> tuple[RetrievalRepresentation, ...]:
     return (
         _rep("prose", content_text="段落正文", ordinal=0),
         _rep("table_row", content_text="告警码为A-101", ordinal=1),

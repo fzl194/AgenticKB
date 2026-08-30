@@ -32,7 +32,7 @@ PROJECTOR_VERSION = "1"
 
 
 @dataclass(frozen=True)
-class RetrieRepresentation:
+class RetrievalRepresentation:
     """一条可搜索表示（§5.4 契约字段全集）.
 
     - ``representation_type``：本模块固定枚举（矩阵行）；
@@ -75,5 +75,5 @@ __all__ = [
     "PROJECTOR_NAME",
     "PROJECTOR_VERSION",
     "REPRESENTATION_TYPES",
-    "RetrieRepresentation",
+    "RetrievalRepresentation",
 ]

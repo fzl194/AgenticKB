@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from typing import Mapping
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 
 STRATEGIES = ("skip", "isolated", "structural", "contextualized", "late_chunking")
@@ -70,7 +70,7 @@ class EmbeddingPolicy:
             fallbacks=merged_fallbacks,
         )
 
-    def _raw_strategy(self, representation: RetrieRepresentation) -> str:
+    def _raw_strategy(self, representation: RetrievalRepresentation) -> str:
         override = self.overrides.get(representation.representation_type)
         if override:
             return override
@@ -80,7 +80,7 @@ class EmbeddingPolicy:
 
     def decide(
         self,
-        representation: RetrieRepresentation,
+        representation: RetrievalRepresentation,
         *,
         capabilities: frozenset[str] | None = None,
     ) -> StrategyDecision:
@@ -106,7 +106,7 @@ class EmbeddingPolicy:
 
     def strategy_for(
         self,
-        representation: RetrieRepresentation,
+        representation: RetrievalRepresentation,
         *,
         capabilities: frozenset[str] | None = None,
     ) -> str:
@@ -123,7 +123,7 @@ def default_policy() -> EmbeddingPolicy:
 
 
 def embedding_input(
-    representation: RetrieRepresentation, strategy: str
+    representation: RetrievalRepresentation, strategy: str
 ) -> str | None:
     """按策略构造模型输入（§5.7：有界确定性上下文，非生成式）."""
     if strategy == "skip":

@@ -15,7 +15,7 @@ import asyncio
 from types import SimpleNamespace
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
-    RetrieRepresentation,
+    RetrievalRepresentation,
 )
 from knowledge_mining.mining.contracts.segment_compiler import (
     CompiledSegment,
@@ -49,9 +49,9 @@ def _segments() -> tuple[CompiledSegment, ...]:
     )
 
 
-def _reps() -> tuple[RetrieRepresentation, ...]:
+def _reps() -> tuple[RetrievalRepresentation, ...]:
     def rep(i, t, ct, lexical=True, text="正文"):
-        return RetrieRepresentation(
+        return RetrievalRepresentation(
             representation_id=f"d:s1:{t}:{i}",
             representation_type=t,
             content_type=ct,

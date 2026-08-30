@@ -4,6 +4,10 @@ import uuid
 from copy import deepcopy
 from typing import Any, Literal
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from psycopg.errors import UniqueViolation
 
 from .compiler import WorkflowCompileException, WorkflowCompiler
@@ -373,21 +377,63 @@ class WorkflowService:
         return default
 
     async def ensure_workflow_library(self) -> dict | None:
-        """M6：4 套预置幂等 seed + 首版发布（只补自己的未发布种子）."""
+        """M6：4 套预置幂等 seed + 首版发布 + 模板漂移重发布（只补自己的种子）."""
         for preset in MINING_PRESETS:
             workflow = await self.repository.get_workflow(preset.workflow_id)
             if workflow is None:
                 continue
-            if (
-                workflow["status"] != "active"
-                or workflow["current_version"] is not None
-            ):
-                continue
-            await self._ensure_initial_publication(
-                workflow,
-                release_notes="批次8 官方预置初始版本",
-            )
+            if workflow["status"] != "active":
+                continue  # 归档 = 运营决定，不复活
+            if workflow["current_version"] is None:
+                await self._ensure_initial_publication(
+                    workflow,
+                    release_notes="批次8 官方预置初始版本",
+                )
+            else:
+                await self._refresh_drifted_system_preset(preset, workflow)
         return await self.ensure_system_workflows()
+
+    async def _refresh_drifted_system_preset(
+        self, preset: Any, workflow: dict
+    ) -> None:
+        """27号审查修复：官方预置模板漂移 → 草稿对齐 + 发布新版本.
+
+        系统预置固定 id、随官方模板演进（要定制请 clone）；run 绑定按
+        current_version 解析，进行中的旧 run 冻结版本不受影响。对比键缺失/
+        保存冲突只告警——启动路径不被预置刷新阻断。
+        """
+        template = builtin_templates().get(preset.template_key)
+        if template is None:
+            return
+        desired = template.to_dict()
+        if workflow.get("draft_graph_json") == desired:
+            return
+        try:
+            updated = await self.save_draft(
+                workflow["id"],
+                graph=desired,
+                expected_revision=workflow["draft_revision"],
+                updated_by="system-preset-refresh",
+            )
+            await self.publish(
+                workflow["id"],
+                expected_revision=updated["draft_revision"],
+                release_notes=(
+                    "官方预置模板更新（表格行拆分 tableView=both / "
+                    "标准家族章节表示）"
+                ),
+                created_by="system-preset-refresh",
+            )
+        except DraftRevisionConflict:
+            logger.warning(
+                "System preset %s drift-refresh lost a race; another "
+                "instance refreshed it", preset.workflow_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "System preset %s drift-refresh failed (skipped)",
+                preset.workflow_id,
+            )
 
     async def _ensure_initial_publication(
         self,

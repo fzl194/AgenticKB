@@ -114,3 +114,128 @@ def test_official_presets_enable_table_rows_and_sections() -> None:
         n for n in lexical.nodes if n.operator_type == "retrieval_unit_project"
     )
     assert not lexical_project.params.get("includeSections")
+
+
+
+@pytest.mark.asyncio
+async def test_system_preset_drift_triggers_republish():
+    """27号审查修复：官方预置模板漂移（tableView/includeSections 参数更新）时，
+    已发布的系统 workflow 草稿对齐并发布新版本——否则生产库旧图永不生效。"""
+    from knowledge_mining.mining.workflow.presets import MINING_PRESETS
+    from knowledge_mining.mining.workflow.service import WorkflowService
+    from knowledge_mining.mining.workflow.templates import builtin_templates
+
+    presets_by_key = {p.template_key: p for p in MINING_PRESETS}
+    preset = presets_by_key["hybrid_assets"]
+
+    stale_graph = builtin_templates()["lexical_assets"].to_dict()  # 假装旧模板
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.row = {
+                "id": preset.workflow_id,
+                "status": "active",
+                "current_version": 1,
+                "draft_revision": 3,
+                "draft_graph_json": dict(stale_graph),
+            }
+            self.saved = None
+            self.published = None
+
+        async def get_workflow(self, workflow_id):
+            # 其余预置返回"已对齐"行（ensure_system_workflows 遍历全部 4 套）
+            if workflow_id == preset.workflow_id:
+                return dict(self.row)
+            other = next(
+                (q for q in MINING_PRESETS if q.workflow_id == workflow_id),
+                None,
+            )
+            return {
+                "id": workflow_id, "status": "active", "current_version": 1,
+                "draft_revision": 2,
+                "draft_graph_json": builtin_templates()[
+                    other.template_key
+                ].to_dict(),
+            } if other else None
+
+        async def update_draft(self, workflow_id, *, graph, expected_revision,
+                               updated_by):
+            assert expected_revision == 3
+            self.saved = graph
+            self.row["draft_revision"] = 4
+            self.row["draft_graph_json"] = graph
+            return dict(self.row)
+
+        async def insert_version_and_advance(self, workflow_id, *,
+                                             expected_revision, version_record):
+            assert expected_revision == 4
+            self.published = version_record
+            self.row["current_version"] = version_record["version"]
+            return dict(self.row)
+
+    class _Compiler:
+        def compile(self, graph, mode="publish"):
+            from types import SimpleNamespace
+
+            plan = SimpleNamespace(
+                to_manifest=lambda **kw: {
+                    "graphHash": "h", "schemaVersion": "2.0",
+                    "catalogVersion": "1", **kw,
+                },
+                graph=graph,
+            )
+
+            class _Require:
+                def require_plan(self_inner):
+                    return plan
+
+            return _Require()
+
+    service = WorkflowService.__new__(WorkflowService)
+    service.repository = _Repo()
+    service.compiler = _Compiler()
+
+    await service.ensure_workflow_library()
+
+    repo = service.repository
+    desired = builtin_templates()["hybrid_assets"].to_dict()
+    assert repo.saved == desired  # 草稿对齐新模板（含 tableView=both）
+    assert repo.published is not None and repo.published["version"] == 2
+
+
+
+@pytest.mark.asyncio
+async def test_system_preset_no_drift_no_touch():
+    """模板未漂移（草稿 == 当前模板）时不重发布。"""
+    from knowledge_mining.mining.workflow.presets import MINING_PRESETS
+    from knowledge_mining.mining.workflow.service import WorkflowService
+    from knowledge_mining.mining.workflow.templates import builtin_templates
+
+    presets_by_key = {p.template_key: p for p in MINING_PRESETS}
+    calls = {"publish": 0}
+
+    class _Repo:
+        async def get_workflow(self, workflow_id):
+            preset = next(
+                p for p in MINING_PRESETS if p.workflow_id == workflow_id
+            )
+            return {
+                "id": workflow_id, "status": "active", "current_version": 1,
+                "draft_revision": 2,
+                "draft_graph_json": builtin_templates()[
+                    preset.template_key
+                ].to_dict(),
+            }
+
+        async def update_draft(self, *a, **k):
+            raise AssertionError("no drift must not touch draft")
+
+        async def insert_version_and_advance(self, *a, **k):
+            calls["publish"] += 1
+            raise AssertionError("no drift must not publish")
+
+    service = WorkflowService.__new__(WorkflowService)
+    service.repository = _Repo()
+    service.compiler = None
+    await service.ensure_workflow_library()
+    assert calls["publish"] == 0

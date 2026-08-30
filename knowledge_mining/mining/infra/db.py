@@ -896,29 +896,68 @@ class AssetCoreDB(_DB):
     def fetch_snapshot_readiness(
         self, snapshot_ids: list[str]
     ) -> dict[str, dict[str, Any]]:
-        """27号审查修复 B：批量取快照冻结 readiness（无行 = 缺失，不视为 ready）.
+        """快照冻结 readiness（无行 = 缺失，不视为 ready）.
 
-        供 finalize 发布门禁与 build 摘要聚合；readiness_json 由 psycopg
-        反序列化为 dict（防御 str 形态）。
+        29号 R03（Wave 2）：门禁在晋升**之前**读——staging 优先（本 run 的
+        persist 产物），缺失回落 final（已完成晋升/旧链快照）。
+        readiness_json 由 psycopg 反序列化为 dict（防御 str 形态）。
         """
         if not snapshot_ids:
             return {}
-        rows = self._fetchall(
-            "SELECT snapshot_id, readiness_json FROM asset_snapshot_readiness "
-            "WHERE snapshot_id = ANY(%s)",
-            (snapshot_ids,),
-        )
         out: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            facts = row.get("readiness_json")
-            if isinstance(facts, str):
-                try:
-                    facts = json.loads(facts)
-                except (json.JSONDecodeError, TypeError):
-                    facts = None
-            if isinstance(facts, dict):
-                out[str(row["snapshot_id"])] = facts
+        for table in (
+            "asset_snapshot_readiness_staging",
+            "asset_snapshot_readiness",
+        ):
+            missing = [sid for sid in snapshot_ids if sid not in out]
+            if not missing:
+                break
+            rows = self._fetchall(
+                f"SELECT snapshot_id, readiness_json FROM {table} "
+                "WHERE snapshot_id = ANY(%s)",
+                (missing,),
+            )
+            for row in rows:
+                facts = row.get("readiness_json")
+                if isinstance(facts, str):
+                    try:
+                        facts = json.loads(facts)
+                    except (json.JSONDecodeError, TypeError):
+                        facts = None
+                if isinstance(facts, dict):
+                    out[str(row["snapshot_id"])] = facts
         return out
+
+    def promote_snapshot_assets(self, snapshot_ids: list[str]) -> int:
+        """29号 R03（Wave 2）：staging → final 原子晋升（派生资产唯一入通道）.
+
+        必须在调用方事务内执行（mining_finalize 的 Build 组装事务）——七张
+        派生表逐张"清 final → 拷 staging → 清 staging"，任一步失败整体
+        回滚，活动 Build 读到的资产在发布成功前不变。
+        """
+        if not snapshot_ids:
+            return 0
+        from knowledge_mining.mining.retrieval_projection.schema import (
+            PROMOTE_TABLE_COLUMNS,
+        )
+
+        for final_table, columns in PROMOTE_TABLE_COLUMNS:
+            cols = ", ".join(columns)
+            self._execute(
+                f"DELETE FROM {final_table} WHERE snapshot_id = ANY(%s)",
+                (snapshot_ids,),
+            )
+            self._execute(
+                f"INSERT INTO {final_table} ({cols}) "
+                f"SELECT {cols} FROM {final_table}_staging "
+                f"WHERE snapshot_id = ANY(%s)",
+                (snapshot_ids,),
+            )
+            self._execute(
+                f"DELETE FROM {final_table}_staging WHERE snapshot_id = ANY(%s)",
+                (snapshot_ids,),
+            )
+        return len(snapshot_ids)
 
     def count_embeddings_by_snapshot(self, document_snapshot_id: str) -> int:
         # 批次8 M5：优先 v2 向量资产；存量旧表兜底（clean break 后应为 0）。

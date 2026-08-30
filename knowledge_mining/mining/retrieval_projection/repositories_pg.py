@@ -30,10 +30,10 @@ from knowledge_mining.mining.retrieval_projection.schema import (
     ASSET_SCHEMA_V2_STATEMENTS,
 )
 
-_UNITS_DELETE = "DELETE FROM asset_retrieval_units_v2 WHERE snapshot_id = %s"
+_UNITS_DELETE = "DELETE FROM asset_retrieval_units_v2_staging WHERE snapshot_id = %s"
 
 _UNITS_INSERT = """
-    INSERT INTO asset_retrieval_units_v2 (
+    INSERT INTO asset_retrieval_units_v2_staging (
         representation_id, snapshot_id, representation_type, content_type,
         content_text, structural_context, lexical_text, tokenizer_version,
         target_type, target_ref, canonical_evidence_id, container_ref,
@@ -51,17 +51,17 @@ _UNITS_SELECT = """
            container_ref, parent_ref, context_group_id, source_refs_json,
            ordinal, lexical_eligible, dense_eligible,
            returnable, facets_json, provenance_json
-    FROM asset_retrieval_units_v2
+    FROM asset_retrieval_units_v2_staging
     WHERE snapshot_id = %s
     ORDER BY ordinal, representation_id
 """
 
 _EMBEDDINGS_DELETE = (
-    "DELETE FROM asset_retrieval_embeddings_v2 WHERE snapshot_id = %s"
+    "DELETE FROM asset_retrieval_embeddings_v2_staging WHERE snapshot_id = %s"
 )
 
 _EMBEDDINGS_INSERT = """
-    INSERT INTO asset_retrieval_embeddings_v2 (
+    INSERT INTO asset_retrieval_embeddings_v2_staging (
         embedding_id, snapshot_id, representation_id, strategy,
         policy_version, provider, model, model_version, dimension,
         input_hash, context_group_hash, fallback_from, embedding_vector_vec
@@ -78,53 +78,53 @@ _EMBEDDINGS_SELECT = """
     SELECT embedding_id, representation_id, strategy, policy_version,
            provider, model, model_version, dimension, input_hash,
            context_group_hash, fallback_from
-    FROM asset_retrieval_embeddings_v2
+    FROM asset_retrieval_embeddings_v2_staging
     WHERE snapshot_id = %s
     ORDER BY embedding_id
 """
 
 _STRUCTURE_NODES_DELETE = (
-    "DELETE FROM asset_structure_nodes WHERE snapshot_id = %s"
+    "DELETE FROM asset_structure_nodes_staging WHERE snapshot_id = %s"
 )
 _STRUCTURE_NODES_INSERT = """
-    INSERT INTO asset_structure_nodes (
+    INSERT INTO asset_structure_nodes_staging (
         snapshot_id, node_type, ref, parent_ref, ordinal, title, level,
         block_type
     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 _STRUCTURE_EDGES_DELETE = (
-    "DELETE FROM asset_structure_edges WHERE snapshot_id = %s"
+    "DELETE FROM asset_structure_edges_staging WHERE snapshot_id = %s"
 )
 _STRUCTURE_EDGES_INSERT = """
-    INSERT INTO asset_structure_edges (snapshot_id, relation, from_ref, to_ref)
+    INSERT INTO asset_structure_edges_staging (snapshot_id, relation, from_ref, to_ref)
     VALUES (%s,%s,%s,%s)
 """
 
 _STRUCTURED_ASSETS_DELETE = (
-    "DELETE FROM asset_structured_assets WHERE snapshot_id = %s"
+    "DELETE FROM asset_structured_assets_staging WHERE snapshot_id = %s"
 )
 _STRUCTURED_ASSETS_INSERT = """
-    INSERT INTO asset_structured_assets (
+    INSERT INTO asset_structured_assets_staging (
         snapshot_id, asset_ref, asset_type, table_ref, columns_json,
         row_count, readiness, schema_version
     ) VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
 """
 
-_TABLE_CELLS_DELETE = "DELETE FROM asset_table_cells WHERE snapshot_id = %s"
+_TABLE_CELLS_DELETE = "DELETE FROM asset_table_cells_staging WHERE snapshot_id = %s"
 
 _READINESS_DELETE = (
-    "DELETE FROM asset_snapshot_readiness WHERE snapshot_id = %s"
+    "DELETE FROM asset_snapshot_readiness_staging WHERE snapshot_id = %s"
 )
 
 _READINESS_INSERT = """
-    INSERT INTO asset_snapshot_readiness (
+    INSERT INTO asset_snapshot_readiness_staging (
         snapshot_id, document_ref, readiness_json, schema_version,
         tokenizer_version
     ) VALUES (%s, %s, %s::jsonb, %s, %s)
 """
 _TABLE_CELLS_INSERT = """
-    INSERT INTO asset_table_cells (
+    INSERT INTO asset_table_cells_staging (
         snapshot_id, table_ref, row_index, column_index, column_name, value,
         is_header
     ) VALUES (%s,%s,%s,%s,%s,%s,%s)
@@ -397,11 +397,17 @@ def _prepare_embedding_rows(
 
 
 class PgAssetWriter(_PgSchemaBound):
-    """PG ``AssetWriter``：三面资产按快照整体落库（faces 见 persist.py）.
+    """PG ``AssetWriter``：三面资产按快照整体写入 **staging**（faces 见 persist.py）.
 
     同步入口（AssetPersistService 直接调用）；内部经 async_bridge.run_sync
     驱动 PG 写入，事务包裹全部清旧插新——中途失败不得留下半个快照。
     raw 面与向量本体的归属取舍见模块 docstring。
+
+    29号 R03（Wave 2）：本 writer 只写 staging——final 表的唯一写入者是
+    ``AssetCoreDB.promote_snapshot_assets``（mining_finalize 的 Build 组装
+    事务内执行）。范式切换（hybrid→lexical，embedding 节点缺席）时
+    faces["embeddings"] 为空，这里同步清掉该快照的 staging 向量，防止
+    上一轮残影被晋升。
     """
 
     def replace_for_snapshot(
@@ -433,7 +439,13 @@ class PgAssetWriter(_PgSchemaBound):
                 )
                 await self._insert_structure(conn, snapshot_id, faces)
                 await self._insert_tables(conn, snapshot_id, faces)
-                await self._insert_embedding_meta(conn, snapshot_id, faces)
+                if not (faces.get("embeddings") or ()):
+                    # 范式无 embedding 节点：清 staging 向量（防上轮残影晋升）
+                    await conn.execute(_EMBEDDINGS_DELETE, [snapshot_id])
+                else:
+                    await self._insert_embedding_meta(
+                        conn, snapshot_id, faces,
+                    )
                 await self._insert_readiness(conn, snapshot_id, faces)
         return int(faces.get("representation_count", len(representations)))
 

@@ -2640,11 +2640,26 @@ def _finalize_run(
                             if f.get("structured_query_ready")
                         ),
                     }
+                    # 29号 R04：hybrid 家族（图含 embedding 算子）要求
+                    # dense 全覆盖——eligible>0 而 covered<eligible 的快照
+                    # 不得发布（部分覆盖=向量面残缺）。lexical 无 embedding
+                    # 节点不受此门（search_ready 即可）。
+                    if "embedding" in (capabilities or []):
+                        undercovered = [
+                            sid for sid, f in frozen.items()
+                            if int((f.get("counts") or {}).get("dense_units") or 0) > 0
+                            and int((f.get("counts") or {}).get("dense_covered") or 0)
+                            < int((f.get("counts") or {}).get("dense_units") or 0)
+                        ]
+                        readiness_summary["dense_undercovered"] = len(
+                            undercovered,
+                        )
                     readiness_summary["degraded"] = bool(
                         readiness_summary["reported"]
                         < readiness_summary["snapshots"]
                         or readiness_summary["search_ready"]
                         < readiness_summary["reported"]
+                        or readiness_summary.get("dense_undercovered", 0) > 0
                     )
                     readiness_ok = not readiness_summary["degraded"]
                     if not readiness_ok:
@@ -2652,6 +2667,12 @@ def _finalize_run(
                             "Run %s blocked from publish: readiness degraded %s",
                             run_id, readiness_summary,
                         )
+
+                    # 29号 R03（Wave 2）：staging → final 原子晋升——本
+                    # 事务内完成，Build 组装与资产切换同生共死；未到达
+                    # finalize 的 run（project/embed/persist 任一失败）
+                    # 只留下 staging，活动 Build 读到的资产不变。
+                    asset_db.promote_snapshot_assets(validated_snapshot_ids)
 
             should_publish = (
                 publish and readiness_ok

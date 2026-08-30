@@ -159,6 +159,98 @@ ASSET_SCHEMA_V2_STATEMENTS: tuple[str, ...] = (
 )
 
 
+def _staging_statements() -> tuple[str, ...]:
+    """29号 R03（Wave 2）：派生资产 staging 表——与 final 同构（表名后缀）。
+
+    project/embedding/persist 全程只写 staging；mining_finalize 在 Build
+    组装事务内把 staging 原子晋升到 final——未发布/失败的 run 不再触碰
+    活动 Build 读到的资产。源证据面（asset_raw_segments）内容寻址、随
+    快照提交即冻结，不参与 staging。
+    """
+    import re as _re
+
+    out: list[str] = []
+    for stmt in ASSET_SCHEMA_V2_STATEMENTS:
+        stripped = stmt.strip()
+        match = _re.match(
+            r"CREATE TABLE IF NOT EXISTS (\w+) ", stripped, _re.IGNORECASE,
+        )
+        if match is None:
+            continue
+        name = match.group(1)
+        # readiness 的 computed_at 默认值在晋升列清单之外，结构同构即可。
+        out.append(stripped.replace(
+            f"CREATE TABLE IF NOT EXISTS {name}",
+            f"CREATE TABLE IF NOT EXISTS {name}_staging", 1,
+        ))
+    for table in (
+        "asset_retrieval_units_v2_staging",
+        "asset_retrieval_embeddings_v2_staging",
+        "asset_structure_nodes_staging",
+        "asset_structure_edges_staging",
+        "asset_structured_assets_staging",
+        "asset_table_cells_staging",
+        "asset_snapshot_readiness_staging",
+    ):
+        out.append(
+            f"CREATE INDEX IF NOT EXISTS idx_{table}_snapshot "
+            f"ON {table} (snapshot_id)"
+        )
+    return tuple(out)
+
+
+#: 晋升列清单（final 与 staging 严格同序；生成列/默认列不参与）。
+PROMOTE_TABLE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "asset_retrieval_units_v2",
+        (
+            "representation_id", "snapshot_id", "representation_type",
+            "content_type", "content_text", "structural_context",
+            "lexical_text", "tokenizer_version", "target_type", "target_ref",
+            "canonical_evidence_id", "container_ref", "parent_ref",
+            "context_group_id", "source_refs_json", "ordinal",
+            "lexical_eligible", "dense_eligible", "returnable",
+            "facets_json", "provenance_json",
+        ),
+    ),
+    (
+        "asset_retrieval_embeddings_v2",
+        (
+            "embedding_id", "snapshot_id", "representation_id", "strategy",
+            "policy_version", "provider", "model", "model_version",
+            "dimension", "input_hash", "context_group_hash", "fallback_from",
+            "embedding_vector_vec",
+        ),
+    ),
+    (
+        "asset_structure_nodes",
+        ("snapshot_id", "node_type", "ref", "parent_ref", "ordinal", "title",
+         "level", "block_type"),
+    ),
+    (
+        "asset_structure_edges",
+        ("snapshot_id", "relation", "from_ref", "to_ref"),
+    ),
+    (
+        "asset_structured_assets",
+        ("snapshot_id", "asset_ref", "asset_type", "table_ref",
+         "columns_json", "row_count", "readiness", "schema_version"),
+    ),
+    (
+        "asset_table_cells",
+        ("snapshot_id", "table_ref", "row_index", "column_index",
+         "column_name", "value", "is_header"),
+    ),
+    (
+        "asset_snapshot_readiness",
+        ("snapshot_id", "document_ref", "readiness_json", "schema_version",
+         "tokenizer_version"),
+    ),
+)
+
+ASSET_SCHEMA_V2_STATEMENTS = ASSET_SCHEMA_V2_STATEMENTS + _staging_statements()
+
+
 def ensure_asset_schema_v2(conn: Any) -> None:
     """幂等建表（mining 唯一维护；DDL 归属约定见 24 号 §5.8）."""
     with conn.cursor() as cursor:

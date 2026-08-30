@@ -79,6 +79,9 @@ public interface StructureToolMapper {
             @Param("domain") String domain, @Param("kbIds") List<String> kbIds,
             @Param("limit") int limit);
 
+    /** 27号审查修复 B：mining 冻结的 readiness 事实 JSON（无行 = null，回落现场计数）。 */
+    String selectFrozenReadinessJson(@Param("snapshotId") String snapshotId);
+
     // ---- structure_navigate ----------------------------------------------------------
 
     StructureNodeRow selectNode(@Param("snapshotId") String snapshotId, @Param("ref") String ref);

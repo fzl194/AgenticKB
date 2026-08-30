@@ -95,6 +95,27 @@ public class GlobalExceptionHandler {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "ref_id_required", "message", "Each ref needs a non-blank id"));
         }
+        // ---- 27号审查修复：scope hard filter 契约（显式拒绝优于静默忽略） ----
+        if (ex.getMessage() != null && ex.getMessage().startsWith("unsupported_scope_filter:")) {
+            String key = ex.getMessage().substring("unsupported_scope_filter:".length());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "unsupported_scope_filter",
+                            "message", "Filter key '" + key
+                                    + "' is not supported yet. Supported: document_refs, "
+                                    + "section_refs, evidence_types, asset_types"));
+        }
+        if (ex.getMessage() != null && ex.getMessage().startsWith("invalid_scope_ref")) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "invalid_scope_ref",
+                            "message", "A document_refs/section_refs value could not be "
+                                    + "resolved to an in-scope internal ref: " + ex.getMessage()));
+        }
+        if ("scope_ref_requires_kb".equals(ex.getMessage())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "scope_ref_requires_kb",
+                            "message", "Opaque doc_/st_ refs in scope filters require "
+                                    + "an explicit knowledge base scope"));
+        }
         // ---- R8（25 号 §7.1）显式请求参数校验 ----
         if ("top_k_invalid".equals(ex.getMessage())) {
             return ResponseEntity.badRequest()

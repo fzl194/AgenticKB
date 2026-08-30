@@ -60,7 +60,8 @@ class EvidenceSourceV2MapperXmlTest {
     void tokenTotalsGroupedBySnapshot() throws Exception {
         String xml = mapperXml();
         assertThat(xml).contains("SUM(COALESCE(token_count, 0))");
-        assertThat(xml).contains("GROUP BY snapshot_id");
+        // 2de813a：raw 表实际为 001 DDL 的 legacy 形态（document_snapshot_id 列）
+        assertThat(xml).contains("GROUP BY document_snapshot_id");
     }
 
     @Test

@@ -51,7 +51,7 @@ class OperatorCatalogTest {
 
     private static OperatorRegistry realRegistry() {
         List<Operator> all = List.of(
-                new QueryEmbedOperator(null, null), new ScopeResolveOperator(null, null),
+                new QueryEmbedOperator(null, null), new ScopeResolveOperator(null, null, null),
                 new DenseVectorOperator(null), new FtsOperator(null),
                 new RrfOperator(), new ModelRerankOperator(null),
                 new EvidenceHydrateOperator(null), new AssembleOperator(null));

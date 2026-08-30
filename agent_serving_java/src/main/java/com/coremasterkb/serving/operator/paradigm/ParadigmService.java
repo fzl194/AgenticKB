@@ -73,6 +73,7 @@ public class ParadigmService {
               ],
               "edges": [
                 {"fromNode": "qe", "fromSlot": "queryEmbedding", "toNode": "dv", "toSlot": "queryEmbedding"},
+                {"fromNode": "scope", "fromSlot": "scope", "toNode": "qe", "toSlot": "scope"},
                 {"fromNode": "scope", "fromSlot": "scope", "toNode": "dv", "toSlot": "scope"},
                 {"fromNode": "scope", "fromSlot": "scope", "toNode": "fts", "toSlot": "scope"},
                 {"fromNode": "dv", "fromSlot": "candidates", "toNode": "fuse", "toSlot": "candidates"},

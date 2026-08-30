@@ -37,7 +37,7 @@ class ScopeResolveOperatorTest {
     void setUp() {
         assetRepository = mock(AssetRepository.class);
         kbAccessService = mock(KbAccessService.class);
-        operator = new ScopeResolveOperator(assetRepository, kbAccessService);
+        operator = new ScopeResolveOperator(assetRepository, kbAccessService, null);
         when(assetRepository.resolveActiveScope(anyString(), anyString(), any()))
                 .thenReturn(new ActiveScope("rel1", "b1", List.of("snap1"), Map.of()));
     }
@@ -111,14 +111,13 @@ class ScopeResolveOperatorTest {
     // ---- R1: explicit hard filters channel (25 号 §6.2) ------------------------------------
 
     @Test
-    @DisplayName("R1: request filters are passed through verbatim into ActiveScope.hardFilters")
+    @DisplayName("R1: supported filter keys pass through verbatim into ActiveScope.hardFilters")
     void requestFiltersPassThroughVerbatim() {
         when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
         ExecContext c = ctx("alice");
         Map<String, Object> filters = Map.of(
                 "document_refs", List.of("doc-1"),
-                "relative_path_prefix", "规范/接入网",
-                "date_range", Map.of("from", "2026-01-01"));
+                "evidence_types", List.of("table_row"));
         c.setRequestFilters(filters);
 
         var out = operator.execute(new SlotValues(), params("{}"), c);
@@ -126,7 +125,55 @@ class ScopeResolveOperatorTest {
         assertThat(out.getScope("scope").hardFilters()).isEqualTo(filters);
         assertThat(c.attributes().get("hardFilterKeys"))
                 .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST)
-                .containsExactlyInAnyOrder("date_range", "document_refs", "relative_path_prefix");
+                .containsExactlyInAnyOrder("document_refs", "evidence_types");
+    }
+
+    @Test
+    @DisplayName("27fix: unsupported filter keys are rejected explicitly (not silently ignored)")
+    void unsupportedFilterKeysAreRejected() {
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
+        ExecContext c = ctx("alice");
+        c.setRequestFilters(Map.of(
+                "document_refs", List.of("doc-1"),
+                "relative_path_prefix", "规范/接入网"));
+
+        // 静默忽略会让调用方以为过滤生效——必须显式 400（GlobalExceptionHandler
+        // 映射 unsupported_scope_filter:*）。
+        assertThatThrownBy(() -> operator.execute(new SlotValues(), params("{}"), c))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("unsupported_scope_filter:relative_path_prefix");
+
+        c.setRequestFilters(Map.of("date_range", Map.of("from", "2026-01-01")));
+        assertThatThrownBy(() -> operator.execute(new SlotValues(), params("{}"), c))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("unsupported_scope_filter:date_range");
+    }
+
+    @Test
+    @DisplayName("27fix: opaque doc_/st_ refs decode to internal refs before SQL comparison")
+    void opaqueRefsDecodeBeforePushdown() {
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of("kb1"));
+        com.coremasterkb.serving.structure.StructureRefService refService =
+                mock(com.coremasterkb.serving.structure.StructureRefService.class);
+        when(refService.resolve(
+                eq("doc_abc"), eq("cloud_core_network"), eq(List.of("kb1")), eq("alice")))
+                .thenReturn(new com.coremasterkb.serving.evidence.EvidenceRefResolver.ResolvedRef(
+                        "snap1",
+                        com.coremasterkb.serving.evidence.EvidenceRefResolver.RefKind.DOCUMENT,
+                        "manual.md"));
+        ScopeResolveOperator decoding = new ScopeResolveOperator(
+                assetRepository, kbAccessService, refService);
+
+        ExecContext c = ctx("alice");
+        Map<String, Object> filters = new java.util.LinkedHashMap<>();
+        filters.put("document_refs", List.of("doc_abc", "plain-internal.md"));
+        c.setRequestFilters(filters);
+
+        var out = decoding.execute(new SlotValues(), params("{}"), c);
+
+        // opaque ref 解码为内部 ref；明文内部 ref 原样透传（直连 API 契约）
+        assertThat(out.getScope("scope").hardFilters().get("document_refs"))
+                .isEqualTo(List.of("manual.md", "plain-internal.md"));
     }
 
     @Test

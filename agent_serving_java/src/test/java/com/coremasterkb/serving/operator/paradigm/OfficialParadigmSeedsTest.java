@@ -56,7 +56,7 @@ class OfficialParadigmSeedsTest {
         paradigmMapper = mock(ParadigmMapper.class);
         versionMapper = mock(ParadigmVersionMapper.class);
         OperatorRegistry registry = new OperatorRegistry(List.of(
-                new QueryEmbedOperator(null, null), new ScopeResolveOperator(null, null),
+                new QueryEmbedOperator(null, null), new ScopeResolveOperator(null, null, null),
                 new DenseVectorOperator(null), new FtsOperator(null),
                 new RrfOperator(), new ModelRerankOperator(null),
                 new EvidenceHydrateOperator(null), new AssembleOperator(null)));
@@ -197,7 +197,7 @@ class OfficialParadigmSeedsTest {
 
     private static ParadigmCompiler compilerOf(ParadigmService unused) {
         OperatorRegistry registry = new OperatorRegistry(List.of(
-                new QueryEmbedOperator(null, null), new ScopeResolveOperator(null, null),
+                new QueryEmbedOperator(null, null), new ScopeResolveOperator(null, null, null),
                 new DenseVectorOperator(null), new FtsOperator(null),
                 new RrfOperator(), new ModelRerankOperator(null),
                 new EvidenceHydrateOperator(null), new AssembleOperator(null)));

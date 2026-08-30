@@ -2,12 +2,19 @@ package com.coremasterkb.serving.operator.operators.output;
 
 import com.coremasterkb.serving.application.KbAccessService;
 import com.coremasterkb.serving.domain.ActiveScope;
+import com.coremasterkb.serving.evidence.EvidenceRefCodec;
+import com.coremasterkb.serving.evidence.EvidenceRefResolver;
 import com.coremasterkb.serving.operator.core.*;
 import com.coremasterkb.serving.repository.AssetRepository;
+import com.coremasterkb.serving.structure.StructureRefService;
+import com.coremasterkb.serving.structure.StructureToolException;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * {@code scope_resolve} — resolve the document snapshots a retrieval may see (25 号 §6.2).
@@ -45,10 +52,13 @@ public class ScopeResolveOperator implements Operator {
 
     private final AssetRepository assetRepository;
     private final KbAccessService kbAccessService;
+    private final StructureRefService refService;
 
-    public ScopeResolveOperator(AssetRepository assetRepository, KbAccessService kbAccessService) {
+    public ScopeResolveOperator(AssetRepository assetRepository, KbAccessService kbAccessService,
+                                StructureRefService refService) {
         this.assetRepository = assetRepository;
         this.kbAccessService = kbAccessService;
+        this.refService = refService;
     }
 
     @Override
@@ -84,10 +94,20 @@ public class ScopeResolveOperator implements Operator {
         ActiveScope scope = assetRepository.resolveActiveScope(ctx.domain(), ctx.channel(), kbIds);
 
         // R1：显式 hard filters 透传（不推断、不改写——规范化归下游算子的确定性映射）。
+        // 27号审查修复：①未支持的键（path/date 等 v2 表暂无可下推列）显式 400，
+        // 不再静默忽略造成"以为过滤了其实没滤"；②doc_/st_ opaque ref 先解码成
+        // 内部 ref——公开身份进 SQL 比较前必须还原（否则恒零命中）。
         Map<String, Object> requestFilters = ctx.requestFilters();
         if (requestFilters != null && !requestFilters.isEmpty()) {
-            scope = scope.withHardFilters(requestFilters);
-            ctx.putAttribute("hardFilterKeys", List.copyOf(requestFilters.keySet()));
+            for (String key : requestFilters.keySet()) {
+                if (!SUPPORTED_FILTER_KEYS.contains(key)) {
+                    throw new IllegalArgumentException("unsupported_scope_filter:" + key);
+                }
+            }
+            Map<String, Object> decoded = decodeOpaqueRefs(
+                    requestFilters, ctx.domain(), kbIds, ctx.username());
+            scope = scope.withHardFilters(decoded);
+            ctx.putAttribute("hardFilterKeys", List.copyOf(decoded.keySet()));
         }
 
         ctx.putAttribute("releaseId", scope.releaseId());
@@ -97,5 +117,58 @@ public class ScopeResolveOperator implements Operator {
             ctx.putAttribute("kbIds", kbIds);
         }
         return SlotValues.of("scope", scope);
+    }
+
+    /** 27号审查修复：当前召回链真正可下推的 hard filter 键白名单。 */
+    static final Set<String> SUPPORTED_FILTER_KEYS = Set.of(
+            "document_refs", "section_refs", "evidence_types", "asset_types");
+
+    /**
+     * document_refs/section_refs 里的 doc_/st_ opaque ref 解码为内部 ref。
+     *
+     * <p>解码走 {@link StructureRefService} 的授权枚举（与结构工具同源：开放库求交
+     * + 活动/历史快照扫描），非法/越权/失效统一映射 invalid_scope_ref（400）。
+     * 明文内部 ref 原样透传（服务端直连 API 的既有契约）。域级 release 范围
+     * （无 kbIds）无法枚举候选——opaque ref 要求请求带库范围。</p>
+     */
+    private Map<String, Object> decodeOpaqueRefs(Map<String, Object> filters,
+                                                  String domain, List<String> kbIds,
+                                                  String username) {
+        Map<String, Object> out = new LinkedHashMap<>(filters);
+        decodeRefList(out, "document_refs", domain, kbIds, username);
+        decodeRefList(out, "section_refs", domain, kbIds, username);
+        return out;
+    }
+
+    private void decodeRefList(Map<String, Object> filters, String key,
+                               String domain, List<String> kbIds, String username) {
+        Object value = filters.get(key);
+        if (!(value instanceof List<?> list) || list.isEmpty()) {
+            return;
+        }
+        List<Object> decoded = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof String ref) || ref.isBlank()) {
+                decoded.add(item);
+                continue;
+            }
+            if (!ref.startsWith(EvidenceRefCodec.DOCUMENT_PREFIX)
+                    && !ref.startsWith(EvidenceRefCodec.STRUCTURE_PREFIX)) {
+                decoded.add(ref); // 明文内部 ref：直连 API 契约，原样透传
+                continue;
+            }
+            if (kbIds == null || kbIds.isEmpty()) {
+                throw new IllegalArgumentException("scope_ref_requires_kb");
+            }
+            try {
+                EvidenceRefResolver.ResolvedRef resolved =
+                        refService.resolve(ref, domain, kbIds, username);
+                decoded.add(resolved.internalRef());
+            } catch (StructureToolException e) {
+                throw new IllegalArgumentException(
+                        "invalid_scope_ref: " + ref + " (" + e.getMessage() + ")");
+            }
+        }
+        filters.put(key, decoded);
     }
 }

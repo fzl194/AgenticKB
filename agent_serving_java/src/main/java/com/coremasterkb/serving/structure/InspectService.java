@@ -84,17 +84,49 @@ public class InspectService {
 
     // ------------------------------------------------------------------ kinds
 
+    /**
+     * 27号审查修复 B：mining 冻结的 readiness 事实（asset_snapshot_readiness）。
+     * 无行/解析失败返回 null——调用方回落现场计数（legacy 快照兼容）。
+     */
+    private Map<String, Boolean> frozenReadiness(String snapshotId) {
+        String json = toolMapper.selectFrozenReadinessJson(snapshotId);
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = CODEC_MAPPER.readTree(json);
+            Map<String, Boolean> out = new LinkedHashMap<>();
+            out.put("structure_navigate_ready", node.path("structure_navigate_ready").asBoolean(false));
+            out.put("structured_query_ready", node.path("structured_query_ready").asBoolean(false));
+            out.put("aggregate_ready", node.path("aggregate_ready").asBoolean(false));
+            return out;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper CODEC_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private InspectResult inspectDocument(String ref, String snapshotId, String documentRef) {
         boolean navigateReady = navigateReady(snapshotId);
         List<TableAssetRow> assets = toolMapper.selectSnapshotTableAssets(snapshotId, ASSET_LIST_CAP);
         List<AssetSummary> summaries = assetSummaries(snapshotId, assets, false);
         boolean anyReady = summaries.stream().anyMatch(a -> "ready".equals(a.readiness()));
+        // 27号审查修复 B：能力披露优先读 mining 冻结 readiness（与发布门禁
+        // 同源）；缺行（legacy 快照）回落现场计数。
+        Map<String, Boolean> frozen = frozenReadiness(snapshotId);
+        if (frozen != null) {
+            navigateReady = frozen.get("structure_navigate_ready");
+            anyReady = frozen.get("structured_query_ready");
+        }
 
         Map<String, Boolean> caps = new LinkedHashMap<>();
         caps.put("can_read_document", true);
         caps.put("can_navigate", navigateReady);
         caps.put("can_query_structured", anyReady);
-        caps.put("can_aggregate", anyAggregate(snapshotId, assets));
+        caps.put("can_aggregate", frozen != null
+                ? frozen.get("aggregate_ready") : anyAggregate(snapshotId, assets));
 
         return new InspectResult(ref, "document_ref", "document", null,
                 sourceProjection(snapshotId, documentRef), caps,
@@ -114,12 +146,18 @@ public class InspectService {
         List<TableAssetRow> assets = toolMapper.selectSnapshotTableAssets(snapshotId, ASSET_LIST_CAP);
         List<AssetSummary> summaries = assetSummaries(snapshotId, assets, false);
         boolean anyReady = summaries.stream().anyMatch(a -> "ready".equals(a.readiness()));
+        Map<String, Boolean> frozen = frozenReadiness(snapshotId);
+        if (frozen != null) {
+            navigateReady = frozen.get("structure_navigate_ready");
+            anyReady = frozen.get("structured_query_ready");
+        }
 
         Map<String, Boolean> caps = new LinkedHashMap<>();
         caps.put("can_read_document", true);
         caps.put("can_navigate", navigateReady);
         caps.put("can_query_structured", anyReady);
-        caps.put("can_aggregate", anyAggregate(snapshotId, assets));
+        caps.put("can_aggregate", frozen != null
+                ? frozen.get("aggregate_ready") : anyAggregate(snapshotId, assets));
 
         List<String> relations = new ArrayList<>();
         if (navigateReady) {

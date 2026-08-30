@@ -87,6 +87,8 @@
 
     <!-- ======================= ref 反查候选 ======================= -->
 
+    <!-- 27号审查修复：候选枚举补稳定排序——超 cap 截断时子集确定，
+         同一 ref 不会因执行计划抖动而时有时无。 -->
     <select id="selectStructureRefCandidates" resultMap="refRowMap">
         SELECT snapshot_id, ref FROM (
             SELECT n.snapshot_id, n.ref
@@ -99,6 +101,7 @@
             WHERE a.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
         ) u
+        ORDER BY u.snapshot_id ASC, u.ref ASC
         LIMIT #{limit}
     </select>
 
@@ -108,6 +111,7 @@
         WHERE n.node_type = 'document'
           AND n.snapshot_id IN
         <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+        ORDER BY n.snapshot_id ASC, n.ref ASC
         LIMIT #{limit}
     </select>
 
@@ -119,6 +123,7 @@
             WHERE r.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
         ) u
+        ORDER BY u.snapshot_id ASC, u.ref ASC
         LIMIT #{limit}
     </select>
 
@@ -133,7 +138,15 @@
           AND d.domain = #{domain}
           AND d.kb_id IN
         <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">#{kbId}</foreach>
+        ORDER BY bs.document_snapshot_id ASC
         LIMIT #{limit}
+    </select>
+
+    <!-- 27号审查修复 B：mining 冻结的 readiness 事实（inspect 优先读冻结值，
+         缺行（legacy 快照）回落现场计数）。 -->
+    <select id="selectFrozenReadinessJson" resultType="java.lang.String">
+        SELECT readiness_json::text FROM asset_snapshot_readiness
+        WHERE snapshot_id = #{snapshotId}
     </select>
 
     <!-- ======================= structure_navigate ======================= -->

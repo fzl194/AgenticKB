@@ -175,3 +175,37 @@ def test_raw_projection_roundtrip_preserves_table_facts():
     assert payload["row_cells"] == [
         ["参数", "A-101"], ["参数#2", "温度；上限=85"], ["功耗W", "30"],
     ]
+
+
+def test_parse_layer_dedups_duplicate_columns_without_losing_values():
+    """29号 R02（E2E 追溯发现的 parse 层根因）：markdown/html 表行以
+    dict（列名→值）流转，重名列静默覆盖丢值（首列值被后列顶掉）——
+    表头捕获时确定性消歧。"""
+    import dataclasses
+
+    from knowledge_mining.mining.parse_adapters.legacy_markdown import (
+        LegacyMarkdownParser,
+    )
+
+    md = (
+        "# 规格\n\n"
+        "| 参数 | 参数 | 门限W |\n"
+        "|---|---|---|\n"
+        "| A-301 | 温度；上限=85 | 30 |\n"
+        "| A-302 | 正常 | 45 |\n"
+    ).encode("utf-8")
+    art = LegacyMarkdownParser().parse(md, mime="text/markdown")
+    table = next(
+        dataclasses.asdict(b) if dataclasses.is_dataclass(b) else vars(b)
+        for b in art.blocks
+        if getattr(b, "block_type", None) == "table"
+        or (getattr(b, "block_type", None) is None
+            and vars(b).get("block_type") == "table")
+    )
+    structure = table["structure"]
+    assert structure["columns"] == ["参数", "参数#2", "门限W"]
+    # 首列值不再被同名列覆盖
+    assert structure["rows"][0] == {
+        "参数": "A-301", "参数#2": "温度；上限=85", "门限W": "30",
+    }
+    assert "A-301" in table["text"]

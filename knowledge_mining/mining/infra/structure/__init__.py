@@ -304,6 +304,24 @@ def _make_md_image_block(
     )
 
 
+
+
+def _dedupe_columns(columns: list[str]) -> list[str]:
+    """29号 R02（parse 层）：重复列名确定性消歧（name、name → name、name#2）。
+
+    表格行以 dict（列名→值）形态流转，重名列会被静默覆盖丢值——必须在
+    捕获表头时消歧，下游（normalizer 网格重建 / compiler / 结构面）才能
+    拿到全列数据。
+    """
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for name in columns:
+        count = seen.get(name, 0)
+        seen[name] = count + 1
+        out.append(name if count == 0 else f"{name}#{count + 1}")
+    return out
+
+
 def _parse_table(tokens: list, start: int) -> ContentBlock:
     """Parse table tokens into a ContentBlock with structured columns/rows."""
     columns: list[str] = []
@@ -323,7 +341,8 @@ def _parse_table(tokens: list, start: int) -> ContentBlock:
         elif tok.type == "tr_close":
             if current_row_cells:
                 if in_thead and not columns:
-                    columns = list(current_row_cells)
+                    # 29号 R02：表头消歧后作为行 dict 的键（重名列直接丢值）
+                    columns = _dedupe_columns(list(current_row_cells))
                 else:
                     if columns:
                         row_dict = {columns[j]: cell for j, cell in enumerate(current_row_cells) if j < len(columns)}
@@ -539,7 +558,8 @@ class _HtmlTableParser(HTMLParser):
         elif tag == "tr":
             if self._current_row:
                 if self._in_thead and not self.columns:
-                    self.columns = list(self._current_row)
+                    # 29号 R02：HTML 表同款表头消歧
+                    self.columns = _dedupe_columns(list(self._current_row))
                 else:
                     if self.columns:
                         row_dict = {

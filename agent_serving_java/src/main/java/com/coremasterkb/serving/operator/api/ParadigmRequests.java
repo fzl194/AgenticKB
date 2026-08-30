@@ -75,8 +75,75 @@ final class ParadigmRequests {
                 throw new IllegalArgumentException("unsupported_scope_filter:" + key);
             }
         }
+        // 29号 R06a：值 schema 校验——错误类型必须 typed 400，绝不静默退化成
+        // 宽检索（此前 stringValues 遇非数组直接返回空 = 全量结果）。
+        for (Map.Entry<String, Object> e : merged.entrySet()) {
+            validateFilterValue(e.getKey(), e.getValue());
+        }
         return Map.copyOf(merged);
     }
+
+    /** 单个 filter 值的形状校验（数组、非空串、长度上限、ref kind 匹配、类型枚举）。 */
+    private static void validateFilterValue(String key, Object value) {
+        if (!(value instanceof List<?> list)) {
+            throw new IllegalArgumentException(
+                    "filter_value_invalid:" + key + ": 必须是字符串数组");
+        }
+        if (list.size() > MAX_FILTER_VALUES) {
+            throw new IllegalArgumentException(
+                    "filter_value_invalid:" + key + ": 超过 " + MAX_FILTER_VALUES + " 项");
+        }
+        for (Object item : list) {
+            if (!(item instanceof String s) || s.isBlank()) {
+                throw new IllegalArgumentException(
+                        "filter_value_invalid:" + key + ": 数组元素必须是非空字符串");
+            }
+            switch (key) {
+                case "document_refs" -> {
+                    if (s.startsWith("st_") || s.startsWith("ev_")) {
+                        throw new IllegalArgumentException(
+                                "filter_value_invalid:document_refs: 不接受 " + prefixOf(s) + " ref（用 doc_ 或明文内部 ref）");
+                    }
+                }
+                case "section_refs" -> {
+                    if (s.startsWith("doc_") || s.startsWith("ev_")) {
+                        throw new IllegalArgumentException(
+                                "filter_value_invalid:section_refs: 不接受 " + prefixOf(s) + " ref（用 st_ 或明文内部 ref）");
+                    }
+                }
+                case "evidence_types" -> {
+                    if (!EVIDENCE_TYPES.contains(s)) {
+                        throw new IllegalArgumentException(
+                                "filter_value_invalid:evidence_types: 未知类型 " + s + "；允许：" + EVIDENCE_TYPES);
+                    }
+                }
+                case "asset_types" -> {
+                    if (!ASSET_TYPES.contains(s)) {
+                        throw new IllegalArgumentException(
+                                "filter_value_invalid:asset_types: 未知类型 " + s + "；允许：" + ASSET_TYPES);
+                    }
+                }
+                default -> { }
+            }
+        }
+    }
+
+    private static String prefixOf(String ref) {
+        int cut = Math.min(ref.length(), 4);
+        return ref.substring(0, ref.indexOf('_') > 0 ? Math.min(ref.indexOf('_') + 1, cut + 1) : cut) + "…";
+    }
+
+    /** §5.3 representation type 枚举（evidence_types 值域）。 */
+    private static final Set<String> EVIDENCE_TYPES = Set.of(
+            "prose", "section", "document", "table", "table_row", "list_group",
+            "code_block", "formula", "figure_caption", "query_alias", "summary_alias");
+
+    /** 源内容类型枚举（asset_types 值域；projector content_type 词表）。 */
+    private static final Set<String> ASSET_TYPES = Set.of(
+            "paragraph", "table", "table_row", "list", "code", "formula",
+            "figure", "figure_caption", "section", "document");
+
+    private static final int MAX_FILTER_VALUES = 64;
 
     private static void copyObject(Map<String, Object> target, JsonNode node) {
         if (node == null || !node.isObject()) return;

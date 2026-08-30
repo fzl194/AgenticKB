@@ -35,6 +35,34 @@ class ParadigmRequestsFiltersTest {
     }
 
     @Test
+    @DisplayName("29fix R06a: 错误值类型/枚举/ref kind → typed 400（不退化为宽检索）")
+    void malformedFilterValuesRejected() throws Exception {
+        // 非数组值：此前 stringValues 静默返回空 → 宽检索
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"asset_types\": \"table\"}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:asset_types");
+
+        // ref kind 错配：document_refs 不接受 st_
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"within\": {\"document_refs\": [\"st_abcd\"]}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:document_refs");
+
+        // evidence_types 枚举外值
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"evidence_types\": [\"vector\"]}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:evidence_types");
+
+        // 空串元素
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"document_refs\": [\" \"]}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:document_refs");
+    }
+
+    @Test
     @DisplayName("27fix: 未支持 filter 键在请求边界显式 400（不静默忽略）")
     void unsupportedFilterKeysRejectedAtBoundary() throws Exception {
         assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(

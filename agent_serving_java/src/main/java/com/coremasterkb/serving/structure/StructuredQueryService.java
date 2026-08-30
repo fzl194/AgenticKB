@@ -35,6 +35,9 @@ public class StructuredQueryService {
 
     static final int MAX_LIMIT = 200;
     static final int DEFAULT_LIMIT = 50;
+    /** 29号 R0 复审护栏：where 子句数与 in 数组长度上限。 */
+    static final int MAX_WHERE_CLAUSES = 32;
+    static final int MAX_IN_VALUES = 200;
     /** 列能力扫描上限：超出即保守按文本列处理（不放大内存/判定成本）。 */
     static final int TYPING_SCAN_CAP = 2000;
     /** 无过滤聚合的行数护栏：超过即 result_too_large（提示加 filter）。 */
@@ -122,6 +125,11 @@ public class StructuredQueryService {
 
         List<StructureToolMapper.Criterion> criteria = new ArrayList<>();
         if (spec.where() != null) {
+            // 29号 R0 复审：where 数量上限（防超大 OR/AND 构造打爆 SQL 规划）。
+            if (spec.where().size() > MAX_WHERE_CLAUSES) {
+                throw StructureToolException.resultTooLarge(
+                        "where 子句超上限 " + MAX_WHERE_CLAUSES);
+            }
             for (WhereClause w : spec.where()) {
                 criteria.add(toCriterion(w, byName, columnNames));
             }
@@ -157,6 +165,12 @@ public class StructuredQueryService {
         }
 
         int limit = spec.limit() == null ? DEFAULT_LIMIT : spec.limit();
+        // 29号 R0 复审：limit<=0 会形成空页且 cursor 不前进（0）/负数下沉
+        // 成 SQL 错误（<0）——按 typed 400 拒绝。
+        if (limit <= 0) {
+            throw StructureToolException.resultTooLarge(
+                    "limit 必须为 1-" + MAX_LIMIT + " 的正整数（当前 " + limit + "）");
+        }
         if (limit > MAX_LIMIT) {
             throw StructureToolException.resultTooLarge(
                     "limit 超上限 " + MAX_LIMIT + "——请用 cursor 分页或收窄过滤条件");
@@ -302,6 +316,10 @@ public class StructuredQueryService {
         if ("in".equals(op)) {
             if (w.value() == null || !w.value().isArray() || w.value().isEmpty()) {
                 throw StructureToolException.typeMismatch(w.field() + " in", "非空数组");
+            }
+            if (w.value().size() > MAX_IN_VALUES) {
+                throw StructureToolException.resultTooLarge(
+                        "in 数组超上限 " + MAX_IN_VALUES + "（field=" + w.field() + "）");
             }
             List<String> values = new ArrayList<>();
             for (JsonNode item : w.value()) {

@@ -110,6 +110,12 @@ public class GlobalExceptionHandler {
                             "message", "A document_refs/section_refs value could not be "
                                     + "resolved to an in-scope internal ref: " + ex.getMessage()));
         }
+        // 29号 R06a：filter 值类型错误 → typed 400（不静默退化成宽检索）
+        if (ex.getMessage() != null && ex.getMessage().startsWith("filter_value_invalid")) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "filter_value_invalid",
+                            "message", ex.getMessage()));
+        }
         if ("scope_ref_requires_kb".equals(ex.getMessage())) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "scope_ref_requires_kb",

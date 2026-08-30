@@ -122,9 +122,13 @@ def _representation_for(
     metadata: Mapping[str, Any] = segment.metadata or {}
     table_ref = str(metadata.get("table_ref") or "")
     header = metadata.get("table_header") or ()
-    # figure 切片的 caption 在 metadata.figure_caption（compiler.py 惯例）
+    # figure 切片的 caption 在 metadata.figure_caption；表格在
+    # metadata.table_caption（compiler.py 惯例）。
     caption = str(
-        metadata.get("caption") or metadata.get("figure_caption") or ""
+        metadata.get("caption")
+        or metadata.get("figure_caption")
+        or metadata.get("table_caption")
+        or ""
     )
 
     if representation_type == "table_row":

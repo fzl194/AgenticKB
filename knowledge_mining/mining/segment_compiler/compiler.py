@@ -442,7 +442,14 @@ def _emit_table(
     header_texts, header_rows = (
         _header_of(asset) if asset is not None else ([], set())
     )
+    # 29号 R02：重复表头确定性消歧（name、name → name、name#2）——
+    # 结构化查询的 JSON pivot 与 cells 检索以列名为键，重名会静默覆盖丢列。
+    header_texts = _dedup_headers(header_texts)
     kind = _table_kind(header_texts)
+    # 29号 R02：稳定表标识从 ParseIR TableAsset 传播——whole/rows/table
+    # node/structured asset/cells/target/container 共享同一 table_ref
+    # （此前各 segment 回落 tbl:{segment_index}，一张表被拆成多个身份）。
+    table_ref = asset.table_id if asset is not None else element.element_id
 
     out: list[CompiledSegment] = []
     if policy.table_view in ("whole", "both"):
@@ -456,6 +463,8 @@ def _emit_table(
                 links=(base_link,),
                 metadata={
                     "view": "whole",
+                    "table_ref": table_ref,
+                    "table_header": header_texts,
                     "table_caption": caption,
                     "table_kind": kind,
                     "rows": asset.rows if asset else None,
@@ -482,6 +491,17 @@ def _emit_table(
                 c.source_span_id for c in cells if c.source_span_id
             )
             prefix = f"[{caption}] " if caption else ""
+            # 29号 R02：精确 cell 事实随行传播（列名=值 对）——下游结构面
+            # 不再从展示字符串反解析（值含 ；/= 或 caption 前缀时会丢列）。
+            row_cells = [
+                [
+                    header_texts[c.column_index]
+                    if c.column_index < len(header_texts)
+                    else f"col{c.column_index}",
+                    c.text,
+                ]
+                for c in sorted(cells, key=lambda c: c.column_index)
+            ]
             out.append(CompiledSegment(
                 segment_index=-1,
                 block_type=_TABLE_ROW,
@@ -494,10 +514,12 @@ def _emit_table(
                 ),),
                 metadata={
                     "view": "row",
+                    "table_ref": table_ref,
                     "table_header": header_texts,
                     "table_caption": caption,
                     "table_kind": kind,
                     "row_index": row_index,
+                    "row_cells": row_cells,
                 },
             ))
     return out
@@ -549,6 +571,8 @@ def _emit_table_row_groups(
             metadata={
                 "view": "whole",
                 "split": "row_group",
+                "table_ref": asset.table_id,
+                "table_header": header_texts,
                 "table_caption": caption,
                 "table_kind": kind,
                 "rows": asset.rows,
@@ -559,6 +583,17 @@ def _emit_table_row_groups(
         )
         for gi, group in enumerate(groups)
     ]
+
+
+def _dedup_headers(headers: list[str]) -> list[str]:
+    """29号 R02：重复表头确定性消歧（name、name → name、name#2）。"""
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for name in headers:
+        count = seen.get(name, 0)
+        seen[name] = count + 1
+        out.append(name if count == 0 else f"{name}#{count + 1}")
+    return out
 
 
 def _header_of(asset: TableAsset) -> tuple[list[str], set[int]]:

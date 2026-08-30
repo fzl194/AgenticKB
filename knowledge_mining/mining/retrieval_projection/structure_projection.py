@@ -94,6 +94,9 @@ def project_structure(
     table_assets: list[dict[str, Any]] = []
     cells: list[dict[str, Any]] = []
     seen_tables: set[str] = set()
+    # 29号 R02：真实数据行数按 table_ref 去重计数（此前 max(row_index)+1
+    # 在行号稀疏/跳跃时虚报）。
+    data_rows_by_table: dict[str, set[int]] = {}
     for segment in materialized:
         if segment.block_type not in _TABLE_TYPES:
             continue
@@ -118,7 +121,18 @@ def project_structure(
         if segment.block_type == "table_row" and header:
             row_index = int(metadata.get("row_index", len(cells)))
             col_idx_of = {name: i for i, name in enumerate(header)}
-            for name, value in _row_cells(segment.raw_text, header):
+            # 29号 R02：优先消费编译器传播的精确 cell 事实（row_cells）；
+            # 自描述文本解析仅作 legacy 行兜底。
+            raw_pairs = metadata.get("row_cells")
+            if raw_pairs:
+                pairs = [
+                    (str(pair[0]), str(pair[1]))
+                    for pair in raw_pairs
+                    if isinstance(pair, (list, tuple)) and len(pair) == 2
+                ]
+            else:
+                pairs = _row_cells(segment.raw_text, header)
+            for name, value in pairs:
                 if not value.strip():
                     continue
                 cells.append({
@@ -127,9 +141,10 @@ def project_structure(
                     "column": name, "value": value.strip(),
                     "is_header": False,
                 })
-            for asset in table_assets:
-                if asset["table_ref"] == table_ref:
-                    asset["row_count"] = max(asset["row_count"], row_index + 1)
+            data_rows_by_table.setdefault(table_ref, set()).add(row_index)
+
+    for asset in table_assets:
+        asset["row_count"] = len(data_rows_by_table.get(asset["table_ref"], ()))
 
     return StructureProjection(
         nodes=tuple(nodes),

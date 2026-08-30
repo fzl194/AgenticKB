@@ -37,17 +37,19 @@ _UNITS_INSERT = """
         representation_id, snapshot_id, representation_type, content_type,
         content_text, structural_context, lexical_text, tokenizer_version,
         target_type, target_ref, canonical_evidence_id, container_ref,
+        parent_ref, context_group_id, source_refs_json,
         ordinal, lexical_eligible, dense_eligible, returnable,
         facets_json, provenance_json
     ) VALUES (
-        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb
+        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s::jsonb,%s::jsonb
     )
 """
 
 _UNITS_SELECT = """
     SELECT representation_id, representation_type, content_type, content_text,
            structural_context, target_type, target_ref, canonical_evidence_id,
-           container_ref, ordinal, lexical_eligible, dense_eligible,
+           container_ref, parent_ref, context_group_id, source_refs_json,
+           ordinal, lexical_eligible, dense_eligible,
            returnable, facets_json, provenance_json
     FROM asset_retrieval_units_v2
     WHERE snapshot_id = %s
@@ -160,6 +162,14 @@ def _as_dict(value: Any) -> dict:
     return json.loads(value)
 
 
+def _as_list(value: Any) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return json.loads(value)
+
+
 def _as_str(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
@@ -198,6 +208,11 @@ class PgRepresentationStore(_PgSchemaBound):
                             None, None,
                             rep.target_type, rep.target_ref,
                             rep.canonical_evidence_id, rep.container_ref,
+                            rep.parent_ref, rep.context_group_id,
+                            json.dumps(
+                                [dict(r) for r in rep.source_refs],
+                                ensure_ascii=False,
+                            ),
                             rep.ordinal, bool(rep.lexical_eligible),
                             bool(rep.dense_eligible), bool(rep.returnable),
                             json.dumps(dict(rep.facets), ensure_ascii=False),
@@ -228,6 +243,12 @@ class PgRepresentationStore(_PgSchemaBound):
                 canonical_evidence_id=str(row["canonical_evidence_id"]),
                 structural_context=str(row.get("structural_context") or ""),
                 container_ref=_as_str(row.get("container_ref")),
+                parent_ref=_as_str(row.get("parent_ref")),
+                context_group_id=_as_str(row.get("context_group_id")),
+                source_refs=tuple(
+                    dict(r) for r in _as_list(row.get("source_refs_json"))
+                    if isinstance(r, dict)
+                ),
                 ordinal=int(row.get("ordinal") or 0),
                 lexical_eligible=bool(row.get("lexical_eligible")),
                 dense_eligible=bool(row.get("dense_eligible")),
@@ -241,6 +262,50 @@ class PgRepresentationStore(_PgSchemaBound):
     def projector_fingerprint(self, snapshot_id: str) -> str | None:
         """v2 DDL 无指纹列——幂等由快照级替换保证（Memory 实现的暂存字段）."""
         return None
+
+    async def replace_aliases_for_snapshot(
+        self,
+        snapshot_id: str,
+        aliases: tuple,
+        fingerprint: str,
+        *,
+        document_key: str,
+    ) -> int:
+        """27号审查修复：只替换 alias 子集（query_alias/summary_alias）——
+        别名算子（M3）幂等重跑不得清空该快照的基础表示。"""
+        async with self._pool.connection() as conn:
+            await self._ensure_schema(conn)
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM asset_retrieval_units_v2 "
+                    "WHERE snapshot_id = %s "
+                    "AND representation_type IN ('query_alias', 'summary_alias')",
+                    [snapshot_id],
+                )
+                for rep in aliases:
+                    await conn.execute(
+                        _UNITS_INSERT,
+                        [
+                            rep.representation_id, snapshot_id,
+                            rep.representation_type, rep.content_type,
+                            rep.content_text, rep.structural_context,
+                            None, None,
+                            rep.target_type, rep.target_ref,
+                            rep.canonical_evidence_id, rep.container_ref,
+                            rep.parent_ref, rep.context_group_id,
+                            json.dumps(
+                                [dict(r) for r in rep.source_refs],
+                                ensure_ascii=False,
+                            ),
+                            rep.ordinal, bool(rep.lexical_eligible),
+                            bool(rep.dense_eligible), bool(rep.returnable),
+                            json.dumps(dict(rep.facets), ensure_ascii=False),
+                            json.dumps(
+                                dict(rep.provenance), ensure_ascii=False,
+                            ),
+                        ],
+                    )
+        return len(aliases)
 
 
 class PgEmbeddingStore(_PgSchemaBound):
@@ -389,6 +454,9 @@ class PgAssetWriter(_PgSchemaBound):
                     lexical.get("tokenizer_version") if lexical else None,
                     rep["target_type"], rep["target_ref"],
                     rep["canonical_evidence_id"], rep.get("container_ref"),
+                    rep.get("parent_ref"),
+                    rep.get("context_group_id"),
+                    rep.get("source_refs_json") or "[]",
                     rep.get("ordinal") or 0,
                     bool(rep.get("lexical_eligible", True)),
                     bool(rep.get("dense_eligible", True)),

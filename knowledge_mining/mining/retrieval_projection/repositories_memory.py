@@ -33,6 +33,24 @@ class MemoryRepresentationStore:
     ) -> tuple[RetrieRepresentation, ...]:
         return self._by_snapshot.get(snapshot_id, ())
 
+    async def replace_aliases_for_snapshot(
+        self,
+        snapshot_id: str,
+        aliases: tuple[RetrieRepresentation, ...],
+        fingerprint: str,
+        *,
+        document_key: str,
+    ) -> int:
+        """27号审查修复：只替换 alias 子集（query_alias/summary_alias），
+        基础表示不动——别名算子幂等重跑不破坏主投影产物。"""
+        kept = tuple(
+            rep for rep in self._by_snapshot.get(snapshot_id, ())
+            if rep.representation_type not in ("query_alias", "summary_alias")
+        )
+        self._by_snapshot[snapshot_id] = kept + tuple(aliases)
+        self._fingerprints[snapshot_id] = fingerprint
+        return len(aliases)
+
     def projector_fingerprint(self, snapshot_id: str) -> str | None:
         return self._fingerprints.get(snapshot_id)
 

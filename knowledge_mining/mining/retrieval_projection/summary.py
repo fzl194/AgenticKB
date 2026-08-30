@@ -84,22 +84,33 @@ class HierarchicalSummaryFacade:
                 by_path.setdefault((), []).append(segment)
             else:
                 by_path.setdefault(tuple(segment.heading_chain), []).append(segment)
+        # 27号审查修复：文档级路径始终参与——顶层章节摘要（child_summaries）
+        # 也要上卷成 document 摘要，不能因"无无标题段落"而缺失文档摘要。
+        by_path.setdefault((), [])
 
         aliases: list[RetrieRepresentation] = []
         skipped = failures = 0
         ordinal = 0
-        # 自底向上：深层 section 先于浅层；document 最后
+        # 27号审查修复：真自底向上——父章节输入 = 直接子段 + 立即子章节的
+        # 摘要（信息逐层上卷）；文档摘要 = 顶层无标题段 + 顶层章节摘要，
+        # 不再只覆盖无 heading path 的段落。深层先处理，summaries 逐层可用。
+        summaries: dict[tuple[tuple[int, str], ...], str] = {}
         for path in sorted(by_path, key=lambda p: (-len(p), str(p))):
             children = by_path[path]
+            child_summaries = [
+                summaries[sub] for sub in summaries
+                if len(sub) == len(path) + 1 and sub[: len(path)] == path
+            ]
             tokens = sum(child.token_count or 0 for child in children)
-            if tokens < min_tokens:
+            if tokens < min_tokens and not child_summaries:
                 skipped += 1
                 continue
             title = path[-1][1] if path else document_ref
             try:
                 summary_text = str(
                     self._summarizer.summarize(
-                        title, [child.raw_text for child in children]
+                        title,
+                        [child.raw_text for child in children] + child_summaries,
                     )
                 ).strip()
             except Exception:  # noqa: BLE001
@@ -108,6 +119,7 @@ class HierarchicalSummaryFacade:
             if not summary_text:
                 skipped += 1
                 continue
+            summaries[path] = summary_text
             target_ref = (
                 f"{document_ref}#section:{'/'.join(t for _l, t in path)}"
                 if path else f"{document_ref}#document"
@@ -127,12 +139,21 @@ class HierarchicalSummaryFacade:
 
         degraded = failures > 0
         if aliases and self._aliases is not None:
-            run_sync(
-                self._aliases.replace_for_snapshot(
+            # 27号审查修复：alias 子集替换语义（同 query_expansion）——
+            # 不得整快照清空基础表示。
+            replace_aliases = getattr(
+                self._aliases, "replace_aliases_for_snapshot", None
+            )
+            if replace_aliases is not None:
+                run_sync(replace_aliases(
                     snapshot_id, tuple(aliases), SUMMARY_VERSION,
                     document_key=document_ref,
-                )
-            )
+                ))
+            else:
+                run_sync(self._aliases.replace_for_snapshot(
+                    snapshot_id, tuple(aliases), SUMMARY_VERSION,
+                    document_key=document_ref,
+                ))
         return SummaryOutcome(tuple(aliases), skipped, failures, degraded)
 
 

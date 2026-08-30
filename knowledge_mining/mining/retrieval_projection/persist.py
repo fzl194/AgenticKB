@@ -136,6 +136,12 @@ class AssetPersistService:
                     "target_ref": rep.target_ref,
                     "canonical_evidence_id": rep.canonical_evidence_id,
                     "container_ref": rep.container_ref,
+                    "parent_ref": rep.parent_ref,
+                    "context_group_id": rep.context_group_id,
+                    "source_refs_json": json.dumps(
+                        [dict(r) for r in rep.source_refs],
+                        ensure_ascii=False,
+                    ),
                     "ordinal": rep.ordinal,
                     "lexical_eligible": rep.lexical_eligible,
                     "dense_eligible": rep.dense_eligible,

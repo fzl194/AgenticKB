@@ -83,6 +83,9 @@ ASSET_SCHEMA_V2_STATEMENTS: tuple[str, ...] = (
         target_ref          TEXT NOT NULL,
         canonical_evidence_id TEXT NOT NULL,
         container_ref       TEXT,
+        parent_ref          TEXT,
+        context_group_id    TEXT,
+        source_refs_json    JSONB NOT NULL DEFAULT '[]',
         ordinal             INTEGER NOT NULL DEFAULT 0,
         lexical_eligible    BOOLEAN NOT NULL DEFAULT TRUE,
         dense_eligible      BOOLEAN NOT NULL DEFAULT TRUE,
@@ -138,6 +141,20 @@ ASSET_SCHEMA_V2_STATEMENTS: tuple[str, ...] = (
         tokenizer_version TEXT,
         computed_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     )
+    """,
+    # 27号审查修复 E（24号 §5.4 契约）：units_v2 补 source_refs/parent_ref/
+    # context_group_id——CREATE IF NOT EXISTS 对存量表是空操作，ALTER 兜底。
+    """
+    ALTER TABLE asset_retrieval_units_v2
+        ADD COLUMN IF NOT EXISTS parent_ref TEXT
+    """,
+    """
+    ALTER TABLE asset_retrieval_units_v2
+        ADD COLUMN IF NOT EXISTS context_group_id TEXT
+    """,
+    """
+    ALTER TABLE asset_retrieval_units_v2
+        ADD COLUMN IF NOT EXISTS source_refs_json JSONB NOT NULL DEFAULT '[]'
     """,
 )
 

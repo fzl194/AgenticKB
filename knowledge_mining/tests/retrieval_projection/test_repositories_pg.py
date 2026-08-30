@@ -299,7 +299,11 @@ async def test_representation_replace_is_transactional_delete_then_insert():
     assert delete[1] == ["snap-1"]
     assert insert[1] is not None and insert[1][0] == "d:s1:prose:0"
     assert insert[1][6] is None and insert[1][7] is None  # lexical/tokenizer
-    assert json.loads(insert[1][16]) == {"document": "manual.md"}
+    # 27号修复 E：parent_ref/context_group_id/source_refs_json 三列
+    # （12/13/14）随契约持久化；facets/provenance 顺延至 19/20
+    assert insert[1][12] is None and insert[1][13] is None
+    assert json.loads(insert[1][14]) == []
+    assert json.loads(insert[1][19]) == {"document": "manual.md"}
     # DDL 幂等初始化来自 schema.py 真相源，且先于业务语句
     ddl = [entry for entry in log if "CREATE TABLE" in entry[0]]
     assert ddl and log.index(ddl[0]) < log.index(begins[0])

@@ -114,12 +114,14 @@ class QueryExpansionFacade:
     def generate_for_snapshot(
         self, *, snapshot_id: str | None, params: Mapping[str, Any]
     ) -> ExpansionOutcome:
-        from types import SimpleNamespace
-
         if not snapshot_id:
             return ExpansionOutcome((), 0, 0, 0, False)
 
         from .async_bridge import run_sync
+
+        # 27号审查修复：maxAliasesPerTarget 由算子参数真正生效（此前只有
+        # 构造器默认，handler 校验后并未传进门面）。
+        max_aliases = int(params.get("maxAliasesPerTarget", self._max_per_target))
 
         representations = run_sync(
             self._representations.list_for_snapshot(snapshot_id)
@@ -149,9 +151,11 @@ class QueryExpansionFacade:
                     continue
                 question = str(raw.get("question") or "").strip()
                 span = str(raw.get("answer_span") or "")
-                source_text = str(raw.get("source_text") or rep.content_text)
+                # 27号审查修复（§5.5「generation context 只帮助理解，不能
+                # 扩大证据范围」）：answer_span 只对源表示原文校验——LLM
+                # 自报的 source_text 不参与判定。
                 if not question or not validate_answer_span(
-                    span, source_text=source_text
+                    span, source_text=rep.content_text
                 ):
                     invalid += 1
                     continue
@@ -164,27 +168,42 @@ class QueryExpansionFacade:
                     )
                 )
 
-        kept = dedup_aliases(drafts)[: len(eligible) * self._max_per_target]
-        aliases = tuple(
-            _alias_representation(eligible[0], draft.question, idx)
-            for idx, draft in enumerate(kept)
-            # 指回首个同源表示的 target（draft 与 eligible[0] 同 canonical 时）
-        ) if kept else ()
-        # 逐 draft 绑回其真实源表示
+        # 27号审查修复：per-target 上限按 canonical 真正计数（此前是全局
+        # 截断 len(eligible)*max，单个 target 可占满全部名额）。
+        per_target: dict[str, int] = {}
+        capped: list[AliasDraft] = []
+        for draft in dedup_aliases(drafts):
+            used = per_target.get(draft.canonical_evidence_id, 0)
+            if used >= max_aliases:
+                continue
+            per_target[draft.canonical_evidence_id] = used + 1
+            capped.append(draft)
         by_canonical = {rep.canonical_evidence_id: rep for rep in eligible}
         aliases = tuple(
-            _alias_representation(by_canonical[draft.canonical_evidence_id], draft.question, idx)
-            for idx, draft in enumerate(kept)
+            _alias_representation(
+                by_canonical[draft.canonical_evidence_id], draft.question, idx,
+            )
+            for idx, draft in enumerate(capped)
         )
 
         if aliases and self._aliases is not None:
-            run_sync(
-                self._aliases.replace_for_snapshot(
-                    snapshot_id, aliases, PROJECTOR_VERSION, document_key=snapshot_id,
-                )
+            # 27号审查修复：alias 子集替换语义——不得整快照清空（若 alias
+            # store 与主表示 store 同体会抹掉基础表示）。store 未实现该
+            # 方法时回落整替（独立 alias store 的旧契约）。
+            replace_aliases = getattr(
+                self._aliases, "replace_aliases_for_snapshot", None
             )
+            if replace_aliases is not None:
+                run_sync(replace_aliases(
+                    snapshot_id, aliases, PROJECTOR_VERSION,
+                    document_key=snapshot_id,
+                ))
+            else:
+                run_sync(self._aliases.replace_for_snapshot(
+                    snapshot_id, aliases, PROJECTOR_VERSION,
+                    document_key=snapshot_id,
+                ))
         degraded = llm_failures > 0
-        _ = SimpleNamespace  # 保持 import 结构稳定
         return ExpansionOutcome(aliases, skipped, invalid, llm_failures, degraded)
 
 

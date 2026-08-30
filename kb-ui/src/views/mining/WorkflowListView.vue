@@ -94,17 +94,15 @@ const form = ref<{
   template_key: MiningTemplateKey
   schema_version: '2.0'
 }>({
-  name: '', description: '', template_key: 'full', schema_version: '2.0',
+  name: '', description: '', template_key: 'hybrid_assets', schema_version: '2.0',
 })
 
+// 批次8 M6：官方 4 套预置（旧 7 类模板已退役，后端只接受这 4 个 key）
 const templates: Array<{ key: MiningTemplateKey; label: string; description: string }> = [
-  { key: 'minimal', label: '基础文档入库', description: '仅解析、切分并持久化文档资产，适合低成本基础入库。' },
-  { key: 'fast_retrieval', label: '快速向量检索', description: '直接生成检索单元与向量，适合快速构建基础 RAG 检索。' },
-  { key: 'discourse_only', label: '篇章增强检索', description: '理解篇章关系并补充检索上下文，适合长文档的高质量语义检索。' },
-  { key: 'entity_graph', label: '固定本体图谱构建', description: '按已有本体抽取实体和关系并写入图谱，不演化本体。' },
-  { key: 'hybrid_knowledge', label: '检索与图谱联合构建', description: '同时构建篇章增强检索资产和固定本体实体图谱。' },
-  { key: 'ontology_only', label: '本体演化专项', description: '抽取实体关系并归纳、审核本体候选，适合本体持续演化。' },
-  { key: 'full', label: '全量知识构建', description: '执行检索、实体图谱和本体演化的完整挖掘链路。' },
+  { key: 'hybrid_assets', label: '标准混合资产（推荐）', description: '零 LLM 默认线：结构保真切片 + 类型化搜索投影（含表格行/章节）+ 策略化向量。' },
+  { key: 'lexical_assets', label: '轻量关键词资产', description: '仅解析/切片/搜索投影（无向量）：低成本、无 embedding 服务的 lexical-only 场景。' },
+  { key: 'query_alias_assets', label: '问题别名增强资产（实验）', description: '标准混合链 + 离线问题别名生成；LLM 不可用自动降级，不阻断基础资产。' },
+  { key: 'longdoc_assets', label: '长文档全局增强资产（实验）', description: '标准混合链 + 标题树层级摘要；LLM 不可用自动降级，不阻断基础资产。' },
 ]
 const selectedTemplateDescription = computed(() => templates.find(item => item.key === form.value.template_key)?.description ?? '')
 
@@ -121,7 +119,7 @@ async function load() {
 
 function openCreate() {
   form.value = {
-    name: '', description: '', template_key: 'full', schema_version: '2.0',
+    name: '', description: '', template_key: 'hybrid_assets', schema_version: '2.0',
   }
   createVisible.value = true
 }

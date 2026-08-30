@@ -147,13 +147,16 @@ import type { McpAccessStatus } from '@/types/kb'
 const kbApi = useKbApi()
 const domainStore = useDomainStore()
 
-/** 六件套（与后端 MCP_TOOL_NAMES 一致）；label 为默认文案摘要。 */
+/** 九件套（与后端 MCP_TOOL_NAMES 一致）；label 为默认文案摘要。 */
 const ALL_TOOLS = [
   { name: 'search_knowledge', label: '按开放库检索知识证据（管线随库绑定）' },
+  { name: 'get_evidence', label: '取回某条证据的完整原文' },
+  { name: 'get_document', label: '读取某文件的结构化内容' },
+  { name: 'inspect_knowledge', label: '渐进披露结构能力与表格资产' },
+  { name: 'navigate_structure', label: '按关系导航知识结构' },
+  { name: 'query_structured_asset', label: 'schema 化查询表格资产' },
   { name: 'list_knowledge_bases', label: '列出开放的知识库' },
   { name: 'list_documents', label: '列出某库的文件清单' },
-  { name: 'get_document', label: '读取某文件的结构化内容' },
-  { name: 'get_segment_fulltext', label: '取回证据的完整原文' },
   { name: 'upload_document', label: '上传文件入库（不自动挖掘）' },
 ] as const
 

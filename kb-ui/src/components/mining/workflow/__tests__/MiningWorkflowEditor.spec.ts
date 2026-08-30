@@ -12,13 +12,14 @@ const definitions = [
   { type: 'editable', displayName: 'Editable', category: 'document', zone: 'document', editPolicy: 'editable', inputSlots: [], outputSlots: [], description: '' },
 ] as any[]
 
+// 批次8 M6：正式目录 9 算子子集（实体/本体研究线不在 catalog）
 const businessDefinitions = [
   { type: 'input_ingest', displayName: '输入发现', category: 'input', zone: 'input', editPolicy: 'fixed', inputSlots: [], outputSlots: [], description: '' },
-  { type: 'enrich', displayName: '语义增强', category: 'document', zone: 'document', editPolicy: 'editable', inputSlots: [], outputSlots: [], description: '' },
-  { type: 'entity_review_gate', displayName: '实体审核', category: 'review', zone: 'global', editPolicy: 'protected', inputSlots: [], outputSlots: [], description: '' },
-  { type: 'graph_write', displayName: '图谱写入', category: 'ontology', zone: 'global', editPolicy: 'protected', inputSlots: [], outputSlots: [], description: '' },
-  { type: 'ontology_induction', displayName: '本体归纳', category: 'ontology', zone: 'global', editPolicy: 'editable', inputSlots: [], outputSlots: [], description: '' },
+  { type: 'document_parse', displayName: '文档解析', category: 'document', zone: 'document', editPolicy: 'editable', inputSlots: [], outputSlots: [], description: '' },
+  { type: 'retrieval_unit_project', displayName: '搜索投影', category: 'document', zone: 'document', editPolicy: 'editable', inputSlots: [], outputSlots: [], description: '' },
+  { type: 'embedding', displayName: '向量化', category: 'document', zone: 'document', editPolicy: 'editable', inputSlots: [], outputSlots: [], description: '' },
   { type: 'asset_persist', displayName: '资产持久化', category: 'storage', zone: 'document', editPolicy: 'fixed', inputSlots: [], outputSlots: [], description: '' },
+  { type: 'mining_finalize', displayName: '构建收尾', category: 'review', zone: 'global', editPolicy: 'protected', inputSlots: [], outputSlots: [], description: '' },
 ] as any[]
 
 describe('mining Workflow editor components', () => {
@@ -40,17 +41,23 @@ describe('mining Workflow editor components', () => {
     })
     const headings = palette.findAll('.mining-palette__group h4').map(item => item.text())
 
-    expect(headings).toEqual(['输入与解析', '篇章与检索', '实体与图谱', '本体演化', '资产与发布', '其他'])
+    expect(headings).toEqual(['输入与解析', '搜索表示与增强', '资产与发布', '其他'])
     expect(palette.get('[data-operator="custom_extension"]').text()).toContain('扩展算子')
-    expect(palette.get('[data-operator="entity_review_gate"]').text()).toContain('整批次')
+    expect(palette.get('[data-operator="mining_finalize"]').text()).toContain('整批次')
     expect(palette.get('[data-operator="asset_persist"]').text()).toContain('逐文档')
   })
 
   it('uses graph-aware edit states in palette and node badges', async () => {
+    // 图感知门控用研究线受保护算子验证（managed protected：随图内能力线
+    // 出现/消失切换必需↔可选——通用行为，与研究线是否在正式 catalog 无关）
+    const gates = [
+      { type: 'entity_review_gate', displayName: '实体审核', category: 'review', zone: 'global', editPolicy: 'protected', inputSlots: [], outputSlots: [], description: '' },
+      { type: 'graph_write', displayName: '图谱写入', category: 'ontology', zone: 'global', editPolicy: 'protected', inputSlots: [], outputSlots: [], description: '' },
+    ] as any[]
     const palette = shallowMount(MiningOperatorPalette, {
       props: {
-        operators: businessDefinitions,
-        nodes: [{ nodeId: 'entity', operatorType: 'entity_extract', params: {} }],
+        operators: gates,
+        nodes: [{ nodeId: 'e', operatorType: 'entity_extract', params: {} }],
       },
     })
     expect(palette.get('[data-operator="graph_write"]').text()).toContain('当前必需')
@@ -62,12 +69,12 @@ describe('mining Workflow editor components', () => {
 
     const node = shallowMount(MiningOperatorNode, {
       props: {
-        id: 'n', operatorType: 'graph_write', definition: businessDefinitions[3], params: {}, selected: false,
-        editState: 'required', editReason: '当前存在实体能力线，发布前必须写入图谱',
+        id: 'n', operatorType: 'mining_finalize', definition: businessDefinitions[5], params: {}, selected: false,
+        editState: 'required', editReason: '存在未收尾的构建，发布前必须执行构建收尾',
       },
     })
     expect(node.getComponent(WorkflowOperatorNodeBase).props('badge')).toBe('当前必需')
-    expect(node.getComponent(WorkflowOperatorNodeBase).props('badgeTitle')).toContain('实体能力线')
+    expect(node.getComponent(WorkflowOperatorNodeBase).props('badgeTitle')).toContain('构建收尾')
   })
 
   it('renders local and server validation issues together', () => {

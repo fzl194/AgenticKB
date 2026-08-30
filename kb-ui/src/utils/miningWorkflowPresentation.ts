@@ -6,19 +6,14 @@ export interface MiningOperatorFamily {
   types: readonly string[]
 }
 
+// 批次8 M6：正式目录 9 算子（实体/本体研究线不在 catalog，不分组展示）
 export const MINING_OPERATOR_FAMILIES: readonly MiningOperatorFamily[] = [
-  { key: 'input_parse', label: '输入与解析', types: ['input_ingest', 'parse_segment'] },
+  { key: 'input_parse', label: '输入与解析', types: ['input_ingest', 'document_parse', 'segment_compile'] },
   {
-    key: 'discourse_retrieval',
-    label: '篇章与检索',
-    types: ['enrich', 'discourse_line', 'contextual_retrieval_enrich', 'retrieval_unit_build', 'embedding'],
+    key: 'retrieval_assets',
+    label: '搜索表示与增强',
+    types: ['retrieval_unit_project', 'query_expansion_generate', 'hierarchical_summary_generate', 'embedding'],
   },
-  {
-    key: 'entity_graph',
-    label: '实体与图谱',
-    types: ['entity_extract', 'entity_resolve', 'entity_relation_extract', 'entity_review_gate', 'graph_write'],
-  },
-  { key: 'ontology_evolution', label: '本体演化', types: ['ontology_induction', 'ontology_review_gate'] },
   { key: 'asset_publish', label: '资产与发布', types: ['asset_persist', 'mining_finalize'] },
 ]
 

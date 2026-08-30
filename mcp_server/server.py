@@ -202,15 +202,17 @@ def search_knowledge(
         domain: 必填知识域标识，例如 civil_engineering 或 odn。
         kb_names: 可选，在开放的多个库中缩小范围。不传 = 检索全部开放库。
         within: 可选范围约束（hard filter）：{"document_refs": ["doc_…"],
-            "section_refs": ["st_…"], "structure_ref": "st_…", "include_descendants": true}。
-        filters: 可选过滤（hard filter）：{"relative_path_prefix": "…",
-            "asset_types": ["table"], "evidence_types": ["table_row"],
-            "date_range": {"from": "…", "to": "…"}}。
+            "section_refs": ["st_…"]}。doc_/st_ 可直接传 search/inspect 返回的
+            opaque ref（服务端解码为内部范围）。只支持这两个键——其他键
+            （如 structure_ref/include_descendants）会返回 400。
+        filters: 可选过滤（hard filter）：{"asset_types": ["table"],
+            "evidence_types": ["table_row"]}。当前只支持这两个键；路径/日期
+            过滤尚未提供，传入会返回 400（不支持显式报错，不静默忽略）。
         expansion: 可选展开模式 {"mode": "auto|exact|window|parent|whole_document"}，
             控制 evidence 内容的粒度（默认 auto）。
         top_k: 可选结果面上限（1-200，服务端按各阶段上限收敛）。
         paradigm: 一般不需要传——范式跟随知识库绑定自动选择。
-        debug: 是否返回检索过程诊断信息。
+        debug: 是否返回检索过程诊断信息（true 时响应附 diagnostics 字段）。
     """
     ident = _identity()
     kb_ids = _scope_kbs(ident, kb_names)

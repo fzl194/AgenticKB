@@ -54,7 +54,7 @@ describe('mining workflow API', () => {
 
     await expect(api.getCatalog()).resolves.toMatchObject({ catalog_version: '1' })
     await expect(api.options()).resolves.toHaveLength(1)
-    await api.create({ name: 'custom', template_key: 'minimal' })
+    await api.create({ name: 'custom', template_key: 'hybrid_assets' })
     await api.saveDraft('wf', { graph: { nodes: [], edges: [], output: { nodeId: '', slot: '' } }, expected_revision: 3 })
     await api.validate('wf')
     await api.publish('wf', { expected_revision: 3, release_notes: 'ready' })

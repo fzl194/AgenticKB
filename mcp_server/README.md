@@ -7,7 +7,7 @@
 - **不做语义判断**：检索结果原样交给 Agent，Server 不评估证据是否充分、不改写内容
 - **instructions 承载精华**：SKILL 中的使用指南、证据理解规则、回答行为、推理护栏全部内嵌在 MCP instructions 中，Agent 拿到即可正确使用
 - **Agent 自主判断**：证据是否充分、如何回答，完全由 Agent（LLM）决定，Server 不做评估
-- **只暴露 2 个 tool**：`search_knowledge` 检索证据，`get_segment_fulltext` 取回其中某几条的完整原文。`health_check` 已实现但在 `server.py` 里被注释掉，仅供内部调用，**不对外暴露**，无 resource、无 prompt
+- **九件套 tool**（批次8）：`search_knowledge`（纯 EvidenceResponse 检索）、`get_evidence`（证据原文下钻，替代已退役的 get_segment_fulltext）、`get_document`、`inspect_knowledge`、`navigate_structure`、`query_structured_asset`、`list_knowledge_bases`、`list_documents`、`upload_document`。无 resource、无 prompt
 
 > ⚠️ **不再是「纯透传」**。为了让「发布检索范式后 MCP 自动用上」成立，client 现在做两件加工：按 domain 解析该用哪条检索引擎，以及把两条引擎不同的响应外壳归一化。详见下节。
 

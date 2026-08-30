@@ -61,7 +61,7 @@ describe('global mining Workflow list', () => {
     expect((wrapper.vm as unknown as { workflows: unknown[] }).workflows).toHaveLength(2)
   })
 
-  it('shows and creates all seven peer-level paradigms and preserves a conflicting name', async () => {
+  it('shows and creates all four official presets and preserves a conflicting name', async () => {
     const wrapper = shallowMount(WorkflowListView)
     await flushPromises()
     const vm = wrapper.vm as unknown as {
@@ -70,14 +70,14 @@ describe('global mining Workflow list', () => {
       createWorkflow: () => Promise<void>
     }
 
+    // 批次8 M6：官方 4 套预置（旧 7 类模板退役）
     const templateKeys = [
-      'minimal', 'fast_retrieval', 'discourse_only', 'entity_graph',
-      'hybrid_knowledge', 'ontology_only', 'full',
+      'hybrid_assets', 'lexical_assets', 'query_alias_assets', 'longdoc_assets',
     ]
     expect(vm.templates.map(template => template.key)).toEqual(templateKeys)
     expect(vm.templates.map(template => template.label)).toEqual([
-      '基础文档入库', '快速向量检索', '篇章增强检索', '固定本体图谱构建',
-      '检索与图谱联合构建', '本体演化专项', '全量知识构建',
+      '标准混合资产（推荐）', '轻量关键词资产',
+      '问题别名增强资产（实验）', '长文档全局增强资产（实验）',
     ])
 
     for (const template_key of templateKeys) {
@@ -87,7 +87,7 @@ describe('global mining Workflow list', () => {
     expect(state.api.create.mock.calls.map(call => call[0].template_key)).toEqual(templateKeys)
 
     state.api.create.mockRejectedValueOnce({ response: { status: 409, data: { detail: { code: 'workflow_name_conflict' } } } })
-    vm.form = { name: 'keep-this-name', description: '', template_key: 'full' }
+    vm.form = { name: 'keep-this-name', description: '', template_key: 'hybrid_assets' }
     await vm.createWorkflow()
     expect(vm.form.name).toBe('keep-this-name')
   })

@@ -6,13 +6,10 @@ export type MiningExecutionZone = 'input' | 'document' | 'global'
 export type MiningEditPolicy = 'fixed' | 'protected' | 'editable'
 export type MiningWorkflowStatus = 'active' | 'archived'
 export type MiningTemplateKey =
-  | 'minimal'
-  | 'fast_retrieval'
-  | 'discourse_only'
-  | 'entity_graph'
-  | 'hybrid_knowledge'
-  | 'ontology_only'
-  | 'full'
+  | 'lexical_assets'
+  | 'hybrid_assets'
+  | 'query_alias_assets'
+  | 'longdoc_assets'
 
 export interface MiningSlotDecl {
   name: string

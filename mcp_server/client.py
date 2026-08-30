@@ -373,6 +373,15 @@ def _search_via_paradigm(
             sorted(body.keys()) if isinstance(body, dict) else type(body).__name__,
         )
         return {"error": "no_evidence_response"}
+    # 27号审查修复：debug=true 时附带 serving 的诊断信息（算子执行留痕），
+    # 不再丢弃——工具描述承诺的 diagnostics 必须兑现。非 debug 保持纯协议。
+    if inp.debug and isinstance(body, dict):
+        diagnostics = {
+            k: v for k, v in body.items()
+            if k != "evidenceResponse" and isinstance(v, (dict, list, str, int, float, bool))
+        }
+        if diagnostics:
+            return {**evidence, "diagnostics": diagnostics}
     return evidence
 
 

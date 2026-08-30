@@ -127,6 +127,18 @@ ASSET_SCHEMA_V2_STATEMENTS: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS idx_are_v2_snapshot
         ON asset_retrieval_embeddings_v2 (snapshot_id)
     """,
+    # 27号审查修复 B（24号 §7/§320：snapshot readiness 持久化）——四能力
+    # 事实随三面资产原子落库；finalize 据此门禁发布，inspect 优先读冻结值。
+    """
+    CREATE TABLE IF NOT EXISTS asset_snapshot_readiness (
+        snapshot_id      TEXT PRIMARY KEY,
+        document_ref     TEXT NOT NULL,
+        readiness_json   JSONB NOT NULL,
+        schema_version   TEXT NOT NULL,
+        tokenizer_version TEXT,
+        computed_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
 )
 
 

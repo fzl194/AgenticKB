@@ -893,6 +893,33 @@ class AssetCoreDB(_DB):
         )
         return int(row["n"]) if row else 0
 
+    def fetch_snapshot_readiness(
+        self, snapshot_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """27号审查修复 B：批量取快照冻结 readiness（无行 = 缺失，不视为 ready）.
+
+        供 finalize 发布门禁与 build 摘要聚合；readiness_json 由 psycopg
+        反序列化为 dict（防御 str 形态）。
+        """
+        if not snapshot_ids:
+            return {}
+        rows = self._fetchall(
+            "SELECT snapshot_id, readiness_json FROM asset_snapshot_readiness "
+            "WHERE snapshot_id = ANY(%s)",
+            (snapshot_ids,),
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            facts = row.get("readiness_json")
+            if isinstance(facts, str):
+                try:
+                    facts = json.loads(facts)
+                except (json.JSONDecodeError, TypeError):
+                    facts = None
+            if isinstance(facts, dict):
+                out[str(row["snapshot_id"])] = facts
+        return out
+
     def count_embeddings_by_snapshot(self, document_snapshot_id: str) -> int:
         # 批次8 M5：优先 v2 向量资产；存量旧表兜底（clean break 后应为 0）。
         row = self._fetchone(

@@ -110,6 +110,17 @@ _STRUCTURED_ASSETS_INSERT = """
 """
 
 _TABLE_CELLS_DELETE = "DELETE FROM asset_table_cells WHERE snapshot_id = %s"
+
+_READINESS_DELETE = (
+    "DELETE FROM asset_snapshot_readiness WHERE snapshot_id = %s"
+)
+
+_READINESS_INSERT = """
+    INSERT INTO asset_snapshot_readiness (
+        snapshot_id, document_ref, readiness_json, schema_version,
+        tokenizer_version
+    ) VALUES (%s, %s, %s::jsonb, %s, %s)
+"""
 _TABLE_CELLS_INSERT = """
     INSERT INTO asset_table_cells (
         snapshot_id, table_ref, row_index, column_index, column_name, value,
@@ -349,7 +360,7 @@ class PgAssetWriter(_PgSchemaBound):
                 for delete in (
                     _UNITS_DELETE, _STRUCTURE_NODES_DELETE,
                     _STRUCTURE_EDGES_DELETE, _STRUCTURED_ASSETS_DELETE,
-                    _TABLE_CELLS_DELETE,
+                    _TABLE_CELLS_DELETE, _READINESS_DELETE,
                 ):
                     await conn.execute(delete, [snapshot_id])
                 await self._insert_units(
@@ -358,6 +369,7 @@ class PgAssetWriter(_PgSchemaBound):
                 await self._insert_structure(conn, snapshot_id, faces)
                 await self._insert_tables(conn, snapshot_id, faces)
                 await self._insert_embedding_meta(conn, snapshot_id, faces)
+                await self._insert_readiness(conn, snapshot_id, faces)
         return int(faces.get("representation_count", len(representations)))
 
     async def _insert_units(
@@ -450,6 +462,28 @@ class PgAssetWriter(_PgSchemaBound):
                     record.get("fallback_from"), None,
                 ],
             )
+
+    async def _insert_readiness(
+        self, conn: Any, snapshot_id: str, faces: Mapping[str, Any],
+    ) -> None:
+        """四能力 readiness 事实随三面原子落库（27号审查修复 B）.
+
+        无 readiness 的 faces（防御：异常形状）跳过——不阻塞三面写入，
+        finalize 门禁对缺行快照按『未知』处理并拒绝发布。
+        """
+        readiness = faces.get("readiness")
+        if not readiness:
+            return
+        await conn.execute(
+            _READINESS_INSERT,
+            [
+                snapshot_id,
+                str(faces.get("document_ref") or snapshot_id),
+                json.dumps(dict(readiness), ensure_ascii=False),
+                str(faces.get("schema_version") or ""),
+                str(faces.get("tokenizer_version") or ""),
+            ],
+        )
 
 
 __all__ = [

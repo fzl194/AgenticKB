@@ -2581,13 +2581,57 @@ def _finalize_run(
     release_id = None
     has_failures = failed_count > 0
 
+    # 27号审查修复 B（24号 §5.8/L340）：按冻结 readiness 决定发布——基础
+    # 搜索资产不完整的 run 不发布 ready release（build 保留待复查）；聚合
+    # 事实冻进 build.summary_json["readiness"]。只作用于新链 run（带范式
+    # manifest）；legacy run 无 readiness 行，维持旧判据。
+    readiness_summary: dict[str, Any] | None = None
+    readiness_ok = True
+    if capabilities is not None:
+        validated_snapshot_ids = sorted({
+            str(d["document_snapshot_id"])
+            for d in snapshot_decisions
+            if d.get("selection_status") == "active"
+            and d.get("action") in ("NEW", "UPDATE", "RESTORE")
+        })
+        if validated_snapshot_ids:
+            frozen = asset_db.fetch_snapshot_readiness(validated_snapshot_ids)
+            reported = [frozen[sid] for sid in validated_snapshot_ids if sid in frozen]
+            readiness_summary = {
+                "snapshots": len(validated_snapshot_ids),
+                "reported": len(reported),
+                "search_ready": sum(
+                    1 for f in reported if f.get("search_ready")
+                ),
+                "dense_ready": sum(1 for f in reported if f.get("dense_ready")),
+                "structure_navigate_ready": sum(
+                    1 for f in reported if f.get("structure_navigate_ready")
+                ),
+                "structured_query_ready": sum(
+                    1 for f in reported if f.get("structured_query_ready")
+                ),
+            }
+            readiness_summary["degraded"] = bool(
+                readiness_summary["reported"] < readiness_summary["snapshots"]
+                or readiness_summary["search_ready"] < readiness_summary["reported"]
+            )
+            readiness_ok = not readiness_summary["degraded"]
+            if not readiness_ok:
+                logger.warning(
+                    "Run %s blocked from publish: readiness degraded %s",
+                    run_id, readiness_summary,
+                )
+
     # Build is always created if there are committed documents
     if not phase1_only and snapshot_decisions:
         _check_cancelled(runtime_db, run_id)
         if not tracker.set_run_phase(run_id, profile.domain_id, "publishing"):
             return {"run_id": run_id, "status": "cancelled"}
         evt = tracker.start_stage(run_id, "assemble_build")
-        should_publish = publish and (not has_failures or publish_on_partial_failure)
+        should_publish = (
+            publish and readiness_ok
+            and (not has_failures or publish_on_partial_failure)
+        )
         with _domain_publish_transaction(asset_db, profile.domain_id):
             # Re-read the parent only after acquiring the domain lock.
             snapshot_decisions = classify_documents(
@@ -2608,6 +2652,7 @@ def _finalize_run(
                 kb_id=_run_meta.get("kb_id"),
                 capabilities=capabilities,
                 embedding_fallback=embedding_fallback,
+                readiness_summary=readiness_summary,
             )
 
             # This read must see the build before the outer transaction commits.

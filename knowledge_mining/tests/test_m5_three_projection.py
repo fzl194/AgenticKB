@@ -127,7 +127,9 @@ def test_readiness_four_capabilities_from_real_assets():
     facts = compute_readiness(
         representations=_reps(),
         structure=structure,
-        embedding_records=(SimpleNamespace(representation_id="d:s1:prose:0"),),
+        embedding_records=(
+            SimpleNamespace(representation_id="d:s1:prose:0", dimension=8),
+        ),
     )
     assert facts["search_ready"] is True
     assert facts["structure_navigate_ready"] is True
@@ -146,6 +148,56 @@ def test_readiness_four_capabilities_from_real_assets():
     assert facts2["aggregate_ready"] is False
     assert facts2["dense_ready"] is False
     assert facts2["search_ready"] is True  # lexical 仍可用
+
+
+def test_readiness_27fix_rules():
+    """27号审查修复：单段可导航 / 表头不算结构化数据 / 空 dimension 不计覆盖 /
+    readiness 随 faces 落库。"""
+    from knowledge_mining.mining.retrieval_projection.readiness import (
+        compute_readiness,
+    )
+    from knowledge_mining.mining.retrieval_projection.structure_projection import (
+        project_structure,
+    )
+
+    # 1) 单段文档：无 order 边（segment_index>0 才产出）但导航可用
+    single = (
+        CompiledSegment(
+            segment_index=0, block_type="paragraph", raw_text="只有一段。",
+            token_count=10,
+        ),
+    )
+    facts = compute_readiness(
+        representations=(),
+        structure=project_structure(single, document_ref="d.md"),
+        embedding_records=(),
+    )
+    assert facts["structure_navigate_ready"] is True
+
+    # 2) 只有表头没有数据行：structured_query_ready 必须为 False
+    header_only = SimpleNamespace(
+        nodes=({"node_type": "document", "ref": "d"},),
+        edges=(),
+        table_assets=(
+            {"asset_ref": "d#table:t1", "readiness": "ready",
+             "columns": ["型号"]},
+        ),
+        table_cells=(),
+    )
+    facts2 = compute_readiness(
+        representations=(), structure=header_only, embedding_records=(),
+    )
+    assert facts2["structured_query_ready"] is False
+
+    # 3) dimension=0 的 embedding 记录（空向量占位）不计入 dense 覆盖
+    facts3 = compute_readiness(
+        representations=_reps(),
+        structure=project_structure(_segments(), document_ref="manual.md"),
+        embedding_records=(
+            SimpleNamespace(representation_id="d:s1:prose:0", dimension=0),
+        ),
+    )
+    assert facts3["dense_ready"] is False
 
 
 def test_fts_lexical_text_is_presegmented():
@@ -275,3 +327,27 @@ def test_schema_ddl_contains_v2_tables_and_tsvector():
         assert table in joined, table
     assert "tsvector" in joined
     assert TOKENIZER_VERSION
+
+
+def test_persist_faces_carry_readiness_and_tokenizer():
+    """27号审查修复 B：readiness/tokenizer_version 进 faces——PgAssetWriter
+    据此原子写 asset_snapshot_readiness，finalize 门禁与 inspect 消费。"""
+    from knowledge_mining.mining.retrieval_projection.persist import (
+        AssetPersistService,
+        MemoryAssetWriter,
+    )
+
+    seg_store, rep_store, emb_store = _seeded_stores()
+    writer = MemoryAssetWriter()
+    service = AssetPersistService(
+        segment_store=seg_store,
+        representation_store=rep_store,
+        embedding_store=emb_store,
+        writer=writer,
+    )
+    service.persist_for_snapshot(snapshot_id="s1", document_ref="manual.md")
+
+    faces = writer.snapshots["s1"]
+    assert faces["readiness"]["search_ready"] is True
+    assert faces["readiness"]["structured_query_ready"] is True
+    assert faces["tokenizer_version"]

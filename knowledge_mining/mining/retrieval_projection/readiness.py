@@ -83,9 +83,20 @@ def compute_readiness(
         edge.get("relation") == "parent" for edge in edges
     )
     has_order = any(edge.get("relation") == "order" for edge in edges)
+    # 27号审查修复：单段文档没有 order 边（segment_index>0 才产出）——
+    # 有 parent 边且 segment 节点 ≤1 时导航仍判定可用。
+    segment_node_count = sum(
+        1 for node in nodes
+        if (node.get("node_type") if isinstance(node, Mapping) else None)
+        == "segment"
+    )
 
+    # 27号审查修复：dimension≤0 的记录（历史空向量/占位）不计入覆盖——
+    # dense_ready 不因存在无向量行而虚报。
     embedded_ids = {
-        getattr(record, "representation_id", None) for record in embedding_records
+        getattr(record, "representation_id", None)
+        for record in embedding_records
+        if int(getattr(record, "dimension", 0) or 0) > 0
     }
     dense_covered = sum(
         1 for rep in dense_units if rep.representation_id in embedded_ids
@@ -94,8 +105,12 @@ def compute_readiness(
     return {
         "search_ready": bool(lexical_units),
         "dense_ready": bool(dense_units) and dense_covered > 0,
-        "structure_navigate_ready": bool(nodes) and has_parent and has_order,
-        "structured_query_ready": bool(ready_tables),
+        "structure_navigate_ready": bool(nodes) and has_parent and (
+            has_order or segment_node_count <= 1
+        ),
+        # 27号审查修复：结构化查询需真实数据行——只有表头没有 cell 的
+        # "ready" 表不足以支撑 query_structured_asset（工具已建、数据面空）。
+        "structured_query_ready": bool(ready_tables) and bool(table_cells),
         "aggregate_ready": any(col["can_aggregate"] for col in aggregability.values()),
         "column_aggregability": aggregability,
         "counts": {
@@ -105,6 +120,7 @@ def compute_readiness(
             "structure_nodes": len(nodes),
             "structure_edges": len(edges),
             "table_assets": len(ready_tables),
+            "table_cells": len(table_cells),
         },
     }
 

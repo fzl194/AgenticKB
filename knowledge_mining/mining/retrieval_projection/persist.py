@@ -167,6 +167,10 @@ class AssetPersistService:
             "representation_count": len(representations),
             "embedding_count": len(embedding_records),
             "structure_node_count": len(structure.nodes),
+            "tokenizer_version": TOKENIZER_VERSION,
+            # 27号审查修复 B：readiness 随三面原子落库（PgAssetWriter 写
+            # asset_snapshot_readiness；finalize 发布门禁与 inspect 消费）。
+            "readiness": dict(readiness),
         }
         self._writer.replace_for_snapshot(snapshot_id, faces)
 

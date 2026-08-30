@@ -123,6 +123,7 @@ def assemble_build(
     kb_id: str | None = None,
     capabilities: list[str] | None = None,
     embedding_fallback: bool = False,
+    readiness_summary: dict[str, Any] | None = None,
 ) -> str:
     """Assemble a new build from snapshot decisions with merge semantics.
 
@@ -183,6 +184,10 @@ def assemble_build(
                 if d.get("selection_status") == "active"
                 and d.get("action") in ("NEW", "UPDATE", "RESTORE")
             })
+        # 27号审查修复 B（24号 §7/L340）：readiness 聚合冻进 build 摘要——
+        # 发布门禁与 UI 展示都以这份冻结事实为准，不回查运行态。
+        if readiness_summary is not None:
+            summary["readiness"] = dict(readiness_summary)
 
         asset_db.insert_build(
             build_id=build_id,

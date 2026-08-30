@@ -60,13 +60,22 @@ final class ParadigmRequests {
      * R8（§7.1）：显式 {@code within} 与 {@code filters} 平铺合并为 requestFilters——
      * 显式传入 = hard filter（scope_resolve 透传、召回 Top-K 前下推）；未传 = 宽检索。
      * 服务端不从 query 推断任何 filter。
+     *
+     * <p>27号审查修复：键白名单在请求边界校验（400），未支持的键不再静默忽略——
+     * 否则调用方以为过滤生效，实际返回的是全范围数据。</p>
      */
     static Map<String, Object> mergedFilters(JsonNode body) {
         if (body == null) return Map.of();
         Map<String, Object> merged = new LinkedHashMap<>();
         copyObject(merged, body.get("within"));
         copyObject(merged, body.get("filters"));
-        return merged.isEmpty() ? Map.of() : Map.copyOf(merged);
+        if (merged.isEmpty()) return Map.of();
+        for (String key : merged.keySet()) {
+            if (!com.coremasterkb.serving.domain.ActiveScope.SUPPORTED_FILTER_KEYS.contains(key)) {
+                throw new IllegalArgumentException("unsupported_scope_filter:" + key);
+            }
+        }
+        return Map.copyOf(merged);
     }
 
     private static void copyObject(Map<String, Object> target, JsonNode node) {

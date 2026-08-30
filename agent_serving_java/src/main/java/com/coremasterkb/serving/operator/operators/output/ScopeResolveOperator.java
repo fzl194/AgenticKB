@@ -119,9 +119,10 @@ public class ScopeResolveOperator implements Operator {
         return SlotValues.of("scope", scope);
     }
 
-    /** 27号审查修复：当前召回链真正可下推的 hard filter 键白名单。 */
-    static final Set<String> SUPPORTED_FILTER_KEYS = Set.of(
-            "document_refs", "section_refs", "evidence_types", "asset_types");
+    /** 27号审查修复：与请求边界（ParadigmRequests）共用 ActiveScope 单一真相源；
+     *  此处二次校验属纵深防御（图参数注入路径）。 */
+    static final Set<String> SUPPORTED_FILTER_KEYS =
+            ActiveScope.SUPPORTED_FILTER_KEYS;
 
     /**
      * document_refs/section_refs 里的 doc_/st_ opaque ref 解码为内部 ref。

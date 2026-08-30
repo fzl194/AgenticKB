@@ -39,6 +39,15 @@ public record ActiveScope(
         Map<String, String> documentSnapshotMap,
         Map<String, Object> hardFilters
 ) {
+
+    /**
+     * 27号审查修复：召回链当前真正可下推的 hard filter 键白名单（单一真相源——
+     * 请求边界（ParadigmRequests）与 scope_resolve 共用）。未列键显式 400，
+     * 不静默忽略。
+     */
+    public static final Set<String> SUPPORTED_FILTER_KEYS = Set.of(
+            "document_refs", "section_refs", "evidence_types", "asset_types");
+
     public ActiveScope {
         if (snapshotIds == null) snapshotIds = List.of();
         if (documentSnapshotMap == null) documentSnapshotMap = Map.of();

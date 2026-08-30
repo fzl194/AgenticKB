@@ -23,15 +23,29 @@ class ParadigmRequestsFiltersTest {
     @DisplayName("within + filters 平铺合并为 requestFilters（显式 = hard filter）")
     void withinAndFiltersMerged() throws Exception {
         var body = M.readTree("""
-                {"query": "q", "within": {"document_refs": ["doc:/a"], "include_descendants": true},
-                 "filters": {"relative_path_prefix": "规范/接入网", "evidence_types": ["table_row"]}}
+                {"query": "q", "within": {"document_refs": ["doc:/a"], "section_refs": ["st_x"]},
+                 "filters": {"asset_types": ["table"], "evidence_types": ["table_row"]}}
                 """);
         var args = ParadigmRequests.toRunArgs(body, "alice");
 
         assertThat(args.filters()).containsEntry("document_refs", java.util.List.of("doc:/a"))
-                .containsEntry("include_descendants", true)
-                .containsEntry("relative_path_prefix", "规范/接入网")
+                .containsEntry("section_refs", java.util.List.of("st_x"))
+                .containsEntry("asset_types", java.util.List.of("table"))
                 .containsEntry("evidence_types", java.util.List.of("table_row"));
+    }
+
+    @Test
+    @DisplayName("27fix: 未支持 filter 键在请求边界显式 400（不静默忽略）")
+    void unsupportedFilterKeysRejectedAtBoundary() throws Exception {
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"date_range\": {\"from\": \"2026-01-01\"}}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("unsupported_scope_filter:date_range");
+
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"within\": {\"include_descendants\": true}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("unsupported_scope_filter:include_descendants");
     }
 
     @Test
@@ -94,7 +108,7 @@ class ParadigmRequestsFiltersTest {
     void runArgsWithersCarryNewFields() throws Exception {
         var args = ParadigmRequests.toRunArgs(
                 M.readTree("{\"query\": \"q\", \"top_k\": 5, \"expansion\": {\"mode\": \"exact\"},"
-                        + " \"within\": {\"structure_ref\": \"st_x\"}}"), "alice")
+                        + " \"within\": {\"section_refs\": [\"st_x\"]}}"), "alice")
                 .withKbIds(java.util.List.of("kb-1"))
                 .withParadigm("pd-1", 2);
 
@@ -103,6 +117,6 @@ class ParadigmRequestsFiltersTest {
         assertThat(args.paradigmVersion()).isEqualTo(2);
         assertThat(args.topK()).isEqualTo(5);
         assertThat(args.expansion()).isEqualTo("exact");
-        assertThat((Map<String, Object>) args.filters()).containsKey("structure_ref");
+        assertThat((Map<String, Object>) args.filters()).containsKey("section_refs");
     }
 }

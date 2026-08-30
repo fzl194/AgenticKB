@@ -19,6 +19,14 @@ from pydantic import BaseModel
 from knowledge_mining.mining.infra.control_plane import get_internal_verify_secret
 from knowledge_mining.mining.kb.auth import current_user, require_admin
 from knowledge_mining.mining.kb.deps import get_user_service
+
+import logging
+
+logger = logging.getLogger(__name__)
+from knowledge_mining.mining.kb.services.mcp_access_service import (
+    MCP_NEW_TOOLS,
+    MCP_TOOL_NAMES,
+)
 from knowledge_mining.mining.kb.services.user_service import (
     DuplicateUser, InvalidRole, UserError, UserNotFound, UserService, WrongPassword,
 )
@@ -150,6 +158,42 @@ async def verify_mcp_key(
     result = await svc.verify_key(body.key)
     if result is None:
         raise HTTPException(401, "invalid mcp key")
+
+    # 29号（未完成 E）：历史 open_tools 一次性迁移——含已退役
+    # get_segment_fulltext 的旧集合：剔除退役名 + 补齐当时不存在的新四结构
+    # 工具（用户从未见过它们，不存在"误开启"；显式关闭的既有工具保持
+    # 关闭）。规范化并回写一次，UI/runtime 后续读到即为终态。
+    open_tools = result.get("open_tools")
+    if open_tools and any(
+        t not in MCP_TOOL_NAMES for t in open_tools
+    ):
+        kept = [t for t in open_tools if t in MCP_TOOL_NAMES]
+        normalized = kept + [
+            t for t in MCP_NEW_TOOLS
+            if t not in kept
+        ]
+        if normalized:
+            try:
+                await svc.update_config(
+                    user_id=result["user_id"], open_tools=normalized,
+                )
+                open_tools = normalized
+                logger.info(
+                    "[mcp-tools] migrated legacy open_tools for %s: "
+                    "retired=%s added=%s",
+                    result["username"],
+                    [t for t in open_tools if t not in MCP_TOOL_NAMES],
+                    [t for t in MCP_NEW_TOOLS if t not in kept],
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "[mcp-tools] legacy open_tools migration failed for %s "
+                    "(serving normalized list without persisting)",
+                    result["username"],
+                    exc_info=True,
+                )
+                open_tools = normalized
+
     return {
         "ok": True,
         "username": result["username"],
@@ -158,7 +202,7 @@ async def verify_mcp_key(
         # kb_names → id 的解析源：开放库 id+name（软删库自动从清单消失）
         "open_kbs": result.get("open_kbs", []),
         # 批次7：工具开关 / 提示词 / 工具描述（MCP 免二次查）
-        "open_tools": result.get("open_tools"),
+        "open_tools": open_tools,
         "instructions": result.get("instructions"),
         "tool_descriptions": result.get("tool_descriptions"),
     }

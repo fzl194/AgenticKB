@@ -59,24 +59,13 @@
 
 > 为什么不给每个范式生成一个独立 tool：MCP 工具名必须是 ASCII 标识符（`^[a-zA-Z0-9_-]{1,64}$`），而范式名是中文自由文本、id 是 `pd-`+uuid8。自动生成的名字要么丢掉全部语义，要么得让人填一个英文名——后者只是把手工从代码挪到表单。把范式名当**数据**传就没有这个约束。
 
-## 原文下钻：`get_segment_fulltext`
+## 原文下钻：`get_evidence`（批次8，取代已退役的 get_segment_fulltext）
 
-`search_knowledge` 返回的 `text` **不是存储的原文**：后端组装阶段有固定字符预算，命中项被硬截断（末尾常见 `...`），其余项只保留与问题最相关的句子。要引用条款/参数/步骤的准确原文，必须再取一次。
+`search_knowledge` 返回的 `content` 有固定 token 预算，命中项可能被截断（`truncated=true`）。要引用条款/参数/步骤的准确原文，把该条证据的 `ref`（`ev_` 开头的 opaque ref）原样传回 `get_evidence` 即可，可选 `mode: auto|exact|window|parent|whole_document` 控制展开粒度（默认 auto=预算内就大）。
 
-```
-POST /api/v1/segments/fulltext
-     {"domain":..., "paradigm_id":..., "refs":[{"type":"raw_segment","id":"seg-1"}]}
-```
-
-`paradigm_id` 由调用方从上次检索结果的 `_retrieval.paradigm_id` **原样回传**；省略时才回落到按 domain 解析该域默认范式。
-
-**必须走同一条范式**，因为范式的 `scope_resolve` 可以绑定知识库；换个语料去查这些 id，只会报「找不到」。而 `found=false` 的语义是「内容被重新挖掘或那个库不可见」——Agent 会照着这句话去解释，**不会**察觉是范围配错了。这就是为什么这个参数只收 id 不收 name：它是机器原样回传，多一种取值就多一条解析失败的路径。
-
-`refs` 直接取自检索结果：`type` 用条目的 `kind`（命中项 `retrieval_unit`，上下文/支撑项 `raw_segment`），`id` 用条目的 `id`。单次上限 50 条。
-
-**解析失败时的降级方向与检索不同**：这里退到域级 active release 去查。KB 内容永远不进 release（KB 挖掘 `publish=false`），所以失败表现为「查不到」，绝不会「查到本不该看到的内容」——安全的那个方向，但会记一条 info 说明原因。
-
-响应里 `items` 与 `refs` 一一对应；`found=false` 表示该 id 已不在当前可检索范围（重挖过，或那个库不可见），**不存在、越权、被移出三种情况共用同一个 `out_of_scope`**，不做存在性探测。
+- **不需要内部 id/type**：ref 是不透明公开身份，服务端自行授权解析；
+- ref 失效（库重新挖掘/不可见）返回稳定的 typed error（`expired_ref` / `out_of_scope`），Agent 据此重新检索拿新 ref；
+- 结构化探索配合 `inspect_knowledge`（能力披露）→ `navigate_structure`（关系导航）→ `query_structured_asset`（表格 schema 查询与聚合）使用。
 
 ### 原件不作为 tool 暴露
 
@@ -110,7 +99,7 @@ POST /api/v1/segments/fulltext
 mcp_server/
 ├── __init__.py      # 版本号
 ├── __main__.py      # 入口，支持 stdio / streamable-http / sse
-├── server.py        # FastMCP 定义：instructions + 对外 2 个 tool
+├── server.py        # FastMCP 定义：instructions + 对外 9 个 tool（批次8 九件套）
 ├── client.py        # HTTP 客户端：范式路由 + 回落 + 响应归一化
 ├── schemas.py       # Pydantic 模型（HealthResult, SearchInput, EntityRef, FullTextInput, SegmentRef）
 ├── tests/           # pytest：路由/回落/归一化/范式选择/原文配对（不需要后端、不需要 mcp 包）
@@ -302,14 +291,21 @@ Body:
 
 返回后端原始 JSON，包含 `items`（证据列表）、`relations`、`sources` 等字段。每条 item 的 `evidence_role` 标注了该证据的角色（`direct_answer` / `support` / `contrast` / `background` / `missing`），Agent 据此自行判断证据是否充分。另有 `_retrieval` 说明本次由哪条引擎作答、还有哪些范式可选。
 
-## 可用工具
+## 可用工具（批次8 九件套）
 
 | 工具 | 用途 |
 |------|------|
-| `search_knowledge` | 检索知识库，返回证据包（文本经压缩） |
-| `get_segment_fulltext` | 取回结果中某几条证据的完整原文 |
+| `search_knowledge` | 检索知识库，返回纯 EvidenceResponse（query/evidence/has_more） |
+| `get_evidence` | 按 `ev_` ref 取回某条证据的完整原文（可调展开粒度） |
+| `get_document` | 按 `doc_` ref 读取某文件的结构化内容 |
+| `inspect_knowledge` | 渐进披露结构能力与表格资产（st_ ref 清单） |
+| `navigate_structure` | 按 parent/children/order 等白名单关系导航 |
+| `query_structured_asset` | 按 `st_` ref 对表格资产做 schema 化查询与聚合 |
+| `list_knowledge_bases` | 列出密钥主人开放的知识库 |
+| `list_documents` | 列出某库的文件清单 |
+| `upload_document` | 上传文件入库（不自动挖掘） |
 
-`health_check` 已实现但在 `server.py` 里被注释掉，仅供内部调用，**不对外暴露**。
+工具开关按用户级 open_tools 控制；含已退役工具名的历史配置会在验钥时自动迁移（剔除退役名 + 补齐新结构工具）。
 
 传输相关的 `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT` 见上文「两种运行模式」；后端相关的环境变量见上文那张表（**以那张为准**）。
 
@@ -317,11 +313,14 @@ Body:
 
 ```
 1. search_knowledge(query="...", domain="...")
-     → 证据包（文本已压缩）+ _retrieval.available_paradigms
-2. 结果不理想时，从 available_paradigms 里挑一个再来一次：
-   search_knowledge(query="...", domain="...", paradigm="ODN 参数表查询")
-3. 需要准确引用原文时（paradigm_id 取自上一步的 _retrieval）：
-   get_segment_fulltext(domain=..., refs=[{"type": 条目.kind, "id": 条目.id}],
-                        paradigm_id=...)
-4. Agent 自行判断证据是否充分，决定如何回答
+     → EvidenceResponse：query / evidence[]（ref,type,content,source）/ has_more
+2. 需要 table_row 级收窄时：
+   search_knowledge(..., filters={"evidence_types": ["table_row"]})
+   （不支持的结构化过滤键返回 typed 400，不静默忽略）
+3. 需要准确引用/更大粒度时：
+   get_evidence(ref=条目.ref, domain=..., mode="parent")
+4. 结构化追问：
+   inspect_knowledge(ref=条目.source.document_ref) → query_structured_asset(
+       ref=st_…, query={"filter": {...}, "aggregate": {...}})
+5. Agent 自行判断证据是否充分，决定如何回答
 ```

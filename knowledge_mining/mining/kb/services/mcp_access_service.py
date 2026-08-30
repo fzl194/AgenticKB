@@ -38,6 +38,15 @@ MCP_TOOL_NAMES = frozenset({
     "upload_document",
 })
 
+#: 批次8 新增四结构工具——历史 open_tools 迁移时的补齐集合（用户从未
+#: 见过它们，补齐不构成"误开启"；见 kb/routes/auth.py 的迁移逻辑）。
+MCP_NEW_TOOLS = (
+    "get_evidence",
+    "inspect_knowledge",
+    "navigate_structure",
+    "query_structured_asset",
+)
+
 MCP_INSTRUCTIONS_MAX = 4000
 MCP_TOOL_DESC_MAX = 2000
 

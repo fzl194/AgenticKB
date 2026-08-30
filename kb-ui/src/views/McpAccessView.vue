@@ -119,6 +119,7 @@
         maxlength="4000"
         show-word-limit
         placeholder="留空使用默认提示词。写清楚你的 Agent 该怎么用这套知识库——例如业务口径、常用问法、注意事项。"
+        :title="'已知限制：当前 MCP 服务端版本的 initialize 响应不注入自定义提示词（fastmcp 上游限制，批次9 升级收口）；本配置保存后将在接线生效时启用。'"
       />
       <div class="mcp-view__descs">
         <div v-for="t in ALL_TOOLS" :key="t.name" class="mcp-view__desc-row">

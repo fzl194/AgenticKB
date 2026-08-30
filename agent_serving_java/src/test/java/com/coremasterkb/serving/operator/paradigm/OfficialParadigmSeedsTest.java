@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -124,18 +125,51 @@ class OfficialParadigmSeedsTest {
     }
 
     @Test
-    @DisplayName("已发布（active, version>0）→ 不动（幂等）")
-    void skipsPublished() {
-        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_LEXICAL_ID))
-                .thenReturn(entity(ParadigmService.OFFICIAL_LEXICAL_ID, 3, "active"));
-        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID))
-                .thenReturn(entity(ParadigmService.OFFICIAL_DEFAULT_ID, 1, "active"));
+    @DisplayName("已发布且草稿与官方图一致 → 不动（幂等，不涨版本）")
+    void skipsPublishedWhenAligned() {
+        ParadigmEntity lexical = entity(ParadigmService.OFFICIAL_LEXICAL_ID, 3, "active");
+        lexical.setDraftGraphJson(ParadigmService.OFFICIAL_LEXICAL_GRAPH);
+        ParadigmEntity hybrid = entity(ParadigmService.OFFICIAL_DEFAULT_ID, 1, "active");
+        hybrid.setDraftGraphJson(ParadigmService.OFFICIAL_HYBRID_GRAPH);
+        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_LEXICAL_ID)).thenReturn(lexical);
+        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID)).thenReturn(hybrid);
 
         service.ensureOfficialParadigms();
 
         verify(paradigmMapper, never()).insert(any(ParadigmEntity.class));
         verify(paradigmMapper, never()).updateDraft(anyString(), anyString());
         verify(versionMapper, never()).insert(any(ParadigmVersionEntity.class));
+    }
+
+    @Test
+    @DisplayName("29fix R07：已发布但草稿漂移（存量旧图缺 scope→query_embed 边）→ 重发布一次")
+    void republishesDriftedOfficialParadigm() {
+        // 存量库典型形态：旧 hybrid 图 + 空草稿的 lexical
+        ParadigmEntity hybrid = entity(ParadigmService.OFFICIAL_DEFAULT_ID, 1, "active");
+        hybrid.setDraftGraphJson("{\"schemaVersion\":\"1.0\",\"nodes\":[],\"edges\":[]}");
+        ParadigmEntity lexical = entity(ParadigmService.OFFICIAL_LEXICAL_ID, 2, "active");
+        lexical.setDraftGraphJson(ParadigmService.OFFICIAL_LEXICAL_GRAPH);
+        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_LEXICAL_ID))
+                .thenReturn(lexical);
+        when(paradigmMapper.selectById(ParadigmService.OFFICIAL_DEFAULT_ID))
+                .thenReturn(hybrid);
+        // mapper 持久化语义：updateDraft 后再读返回新草稿（publish 会复读）
+        doAnswer(inv -> {
+            hybrid.setDraftGraphJson(inv.getArgument(1));
+            return null;
+        }).when(paradigmMapper).updateDraft(
+                eq(ParadigmService.OFFICIAL_DEFAULT_ID), anyString());
+
+        service.ensureOfficialParadigms();
+
+        // 漂移者：草稿对齐官方图并发布新版本（system-preset-refresh）
+        verify(paradigmMapper).updateDraft(
+                eq(ParadigmService.OFFICIAL_DEFAULT_ID),
+                eq(ParadigmService.OFFICIAL_HYBRID_GRAPH));
+        verify(versionMapper, times(1)).insert(any(ParadigmVersionEntity.class));
+        // 未漂移者不动
+        verify(paradigmMapper, never()).updateDraft(
+                eq(ParadigmService.OFFICIAL_LEXICAL_ID), anyString());
     }
 
     @Test

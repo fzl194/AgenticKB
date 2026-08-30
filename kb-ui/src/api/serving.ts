@@ -1,4 +1,4 @@
-import type { FullTextRef, FullTextResult, HealthStatus, SearchResult } from '@/types'
+import type { HealthStatus, SearchResult } from '@/types'
 import type { EvidenceItem, EvidenceResponse } from '@/types/operator'
 import { createProxyClient } from '@/api/proxyClient'
 
@@ -84,30 +84,6 @@ export function useServingApi() {
       if (kbIds && kbIds.length > 0) payload.kbIds = kbIds
 
       const { data } = await client.post('/api/v1/search', payload)
-      return data.data ?? data
-    },
-
-    /**
-     * 取回若干条证据的未压缩原文。
-     *
-     * kbIds 必须与产生这些 id 的那次检索一致——范围不同，后端会把它们全部报成
-     * out_of_scope。所以调用方应把当次检索用的 kbIds 原样传回来，而不是传当前
-     * 选择器里的值（用户可能已经改过了）。
-     */
-    async fetchFullText(
-      refs: FullTextRef[],
-      options?: SearchOptions & { granularity?: 'segment' | 'window'; windowRadius?: number },
-    ): Promise<FullTextResult> {
-      const payload: Record<string, unknown> = {
-        refs,
-        domain: options?.domain,
-      }
-      if (options?.granularity) payload.granularity = options.granularity
-      if (options?.windowRadius != null) payload.windowRadius = options.windowRadius
-      const kbIds = options?.kbIds?.map(id => id?.trim()).filter((id): id is string => !!id)
-      if (kbIds && kbIds.length > 0) payload.kbIds = kbIds
-
-      const { data } = await client.post('/api/v1/segments/fulltext', payload)
       return data.data ?? data
     },
 

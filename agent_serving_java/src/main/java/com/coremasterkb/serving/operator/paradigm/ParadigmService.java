@@ -232,8 +232,35 @@ public class ParadigmService {
             }
             publish(id, "system-seeder");
             log.info("[paradigm] official paradigm published: {}", id);
+        } else if ("active".equals(existing.getStatus()) && drifted(existing, graph)) {
+            // 29号 R07：active 官方范式随源码定义演进——草稿对齐并发布新版本
+            // （与挖掘侧 system-preset-refresh 同款语义；运行中请求继续用旧
+            // 冻结版本，新请求解析到新 current version）。用户显式归档的
+            // 官方范式不复活。系统预置不被用户编辑是本刷新的前提。
+            paradigmMapper.updateDraft(id, graph);
+            try {
+                publish(id, "system-preset-refresh");
+                log.info("[paradigm] official paradigm drift-refreshed: {}", id);
+            } catch (Exception race) {
+                // 并发实例已刷新（版本唯一键冲突）——吸收，另一实例已发布
+                log.warn("[paradigm] drift-refresh race on {} absorbed: {}", id,
+                        race.getMessage());
+            }
         }
-        // active（已发布）或 archived（用户显式下线）都不动——幂等且尊重运营决定。
+        // archived（用户显式下线）不动——幂等且尊重运营决定。
+    }
+
+    /** 草稿与官方图是否语义漂移（规范化 JSON 比较，忽略空白）。 */
+    private boolean drifted(ParadigmEntity existing, String officialGraph) {
+        String draft = existing.getDraftGraphJson();
+        if (draft == null || draft.isBlank()) {
+            return true;
+        }
+        try {
+            return !mapper.readTree(draft).equals(mapper.readTree(officialGraph));
+        } catch (Exception e) {
+            return true; // 存量草稿不可解析——按漂移处理重写
+        }
     }
 
     /** Replace the editable draft graph. */

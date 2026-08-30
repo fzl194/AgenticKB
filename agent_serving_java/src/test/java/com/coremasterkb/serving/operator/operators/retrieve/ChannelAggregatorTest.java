@@ -33,6 +33,30 @@ class ChannelAggregatorTest {
     }
 
     @Test
+    @DisplayName("29fix R09: alias 为最佳命中行时 ranking text 附源证据正文（不只排生成问题）")
+    void aliasBestRankUsesSourceEvidenceText() {
+        // alias 分数最高（最佳），同 canonical 的源 prose 在窗口内名次靠后
+        List<RetrievalCandidate> out = ChannelAggregator.aggregate(List.of(
+                row("a1", "c1", 0.9, "query_alias", "章一", "风扇坏了怎么办？"),
+                row("u1", "c1", 0.5, "prose", "章一", "风扇停转时应当先检查电源模块。")
+        ), "fts", 10);
+
+        assertThat(out).hasSize(1);
+        String text = out.get(0).rankingText();
+        assertThat(text).contains("风扇坏了怎么办？");   // 生成问题
+        assertThat(text).contains("先检查电源模块");      // 源证据正文
+    }
+
+    @Test
+    @DisplayName("29fix R09: 窗口内无源行时回落 alias 自身文本（保序语义不变）")
+    void aliasWithoutSourceInWindowFallsBack() {
+        List<RetrievalCandidate> out = ChannelAggregator.aggregate(List.of(
+                row("a1", "c1", 0.9, "summary_alias", "章一", "本章摘要文本")
+        ), "dense", 10);
+        assertThat(out.get(0).rankingText()).contains("本章摘要文本");
+    }
+
+    @Test
     @DisplayName("same canonical (raw + aliases) keeps best rank only, collects hit rep refs")
     void sameCanonicalAggregatesToOneSlot() {
         List<UnitV2Row> rows = List.of(

@@ -53,6 +53,7 @@ public final class ChannelAggregator {
                 byCanonical.put(canonical, agg);
             }
             agg.representationRefs.add(row.getRepresentationId());
+            agg.rows.add(row);
         }
 
         List<RetrievalCandidate> out = new ArrayList<>(Math.min(topK, byCanonical.size()));
@@ -67,8 +68,7 @@ public final class ChannelAggregator {
 
     /**
      * ranking_text 有界构造（25 号 §6.7）：structural_context（标题面包屑/表头/caption）+
-     * content_text，统一拼接，2048 字符截断。alias 型表示的 content_text 本就是源证据摘要，
-     * 满足"alias 必须补源证据摘要"的排序输入要求。
+     * content_text，统一拼接，2048 字符截断。
      */
     public static String rankingText(String structuralContext, String contentText) {
         String context = structuralContext == null ? "" : structuralContext.trim();
@@ -79,6 +79,41 @@ public final class ChannelAggregator {
         return text.length() > RANKING_TEXT_MAX_CHARS
                 ? text.substring(0, RANKING_TEXT_MAX_CHARS)
                 : text;
+    }
+
+    /** alias 表示（query_alias/summary_alias）：content 是生成文本，非源证据。 */
+    static boolean isAliasType(String representationType) {
+        return representationType != null
+                && (representationType.endsWith("_alias"));
+    }
+
+    /**
+     * 29号 R09：alias 为最佳命中行时的排序输入 = 生成问题 + 同 canonical 的
+     * 源证据文本（窗口内非 alias 行；alias 命中必须回源排序，不得只排问题）。
+     * 窗口无源行时回落 alias 自身文本（同 canonical 源表示未被同窗召回的
+     * 罕见情形，保序语义不受影响）。
+     */
+    private static String rankingTextFor(Agg agg) {
+        UnitV2Row best = agg.best;
+        if (!isAliasType(best.getRepresentationType())) {
+            return rankingText(best.getStructuralContext(), best.getContentText());
+        }
+        // 窗口内同 canonical 的最佳非 alias 行（rows 保持通道名次序）
+        UnitV2Row source = null;
+        for (UnitV2Row row : agg.rows) {
+            if (!isAliasType(row.getRepresentationType())) {
+                source = row;
+                break;
+            }
+        }
+        if (source == null) {
+            return rankingText(best.getStructuralContext(), best.getContentText());
+        }
+        String aliasText = rankingText(best.getStructuralContext(), best.getContentText());
+        String sourceText = rankingText(source.getStructuralContext(), source.getContentText());
+        return aliasText.length() + sourceText.length() > RANKING_TEXT_MAX_CHARS
+                ? sourceText // 预算冲突时源证据优先（问题可从 query 恢复）
+                : aliasText + "\n" + sourceText;
     }
 
     private static String canonicalKey(UnitV2Row row) {
@@ -110,13 +145,15 @@ public final class ChannelAggregator {
                 channelId,
                 rank,
                 score,
-                rankingText(best.getStructuralContext(), best.getContentText()),
+                rankingTextFor(agg),
                 JsonUtils.safeJsonParse(best.getFacetsJson()));
     }
 
     private static final class Agg {
         final UnitV2Row best;
         final Set<String> representationRefs = new LinkedHashSet<>();
+        /** 窗口内同 canonical 全部命中行（29号 R09：alias 回源排序用）。 */
+        final List<UnitV2Row> rows = new ArrayList<>();
 
         Agg(UnitV2Row best) {
             this.best = best;

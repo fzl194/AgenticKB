@@ -217,6 +217,16 @@ public class InternalStructureController {
         if (q == null || q.isNull()) {
             return new QuerySpec(null, null, null, null, null, null);
         }
+        // 29号 2.9：query 下只认白名单键——未知键（如误用 filter/orderBy）
+        // 显式 400，不再静默当成空条件返回全表（调用方以为过滤生效）。
+        java.util.Set<String> fieldNames = new java.util.HashSet<>();
+        q.fieldNames().forEachRemaining(fieldNames::add);
+        fieldNames.removeAll(java.util.Set.of(
+                "select", "where", "order_by", "limit", "cursor", "aggregate"));
+        if (!fieldNames.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "unsupported_query_key:" + String.join(",", fieldNames));
+        }
         List<String> select = stringList(q, "select");
         List<WhereClause> where = new ArrayList<>();
         JsonNode whereNode = q.get("where");

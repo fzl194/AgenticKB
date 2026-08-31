@@ -55,7 +55,8 @@ class ParadigmMcpCatalogWebMvcTest {
                         paradigmService,
                         catalogService,
                         mock(ParadigmExecutionService.class)))
-                .setControllerAdvice(new OperatorExceptionHandler())
+                .setControllerAdvice(new OperatorExceptionHandler(
+                        new com.coremasterkb.serving.api.GlobalExceptionHandler()))
                 .build();
     }
 

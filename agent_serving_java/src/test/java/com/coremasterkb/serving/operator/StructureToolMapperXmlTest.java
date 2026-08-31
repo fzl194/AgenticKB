@@ -99,4 +99,17 @@ class StructureToolMapperXmlTest {
         assertThat(xml).contains("selectStructureRefCandidates");
         assertThat(xml).contains("selectKbSnapshotRefs");
     }
+
+    @Test
+    @DisplayName("canonical 候选 ORDER BY 引用子查询真实列（D3 回归：u.ref 是外层别名）")
+    void canonicalCandidatesOrderByRealColumns() throws Exception {
+        String xml = mapperXml();
+        int start = xml.indexOf("selectCanonicalRefCandidates");
+        int end = xml.indexOf("</select>", start);
+        assertThat(start).as("selectCanonicalRefCandidates must exist").isGreaterThan(0);
+        String block = xml.substring(start, end);
+        // ref 别名定义在外层 SELECT 列上，ORDER BY u.ref 在 PG 报列不存在（2026-08-31 全量 500）
+        assertThat(block).doesNotContain("u.ref");
+        assertThat(block).contains("ORDER BY u.snapshot_id ASC, u.canonical_evidence_id ASC");
+    }
 }

@@ -124,6 +124,8 @@
     </select>
 
     <select id="selectCanonicalRefCandidates" resultMap="refRowMap">
+        <!-- 2026-08-31 用户 E2E（D3）：排序列曾引用外层别名（子查询无此列），
+             PostgreSQL 直接 500。改排真实列。 -->
         SELECT u.snapshot_id, u.canonical_evidence_id AS ref
         FROM (
             SELECT DISTINCT r.snapshot_id, r.canonical_evidence_id
@@ -131,7 +133,7 @@
             WHERE r.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
         ) u
-        ORDER BY u.snapshot_id ASC, u.ref ASC
+        ORDER BY u.snapshot_id ASC, u.canonical_evidence_id ASC
         LIMIT #{limit}
     </select>
 

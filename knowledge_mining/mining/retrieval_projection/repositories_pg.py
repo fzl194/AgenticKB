@@ -252,16 +252,22 @@ class PgRepresentationStore(_PgRepository):
         fingerprint: str,
         *,
         document_key: str,
+        alias_type: str | None = None,
     ) -> int:
-        """27号审查修复：只替换 alias 子集（query_alias/summary_alias）——
-        别名算子（M3）幂等重跑不得清空该快照的基础表示。"""
+        """Replace one alias family in staging; never mutate active final rows."""
+        inferred = {rep.representation_type for rep in aliases}
+        selected = alias_type or (next(iter(inferred)) if len(inferred) == 1 else None)
+        if selected not in ("query_alias", "summary_alias"):
+            raise ValueError("alias_type must be query_alias or summary_alias")
+        if inferred and inferred != {selected}:
+            raise ValueError("aliases do not match alias_type")
         async with self._pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "DELETE FROM asset_retrieval_units_v2 "
+                    "DELETE FROM asset_retrieval_units_v2_staging "
                     "WHERE snapshot_id = %s "
-                    "AND representation_type IN ('query_alias', 'summary_alias')",
-                    [snapshot_id],
+                    "AND representation_type = %s",
+                    [snapshot_id, selected],
                 )
                 for rep in aliases:
                     await conn.execute(

@@ -205,3 +205,68 @@ def test_memory_store_alias_subset_replace_preserves_base():
     assert final.count("prose") == 1
     assert final.count("query_alias") == 1
     assert final.count("summary_alias") == 0
+
+
+def test_memory_store_replaces_each_alias_type_independently_and_clears_empty():
+    from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+        MemoryRepresentationStore,
+    )
+
+    loop = asyncio.new_event_loop()
+    store = MemoryRepresentationStore()
+    base = (_rep("prose", canonical="d#seg:0"),)
+    query = (_rep("query_alias", text="Q", canonical="d#seg:0", ordinal=1),)
+    summary = (
+        _rep("summary_alias", text="S", canonical="d#seg:0", ordinal=2),
+    )
+    loop.run_until_complete(
+        store.replace_for_snapshot("s1", base, "proj", document_key="d")
+    )
+    loop.run_until_complete(store.replace_aliases_for_snapshot(
+        "s1", query, "qe", document_key="d", alias_type="query_alias",
+    ))
+    loop.run_until_complete(store.replace_aliases_for_snapshot(
+        "s1", summary, "sum", document_key="d", alias_type="summary_alias",
+    ))
+    assert [r.representation_type for r in store._by_snapshot["s1"]] == [
+        "prose", "query_alias", "summary_alias",
+    ]
+
+    # A valid empty result clears only this version/type's stale aliases.
+    loop.run_until_complete(store.replace_aliases_for_snapshot(
+        "s1", (), "qe2", document_key="d", alias_type="query_alias",
+    ))
+    assert [r.representation_type for r in store._by_snapshot["s1"]] == [
+        "prose", "summary_alias",
+    ]
+    loop.close()
+
+
+def test_query_expansion_provider_failure_is_degraded_not_business_skip():
+    from knowledge_mining.mining.retrieval_projection.llm_generation import (
+        LLM_FAILURE,
+    )
+    from knowledge_mining.mining.retrieval_projection.query_expansion import (
+        QueryExpansionFacade,
+    )
+    from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+        MemoryRepresentationStore,
+    )
+
+    store = MemoryRepresentationStore()
+    asyncio.new_event_loop().run_until_complete(store.replace_for_snapshot(
+        "s1", (_rep("prose", text="足够长的事实正文" * 20),),
+        "proj", document_key="d",
+    ))
+
+    class _FailedGenerator:
+        def generate_questions(self, items):
+            return [LLM_FAILURE for _item in items]
+
+    outcome = QueryExpansionFacade(
+        representation_store=store, alias_store=store,
+        generator=_FailedGenerator(),
+    ).generate_for_snapshot(snapshot_id="s1", params={})
+    assert outcome.llm_failures == 1
+    assert outcome.skipped == 0
+    assert outcome.degraded is True

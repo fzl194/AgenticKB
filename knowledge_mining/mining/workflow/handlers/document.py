@@ -396,8 +396,11 @@ def query_expansion_generate_handler(state, params, runtime) -> OperatorResult:
         },
     )
     if outcome.degraded:
+        provided = frozenset({"query_aliases"})
         return OperatorResult(
-            updated, frozenset({"query_aliases"}), OperatorStatus.FALLBACK,
+            state.with_context(updated, capabilities=provided),
+            provided,
+            OperatorStatus.FALLBACK,
         )
     return _success(state, updated, "query_aliases")
 
@@ -449,6 +452,13 @@ def hierarchical_summary_generate_handler(state, params, runtime) -> OperatorRes
             },
         },
     )
+    if outcome.degraded:
+        provided = frozenset({"summary_aliases"})
+        return OperatorResult(
+            state.with_context(updated, capabilities=provided),
+            provided,
+            OperatorStatus.FALLBACK,
+        )
     return _success(state, updated, "summary_aliases")
 
 

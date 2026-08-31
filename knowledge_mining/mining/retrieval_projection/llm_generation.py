@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 #: prompt 版本冻结进 provenance（29号 M3 接线：模型/prompt 可追溯）。
 QUESTION_PROMPT_VERSION = "qe-doc2query-1"
 SUMMARY_PROMPT_VERSION = "hier-summary-1"
+# Internal adapter outcome.  It is deliberately distinct from business SKIP so
+# the facade can freeze provider degradation accurately.
+LLM_FAILURE = "__LLM_PROVIDER_FAILURE__"
 
 _QUESTION_SYSTEM = (
     "你是检索增强数据标注器。给定一段知识库原文，为它生成一个用户真实会问的"
@@ -157,7 +160,7 @@ class LLMQuestionGenerator:
                 out.append({"question": question, "answer_span": span})
             except Exception as exc:  # noqa: BLE001
                 logger.warning("question generation failed: %s", exc)
-                out.append("SKIP")
+                out.append(LLM_FAILURE)
         return out
 
 
@@ -190,6 +193,7 @@ __all__ = [
     "LLMQuestionGenerator",
     "LLMServiceGenerationClient",
     "LLMSummarizer",
+    "LLM_FAILURE",
     "QUESTION_PROMPT_VERSION",
     "SUMMARY_PROMPT_VERSION",
 ]

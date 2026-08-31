@@ -2573,6 +2573,27 @@ def _paradigm_capability_signature(
     return types, embedding_fallback
 
 
+def _asset_activation_allowed(
+    *, readiness_ok: bool, has_failures: bool,
+    publish_on_partial_failure: bool,
+) -> bool:
+    """Whether staging assets may become the Build-visible final version."""
+    return readiness_ok and (
+        not has_failures or publish_on_partial_failure
+    )
+
+
+def _asset_activation_block_reason(
+    *, readiness_ok: bool, has_failures: bool,
+    publish_on_partial_failure: bool,
+) -> str | None:
+    if not readiness_ok:
+        return "readiness gate blocked asset activation"
+    if has_failures and not publish_on_partial_failure:
+        return "document failures blocked asset activation"
+    return None
+
+
 def _finalize_run(
     asset_db: AssetCoreDB,
     runtime_db: MiningRuntimeDB,
@@ -2612,14 +2633,15 @@ def _finalize_run(
     has_failures = failed_count > 0
 
     # 27号审查修复 B（24号 §5.8/L340）：按冻结 readiness 决定发布——基础
-    # 搜索资产不完整的 run 不发布 ready release（build 保留待复查）；聚合
-    # 事实冻进 build.summary_json["readiness"]。只作用于新链 run（带范式
+    # 搜索资产不完整的 run 不晋升资产、不创建 validated Build；聚合事实
+    # 在允许激活时冻进 build.summary_json["readiness"]。只作用于新链 run（带范式
     # manifest）；legacy run 无 readiness 行，维持旧判据。
     # 注意：必须在 classify_documents 之后取 action（分类前 KB 决策的
     # action 尚未定为 NEW/UPDATE，提前过滤会得到空集——readiness 永不落
     # 进 build 摘要）。
     readiness_summary: dict[str, Any] | None = None
     readiness_ok = True
+    activation_blocked_reason: str | None = None
 
     # Build is always created if there are committed documents
     if not phase1_only and snapshot_decisions:
@@ -2637,6 +2659,7 @@ def _finalize_run(
                 channel=channel,
             )
 
+            validated_snapshot_ids: list[str] = []
             if capabilities is not None:
                 validated_snapshot_ids = sorted({
                     str(d["document_snapshot_id"])
@@ -2698,44 +2721,59 @@ def _finalize_run(
                             run_id, readiness_summary,
                         )
 
-                    # 29号 R03（Wave 2）：staging → final 原子晋升——本
-                    # 事务内完成，Build 组装与资产切换同生共死；未到达
-                    # finalize 的 run（project/embed/persist 任一失败）
-                    # 只留下 staging，活动 Build 读到的资产不变。
+            activate_assets = _asset_activation_allowed(
+                readiness_ok=readiness_ok,
+                has_failures=has_failures,
+                publish_on_partial_failure=publish_on_partial_failure,
+            )
+            activation_blocked_reason = _asset_activation_block_reason(
+                readiness_ok=readiness_ok,
+                has_failures=has_failures,
+                publish_on_partial_failure=publish_on_partial_failure,
+            )
+            should_publish = publish and activate_assets
+
+            if activate_assets:
+                # staging → final 与 Build 组装在同一事务内；readiness
+                # degraded 或失败策略不允许时，既不晋升也不创建可被 KB
+                # scope 选中的 validated Build。
+                if validated_snapshot_ids:
                     asset_db.promote_snapshot_assets(validated_snapshot_ids)
 
-            should_publish = (
-                publish and readiness_ok
-                and (not has_failures or publish_on_partial_failure)
-            )
-
-            build_id = assemble_build(
-                asset_db,
-                run_id=run_id,
-                batch_id=batch_id,
-                snapshot_decisions=snapshot_decisions,
-                domain=profile.domain_id,
-                channel=channel,
-                kb_id=_run_meta.get("kb_id"),
-                capabilities=capabilities,
-                embedding_fallback=embedding_fallback,
-                readiness_summary=readiness_summary,
-            )
-
-            # This read must see the build before the outer transaction commits.
-            try:
-                quality = demo_quality_summary(asset_db, build_id)
-                logger.info("Demo quality summary: %s", quality)
-            except Exception as e:
-                logger.warning("Demo quality summary failed: %s", e)
-
-            if should_publish:
-                release_id = publish_release(
+                build_id = assemble_build(
                     asset_db,
-                    build_id=build_id,
-                    released_by=f"run:{run_id}",
+                    run_id=run_id,
+                    batch_id=batch_id,
+                    snapshot_decisions=snapshot_decisions,
                     domain=profile.domain_id,
                     channel=channel,
+                    kb_id=_run_meta.get("kb_id"),
+                    capabilities=capabilities,
+                    embedding_fallback=embedding_fallback,
+                    readiness_summary=readiness_summary,
+                )
+
+                # This read must see the build before the outer transaction commits.
+                try:
+                    quality = demo_quality_summary(asset_db, build_id)
+                    logger.info("Demo quality summary: %s", quality)
+                except Exception as e:
+                    logger.warning("Demo quality summary failed: %s", e)
+
+                if should_publish:
+                    release_id = publish_release(
+                        asset_db,
+                        build_id=build_id,
+                        released_by=f"run:{run_id}",
+                        domain=profile.domain_id,
+                        channel=channel,
+                    )
+            else:
+                logger.warning(
+                    "Run %s produced no Build: assets not eligible for activation "
+                    "(readiness_ok=%s, has_failures=%s, partial_allowed=%s)",
+                    run_id, readiness_ok, has_failures,
+                    publish_on_partial_failure,
                 )
 
         # The asset transaction committed on context exit. Emit success only now.
@@ -2743,10 +2781,18 @@ def _finalize_run(
             evt,
             run_id,
             "assemble_build",
-            output_summary=f"build_id={build_id}",
+            output_summary=(
+                f"build_id={build_id}" if build_id is not None
+                else "skipped: assets not eligible for activation"
+            ),
+            status="failed" if activation_blocked_reason else "completed",
+            error_message=activation_blocked_reason,
         )
-        evt = tracker.start_stage(run_id, "validate_build")
-        tracker.end_stage(evt, run_id, "validate_build", output_summary="passed")
+        if build_id is not None:
+            evt = tracker.start_stage(run_id, "validate_build")
+            tracker.end_stage(
+                evt, run_id, "validate_build", output_summary="passed",
+            )
         if release_id is not None:
             evt = tracker.start_stage(run_id, "publish_release")
             tracker.end_stage(
@@ -2761,7 +2807,21 @@ def _finalize_run(
     # All docs failed -> "failed"; some failed -> "completed" with has_failures metadata
     run_status = "completed"
     run_metadata = None
-    if failed_count > 0 and committed_count == 0:
+    if activation_blocked_reason is not None:
+        run_status = "failed"
+        existing_metadata = (runtime_db.get_run(run_id) or {}).get(
+            "metadata_json"
+        ) or {}
+        if isinstance(existing_metadata, str):
+            import json
+            existing_metadata = json.loads(existing_metadata)
+        run_metadata = {
+            **existing_metadata,
+            "activation_blocked": True,
+            "activation_blocked_reason": activation_blocked_reason,
+            "readiness": readiness_summary,
+        }
+    elif failed_count > 0 and committed_count == 0:
         run_status = "failed"
     elif failed_count > 0:
         existing_metadata = (runtime_db.get_run(run_id) or {}).get("metadata_json") or {}
@@ -2775,9 +2835,12 @@ def _finalize_run(
         }
 
     if run_status == "failed":
+        failure_summary = activation_blocked_reason or (
+            f"All {failed_count} documents failed"
+        )
         updated = tracker.fail_run(
             run_id,
-            error_summary=f"All {failed_count} documents failed",
+            error_summary=failure_summary,
             current_stage=(runtime_db.get_run(run_id) or {}).get("current_stage") or "mining",
             domain=profile.domain_id,
             committed_count=committed_count,
@@ -2786,6 +2849,14 @@ def _finalize_run(
             new_count=new_count,
             updated_count=updated_count,
         )
+        if updated and run_metadata is not None:
+            runtime_db.update_run_status(
+                run_id,
+                "failed",
+                domain=profile.domain_id,
+                current_stage="publishing",
+                metadata_json=run_metadata,
+            )
     else:
         updated = tracker.complete_run(
             run_id,

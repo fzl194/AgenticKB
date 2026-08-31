@@ -201,6 +201,54 @@ def test_embedding_handler_converts_params_and_uses_service() -> None:
     assert captured == [{"strategyOverrides": {"code_block": "structural"}}]
 
 
+@pytest.mark.parametrize(
+    ("handler_name", "service_name", "outcome"),
+    [
+        (
+            "query_expansion_generate_handler",
+            "query_expansion_service",
+            SimpleNamespace(
+                aliases=(), skipped=0, invalid=0, llm_failures=1,
+                degraded=True,
+            ),
+        ),
+        (
+            "hierarchical_summary_generate_handler",
+            "hierarchical_summary_service",
+            SimpleNamespace(
+                aliases=(), skipped_sections=0, llm_failures=1,
+                degraded=True,
+            ),
+        ),
+    ],
+)
+def test_m3_degraded_handlers_return_fallback_document_state(
+    handler_name, service_name, outcome,
+) -> None:
+    from knowledge_mining.mining.workflow.bundle import MiningDocumentBundle
+
+    class _Service:
+        def generate_for_snapshot(self, **_kwargs):
+            return outcome
+
+    document_state = DocumentState(
+        run_document_id="doc-a",
+        doc_key="doc:/a",
+        context=MiningDocumentBundle(
+            document_ref="doc:/a", run_document_id="doc-a",
+            snapshot_ref="s1", representations_count=1,
+        ),
+    )
+    result = getattr(handlers, handler_name)(
+        document_state,
+        {},
+        SimpleNamespace(services=SimpleNamespace(**{service_name: _Service()})),
+    )
+    assert result.status is OperatorStatus.FALLBACK
+    assert isinstance(result.outputs, DocumentState)
+    assert result.outputs.context.diagnostics
+
+
 def test_research_entity_handler_preserves_param_conversion(
     monkeypatch,
 ) -> None:

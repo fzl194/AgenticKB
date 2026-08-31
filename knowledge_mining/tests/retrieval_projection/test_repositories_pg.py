@@ -338,6 +338,33 @@ async def test_representation_list_restores_rows_to_contract_objects():
     assert rep.lexical_eligible is True
 
 
+@pytest.mark.asyncio
+async def test_alias_replace_only_mutates_requested_staging_alias_type():
+    from knowledge_mining.mining.retrieval_projection.repositories_pg import (
+        PgRepresentationStore,
+    )
+
+    pool = recording_pool()
+    store = PgRepresentationStore(pool)
+    alias = _representation(
+        "d:s1:query:0", representation_type="query_alias",
+        content_type="query_alias", returnable=False,
+    )
+    await store.replace_aliases_for_snapshot(
+        "snap-1", (alias,), "qe", document_key="manual.md",
+        alias_type="query_alias",
+    )
+
+    delete = find_statement(
+        pool, "DELETE FROM asset_retrieval_units_v2_staging",
+    )
+    assert delete[1] == ["snap-1", "query_alias"]
+    assert not any(
+        statement.startswith("DELETE FROM asset_retrieval_units_v2 ")
+        for statement, _params in statements_of(pool)
+    )
+
+
 # ---------------------------------------------------------------------------
 # SQL 契约：EmbeddingStore（向量本体写入）
 # ---------------------------------------------------------------------------

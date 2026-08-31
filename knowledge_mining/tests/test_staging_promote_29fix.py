@@ -152,3 +152,39 @@ def test_promote_swaps_all_seven_tables_with_explicit_columns():
         s.startswith("DELETE FROM ") and "staging" not in s
         for s in sqls[:first_copy]
     )
+
+
+def test_asset_activation_requires_readiness_and_failure_policy() -> None:
+    from knowledge_mining.mining.jobs.run import (
+        _asset_activation_allowed,
+        _asset_activation_block_reason,
+    )
+
+    assert _asset_activation_allowed(
+        readiness_ok=True, has_failures=False,
+        publish_on_partial_failure=False,
+    ) is True
+    assert _asset_activation_allowed(
+        readiness_ok=False, has_failures=False,
+        publish_on_partial_failure=False,
+    ) is False
+    assert _asset_activation_allowed(
+        readiness_ok=True, has_failures=True,
+        publish_on_partial_failure=False,
+    ) is False
+    assert _asset_activation_allowed(
+        readiness_ok=True, has_failures=True,
+        publish_on_partial_failure=True,
+    ) is True
+    assert "readiness" in _asset_activation_block_reason(
+        readiness_ok=False, has_failures=False,
+        publish_on_partial_failure=False,
+    )
+    assert "document failures" in _asset_activation_block_reason(
+        readiness_ok=True, has_failures=True,
+        publish_on_partial_failure=False,
+    )
+    assert _asset_activation_block_reason(
+        readiness_ok=True, has_failures=False,
+        publish_on_partial_failure=False,
+    ) is None

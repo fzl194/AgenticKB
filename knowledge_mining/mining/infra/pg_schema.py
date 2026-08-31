@@ -85,6 +85,13 @@ _KB_DEFAULT_PARADIGM_DDL = (
 _MCP_ACCESS_CONFIG_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "010_mcp_access_config.sql"
 )
+_KB_LIFECYCLE_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "kb"
+    / "schemas"
+    / "011_kb_lifecycle_names_and_default_workflow.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -176,6 +183,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _MCP_ACCESS_DDL,
         _KB_DEFAULT_PARADIGM_DDL,
         _MCP_ACCESS_CONFIG_DDL,
+        # Active KB names are owner-scoped; migrate the retired default workflow.
+        _KB_LIFECYCLE_DDL,
     )
 
 
@@ -210,6 +219,7 @@ def _ensure_schema_paths(cfg: MiningDbConfig, ddl_paths: tuple[Path, ...]) -> No
                     _ASSET_BUILD_KB_DDL,
                     _MINING_RUN_KB_DDL,
                     _RETRIEVAL_ASSETS_V2_DDL,
+                    _KB_LIFECYCLE_DDL,
                 ),
             )
             logger.info("Applied DDL: %s", ddl_path.name)

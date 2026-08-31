@@ -13,7 +13,8 @@ from knowledge_mining.mining.kb.auth import current_user
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.deps import get_kb_db, get_kb_service
 from knowledge_mining.mining.kb.services.kb_service import (
-    Duplicate, Forbidden, InvalidDomain, InvalidVisibility, KbService, NotFound,
+    Duplicate, Forbidden, InvalidDomain, InvalidName, InvalidVisibility,
+    KbService, NotFound,
 )
 
 router = APIRouter(prefix="/api/kb", tags=["kb"])
@@ -56,6 +57,8 @@ def _map_error(exc: Exception) -> HTTPException:
         return HTTPException(400, f"invalid domain: {exc}")
     if isinstance(exc, InvalidVisibility):
         return HTTPException(400, f"invalid visibility: {exc}")
+    if isinstance(exc, InvalidName):
+        return HTTPException(400, str(exc))
     return HTTPException(500, str(exc))
 
 
@@ -72,7 +75,7 @@ async def create_kb(
             domain=body.domain, name=body.name, owner_id=user["id"],
             visibility=body.visibility, description=body.description,
         )
-    except (Duplicate, InvalidDomain, InvalidVisibility) as exc:
+    except (Duplicate, InvalidDomain, InvalidName, InvalidVisibility) as exc:
         raise _map_error(exc) from None
 
 
@@ -111,7 +114,10 @@ async def update_kb(
     fields = body.model_dump(exclude_unset=True)
     try:
         return await svc.update_kb(kb_id=kb_id, actor_id=user["id"], fields=fields)
-    except (NotFound, Forbidden, InvalidDomain, InvalidVisibility) as exc:
+    except (
+        NotFound, Forbidden, Duplicate, InvalidDomain, InvalidName,
+        InvalidVisibility,
+    ) as exc:
         raise _map_error(exc) from None
 
 
@@ -124,6 +130,18 @@ async def delete_kb(
     try:
         return await svc.soft_delete(kb_id=kb_id, actor_id=user["id"])
     except (NotFound, Forbidden) as exc:
+        raise _map_error(exc) from None
+
+
+@router.post("/{kb_id}/restore")
+async def restore_kb(
+    kb_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    svc: KbService = Depends(get_kb_service),
+):
+    try:
+        return await svc.restore_kb(kb_id=kb_id, actor_id=user["id"])
+    except (NotFound, Forbidden, Duplicate) as exc:
         raise _map_error(exc) from None
 
 

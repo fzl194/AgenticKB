@@ -16,6 +16,8 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
+from knowledge_mining.mining.workflow.presets import DEFAULT_WORKFLOW_ID
+
 
 def _new_id() -> str:
     return uuid.uuid4().hex
@@ -286,14 +288,16 @@ class KbDB:
                       metadata_json, created_at, updated_at, mining_workflow_id)
                    VALUES
                      (%(id)s, %(dom)s, %(n)s, %(desc)s, %(own)s, %(vis)s, 'active',
-                      %(meta)s::jsonb, %(t)s, %(t)s,
-                      COALESCE(%(wf)s, 'system-full-baseline'))
+                       %(meta)s::jsonb, %(t)s, %(t)s, %(wf)s)
                    RETURNING id, domain, name, description, owner_id, visibility,
                              status, created_at, updated_at, mining_workflow_id""",
                 {
                     "id": _new_id(), "dom": domain, "n": name, "desc": description,
                     "own": owner_id, "vis": visibility, "meta": _json(metadata), "t": _utcnow(),
-                    "wf": (metadata or {}).get("mining_workflow_id"),
+                    "wf": (
+                        (metadata or {}).get("mining_workflow_id")
+                        or DEFAULT_WORKFLOW_ID
+                    ),
                 },
             )
             row = await cur.fetchone()
@@ -381,7 +385,7 @@ class KbDB:
                 cur = await conn.execute(
                     """SELECT kb.id, kb.domain, kb.name, kb.description,
                               kb.owner_id, kb.visibility, kb.created_at,
-                              kb.mining_workflow_id,
+                              kb.mining_workflow_id, kb.default_paradigm_id,
                               'admin' AS my_role,
                               (SELECT COUNT(*) FROM asset_documents d
                                WHERE d.kb_id = kb.id AND d.deleted_at IS NULL) AS document_count
@@ -394,7 +398,7 @@ class KbDB:
             cur = await conn.execute(
                 """SELECT kb.id, kb.domain, kb.name, kb.description,
                           kb.owner_id, kb.visibility, kb.created_at,
-                          kb.mining_workflow_id,
+                          kb.mining_workflow_id, kb.default_paradigm_id,
                           CASE
                             WHEN kb.owner_id = %(uid)s THEN 'owner'
                             WHEN EXISTS (SELECT 1 FROM kb_members m
@@ -711,6 +715,21 @@ WITH cur AS (
                    SET status = 'deleted', deleted_at = %(t)s, updated_at = %(t)s
                    WHERE id = %(id)s AND status = 'active'
                    RETURNING id, status, deleted_at""",
+                {"id": kb_id, "t": _utcnow()},
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def restore_kb(self, kb_id: str) -> dict[str, Any] | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE knowledge_bases
+                   SET status = 'active', deleted_at = NULL, updated_at = %(t)s
+                   WHERE id = %(id)s AND status = 'deleted'
+                   RETURNING id, domain, name, description, owner_id,
+                             visibility, status, deleted_at, created_at,
+                             updated_at, mining_workflow_id,
+                             default_paradigm_id""",
                 {"id": kb_id, "t": _utcnow()},
             )
             row = await cur.fetchone()
@@ -1060,6 +1079,19 @@ WITH cur AS (
                                      WHERE m.kb_id = kb.id AND m.user_id = %s AND m.role = 'editor'))
                    """,
                 [kb_id, user_id, user_id, user_id],
+            )
+            return (await cur.fetchone()) is not None
+
+    async def can_restore(self, *, kb_id: str, user_id: str) -> bool:
+        """Deleted KBs are restorable only by their owner or a site admin."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT 1 FROM knowledge_bases kb
+                   WHERE kb.id = %s
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %s AND u.site_role = 'admin')
+                          OR kb.owner_id = %s)""",
+                [kb_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 

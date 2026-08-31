@@ -59,18 +59,18 @@ def test_readiness_missing_units_blocks_lexical() -> None:
 
 # ---------------------------------------------------------- PG 集成（async_pool）
 
-async def test_create_kb_defaults_to_full_baseline(async_pool):
-    """建库默认范式 system-full-baseline（2026-08-27 决策），可 PATCH 后改。"""
+async def test_create_kb_defaults_to_hybrid_assets(async_pool):
+    """建库默认范式是批次8正式默认 system-hybrid-assets。"""
     db = KbDB(async_pool)
     owner = await db.upsert_user_by_username("readiness-owner")
     kb = await db.create_kb(
         domain="cloud_core_network", name="readiness-default",
         owner_id=owner["id"],
     )
-    assert kb["mining_workflow_id"] == "system-full-baseline"
+    assert kb["mining_workflow_id"] == "system-hybrid-assets"
     fetched = await db.get_kb(kb["id"])
     assert fetched is not None
-    assert fetched["mining_workflow_id"] == "system-full-baseline"
+    assert fetched["mining_workflow_id"] == "system-hybrid-assets"
 
 
 async def test_create_kb_honors_explicit_workflow_override(async_pool):

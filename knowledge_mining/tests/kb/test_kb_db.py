@@ -148,6 +148,28 @@ async def test_unique_domain_name(async_pool):
     assert kb2["domain"] == "generic"
 
 
+async def test_same_name_is_owner_scoped_and_soft_delete_releases_name(async_pool):
+    db = KbDB(async_pool)
+    alice = await db.upsert_user_by_username("same-name-alice")
+    bob = await db.upsert_user_by_username("same-name-bob")
+    first = await db.create_kb(
+        domain="cloud_core_network", name="Same Name",
+        owner_id=alice["id"],
+    )
+    other_owner = await db.create_kb(
+        domain="cloud_core_network", name="same name",
+        owner_id=bob["id"],
+    )
+    assert first["id"] != other_owner["id"]
+
+    await db.soft_delete(first["id"])
+    replacement = await db.create_kb(
+        domain="cloud_core_network", name=" same NAME ",
+        owner_id=alice["id"],
+    )
+    assert replacement["id"] != first["id"]
+
+
 async def test_derived_status_mined_for_committed_run_document(async_pool):
     """P1：KB 挖掘 publish=False（无 active release）、run_document 到 committed
     时，派生 status 应为 'mined'。旧 _STATUS_CASE_SQL 没有 committed 档，

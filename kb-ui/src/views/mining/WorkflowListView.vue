@@ -14,7 +14,7 @@
       <el-table-column prop="name" label="名称" min-width="180">
         <template #default="{ row }">
           <button class="workflow-list__link" type="button" @click="edit(row.id)">{{ row.name }}</button>
-          <el-tag v-if="row.is_system_default" size="small" type="success">默认 FULL</el-tag>
+          <el-tag v-if="row.is_system_default" size="small" type="success">系统默认</el-tag>
           <el-tag v-else-if="row.is_system" size="small" type="info">系统</el-tag>
         </template>
       </el-table-column>

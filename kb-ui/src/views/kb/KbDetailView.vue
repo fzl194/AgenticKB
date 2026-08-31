@@ -60,7 +60,11 @@
     </div>
 
     <!-- Not found / no access -->
-    <div v-if="!loading && !kb" class="kb-detail-view__missing">
+    <div v-if="!loading && loadError" class="kb-detail-view__missing">
+      <EmptyState :text="loadError" />
+      <el-button type="primary" @click="reload">重试</el-button>
+    </div>
+    <div v-else-if="!loading && !kb" class="kb-detail-view__missing">
       <EmptyState text="知识库不存在或无权访问" />
       <router-link to="/kb">
         <el-button type="primary">返回列表</el-button>
@@ -79,7 +83,10 @@
         />
       </el-tab-pane>
       <el-tab-pane label="检索" name="search">
-        <KbSearchPanel :kb="kb" :can-write="canWrite" :readiness="readiness" @updated="reload" />
+        <KbSearchPanel
+          :kb="kb" :can-write="canWrite" :readiness="readiness"
+          @updated="reload" @go-mining="activeTab = 'mining'"
+        />
       </el-tab-pane>
       <el-tab-pane label="成员" name="members">
         <KbMembersPanel :kb-id="kbId" :can-write="canWrite" :visibility="kb?.visibility ?? 'private'" />
@@ -129,12 +136,14 @@ const kbApi = useKbApi()
 const kb = ref<KbSummary | null>(null)
 const readiness = ref<KbReadiness | null>(null)
 const loading = ref(false)
+const loadError = ref('')
 const activeTab = ref<'files' | 'search' | 'members' | 'mining' | 'settings'>('files')
 const miningPanelRef = ref<InstanceType<typeof KbMiningPanel> | null>(null)
 
 /** 范式状态由父组件持有（单一真相源），修复旧版「按钮读列表快照 → 误报未选范式」的 Bug A。
  * KbMiningPanel 通过 v-model:selectedWorkflowId 双向同步；KbFileManager 批量挖掘前读它判断是否已设。 */
 const miningWorkflowId = ref<string | null>(null)
+let reloadGeneration = 0
 
 const canWrite = computed(
   () => kb.value?.my_role === 'owner' || kb.value?.my_role === 'editor' || kb.value?.my_role === 'admin',
@@ -160,25 +169,32 @@ function readinessTagType(level: KbReadinessLevel): 'info' | 'warning' | 'succes
 }
 
 async function reload() {
-  if (!domainStore.currentDomain) return
+  const domain = domainStore.currentDomain
+  const kbId = props.kbId
+  if (!domain) return
+  const generation = ++reloadGeneration
   loading.value = true
+  loadError.value = ''
   try {
-    // 列表保底（my_role/document_count 只在列表下发）；详情并行取 readiness。
-    // 详情失败（如 404/网络抖动）不阻塞页面，readiness 静默置空。
+    // 列表提供 my_role/document_count，详情提供默认检索范式和 readiness；
+    // 两者合并后再渲染，避免使用过期的列表快照。
     const [all, detail] = await Promise.all([
-      kbApi.listKbs(domainStore.currentDomain),
-      kbApi.getKb(props.kbId).catch(() => null),
+      kbApi.listKbs(domain),
+      kbApi.getKb(kbId),
     ])
-    kb.value = all.find((k) => k.id === props.kbId) ?? null
+    if (generation !== reloadGeneration || domain !== domainStore.currentDomain || kbId !== props.kbId) return
+    const summary = all.find((k) => k.id === kbId) ?? null
+    kb.value = summary ? { ...summary, ...detail, my_role: summary.my_role } : null
     // 同步范式状态（列表快照 → 父组件权威 ref）
     miningWorkflowId.value = kb.value?.mining_workflow_id ?? null
     readiness.value = detail?.readiness ?? null
   } catch (e) {
+    if (generation !== reloadGeneration || domain !== domainStore.currentDomain || kbId !== props.kbId) return
     kb.value = null
     readiness.value = null
-    ElMessage.error(await apiErrorDetail(e))
+    loadError.value = await apiErrorDetail(e)
   } finally {
-    loading.value = false
+    if (generation === reloadGeneration) loading.value = false
   }
 }
 

@@ -67,6 +67,15 @@ _M5_SEGMENT_LINKS_DDL = (
 _SEMANTIC_ROLE_V2_DDL = (
     _REPO_ROOT / "databases" / "asset_core" / "schemas" / "012_semantic_role_v2.sql"
 )
+# Retrieval v2/final+staging schema.  This must run before workers start;
+# repositories are forbidden from issuing DDL on document-processing paths.
+_RETRIEVAL_ASSETS_V2_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "asset_core"
+    / "schemas"
+    / "013_retrieval_assets_v2_staging.sql"
+)
 # 阶段 A（批次5）：用户级 MCP 接入（一人一钥 + 开放库清单）与库级默认检索范式。
 _MCP_ACCESS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "008_mcp_access.sql"
 _KB_DEFAULT_PARADIGM_DDL = (
@@ -75,6 +84,13 @@ _KB_DEFAULT_PARADIGM_DDL = (
 # 批次7：MCP 用户配置扩展（工具开关/提示词/工具描述）。
 _MCP_ACCESS_CONFIG_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "010_mcp_access_config.sql"
+)
+_KB_LIFECYCLE_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "kb"
+    / "schemas"
+    / "011_kb_lifecycle_names_and_default_workflow.sql"
 )
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
@@ -161,10 +177,14 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _M5_SEGMENT_LINKS_DDL,
         # v2 语义角色词表加宽（存量库幂等迁移）。
         _SEMANTIC_ROLE_V2_DDL,
+        # Retrieval v2/final+staging：启动迁移，严禁业务 repository 热路径 DDL。
+        _RETRIEVAL_ASSETS_V2_DDL,
         # 阶段 A（批次5）：MCP 用户接入（依赖 kb_users/knowledge_bases，链尾安全）。
         _MCP_ACCESS_DDL,
         _KB_DEFAULT_PARADIGM_DDL,
         _MCP_ACCESS_CONFIG_DDL,
+        # Active KB names are owner-scoped; migrate the retired default workflow.
+        _KB_LIFECYCLE_DDL,
     )
 
 
@@ -198,6 +218,8 @@ def _ensure_schema_paths(cfg: MiningDbConfig, ddl_paths: tuple[Path, ...]) -> No
                     _KB_MINING_BINDING_DDL,
                     _ASSET_BUILD_KB_DDL,
                     _MINING_RUN_KB_DDL,
+                    _RETRIEVAL_ASSETS_V2_DDL,
+                    _KB_LIFECYCLE_DDL,
                 ),
             )
             logger.info("Applied DDL: %s", ddl_path.name)

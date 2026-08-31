@@ -228,7 +228,7 @@ export function useMiningApi() {
 
     // ── 本体 / 知识图谱（B7）──
 
-    // 挖掘过程透视 — run 详情之上叠加本体/图谱视角
+    // 挖掘过程透视 — 冻结 Workflow、节点事件和文档执行状态
     async getRunTrace(runId: string): Promise<RunTrace> {
       const { data } = await client.get(`/api/runs/${runId}/trace`)
       return data

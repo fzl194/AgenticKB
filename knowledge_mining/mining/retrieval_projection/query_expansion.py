@@ -16,6 +16,9 @@ from knowledge_mining.mining.contracts.retrieval_projection import (
     PROJECTOR_VERSION,
     RetrievalRepresentation,
 )
+from knowledge_mining.mining.retrieval_projection.llm_generation import (
+    LLM_FAILURE,
+)
 
 # 资格门默认（versioned；§5.5）：prose 归一化 ≥80 tokens；
 # table_row 至少一个 header-value；其余类型默认关闭。
@@ -143,6 +146,9 @@ class QueryExpansionFacade:
             except Exception:  # noqa: BLE001
                 return ExpansionOutcome((), skipped, invalid, 1, True)
             for rep, raw in zip(eligible, raw_results):
+                if raw == LLM_FAILURE:
+                    llm_failures += 1
+                    continue
                 if raw is None or raw == "SKIP":
                     skipped += 1
                     continue
@@ -186,7 +192,7 @@ class QueryExpansionFacade:
             for idx, draft in enumerate(capped)
         )
 
-        if aliases and self._aliases is not None:
+        if self._aliases is not None:
             # 27号审查修复：alias 子集替换语义——不得整快照清空（若 alias
             # store 与主表示 store 同体会抹掉基础表示）。store 未实现该
             # 方法时回落整替（独立 alias store 的旧契约）。
@@ -197,8 +203,9 @@ class QueryExpansionFacade:
                 run_sync(replace_aliases(
                     snapshot_id, aliases, PROJECTOR_VERSION,
                     document_key=snapshot_id,
+                    alias_type="query_alias",
                 ))
-            else:
+            elif aliases:
                 run_sync(self._aliases.replace_for_snapshot(
                     snapshot_id, aliases, PROJECTOR_VERSION,
                     document_key=snapshot_id,

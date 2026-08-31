@@ -24,5 +24,29 @@ export function runStatusLabel(status: string): string {
   return RUN_STATUS_LABELS[status] || status
 }
 
+export function runStatusTagType(
+  status: string,
+): 'success' | 'warning' | 'info' | 'danger' | 'primary' {
+  if (status === 'completed') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'running') return 'primary'
+  if (status === 'queued' || status === 'awaiting_review') return 'warning'
+  return 'info'
+}
+
+export function isActiveRunStatus(status: string | null | undefined): boolean {
+  return status === 'queued' || status === 'running'
+}
+
+export function processedDocumentCount(counts: {
+  committed_count?: number | null
+  failed_count?: number | null
+  skipped_count?: number | null
+}): number {
+  return (counts.committed_count ?? 0)
+    + (counts.failed_count ?? 0)
+    + (counts.skipped_count ?? 0)
+}
+
 /** 供测试与类型收敛用：DB CHECK 里的全部 run 状态。 */
 export const RUN_STATUSES = Object.keys(RUN_STATUS_LABELS)

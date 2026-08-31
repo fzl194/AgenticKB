@@ -119,6 +119,20 @@ describe('apiErrorDetail', () => {
   it('uses_a_stable_fallback', async () => {
     await expect(apiErrorDetail({})).resolves.toBe('请求失败')
   })
+
+  it('extracts_fastapi_typed_detail_objects', async () => {
+    const error = {
+      response: {
+        data: {
+          detail: {
+            code: 'workflow_not_found',
+            message: '挖掘范式不存在',
+          },
+        },
+      },
+    }
+    await expect(apiErrorDetail(error)).resolves.toBe('挖掘范式不存在')
+  })
 })
 
 describe('knowledge document download request', () => {

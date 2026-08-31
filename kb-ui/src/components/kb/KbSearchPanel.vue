@@ -33,6 +33,10 @@
         绑定后，这个库（含 MCP 检索）默认走所选管线；清除则跟随官方默认。
         范式的检索范围保持"留空"即可随库注入——在这里测试即真实链路。
       </p>
+      <div v-if="configurationError" class="kb-search__error">
+        {{ configurationError }}
+        <el-button size="small" @click="reload">重试</el-button>
+      </div>
     </div>
 
     <!-- 搜索区 -->
@@ -105,7 +109,7 @@ const props = defineProps<{
   /** 批次4 readiness：units=0 时空结果给"去挖掘"引导 */
   readiness?: { retrieval_units: number } | null
 }>()
-const emit = defineEmits<{ updated: [] }>()
+const emit = defineEmits<{ updated: []; goMining: [] }>()
 
 const kbApi = useKbApi()
 const operatorApi = useOperatorApi()
@@ -124,6 +128,8 @@ const error = ref('')
 const evidence = ref<EvidenceItem[]>([])
 const hasMore = ref(false)
 const effective = ref<{ name: string; version: number; sourceLabel: string } | null>(null)
+const configurationError = ref('')
+let reloadGeneration = 0
 
 const activeParadigms = computed(() => paradigms.value.filter(p => p.status === 'active'))
 
@@ -142,23 +148,39 @@ const emptyHint = computed(() =>
     : '没有命中，换个问法或调整检索范式试试')
 
 async function reload() {
-  if (!domainStore.currentDomain) return
+  const domain = domainStore.currentDomain
+  const kbId = props.kb.id
+  if (!domain) return
+  const generation = ++reloadGeneration
   selectedParadigmId.value = props.kb.default_paradigm_id ?? null
+  configurationError.value = ''
   try {
     paradigms.value = await operatorApi.listParadigms()
-  } catch {
+    if (generation !== reloadGeneration || domain !== domainStore.currentDomain || kbId !== props.kb.id) return
+  } catch (e) {
     paradigms.value = []
+    configurationError.value = await apiErrorDetail(e)
+    resolveInfo.value = null
+    return
   }
-  await refreshResolve()
+  await refreshResolve({ generation, domain, kbId })
 }
 
-async function refreshResolve() {
+async function refreshResolve(expected?: { generation: number; domain: string; kbId: string }) {
   if (!domainStore.currentDomain) return
   try {
-    resolveInfo.value = await servingApi.resolveParadigm(
+    const resolved = await servingApi.resolveParadigm(
       domainStore.currentDomain, [props.kb.id])
-  } catch {
+    if (expected && (
+      expected.generation !== reloadGeneration
+      || expected.domain !== domainStore.currentDomain
+      || expected.kbId !== props.kb.id
+    )) return
+    resolveInfo.value = resolved
+  } catch (e) {
+    if (expected && expected.generation !== reloadGeneration) return
     resolveInfo.value = null
+    configurationError.value = await apiErrorDetail(e)
   }
 }
 
@@ -182,6 +204,10 @@ async function run() {
   const q = query.value.trim()
   if (!q) return
   const resolved = resolveInfo.value
+  if (configurationError.value) {
+    error.value = configurationError.value
+    return
+  }
   if (!resolved?.bound || !resolved.paradigmId) {
     error.value = '该知识域未配置检索范式（库级/官方默认均缺失），请联系管理员在「检索范式」页发布范式。'
     evidence.value = []
@@ -215,8 +241,7 @@ async function run() {
 }
 
 function goMine() {
-  // 切到挖掘 tab 由父组件处理——用路由 query 或直接提示；这里简单跳转知识库页并提示
-  ElMessage.info('请在「挖掘」页签将挖掘范式切换为 system-full-baseline 后重新挖掘')
+  emit('goMining')
 }
 
 /** 来源行：文件名（+章节路径）；库同名时附库名。 */

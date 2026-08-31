@@ -103,49 +103,6 @@
         </div>
       </el-tab-pane>
 
-      <!-- Relations Tab -->
-      <el-tab-pane name="relations">
-        <template #label>
-          关系 <span class="tab-count">{{ relTotal }}</span>
-        </template>
-        <el-table
-          :data="relations"
-          class="kb-table"
-          :header-cell-style="{ background: 'transparent' }"
-          v-loading="relLoading"
-        >
-          <el-table-column label="源分段" min-width="200">
-            <template #default="{ row }">
-              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`rs-${row.source_segment_id}`) }" @click="toggleExpand(`rs-${row.source_segment_id}`)">{{ row.source_text || row.source_segment_id }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="关系类型" width="140">
-            <template #default="{ row }">
-              <span class="relation-type-tag">{{ relationTypeLabel(row.relation_type) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="目标分段" min-width="200">
-            <template #default="{ row }">
-              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`rt-${row.target_segment_id}`) }" @click="toggleExpand(`rt-${row.target_segment_id}`)">{{ row.target_text || row.target_segment_id }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="置信度" width="90">
-            <template #default="{ row }">
-              {{ row.confidence != null ? Number(row.confidence).toFixed(2) : '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="距离" width="80">
-            <template #default="{ row }">
-              {{ row.distance != null ? row.distance : '-' }}
-            </template>
-          </el-table-column>
-        </el-table>
-        <EmptyState v-if="!relLoading && !relations.length" text="无关系数据" />
-        <div class="tab-pagination" v-if="relTotal > PAGE_SIZE">
-          <el-pagination v-model:current-page="relPage" :page-size="PAGE_SIZE" :total="relTotal" layout="prev, pager, next" size="small" />
-        </div>
-      </el-tab-pane>
-
       <!-- Raw Content Tab -->
       <el-tab-pane name="raw-content">
         <template #label>
@@ -173,7 +130,7 @@ import { useDomainStore } from '@/stores/domain'
 import { useMiningApi } from '@/api/mining'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
-import type { KnowledgeDocument, KnowledgeSegment, KnowledgeUnit, KnowledgeRelation } from '@/types'
+import type { KnowledgeDocument, KnowledgeSegment, KnowledgeUnit } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -198,7 +155,6 @@ let documentRequestToken = 0
 let removalRequestToken = 0
 let segmentRequestToken = 0
 let unitRequestToken = 0
-let relationRequestToken = 0
 
 // Segments
 const segments = ref<KnowledgeSegment[]>([])
@@ -211,12 +167,6 @@ const units = ref<KnowledgeUnit[]>([])
 const unitTotal = ref(0)
 const unitPage = ref(1)
 const unitLoading = ref(false)
-
-// Relations
-const relations = ref<KnowledgeRelation[]>([])
-const relTotal = ref(0)
-const relPage = ref(1)
-const relLoading = ref(false)
 
 // Raw content
 const rawLoading = ref(false)
@@ -235,16 +185,7 @@ function toggleExpand(key: string) {
 function unitTypeLabel(type: string) {
   const map: Record<string, string> = {
     raw_text: '原始文本', contextual_text: '上下文', summary: '摘要',
-    generated_question: '生成问题', entity_card: '实体卡片',
-  }
-  return map[type] || type
-}
-
-function relationTypeLabel(type: string) {
-  const map: Record<string, string> = {
-    elaboration: '详述', contrast: '对比', sequence: '顺序',
-    cause_effect: '因果', problem_solution: '问题-方案',
-    similarity: '相似', dependency: '依赖', reference: '引用',
+    generated_question: '生成问题',
   }
   return map[type] || type
 }
@@ -295,28 +236,6 @@ async function loadUnits(domain = domainStore.currentDomain) {
     }
   } finally {
     if (requestToken === unitRequestToken) unitLoading.value = false
-  }
-}
-
-async function loadRelations(domain = domainStore.currentDomain) {
-  const requestToken = ++relationRequestToken
-  relLoading.value = true
-  try {
-    const res = await miningApi.getDocumentRelations(props.docId, {
-      limit: PAGE_SIZE,
-      offset: (relPage.value - 1) * PAGE_SIZE,
-    })
-    if (requestToken === relationRequestToken && domain === domainStore.currentDomain) {
-      relations.value = res.items
-      relTotal.value = res.total
-    }
-  } catch {
-    if (requestToken === relationRequestToken && domain === domainStore.currentDomain) {
-      relations.value = []
-      relTotal.value = 0
-    }
-  } finally {
-    if (requestToken === relationRequestToken) relLoading.value = false
   }
 }
 
@@ -420,7 +339,6 @@ async function removeDocument(): Promise<void> {
 function onTabChange(tab: string | number) {
   if (tab === 'segments' && segments.value.length === 0) loadSegments()
   else if (tab === 'units' && units.value.length === 0) loadUnits()
-  else if (tab === 'relations' && relations.value.length === 0) loadRelations()
   else if (tab === 'raw-content' && !rawHtml.value && !rawError.value) loadRawContent()
 }
 
@@ -430,16 +348,13 @@ async function loadData() {
   ++removalRequestToken
   ++segmentRequestToken
   ++unitRequestToken
-  ++relationRequestToken
   loading.value = true
   segLoading.value = false
   unitLoading.value = false
-  relLoading.value = false
   removing.value = false
   document.value = null
   segments.value = []
   units.value = []
-  relations.value = []
   rawHtml.value = ''
   rawError.value = ''
   try {
@@ -449,15 +364,12 @@ async function loadData() {
     // Load the active tab data
     segPage.value = 1
     unitPage.value = 1
-    relPage.value = 1
     segments.value = []
     units.value = []
-    relations.value = []
     await loadSegments(requestedDomain)
     if (requestToken !== documentRequestToken || requestedDomain !== domainStore.currentDomain) return
     // Preload totals for other tabs (lightweight: just first page)
     loadUnits(requestedDomain)
-    loadRelations(requestedDomain)
   } catch (error) {
     if (requestToken === documentRequestToken && requestedDomain === domainStore.currentDomain) {
       document.value = null
@@ -471,7 +383,6 @@ async function loadData() {
 // Watch page changes
 watch(segPage, () => loadSegments())
 watch(unitPage, () => loadUnits())
-watch(relPage, () => loadRelations())
 
 onMounted(loadData)
 watch(() => domainStore.currentDomain, loadData)

@@ -138,7 +138,7 @@ class HierarchicalSummaryFacade:
             ordinal += 1
 
         degraded = failures > 0
-        if aliases and self._aliases is not None:
+        if self._aliases is not None:
             # 27号审查修复：alias 子集替换语义（同 query_expansion）——
             # 不得整快照清空基础表示。
             replace_aliases = getattr(
@@ -148,8 +148,9 @@ class HierarchicalSummaryFacade:
                 run_sync(replace_aliases(
                     snapshot_id, tuple(aliases), SUMMARY_VERSION,
                     document_key=document_ref,
+                    alias_type="summary_alias",
                 ))
-            else:
+            elif aliases:
                 run_sync(self._aliases.replace_for_snapshot(
                     snapshot_id, tuple(aliases), SUMMARY_VERSION,
                     document_key=document_ref,

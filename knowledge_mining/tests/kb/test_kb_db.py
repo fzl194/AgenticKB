@@ -148,6 +148,28 @@ async def test_unique_domain_name(async_pool):
     assert kb2["domain"] == "generic"
 
 
+async def test_same_name_is_owner_scoped_and_soft_delete_releases_name(async_pool):
+    db = KbDB(async_pool)
+    alice = await db.upsert_user_by_username("same-name-alice")
+    bob = await db.upsert_user_by_username("same-name-bob")
+    first = await db.create_kb(
+        domain="cloud_core_network", name="Same Name",
+        owner_id=alice["id"],
+    )
+    other_owner = await db.create_kb(
+        domain="cloud_core_network", name="same name",
+        owner_id=bob["id"],
+    )
+    assert first["id"] != other_owner["id"]
+
+    await db.soft_delete(first["id"])
+    replacement = await db.create_kb(
+        domain="cloud_core_network", name=" same NAME ",
+        owner_id=alice["id"],
+    )
+    assert replacement["id"] != first["id"]
+
+
 async def test_derived_status_mined_for_committed_run_document(async_pool):
     """P1：KB 挖掘 publish=False（无 active release）、run_document 到 committed
     时，派生 status 应为 'mined'。旧 _STATUS_CASE_SQL 没有 committed 档，
@@ -223,9 +245,8 @@ async def test_list_kb_runs_includes_committed_count(async_pool):
     assert runs[0]["committed_count"] == 3
 
 
-async def test_get_document_knowledge_returns_relations(async_pool):
-    """get_document_knowledge 经 build→snapshot 返回切片/检索单元/实体提及/**关系**。
-    关系(asset_raw_segment_relations)是文档预览页「关系」Tab 的数据源。"""
+async def test_get_document_knowledge_hides_graph_assets(async_pool):
+    """文档预览只返回本批启用的切片与检索单元，图资产继续留库但不暴露。"""
     db = KbDB(async_pool)
     owner = await db.upsert_user_by_username("alice")
     kb = await db.create_kb(domain="cloud_core_network", name="K", owner_id=owner["id"])
@@ -284,12 +305,5 @@ async def test_get_document_knowledge_returns_relations(async_pool):
     assert knowledge["build_id"] == build_id
     assert len(knowledge["segments"]) == 2
     assert knowledge["retrieval_units"] == []  # 空数组兜底
-    assert knowledge["entity_mentions"] == []
-    rels = knowledge["relations"]
-    assert len(rels) == 1
-    r = rels[0]
-    assert r["relation_type"] == "elaborates"
-    assert r["source_segment_text"] == "源段文本"
-    assert r["target_segment_text"] == "目标段文本"
-    assert r["weight"] == 0.8
-    assert r["confidence"] == 0.9
+    assert "entity_mentions" not in knowledge
+    assert "relations" not in knowledge

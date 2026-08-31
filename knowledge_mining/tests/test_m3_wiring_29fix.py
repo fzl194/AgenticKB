@@ -23,6 +23,7 @@ def test_build_new_chain_services_wires_m3_when_llm_configured():
 
 def test_question_generator_skip_and_parse_paths():
     from knowledge_mining.mining.retrieval_projection.llm_generation import (
+        LLM_FAILURE,
         LLMQuestionGenerator,
     )
 
@@ -48,7 +49,7 @@ def test_question_generator_skip_and_parse_paths():
     out2 = LLMQuestionGenerator(_Boom()).generate_questions(
         [{"text": "正文"}],
     )
-    assert out2 == ["SKIP"]  # 单项失败按 SKIP，不抛
+    assert out2 == [LLM_FAILURE]  # provider 故障必须与业务 SKIP 区分
 
     # 成本护栏：超 max_items 的项直接 SKIP 不调用
     out3 = LLMQuestionGenerator(_Client(), max_items=1).generate_questions(

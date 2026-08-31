@@ -98,10 +98,6 @@
             <span class="artifact-stat__value">{{ miningStore.documentArtifacts.unit_count }}</span>
             <span class="artifact-stat__label">检索单元</span>
           </div>
-          <div class="artifact-stat">
-            <span class="artifact-stat__value">{{ miningStore.documentArtifacts.relation_count }}</span>
-            <span class="artifact-stat__label">关系图谱</span>
-          </div>
         </div>
       </div>
 
@@ -161,42 +157,6 @@
         <div class="tab-pagination" v-if="unitTotal > PAGE_SIZE">
           <el-pagination v-model:current-page="unitPage" :page-size="PAGE_SIZE" :total="unitTotal" layout="prev, pager, next" size="small" />
         </div>
-        <el-table
-          v-if="activeArtifactTab === 'relations'"
-          :data="relations"
-          class="kb-table"
-          :header-cell-style="{ background: 'transparent' }"
-          v-loading="artifactsLoading"
-        >
-          <el-table-column label="源分段" min-width="200">
-            <template #default="{ row }">
-              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`rs-${row.source_segment_id}`) }" @click="toggleExpand(`rs-${row.source_segment_id}`)">{{ row.source_text || row.source_segment_id || '-' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="关系类型" width="140">
-            <template #default="{ row }">
-              <span class="relation-type-tag">{{ relationTypeLabel(row.relation_type) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="目标分段" min-width="200">
-            <template #default="{ row }">
-              <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`rt-${row.target_segment_id}`) }" @click="toggleExpand(`rt-${row.target_segment_id}`)">{{ row.target_text || row.target_segment_id || '-' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="置信度" width="90">
-            <template #default="{ row }">
-              {{ row.confidence != null ? Number(row.confidence).toFixed(2) : '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="距离" width="80">
-            <template #default="{ row }">
-              {{ row.distance != null ? row.distance : '-' }}
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="tab-pagination" v-if="relTotal > PAGE_SIZE">
-          <el-pagination v-model:current-page="relPage" :page-size="PAGE_SIZE" :total="relTotal" layout="prev, pager, next" size="small" />
-        </div>
         <!-- Raw Content -->
         <div v-if="activeArtifactTab === 'raw-content'" v-loading="rawLoading" class="raw-content-wrapper">
           <div v-if="rawError" class="raw-content-error">
@@ -218,6 +178,7 @@ import { useMiningStore } from '@/stores/mining'
 import { useMiningApi } from '@/api/mining'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import PreprocessNotice from '@/components/kb/PreprocessNotice.vue'
+import { miningOperatorLabel } from '@/utils/miningWorkflowPresentation'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -235,8 +196,6 @@ const segTotal = ref(0)
 const segPage = ref(1)
 const unitTotal = ref(0)
 const unitPage = ref(1)
-const relTotal = ref(0)
-const relPage = ref(1)
 
 // Raw content
 const rawLoading = ref(false)
@@ -256,12 +215,10 @@ const segments = ref<any[]>([])
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const units = ref<any[]>([])
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const relations = ref<any[]>([])
 
 const artifactTabs = [
   { key: 'segments', label: '原始分段' },
   { key: 'units', label: '检索单元' },
-  { key: 'relations', label: '关系图谱' },
   { key: 'raw-content', label: '原始文本' },
 ]
 
@@ -372,6 +329,8 @@ function actionLabel(action: string) {
 }
 
 function stageLabel(stage: string) {
+  const operatorLabel = miningOperatorLabel(stage)
+  if (operatorLabel !== stage) return operatorLabel
   const map: Record<string, string> = {
     parse: '解析', segment: '分段', enrich: '增强', discourse: '语篇分析',
     retrieval_units: '检索单元构建', embedding: '向量化',
@@ -400,15 +359,6 @@ function formatMs(ms: number) {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
-function relationTypeLabel(type: string) {
-  const map: Record<string, string> = {
-    elaboration: '详述', contrast: '对比', sequence: '顺序',
-    cause_effect: '因果', problem_solution: '问题-方案',
-    similarity: '相似', dependency: '依赖', reference: '引用',
-  }
-  return map[type] || type
-}
-
 // ── Data loading ──
 
 async function loadArtifacts() {
@@ -430,16 +380,6 @@ async function loadArtifacts() {
       })
       units.value = result.items
       unitTotal.value = result.total ?? 0
-    } catch { /* ignore */ }
-    finally { artifactsLoading.value = false }
-  } else if (activeArtifactTab.value === 'relations') {
-    artifactsLoading.value = true
-    try {
-      const result = await miningApi.getRunDocumentRelations(props.runId, props.docId, {
-        limit: PAGE_SIZE, offset: (relPage.value - 1) * PAGE_SIZE,
-      })
-      relations.value = result.items
-      relTotal.value = result.total ?? 0
     } catch { /* ignore */ }
     finally { artifactsLoading.value = false }
   } else if (activeArtifactTab.value === 'raw-content') {
@@ -489,12 +429,10 @@ onMounted(loadAll)
 watch(() => activeArtifactTab.value, () => {
   segPage.value = 1
   unitPage.value = 1
-  relPage.value = 1
   loadArtifacts()
 })
 watch(segPage, loadArtifacts)
 watch(unitPage, loadArtifacts)
-watch(relPage, loadArtifacts)
 </script>
 
 <style scoped>

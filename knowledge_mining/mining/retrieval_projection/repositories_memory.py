@@ -40,12 +40,18 @@ class MemoryRepresentationStore:
         fingerprint: str,
         *,
         document_key: str,
+        alias_type: str | None = None,
     ) -> int:
-        """27号审查修复：只替换 alias 子集（query_alias/summary_alias），
-        基础表示不动——别名算子幂等重跑不破坏主投影产物。"""
+        """Replace exactly one alias family while preserving all other rows."""
+        inferred = {rep.representation_type for rep in aliases}
+        selected = alias_type or (next(iter(inferred)) if len(inferred) == 1 else None)
+        if selected not in ("query_alias", "summary_alias"):
+            raise ValueError("alias_type must be query_alias or summary_alias")
+        if inferred and inferred != {selected}:
+            raise ValueError("aliases do not match alias_type")
         kept = tuple(
             rep for rep in self._by_snapshot.get(snapshot_id, ())
-            if rep.representation_type not in ("query_alias", "summary_alias")
+            if rep.representation_type != selected
         )
         self._by_snapshot[snapshot_id] = kept + tuple(aliases)
         self._fingerprints[snapshot_id] = fingerprint

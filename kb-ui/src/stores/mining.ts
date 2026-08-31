@@ -57,16 +57,28 @@ export const useMiningStore = defineStore('mining', () => {
     if (!options?.silent) loading.value = true
     error.value = null
     try {
-      const [run, runStages, runDocsResult] = await Promise.all([
-        miningApi.getRun(runId),
+      // Run metadata is the primary surface. Stage/doc auxiliary failures must
+      // not blank the whole detail page.
+      const run = await miningApi.getRun(runId)
+      if (generation !== runDetailGeneration || domain !== domainStore.currentDomain) return
+      currentRun.value = run
+      const [stageResult, documentResult] = await Promise.allSettled([
         miningApi.getRunStages(runId),
         miningApi.getRunDocuments(runId, { page: documentsPage.value, page_size: DOCUMENTS_PAGE_SIZE }),
       ])
       if (generation !== runDetailGeneration || domain !== domainStore.currentDomain) return
-      currentRun.value = run
-      stages.value = runStages
-      documents.value = runDocsResult.documents
-      documentsTotal.value = runDocsResult.total
+      if (stageResult.status === 'fulfilled') stages.value = stageResult.value
+      else stages.value = []
+      if (documentResult.status === 'fulfilled') {
+        documents.value = documentResult.value.documents
+        documentsTotal.value = documentResult.value.total
+      } else {
+        documents.value = []
+        documentsTotal.value = 0
+      }
+      if (stageResult.status === 'rejected' || documentResult.status === 'rejected') {
+        error.value = '任务已加载，但部分进度或文档明细暂时不可用'
+      }
     } catch (e: unknown) {
       if (generation === runDetailGeneration && domain === domainStore.currentDomain) {
         error.value = e instanceof Error ? e.message : 'Failed to fetch run detail'
@@ -155,6 +167,7 @@ export const useMiningStore = defineStore('mining', () => {
     currentDocument.value = null
     documentStages.value = []
     documentArtifacts.value = null
+    error.value = null
   }
 
   return {

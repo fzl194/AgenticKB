@@ -304,9 +304,10 @@ async def test_representation_replace_is_transactional_delete_then_insert():
     assert insert[1][12] is None and insert[1][13] is None
     assert json.loads(insert[1][14]) == []
     assert json.loads(insert[1][19]) == {"document": "manual.md"}
-    # DDL 幂等初始化来自 schema.py 真相源，且先于业务语句
+    # Schema 必须由启动 migration 完成；业务热路径不得执行 DDL，否则多个
+    # 文档 worker 首次并发会发生 relation lock upgrade deadlock。
     ddl = [entry for entry in log if "CREATE TABLE" in entry[0]]
-    assert ddl and log.index(ddl[0]) < log.index(begins[0])
+    assert ddl == []
 
 
 @pytest.mark.asyncio
@@ -335,6 +336,33 @@ async def test_representation_list_restores_rows_to_contract_objects():
     assert rep.facets == {"document": "manual.md"}
     assert rep.provenance == {"projector_version": "1"}
     assert rep.lexical_eligible is True
+
+
+@pytest.mark.asyncio
+async def test_alias_replace_only_mutates_requested_staging_alias_type():
+    from knowledge_mining.mining.retrieval_projection.repositories_pg import (
+        PgRepresentationStore,
+    )
+
+    pool = recording_pool()
+    store = PgRepresentationStore(pool)
+    alias = _representation(
+        "d:s1:query:0", representation_type="query_alias",
+        content_type="query_alias", returnable=False,
+    )
+    await store.replace_aliases_for_snapshot(
+        "snap-1", (alias,), "qe", document_key="manual.md",
+        alias_type="query_alias",
+    )
+
+    delete = find_statement(
+        pool, "DELETE FROM asset_retrieval_units_v2_staging",
+    )
+    assert delete[1] == ["snap-1", "query_alias"]
+    assert not any(
+        statement.startswith("DELETE FROM asset_retrieval_units_v2 ")
+        for statement, _params in statements_of(pool)
+    )
 
 
 # ---------------------------------------------------------------------------

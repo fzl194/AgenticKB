@@ -316,8 +316,6 @@ const tiles = computed(() => {
     { label: '文档', value: docTotal, icon: '📄' },
     { label: '已挖掘', value: s?.mined ?? 0, icon: '✅' },
     { label: '检索单元', value: a?.retrieval_units ?? 0, icon: '🔎' },
-    { label: '实体提及', value: a?.entity_mentions ?? 0, icon: '🏷' },
-    { label: '切片关系', value: a?.relations ?? 0, icon: '🔗' },
   ]
 })
 

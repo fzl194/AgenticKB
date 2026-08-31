@@ -44,6 +44,10 @@ class InvalidVisibility(KbError):
     pass
 
 
+class InvalidName(KbError):
+    pass
+
+
 # ----------------------------------------------------------------- service
 
 class KbService:
@@ -59,6 +63,7 @@ class KbService:
     ) -> dict[str, Any]:
         _validate_domain(domain)
         _validate_visibility(visibility)
+        name = normalize_kb_name(name)
         try:
             return await self._db.create_kb(
                 domain=domain, name=name, owner_id=owner_id,
@@ -89,17 +94,49 @@ class KbService:
         await self._assert_write(kb_id, actor_id)
         if "visibility" in fields:
             _validate_visibility(fields["visibility"])
-        updated = await self._db.update_kb(kb_id, fields=fields)
+        if "name" in fields:
+            fields = {**fields, "name": normalize_kb_name(fields["name"])}
+        try:
+            updated = await self._db.update_kb(kb_id, fields=fields)
+        except UniqueViolation as exc:
+            raise Duplicate(f"duplicate active KB name: {fields.get('name')}") from exc
         if updated is None:
             raise NotFound(kb_id)
         return updated
 
     async def soft_delete(self, *, kb_id: str, actor_id: str) -> dict[str, Any]:
-        await self._assert_write(kb_id, actor_id)
+        if not await self._db.is_visible(kb_id=kb_id, user_id=actor_id):
+            raise NotFound(kb_id)
+        # Deleting the whole container is lifecycle administration, not an
+        # ordinary editor write.  Only owner/site-admin may delete or restore.
+        if not await self._db.can_restore(kb_id=kb_id, user_id=actor_id):
+            raise Forbidden(kb_id)
         deleted = await self._db.soft_delete(kb_id)
         if deleted is None:
             raise NotFound(kb_id)
         return deleted
+
+    async def restore_kb(self, *, kb_id: str, actor_id: str) -> dict[str, Any]:
+        kb = await self._db.get_kb(kb_id, include_deleted=True)
+        if kb is None or not await self._db.can_restore(
+            kb_id=kb_id, user_id=actor_id,
+        ):
+            # Do not disclose deleted private KB existence to other users.
+            raise NotFound(kb_id)
+        if kb.get("status") == "active":
+            return kb
+        try:
+            restored = await self._db.restore_kb(kb_id)
+        except UniqueViolation as exc:
+            raise Duplicate(f"duplicate active KB name: {kb.get('name')}") from exc
+        if restored is None:
+            # Idempotent race: another authorized request may have restored the
+            # row after our initial deleted-state read.
+            current = await self._db.get_kb(kb_id, include_deleted=True)
+            if current is not None and current.get("status") == "active":
+                return current
+            raise NotFound(kb_id)
+        return restored
 
     # ----- members -----
 
@@ -155,6 +192,20 @@ def _validate_domain(domain: str) -> None:
 
 
 _VALID_VISIBILITY = {"private", "public"}
+_MAX_KB_NAME_LENGTH = 80
+
+
+def normalize_kb_name(value: str) -> str:
+    if not isinstance(value, str):
+        raise InvalidName("knowledge base name must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise InvalidName("knowledge base name must not be blank")
+    if len(normalized) > _MAX_KB_NAME_LENGTH:
+        raise InvalidName(
+            f"knowledge base name must be at most {_MAX_KB_NAME_LENGTH} characters"
+        )
+    return normalized
 
 
 def _validate_visibility(visibility: str | None) -> None:

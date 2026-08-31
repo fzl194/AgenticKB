@@ -6,6 +6,11 @@
       </el-button>
     </div>
 
+    <div v-if="!initialLoading && miningStore.error && !miningStore.currentRun" class="run-detail__error-banner">
+      {{ miningStore.error }}
+      <el-button size="small" @click="startPolling">重试</el-button>
+    </div>
+
     <template v-if="miningStore.currentRun">
       <!-- Run Meta Card -->
       <div class="run-detail__meta-card">
@@ -42,8 +47,11 @@
       </div>
 
       <!-- Error Banner -->
-      <div v-if="miningStore.currentRun.error_message" class="run-detail__error-banner">
-        {{ miningStore.currentRun.error_message }}
+      <div v-if="miningStore.currentRun.error_summary" class="run-detail__error-banner">
+        {{ miningStore.currentRun.error_summary }}
+      </div>
+      <div v-else-if="miningStore.error" class="run-detail__error-banner">
+        {{ miningStore.error }}
       </div>
 
       <!-- 人审暂停横幅（B7）-->
@@ -51,25 +59,13 @@
         <div class="review-banner__main">
           <div class="review-banner__icon">⏸</div>
           <div class="review-banner__text">
-            <div class="review-banner__title">挖掘已暂停，等待人工评审</div>
+            <div class="review-banner__title">挖掘已暂停，等待人工处理</div>
             <div class="review-banner__sub">
-              <template v-if="trace?.active_gate === 'ontology_review'">
-                本体确认：{{ trace?.ontology_proposed_candidates ?? 0 }} 条待审
-              </template>
-              <template v-else-if="trace?.active_gate === 'entity_review'">
-                实体确认：{{ trace?.entity_pending_mentions ?? 0 }} 条待确认
-              </template>
-              <template v-else>评审完成后可继续</template>
+              {{ trace?.pause_step ? `暂停节点：${trace.pause_step}` : '处理完成后可继续' }}
             </div>
           </div>
         </div>
         <div class="review-banner__actions">
-          <router-link v-if="trace?.active_gate === 'ontology_review'" :to="`/candidates/review?run_id=${props.runId}`">
-            <el-button type="primary">去评审本体候选</el-button>
-          </router-link>
-          <router-link v-else-if="trace?.active_gate === 'entity_review'" :to="`/mentions/review?run_id=${props.runId}`">
-            <el-button type="primary">去确认实体</el-button>
-          </router-link>
           <el-button type="success" :loading="resuming" @click="handleResume">继续挖掘</el-button>
         </div>
       </div>
@@ -121,15 +117,8 @@
       <!-- Pipeline Flow -->
       <div class="run-detail__section">
         <h4 class="section-label">Pipeline 阶段</h4>
-        <PipelineFlow :stage-events="miningStore.stages" :all-docs-settled="allDocsSettled" />
-        <div v-if="trace" class="ontology-line-stats">
-          <span class="ontology-line-stats__tag">本体线产出</span>
-          <span class="ontology-line-stats__item">实体 <b>{{ trace.entity_count }}</b></span>
-          <span class="ontology-line-stats__item">关系 <b>{{ trace.relation_count }}</b></span>
-          <router-link :to="`/candidates/review?run_id=${props.runId}`" class="ontology-line-stats__item ontology-line-stats__item--link">
-            逃生口候选 <b>{{ trace.escape_hatch_candidates ?? 0 }}</b>
-          </router-link>
-        </div>
+        <MiningWorkflowTrace v-if="trace?.workflow" :trace="trace" />
+        <PipelineFlow v-else :stage-events="miningStore.stages" :all-docs-settled="allDocsSettled" />
       </div>
 
       <!-- Documents Table -->
@@ -215,10 +204,12 @@ import { useDomainStore } from '@/stores/domain'
 import { useMiningStore } from '@/stores/mining'
 import { useMiningApi } from '@/api/mining'
 // 共用一份 run 状态文案：这里原先缺 queued、多一个 DB CHECK 里不存在的 pending
-import { runStatusLabel as statusLabel } from '@/utils/runStatus'
+import { isActiveRunStatus, runStatusLabel as statusLabel } from '@/utils/runStatus'
 import type { RunTrace } from '@/types'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import PipelineFlow from '@/components/kb/PipelineFlow.vue'
+import MiningWorkflowTrace from '@/components/mining/workflow/MiningWorkflowTrace.vue'
+import { miningOperatorLabel } from '@/utils/miningWorkflowPresentation'
 
 const props = defineProps<{ kbId: string; runId: string }>()
 const domainStore = useDomainStore()
@@ -228,6 +219,7 @@ const miningApi = useMiningApi()
 const activeDocFilter = ref('all')
 const initialLoading = ref(true)
 const trace = ref<RunTrace | null>(null)
+let traceGeneration = 0
 const resuming = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 // resume 后延迟启动轮询的句柄，需在卸载/切域时一并清除，避免离开页面后仍触发轮询
@@ -248,6 +240,8 @@ function actionLabel(action: string) {
 }
 
 function stageLabel(stage: string) {
+  const operatorLabel = miningOperatorLabel(stage)
+  if (operatorLabel !== stage) return operatorLabel
   const map: Record<string, string> = {
     parse: '解析', segment: '分段', enrich: '段落理解', entity_extract: '实体抽取',
     resolve: '实体归一', entity_relations: '关系抽取', graph_write: '落图',
@@ -354,8 +348,16 @@ const filteredDocs = computed(() => {
 // ── Polling ──
 
 async function fetchTrace() {
+  const generation = ++traceGeneration
+  const domain = domainStore.currentDomain
+  const runId = props.runId
   try {
-    trace.value = await miningApi.getRunTrace(props.runId)
+    const result = await miningApi.getRunTrace(runId)
+    if (
+      generation === traceGeneration
+      && domain === domainStore.currentDomain
+      && runId === props.runId
+    ) trace.value = result
   } catch { /* trace 是叠加视图，失败不影响主流程 */ }
 }
 
@@ -388,7 +390,7 @@ async function pollOnce(silent = false) {
     fetchTrace(),
   ])
   initialLoading.value = false
-  if (miningStore.currentRun?.status !== 'running' && pollTimer) {
+  if (!isActiveRunStatus(miningStore.currentRun?.status) && pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
   }
@@ -397,7 +399,7 @@ async function pollOnce(silent = false) {
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer)
   pollOnce(false).then(() => {
-    if (miningStore.currentRun?.status === 'running') {
+    if (isActiveRunStatus(miningStore.currentRun?.status)) {
       pollTimer = setInterval(() => pollOnce(true), 3000)
     }
   })
@@ -405,12 +407,21 @@ function startPolling() {
 
 onMounted(startPolling)
 onUnmounted(() => {
+  traceGeneration += 1
   if (pollTimer) clearInterval(pollTimer)
   if (resumeTimer) clearTimeout(resumeTimer)
 })
 watch(() => domainStore.currentDomain, () => {
+  traceGeneration += 1
+  trace.value = null
   if (resumeTimer) clearTimeout(resumeTimer)
   resumeTimer = null
+  miningStore.clearCurrentRun()
+  startPolling()
+})
+watch(() => props.runId, () => {
+  traceGeneration += 1
+  trace.value = null
   miningStore.clearCurrentRun()
   startPolling()
 })

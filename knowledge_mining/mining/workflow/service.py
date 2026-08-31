@@ -347,7 +347,19 @@ class WorkflowService:
         selected_version = workflow_version or workflow["current_version"]
         if selected_version is None:
             raise WorkflowNotFound(f"{selected_id} has no published version")
-        return await self.get_version(selected_id, selected_version)
+        version = await self.get_version(selected_id, selected_version)
+        preset_template_key = next(
+            (
+                preset.template_key for preset in MINING_PRESETS
+                if preset.workflow_id == selected_id
+            ),
+            None,
+        )
+        return {
+            **version,
+            "workflow_name": workflow.get("name"),
+            "template_key": workflow.get("template_key") or preset_template_key,
+        }
 
     async def ensure_system_workflows(self) -> dict | None:
         """批次8 M6（24 号 §8）：seed 4 套官方挖掘预置（幂等，归档不复活）."""

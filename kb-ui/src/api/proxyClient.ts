@@ -95,7 +95,8 @@ function errorDetailFromValue(value: unknown): string | null {
 
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>
-    if (typeof record.detail === 'string' && record.detail.trim()) return record.detail
+    const nestedDetail = errorDetailFromValue(record.detail)
+    if (nestedDetail) return nestedDetail
     if (typeof record.message === 'string' && record.message.trim()) return record.message
   }
 

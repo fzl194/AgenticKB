@@ -12,17 +12,19 @@ from __future__ import annotations
 
 from .graph import EdgeDef, NodeDef, OutputDef, WorkflowGraph
 
-# 节点坐标（画布布局）
+# 节点坐标（画布布局）。2026-08-31 用户反馈修复：等距网格（主链 x 步进 240、
+# 可选增强算子走上下泳道 y=120/400），消除旧坐标 140-200 的不均间距与节点
+# （宽约 190px）相互压叠。模板坐标只在创建时作为初始布局，不影响存量图。
 _POSITIONS = {
     "input_ingest": (40, 260),
-    "document_parse": (180, 260),
-    "segment_compile": (380, 260),
-    "retrieval_unit_project": (580, 260),
-    "query_expansion_generate": (760, 140),
-    "hierarchical_summary_generate": (760, 380),
-    "embedding": (960, 260),
-    "asset_persist": (1160, 260),
-    "mining_finalize": (1360, 260),
+    "document_parse": (280, 260),
+    "segment_compile": (520, 260),
+    "retrieval_unit_project": (760, 260),
+    "query_expansion_generate": (1000, 120),
+    "hierarchical_summary_generate": (1000, 400),
+    "embedding": (1240, 260),
+    "asset_persist": (1480, 260),
+    "mining_finalize": (1720, 260),
 }
 
 

@@ -182,7 +182,6 @@ import WorkflowVersionPreview from '@/components/mining/workflow/WorkflowVersion
 import {
   canDeleteNodeInGraph,
   canDisableNode,
-  canMoveNode,
   effectiveEditReason,
   effectiveEditState,
   fromVueFlowElements,
@@ -264,7 +263,9 @@ function applyGraph(value: MiningWorkflowGraph) {
   const mapped = toVueFlowElements(graph.value, catalog.value)
   flowNodes.value = mapped.nodes.map(node => ({
     ...node,
-    draggable: node.data.definition ? canMoveNode(node.data.definition) : false,
+    // 位置（ui 坐标）是纯视觉属性，拖动不改变图结构——editPolicy 只管
+    // 删除/禁用等结构不变量，不再锁画布拖动（2026-08-31 用户反馈修复）。
+    draggable: !readOnly.value,
     deletable: node.data.definition ? canDeleteNodeInGraph(node.data.definition, graph.value.nodes) : false,
     connectable: Boolean(node.data.definition) && !readOnly.value,
   }))
@@ -347,7 +348,7 @@ function defaultParams(definition: MiningOperatorDef): Record<string, unknown> {
     .map(([key, schema]) => [key, schema.default]))
 }
 
-function addOperator(operatorType: string, position = { x: 100, y: 100 }) {
+function addOperator(operatorType: string, position?: { x: number; y: number }) {
   const definition = definitionMap.value.get(operatorType)
   if (!definition || definition.editPolicy === 'fixed' || readOnly.value) return
   if (definition.unique && graph.value.nodes.some(node => node.operatorType === operatorType)) {
@@ -361,9 +362,35 @@ function addOperator(operatorType: string, position = { x: 100, y: 100 }) {
       operatorType,
       operatorVersion: definition.version,
       params: defaultParams(definition),
-      ui: position,
+      ui: position ?? nextFreeSlot(),
     })
   })
+}
+
+/**
+ * 画布空位扫描：按 (GRID_STEP_X, GRID_STEP_Y) 网格从左上角起找第一个
+ * 没有节点占据的格子——palette 双击连续添加不再全部叠在同一点。
+ */
+const GRID_STEP_X = 240
+const GRID_STEP_Y = 150
+const GRID_ORIGIN = { x: 60, y: 60 }
+const GRID_COLS = 6
+const GRID_ROWS = 6
+
+function nextFreeSlot(): { x: number; y: number } {
+  const occupied = new Set(
+    graph.value.nodes
+      .filter(node => node.ui)
+      .map(node => `${Math.round((node.ui!.x - GRID_ORIGIN.x) / GRID_STEP_X)},${Math.round((node.ui!.y - GRID_ORIGIN.y) / GRID_STEP_Y)}`),
+  )
+  for (let row = 0; row < GRID_ROWS; row++) {
+    for (let col = 0; col < GRID_COLS; col++) {
+      if (!occupied.has(`${col},${row}`)) {
+        return { x: GRID_ORIGIN.x + col * GRID_STEP_X, y: GRID_ORIGIN.y + row * GRID_STEP_Y }
+      }
+    }
+  }
+  return { x: GRID_ORIGIN.x + GRID_COLS * GRID_STEP_X, y: GRID_ORIGIN.y }
 }
 
 function onDrop(event: DragEvent) {
@@ -656,7 +683,9 @@ function errorMessage(error: unknown): string {
 }
 
 onBeforeRouteLeave((_to, _from, next) => {
-  if (!dirty.value) {
+  // 预览历史版本（readOnly）会把版本图写进 graph 使 dirty 变 true——
+  // 那不是用户改动，不得弹"未保存"告警（2026-08-31 前端审查 M11）。
+  if (!dirty.value || readOnly.value) {
     next()
     return
   }
@@ -666,7 +695,7 @@ onBeforeRouteLeave((_to, _from, next) => {
 })
 
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (!dirty.value) return
+  if (!dirty.value || readOnly.value) return
   event.preventDefault()
   event.returnValue = ''
 }

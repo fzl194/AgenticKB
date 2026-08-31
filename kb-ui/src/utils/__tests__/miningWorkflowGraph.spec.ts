@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  canDeleteNode, canDeleteNodeInGraph, canDisableNode, canMoveNode, canReconnectNode,
+  canDeleteNode, canDeleteNodeInGraph, canDisableNode, canReconnectNode,
   effectiveEditReason, effectiveEditState,
   fromVueFlowElements, stableGraphJson, toVueFlowElements, validateLocalGraph,
 } from '@/utils/miningWorkflowGraph'
@@ -71,13 +71,14 @@ describe('mining workflow graph rules', () => {
     const editable = catalog[1]
     const protectedDef = catalog[2]
 
-    // canMove/canDelete/canDisable/canReconnect —— editPolicy 只管结构，不管参数编辑。
-    expect([canMoveNode(fixed), canDeleteNode(fixed), canDisableNode(fixed), canReconnectNode(fixed)])
-      .toEqual([false, false, false, false])
-    expect([canMoveNode(protectedDef), canDeleteNode(protectedDef), canDisableNode(protectedDef), canReconnectNode(protectedDef)])
-      .toEqual([true, false, false, true])
-    expect([canMoveNode(editable), canDeleteNode(editable), canDisableNode(editable), canReconnectNode(editable)])
-      .toEqual([true, true, true, true])
+    // canDelete/canDisable/canReconnect —— editPolicy 只管结构，不管参数编辑。
+    // （节点位置拖动已与 editPolicy 解耦——2026-08-31 修复，canMoveNode 已删。）
+    expect([canDeleteNode(fixed), canDisableNode(fixed), canReconnectNode(fixed)])
+      .toEqual([false, false, false])
+    expect([canDeleteNode(protectedDef), canDisableNode(protectedDef), canReconnectNode(protectedDef)])
+      .toEqual([false, false, true])
+    expect([canDeleteNode(editable), canDisableNode(editable), canReconnectNode(editable)])
+      .toEqual([true, true, true])
   })
 
   it('rejects cycles, incompatible slots, duplicate non-variadic inputs, and missing inputs', () => {

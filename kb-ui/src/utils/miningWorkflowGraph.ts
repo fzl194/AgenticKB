@@ -8,9 +8,8 @@ import type {
   WorkflowValidationIssue,
 } from '@/types/miningWorkflow'
 
-export function canMoveNode(definition: MiningOperatorDef): boolean {
-  return definition.editPolicy !== 'fixed'
-}
+// 2026-08-31 用户反馈修复：节点位置（ui 坐标）是纯视觉属性，拖动不改变图结构，
+// 不受 editPolicy 限制（原 canMoveNode 已删）——editPolicy 只管删除/禁用/重连。
 
 export function canDeleteNode(definition: MiningOperatorDef): boolean {
   return definition.editPolicy === 'editable'

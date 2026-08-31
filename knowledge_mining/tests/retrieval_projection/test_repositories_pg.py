@@ -304,9 +304,10 @@ async def test_representation_replace_is_transactional_delete_then_insert():
     assert insert[1][12] is None and insert[1][13] is None
     assert json.loads(insert[1][14]) == []
     assert json.loads(insert[1][19]) == {"document": "manual.md"}
-    # DDL 幂等初始化来自 schema.py 真相源，且先于业务语句
+    # Schema 必须由启动 migration 完成；业务热路径不得执行 DDL，否则多个
+    # 文档 worker 首次并发会发生 relation lock upgrade deadlock。
     ddl = [entry for entry in log if "CREATE TABLE" in entry[0]]
-    assert ddl and log.index(ddl[0]) < log.index(begins[0])
+    assert ddl == []
 
 
 @pytest.mark.asyncio

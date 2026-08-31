@@ -1,7 +1,9 @@
-"""三面资产 v2 DDL（批次8 M5，24 号 §5.8/DDL 归属约定）.
+"""三面资产 v2 契约常量（批次8 M5）.
 
-DDL 由 mining 侧唯一维护（幂等 CREATE IF NOT EXISTS）；Java 检索侧只以
-schema version 化 mapper 消费。FTS 契约：lexical_text 由 mining 预分词
+生产 DDL 已迁移到 ``013_retrieval_assets_v2_staging.sql``，由 pg_schema
+在启动阶段维护。此模块的 statement 集仅保留给契约/内存测试与显式开发
+工具，禁止 repository 热路径调用。Java 检索侧只以 schema version 化
+mapper 消费。FTS 契约：lexical_text 由 mining 预分词
 （tokenize_for_search/jieba），PG 端用 'simple' 配置建 tsvector——两侧
 分词器版本一致性由 TOKENIZER_VERSION 冻结进 build manifest。
 """
@@ -252,7 +254,10 @@ ASSET_SCHEMA_V2_STATEMENTS = ASSET_SCHEMA_V2_STATEMENTS + _staging_statements()
 
 
 def ensure_asset_schema_v2(conn: Any) -> None:
-    """幂等建表（mining 唯一维护；DDL 归属约定见 24 号 §5.8）."""
+    """Deprecated developer helper; production uses migration 013.
+
+    Do not call this from repositories or document-processing workers.
+    """
     with conn.cursor() as cursor:
         for statement in ASSET_SCHEMA_V2_STATEMENTS:
             cursor.execute(statement)

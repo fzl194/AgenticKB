@@ -1,7 +1,7 @@
 """受保护域资产 reset（批次8 M6/R8，24 号 §10.2/§10.3）.
 
 clean break 重建流程的清库步骤：
-- DROP v2 资产表族（让 schema.py 按新形态重建；存量 asset_raw_segments
+- DROP v2 资产表族（让正式 migration 013 按新形态重建；存量 asset_raw_segments
   是 legacy 形态必须 DROP 而非复用）；
 - TRUNCATE 派生资产/挖掘运行/范式/研究线图谱/旧检索缓存；
 - **保留** control-plane 与存储层（用户/密钥/开放库/域注册/文档记录/
@@ -26,7 +26,8 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = REPO_ROOT / "main_control_service" / "config" / "domain_registry.yaml"
 
-# v2 表族：DROP 后由 mining ensure_asset_schema_v2 重建（新形态）
+# v2 表族：DROP 后由 pg_schema migration 013 重建（新形态）。final 与
+# staging/readiness 必须一起清，避免 reset 后晋升历史残影。
 V2_DROP_TABLES = (
     "asset_raw_segments",
     "asset_structure_nodes",
@@ -35,6 +36,14 @@ V2_DROP_TABLES = (
     "asset_table_cells",
     "asset_retrieval_units_v2",
     "asset_retrieval_embeddings_v2",
+    "asset_snapshot_readiness",
+    "asset_structure_nodes_staging",
+    "asset_structure_edges_staging",
+    "asset_structured_assets_staging",
+    "asset_table_cells_staging",
+    "asset_retrieval_units_v2_staging",
+    "asset_retrieval_embeddings_v2_staging",
+    "asset_snapshot_readiness_staging",
 )
 
 # 派生资产/运行/范式/研究线/旧缓存：TRUNCATE（RESTART IDENTITY CASCADE）
@@ -178,7 +187,7 @@ def main() -> int:
             print(f"拒绝：保留白名单与清理清单重叠：{sorted(overlap)}")
             return 3
 
-        print("\n=== DROP（v2 表族，schema.py 重建新形态） ===")
+        print("\n=== DROP（v2 表族，由 migration 013 重建新形态） ===")
         for table in drop_list:
             print(f"  DROP TABLE {table}")
         print("\n=== TRUNCATE（派生资产/运行/范式/研究线/缓存） ===")

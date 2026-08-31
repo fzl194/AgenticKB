@@ -402,8 +402,8 @@ def build_new_chain_services(
             PgSnapshotRepository,
         )
 
-        # 批次8 生产化：三面资产 PG 落库（retrieval_projection schema.py 的
-        # v2 DDL 首次使用时幂等建表）；memory 三件套仅供显式传入/无池测试。
+        # 批次8 生产化：三面资产 PG 落库。v2 schema 由 pg_schema 启动
+        # migration 预装；memory 三件套仅供显式传入/无池测试。
         from knowledge_mining.mining.retrieval_projection.repositories_pg import (
             PgAssetWriter,
             PgEmbeddingStore,

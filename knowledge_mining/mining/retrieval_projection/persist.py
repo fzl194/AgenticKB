@@ -1,8 +1,8 @@
 """三面资产持久化（批次8 M5，24 号 §5.8）.
 
 AssetPersistService：读三个暂存 store（切片/表示/向量）→ 结构化面投影
-→ readiness 事实 → 快照级替换写入 AssetWriter（memory 契约实现；PG 实现
-执行 schema.py DDL 后参数化写入）。FTS 分词契约在此落地：lexical 文本经
+→ readiness 事实 → 快照级替换写入 AssetWriter（memory 契约实现；PG schema
+由启动 migration 预先安装，运行期只做参数化 DML）。FTS 分词契约在此落地：lexical 文本经
 tokenize_for_search（jieba）预分词，tokenizer 版本进 provenance。
 """
 from __future__ import annotations

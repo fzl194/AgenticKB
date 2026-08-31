@@ -4,17 +4,16 @@ PgRepresentationStore / PgEmbeddingStore / PgAssetWriter —— 生产落库三�
 memory 实现（repositories_memory）仅测试/开发。快照级替换语义与 Memory*
 一致：幂等重跑 = 事务内先删该快照全部行再整体插入，不累积重复。
 
-DDL 真相源：同目录 schema.py（``ASSET_SCHEMA_V2_STATEMENTS``）。各 store
-首次使用时逐条幂等执行（CREATE IF NOT EXISTS；并发首跑的 Duplicate 冲突
-按 infra/pg_schema.py 同款惯例吞掉），DDL 归属约定见 24 号 §5.8。
+生产 DDL 真相源：``databases/asset_core/schemas/013_retrieval_assets_v2_staging.sql``，
+由 ``infra/pg_schema.py`` 在 worker pool 启动前迁移。Repository 热路径只做
+参数化 DML，严禁 CREATE/ALTER/INDEX（并发文档 worker 会造成 relation 锁升级）。
 
 与 persist.py faces 契约对齐的两处刻意取舍（最小且一致方案）：
 
 1. **raw 面不写**：``asset_raw_segments`` 在已部署库上是 002 DDL 的 legacy
    形态（document_snapshot_id 列 + FK→asset_document_snapshots），且同一条
    工作流里 segment_compile 的 PgSegmentStore 已按快照替换写入该表；
-   schema.py 对该表名的 CREATE IF NOT EXISTS 在存量库上是空操作，v2 列
-   形态的 INSERT 必然 UndefinedColumn。faces["raw_segments"] 只参与计数。
+   013 不创建第二种 raw schema；faces["raw_segments"] 只参与计数。
 2. **向量本体归 PgEmbeddingStore**：faces["embeddings"] 不含向量（只含
    provenance 元数据）；EmbeddingFacade 产出的向量经
    ``replace_for_snapshot(..., vectors=...)`` 传入（Memory 实现忽略该参数）。
@@ -25,10 +24,6 @@ from __future__ import annotations
 
 import json
 from typing import Any, Mapping, Sequence
-
-from knowledge_mining.mining.retrieval_projection.schema import (
-    ASSET_SCHEMA_V2_STATEMENTS,
-)
 
 _UNITS_DELETE = "DELETE FROM asset_retrieval_units_v2_staging WHERE snapshot_id = %s"
 
@@ -131,27 +126,16 @@ _TABLE_CELLS_INSERT = """
 """
 
 
-class _PgSchemaBound:
-    """pool 持有 + schema.py v2 DDL 的首次使用幂等初始化（DDL 归 mining）."""
+class _PgRepository:
+    """Pool-bound repository.
+
+    Retrieval schema is installed by ``pg_schema`` before worker pools become
+    available.  Repository calls intentionally contain no DDL: concurrent
+    document workers must never perform relation-lock upgrades.
+    """
 
     def __init__(self, pool: Any) -> None:
         self._pool = pool
-        self._schema_ready = False
-
-    async def _ensure_schema(self, conn: Any) -> None:
-        if self._schema_ready:
-            return
-        import psycopg.errors
-
-        for statement in ASSET_SCHEMA_V2_STATEMENTS:
-            try:
-                await conn.execute(statement)
-            except (
-                psycopg.errors.DuplicateTable,
-                psycopg.errors.DuplicateObject,
-            ):
-                pass  # 已存在/并发首跑撞名 —— 幂等（pg_schema.py 同款惯例）
-        self._schema_ready = True
 
 
 def _as_dict(value: Any) -> dict:
@@ -179,7 +163,7 @@ def _vector_literal(vector: Sequence[float]) -> str:
     return "[" + ",".join(repr(float(v)) for v in vector) + "]"
 
 
-class PgRepresentationStore(_PgSchemaBound):
+class PgRepresentationStore(_PgRepository):
     """PG ``RepresentationStore``：asset_retrieval_units_v2（快照级替换）.
 
     M2（retrieval_unit_project）落库；lexical_text/tokenizer_version 留空，
@@ -195,7 +179,6 @@ class PgRepresentationStore(_PgSchemaBound):
         document_key: str,
     ) -> int:
         async with self._pool.connection() as conn:
-            await self._ensure_schema(conn)
             async with conn.transaction():
                 await conn.execute(_UNITS_DELETE, [snapshot_id])
                 for rep in representations:
@@ -229,7 +212,6 @@ class PgRepresentationStore(_PgSchemaBound):
         )
 
         async with self._pool.connection() as conn:
-            await self._ensure_schema(conn)
             cursor = await conn.execute(_UNITS_SELECT, [snapshot_id])
             rows = await cursor.fetchall()
         return tuple(
@@ -274,7 +256,6 @@ class PgRepresentationStore(_PgSchemaBound):
         """27号审查修复：只替换 alias 子集（query_alias/summary_alias）——
         别名算子（M3）幂等重跑不得清空该快照的基础表示。"""
         async with self._pool.connection() as conn:
-            await self._ensure_schema(conn)
             async with conn.transaction():
                 await conn.execute(
                     "DELETE FROM asset_retrieval_units_v2 "
@@ -308,7 +289,7 @@ class PgRepresentationStore(_PgSchemaBound):
         return len(aliases)
 
 
-class PgEmbeddingStore(_PgSchemaBound):
+class PgEmbeddingStore(_PgRepository):
     """PG ``EmbeddingStore``：asset_retrieval_embeddings_v2（快照级替换）.
 
     向量本体经 ``vectors``（与 records 等长平行序列）写入 ``%s::vector``；
@@ -329,7 +310,6 @@ class PgEmbeddingStore(_PgSchemaBound):
             snapshot_id, records, vectors=vectors,
         )
         async with self._pool.connection() as conn:
-            await self._ensure_schema(conn)
             async with conn.transaction():
                 await conn.execute(_EMBEDDINGS_DELETE, [snapshot_id])
                 for params in prepared:
@@ -342,7 +322,6 @@ class PgEmbeddingStore(_PgSchemaBound):
         )
 
         async with self._pool.connection() as conn:
-            await self._ensure_schema(conn)
             cursor = await conn.execute(_EMBEDDINGS_SELECT, [snapshot_id])
             rows = await cursor.fetchall()
         return tuple(
@@ -396,7 +375,7 @@ def _prepare_embedding_rows(
     return prepared
 
 
-class PgAssetWriter(_PgSchemaBound):
+class PgAssetWriter(_PgRepository):
     """PG ``AssetWriter``：三面资产按快照整体写入 **staging**（faces 见 persist.py）.
 
     同步入口（AssetPersistService 直接调用）；内部经 async_bridge.run_sync
@@ -426,7 +405,6 @@ class PgAssetWriter(_PgSchemaBound):
             for row in (faces.get("lexical_rows") or ())
         }
         async with self._pool.connection() as conn:
-            await self._ensure_schema(conn)
             async with conn.transaction():
                 for delete in (
                     _UNITS_DELETE, _STRUCTURE_NODES_DELETE,

@@ -70,6 +70,7 @@ async def list_kbs(body: dict[str, Any], kbdb: KbDB = Depends(get_kb_db)) -> dic
             "id": kb["id"],
             "name": kb["name"],
             "description": kb.get("description"),
+            "domain": kb.get("domain"),
             "default_paradigm_id": kb.get("default_paradigm_id"),
         })
     return {"knowledge_bases": out}

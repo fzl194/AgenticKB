@@ -191,8 +191,15 @@ async def verify_mcp_key(
         "username": result["username"],
         "user_id": result["user_id"],
         "open_kb_ids": result["open_kb_ids"],
-        # kb_names → id 的解析源：开放库 id+name（软删库自动从清单消失）
+        # kb_names → id 的解析源：开放库 id+name+domain（软删库自动从清单消失）
         "open_kbs": result.get("open_kbs", []),
+        # 开放库覆盖的知识域（有序去重）——MCP 侧 domain 免传的解析源：
+        # 唯一域自动默认；跨多域时 Agent 必须显式选择（错误响应带本清单）
+        "domains": list(dict.fromkeys(
+            str(kb.get("domain"))
+            for kb in (result.get("open_kbs") or [])
+            if isinstance(kb, dict) and kb.get("domain")
+        )),
         # 批次7：工具开关 / 提示词 / 工具描述（MCP 免二次查）
         "open_tools": open_tools,
         "instructions": result.get("instructions"),

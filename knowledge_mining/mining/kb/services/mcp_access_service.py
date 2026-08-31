@@ -22,42 +22,45 @@ class McpAccessError(KbError):
 KEY_PREFIX_TAG = "kbm_"
 _KEY_RANDOM_BYTES = 32
 
-#: MCP 工具族六件套（批次7 定稿）——open_tools 白名单与描述键的校验基线，
-#: 与 mcp_server 的工具注册一一对应。
-# 批次8 R8：九件套（get_segment_fulltext 由 get_evidence 取代；
-# 新增证据/结构工具族经 serving internal 通道）。
+#: MCP 工具族七件套（2026-08-31 用户拍板"功能类似必须合并"）——open_tools
+#: 白名单与描述键的校验基线，与 mcp_server 的工具注册一一对应：
+#: - get_content = get_evidence + get_document（读取原文/文件内容）
+#: - browse_knowledge = list_knowledge_bases + list_documents（层级浏览）
 MCP_TOOL_NAMES = frozenset({
     "search_knowledge",
-    "list_knowledge_bases",
-    "list_documents",
-    "get_document",
-    "get_evidence",
+    "get_content",
+    "browse_knowledge",
     "inspect_knowledge",
     "navigate_structure",
     "query_structured_asset",
     "upload_document",
 })
 
-#: 批次8 新增四结构工具——历史 open_tools 迁移时的补齐集合（用户从未
-#: 见过它们，补齐不构成"误开启"；见 kb/routes/auth.py 的迁移逻辑）。
-MCP_NEW_TOOLS = (
-    "get_evidence",
-    "inspect_knowledge",
-    "navigate_structure",
-    "query_structured_asset",
-)
+#: 工具族合并改名映射（2026-08-31 9→7）：旧名 → 新名。任一旧源开启即新工具
+#: 开启；全部旧源都不在清单（=显式关闭）则新工具不开启（关闭语义优先）。
+_RENAMED_TOOLS = {
+    "get_evidence": "get_content",
+    "get_document": "get_content",
+    "list_knowledge_bases": "browse_knowledge",
+    "list_documents": "browse_knowledge",
+}
+
 
 def normalize_legacy_open_tools(open_tools: list[str]) -> list[str] | None:
-    """29号（未完成 E）：历史 open_tools 迁移的纯函数。
+    """跨版本 open_tools 迁移的纯函数（29号 退役迁移 + 2026-08-31 合并改名）。
 
-    含已退役工具名（如 get_segment_fulltext）的集合 → 剔除退役名 + 补齐
-    新四结构工具（用户从未见过它们，不构成"误开启"；显式关闭的既有工具
-    保持关闭）。非 legacy 集合（全部在当前白名单内）返回 None = 无需迁移。
+    规则按序应用：①合并改名（保序去重）②剔除退役名（get_segment_fulltext 等，
+    即不在白名单也不在改名映射的名字）。非 legacy 集合（全部在当前白名单内）
+    返回 None = 无需迁移。
     """
     if not open_tools or all(t in MCP_TOOL_NAMES for t in open_tools):
         return None
-    kept = [t for t in open_tools if t in MCP_TOOL_NAMES]
-    return kept + [t for t in MCP_NEW_TOOLS if t not in kept]
+    renamed: list[str] = []
+    for t in open_tools:
+        new = _RENAMED_TOOLS.get(t, t)
+        if new not in renamed:
+            renamed.append(new)
+    return [t for t in renamed if t in MCP_TOOL_NAMES]
 
 
 MCP_INSTRUCTIONS_MAX = 4000
@@ -79,8 +82,16 @@ class McpAccessService:
         self._db = db
 
     async def get_status(self, *, user_id: str) -> dict[str, Any] | None:
-        """本人视角：密钥状态（无明文/hash）+ 开放库列表。"""
-        return await self._db.get_mcp_access(user_id)
+        """本人视角：密钥状态（无明文/hash）+ 开放库列表。
+
+        open_tools 读时归一（合并改名/退役剔除，纯内存变换不回写——UI 开关
+        因此不会因旧工具名显示成"全关"；verify 路径的迁移会持久化终态）。"""
+        row = await self._db.get_mcp_access(user_id)
+        if row and row.get("open_tools"):
+            normalized = normalize_legacy_open_tools(list(row["open_tools"]))
+            if normalized is not None:
+                row["open_tools"] = normalized
+        return row
 
     async def rotate_key(self, *, user_id: str) -> dict[str, Any]:
         """生成或轮换密钥。返回明文（仅此一次）+ 状态。"""

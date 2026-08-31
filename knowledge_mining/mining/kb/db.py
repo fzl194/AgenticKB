@@ -800,7 +800,7 @@ WITH cur AS (
             if urow is None:
                 return None
             cur = await conn.execute(
-                """SELECT k.id, k.name FROM mcp_open_kbs o
+                """SELECT k.id, k.name, k.domain FROM mcp_open_kbs o
                    JOIN knowledge_bases k ON k.id = o.kb_id
                    WHERE o.user_id = %s AND k.status = 'active'
                    ORDER BY k.name""",

@@ -65,18 +65,17 @@ class IdentityError(Exception):
     """无钥/错钥/后端不可达。message 面向 Agent（中文），可直接作为工具错误返回。"""
 
 
-#: MCP 工具族九件套（批次8 R8，25 号 §8.1：get_segment_fulltext 被 get_evidence 取代，
-#: 新增 inspect_knowledge/navigate_structure/query_structured_asset，get_document 切
-#: document_ref 主键）。mining 侧 open_tools 白名单校验基线同步待扩（遗留项，见部署说明）。
+#: MCP 工具族七件套（2026-08-31 用户拍板"功能类似必须合并"）：
+#: - get_content = get_evidence + get_document（读取原文/文件内容，ref 分流 ev_/doc_）
+#: - browse_knowledge = list_knowledge_bases + list_documents（domain→库→文档层级浏览）
+#: 与 mcp_access_service.MCP_TOOL_NAMES 一一对应。
 TOOL_NAMES = frozenset({
     "search_knowledge",
-    "get_evidence",
-    "get_document",
+    "get_content",
+    "browse_knowledge",
     "inspect_knowledge",
     "navigate_structure",
     "query_structured_asset",
-    "list_knowledge_bases",
-    "list_documents",
     "upload_document",
 })
 
@@ -85,12 +84,14 @@ TOOL_NAMES = frozenset({
 class Identity:
     username: str
     user_id: str
-    #: 开放库 [{id, name}]——kb_names → id 的唯一解析源
+    #: 开放库 [{id, name, domain}]——kb_names → id 的唯一解析源；domain 供层级浏览分组
     open_kbs: tuple[dict, ...]
     #: 工具白名单（None=全部开放）；提示词与工具描述（None=服务端默认）
     open_tools: tuple[str, ...] | None = None
     instructions: str | None = None
     tool_descriptions: tuple[dict, ...] = ()
+    #: 开放库覆盖的知识域（有序去重）——domain 免传的解析源
+    domains: tuple[str, ...] = ()
 
     @property
     def open_kb_ids(self) -> list[str]:
@@ -111,6 +112,35 @@ class Identity:
             if isinstance(d, dict) and name in d:
                 return str(d[name])
         return default
+
+    def resolve_domain(self, explicit: str | None) -> str:
+        """工具 domain 参数的缺省解析（2026-08-31 用户拍板的目标态）。
+
+        - 显式传入：优先使用；不在开放库覆盖域内 → 报错带可用清单（防 typo/防猜域）
+        - 未传且只覆盖一个域：自动用该域（一台部署机器通常一个 domain 的常态）
+        - 未传且跨多域：报错并列出全部可用域——Agent 不知道信息就必须给它清单去选
+        - 未传且无域信息（旧 mining 混布窗口）：要求显式指定
+        """
+        if explicit is not None and str(explicit).strip():
+            domain = str(explicit).strip()
+            if self.domains and domain not in self.domains:
+                raise IdentityError(
+                    f"知识域 {domain!r} 不在你的开放知识库覆盖范围内。"
+                    f"可用知识域：{'、'.join(self.domains)}。"
+                )
+            return domain
+        if len(self.domains) == 1:
+            return self.domains[0]
+        if len(self.domains) > 1:
+            raise IdentityError(
+                "未指定 domain，且你的开放知识库跨越多个知识域："
+                f"{'、'.join(self.domains)}。请从中选择一个作为 domain 参数重试"
+                "（可用 browse_knowledge 浏览各域下的知识库）。"
+            )
+        raise IdentityError(
+            "无法确定默认知识域：请显式指定 domain 参数"
+            "（可用 browse_knowledge 查看你开放的知识库）。"
+        )
 
 
 #: 当前请求的 identity（middleware 验明后 set，工具函数内 get）。
@@ -179,7 +209,11 @@ def require_identity(headers) -> Identity:
 
     data = resp.json()
     open_kbs = tuple(
-        {"id": str(k.get("id") or ""), "name": str(k.get("name") or "")}
+        {
+            "id": str(k.get("id") or ""),
+            "name": str(k.get("name") or ""),
+            "domain": str(k.get("domain") or ""),
+        }
         for k in (data.get("open_kbs") or [])
         if isinstance(k, dict) and k.get("id")
     )
@@ -195,6 +229,10 @@ def require_identity(headers) -> Identity:
         tuple({"tool": k, "description": v} for k, v in raw_descs.items())
         if isinstance(raw_descs, dict) else ())
     instructions = data.get("instructions")
+    domains = tuple(
+        str(d) for d in (data.get("domains") or [])
+        if isinstance(d, str) and d
+    )
     return Identity(
         username=str(data["username"]),
         user_id=str(data.get("user_id") or ""),
@@ -202,6 +240,7 @@ def require_identity(headers) -> Identity:
         open_tools=open_tools,
         instructions=str(instructions) if instructions else None,
         tool_descriptions=tool_descriptions,
+        domains=domains,
     )
 
 

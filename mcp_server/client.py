@@ -356,6 +356,20 @@ def _search_via_paradigm(
             resp.status_code,
             inp.query[:80],
         )
+        # D2（2026-08-31 用户 E2E）：serving 的管线错误体 {"error": code, ...}
+        # 必须转成结构化错误——裸泡 HTTP 500/404 会让 Agent 无从修正。
+        code, message = _serving_error_body(resp)
+        if code == "kb_not_found":
+            return {
+                "error": "kb_not_found",
+                "message": (
+                    f"知识域 {inp.domain!r} 下没有可检索的知识库内容。"
+                    "请检查 domain 是否正确（可用 browse_knowledge 查看开放的知识域），"
+                    "或确认目标库已完成挖掘。"
+                ),
+            }
+        if code:
+            return {"error": code, "message": message or code}
         return {"error": f"HTTP {resp.status_code}", "raw": resp.text[:500]}
 
     try:
@@ -386,6 +400,20 @@ def _search_via_paradigm(
 
 
 # ── error-side advisory list ─────────────────────────────────────────────
+
+
+def _serving_error_body(resp: httpx.Response) -> tuple[str | None, str]:
+    """serving 错误体 {"error": code, "message": …} 的安全提取（非该形状 → (None, "")）。"""
+    try:
+        body = resp.json()
+    except ValueError:
+        return None, ""
+    if not isinstance(body, dict):
+        return None, ""
+    code = body.get("error")
+    if isinstance(code, str) and code:
+        return code, str(body.get("message") or "")
+    return None, ""
 
 
 def _offered_or_omit(domain: str) -> list[dict] | None:

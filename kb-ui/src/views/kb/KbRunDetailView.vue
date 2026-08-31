@@ -396,9 +396,16 @@ async function pollOnce(silent = false) {
   }
 }
 
+let pollingGeneration = 0
+
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer)
+  // 幂等 + 代际守卫：并发调用（双击重试/延迟恢复与初始链路竞争/连续切换）
+  // 时旧 .then 不得再赋值 interval，否则句柄被覆盖成孤儿——双倍轮询且
+  // 离开页面后无法清理（2026-08-31 前端审查 H4）。
+  const gen = ++pollingGeneration
   pollOnce(false).then(() => {
+    if (gen !== pollingGeneration) return
     if (isActiveRunStatus(miningStore.currentRun?.status)) {
       pollTimer = setInterval(() => pollOnce(true), 3000)
     }
@@ -408,6 +415,7 @@ function startPolling() {
 onMounted(startPolling)
 onUnmounted(() => {
   traceGeneration += 1
+  pollingGeneration += 1
   if (pollTimer) clearInterval(pollTimer)
   if (resumeTimer) clearTimeout(resumeTimer)
 })

@@ -427,7 +427,9 @@ async function batchDelete() {
       /* 单个失败继续删其余 */
     }
   }
-  ElMessage.success(`已删除 ${ok}/${ids.length} 个文件`)
+  // 部分或全部失败不得伪装成功（全失败时 success toast 会误导重复操作）
+  if (ok === ids.length) ElMessage.success(`已删除 ${ok}/${ids.length} 个文件`)
+  else ElMessage.warning(`已删除 ${ok}/${ids.length} 个文件，${ids.length - ok} 个失败——请刷新后重试`)
   clearSelection()
   await loadFiles()
 }
@@ -523,7 +525,14 @@ function formatDate(t?: string | null): string {
 
 onMounted(reload)
 watch(() => currentFolderId.value, loadFiles)
-watch(() => props.kbId, reload)
+// 切库必须先重置路径与选中：组件被复用（/kb/A → /kb/B），否则旧库的
+// currentFolderId 会拿去请求新库列表，更糟的是「挖掘选中」会把 A 库的
+// document id 发给 B 库的挖掘接口（2026-08-31 前端审查 H1）。
+watch(() => props.kbId, () => {
+  currentFolderId.value = null
+  selectedFileIds.value = []
+  reload()
+})
 // 切回文件 Tab 时刷新：挖掘结束后文件状态（uploaded→mined 等）能即时看到
 watch(() => props.active, (now, prev) => {
   if (now && !prev) reload()

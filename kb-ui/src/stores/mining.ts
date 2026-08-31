@@ -138,6 +138,11 @@ export const useMiningStore = defineStore('mining', () => {
   async function fetchDocumentDetail(runId: string, docId: string) {
     loading.value = true
     error.value = null
+    // 先清上一个文档：共享 store 跨页面残留，失败时页面会把 A 的数据
+    // 挂在 B 的 URL 下渲染（2026-08-31 前端审查 H2）。
+    currentDocument.value = null
+    documentStages.value = []
+    documentArtifacts.value = null
     try {
       const [doc, docStages, docArts] = await Promise.all([
         miningApi.getRunDocument(runId, docId),

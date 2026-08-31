@@ -2,8 +2,6 @@
   <header class="header">
     <div class="header__left">
       <h2 class="header__title">{{ pageTitle }}</h2>
-      <span class="header__divider" />
-      <span class="header__breadcrumb">{{ route.meta?.description || '' }}</span>
     </div>
 
     <div class="header__right">
@@ -75,13 +73,18 @@ const pageTitles: Record<string, string> = {
   dashboard: '概览',
   kb: '知识库',
   'kb-detail': '知识库',
+  'kb-run-detail': '知识库',
+  'kb-run-doc-detail': '知识库',
+  'kb-doc-preview': '知识库',
   'mining-workflows': '挖掘范式',
   'mining-workflow-editor': '挖掘范式',
-  search: '检索测试',
+  paradigm: '检索范式',
+  'paradigm-edit': '检索范式',
+  'mcp-access': 'MCP 接入',
   knowledge: '知识资产',
   'knowledge-detail': '文档详情',
-  graph: '知识图谱',
   llm: 'LLM 服务',
+  'llm-task-detail': 'LLM 服务',
   settings: '系统设置',
 }
 

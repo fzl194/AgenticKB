@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
 
 import App from './App.vue'
@@ -20,7 +21,8 @@ const brand = useBrandStore(pinia)
 const auth = useAuthStore(pinia)
 auth.bootstrap()
 app.use(router)
-app.use(ElementPlus)
+// 中文 locale：否则确认弹窗按钮/表格空态渲染英文 OK/Cancel、No Data
+app.use(ElementPlus, { locale: zhCn })
 
 Promise.allSettled([brand.fetchBrand(), auth.ready]).finally(() => {
   brand.applyBrand()

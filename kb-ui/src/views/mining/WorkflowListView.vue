@@ -2,15 +2,21 @@
   <div class="workflow-list">
     <header class="workflow-list__header">
       <div>
-        <h2>挖掘 Workflow</h2>
+        <h2>挖掘范式</h2>
         <p>全局共享，不随 Domain 切换；发布后可在上传文件挖掘时选择精确版本。</p>
       </div>
-      <el-button type="primary" data-test="create-workflow" @click="openCreate">新建 Workflow</el-button>
+      <el-button type="primary" data-test="create-workflow" @click="openCreate">新建范式</el-button>
     </header>
 
     <div class="workflow-list__notice">全局共享 · 草稿使用 revision 乐观锁 · 已发布版本不可变</div>
 
-    <el-table v-loading="loading" :data="workflows">
+    <el-tabs v-model="activeTab" class="workflow-list__tabs">
+      <el-tab-pane label="全部" name="all" />
+      <el-tab-pane :label="`已发布 (${countBy('active')})`" name="active" />
+      <el-tab-pane :label="`已归档 (${countBy('archived')})`" name="archived" />
+    </el-tabs>
+
+    <el-table v-loading="loading" :data="filteredWorkflows">
       <el-table-column prop="name" label="名称" min-width="180">
         <template #default="{ row }">
           <button class="workflow-list__link" type="button" @click="edit(row.id)">{{ row.name }}</button>
@@ -27,7 +33,7 @@
       </el-table-column>
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag size="small" :type="row.status === 'active' ? 'success' : 'info'">{{ row.status === 'active' ? '有效' : '已归档' }}</el-tag>
+          <el-tag size="small" :type="row.status === 'active' ? 'success' : 'info'">{{ row.status === 'active' ? '已发布' : '已归档' }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="操作" width="230" fixed="right">
@@ -39,7 +45,7 @@
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="createVisible" title="新建挖掘 Workflow" width="520px">
+    <el-dialog v-model="createVisible" title="新建挖掘范式" width="520px">
       <el-form label-width="90px">
         <el-form-item label="名称"><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" /></el-form-item>
@@ -60,7 +66,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="copyVisible" title="复制 Workflow" width="460px">
+    <el-dialog v-model="copyVisible" title="复制范式" width="460px">
       <el-form label-width="80px">
         <el-form-item label="新名称"><el-input v-model="copyName" /></el-form-item>
       </el-form>
@@ -83,6 +89,13 @@ const api = useMiningWorkflowApi()
 const router = useRouter()
 const workflows = ref<MiningWorkflow[]>([])
 const loading = ref(false)
+// 默认只看已发布——归档件不再混进主列表（2026-08-31 用户反馈）
+const activeTab = ref('active')
+const filteredWorkflows = computed(() =>
+  activeTab.value === 'all' ? workflows.value : workflows.value.filter(w => w.status === activeTab.value))
+function countBy(status: string) {
+  return workflows.value.filter(w => w.status === status).length
+}
 const creating = ref(false)
 const createVisible = ref(false)
 const copyVisible = ref(false)
@@ -111,7 +124,7 @@ async function load() {
   try {
     workflows.value = await api.list({ include_archived: true })
   } catch (error) {
-    ElMessage.error(`加载 Workflow 失败：${errorMessage(error)}`)
+    ElMessage.error(`加载挖掘范式失败：${errorMessage(error)}`)
   } finally {
     loading.value = false
   }
@@ -154,7 +167,7 @@ function edit(id: string) {
 
 function openCopy(workflow: MiningWorkflow) {
   copySource.value = workflow
-  copyName.value = `${workflow.name} copy`
+  copyName.value = `${workflow.name} 副本`
   copyVisible.value = true
 }
 
@@ -164,7 +177,7 @@ async function confirmCopy() {
 }
 
 async function copyWorkflow(workflow: MiningWorkflow, requestedName?: string) {
-  const name = (requestedName ?? `${workflow.name} copy`).trim()
+  const name = (requestedName ?? `${workflow.name} 副本`).trim()
   if (!name) {
     ElMessage.warning('请填写复制后的名称')
     return
@@ -185,7 +198,7 @@ function canArchive(workflow: MiningWorkflow): boolean {
 async function archiveWorkflow(workflow: MiningWorkflow) {
   if (!canArchive(workflow)) return
   try {
-    await ElMessageBox.confirm(`归档「${workflow.name}」？已发布版本仍可追溯。`, '归档 Workflow', { type: 'warning' })
+    await ElMessageBox.confirm(`归档「${workflow.name}」？已发布版本仍可追溯。`, '归档范式', { type: 'warning' })
     await api.archive(workflow.id)
     ElMessage.success('已归档')
     await load()

@@ -6,6 +6,11 @@
       </el-button>
     </div>
 
+    <div v-if="miningStore.error && !miningStore.currentDocument" class="doc-detail__load-error">
+      <p>文档详情加载失败：{{ miningStore.error }}</p>
+      <el-button size="small" @click="loadAll">重试</el-button>
+    </div>
+
     <template v-if="miningStore.currentDocument">
       <!-- Info Card -->
       <div class="doc-detail__info-card">
@@ -436,6 +441,7 @@ watch(unitPage, loadArtifacts)
 </script>
 
 <style scoped>
+.doc-detail__load-error { display: flex; align-items: center; gap: 10px; padding: 14px; color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; font-size: 13px; }
 .doc-detail {
   display: flex;
   flex-direction: column;

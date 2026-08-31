@@ -269,19 +269,23 @@ function hasActiveRun(): boolean {
 }
 
 /** running/queued 时 3s 轮询直到终态。 */
+let disposed = false
+
 function schedulePolling() {
   clearPolling()
-  if (!hasActiveRun()) return
+  if (disposed || !hasActiveRun()) return
   const kbId = props.kbId
   pollTimer = window.setTimeout(async () => {
     try {
       const result = await kbApi.getKbRuns(kbId)
-      if (kbId !== props.kbId) return
+      if (disposed || kbId !== props.kbId) return
       runs.value = result
     } catch {
       // 静默失败，下次 tick 再试
     } finally {
-      if (kbId === props.kbId) schedulePolling()
+      // 卸载只清"待触发"的 timer——飞行中的响应若在这里重新起 timer，
+      // 会形成离开页面后永不清理的轮询链（2026-08-31 前端审查 H3）。
+      if (!disposed && kbId === props.kbId) schedulePolling()
     }
   }, 3000)
 }
@@ -320,7 +324,10 @@ onMounted(() => {
   loadOptions()
   loadRuns()
 })
-onUnmounted(clearPolling)
+onUnmounted(() => {
+  disposed = true
+  clearPolling()
+})
 </script>
 
 <style scoped>

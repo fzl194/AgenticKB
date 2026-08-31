@@ -256,7 +256,16 @@ function sourceLabelOf(ev: EvidenceItem): string {
   return base || (src.knowledge_base ?? '')
 }
 
-watch(() => props.kb.id, reload)
+watch(() => props.kb.id, () => {
+  // 切库必须清上一库的检索结果与管线横幅——只重载范式配置的话，
+  // B 库页面会显示 A 库挖出的证据（2026-08-31 前端审查 M9）。
+  evidence.value = []
+  hasMore.value = false
+  effective.value = null
+  searched.value = false
+  error.value = ''
+  reload()
+})
 watch(() => props.kb.default_paradigm_id, (v) => { selectedParadigmId.value = v ?? null })
 watch(() => domainStore.currentDomain, reload)
 onMounted(reload)

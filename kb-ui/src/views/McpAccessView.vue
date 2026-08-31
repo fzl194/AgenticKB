@@ -10,6 +10,12 @@
       </div>
     </div>
 
+    <!-- 加载失败：显式错误态（禁止伪装"未配置密钥"诱导误轮换） -->
+    <el-alert v-if="loadFailed" type="error" :closable="false" show-icon style="margin-bottom: 14px">
+      <template #title>配置加载失败——密钥轮换与保存已暂时禁用，不会影响你现役的接入密钥。</template>
+      <el-button size="small" @click="reload">重试加载</el-button>
+    </el-alert>
+
     <!-- ① Agent 接入配置（无密钥时引导先生成） -->
     <section class="mcp-view__card mcp-view__card--hero">
       <div class="mcp-view__card-head">
@@ -44,7 +50,7 @@
             Agent 用它证明"我是你"。重新生成后旧密钥立即失效（防泄漏）；明文只在生成时显示一次。
           </p>
         </div>
-        <el-button type="primary" plain :loading="rotating" @click="rotate">
+        <el-button type="primary" plain :loading="rotating" :disabled="loadFailed" @click="rotate">
           {{ hasKey ? '重新生成（旧钥立即失效）' : '生成密钥' }}
         </el-button>
       </div>
@@ -174,6 +180,7 @@ const toolDescs = ref<Record<string, string>>({})
 const savingPrompt = ref(false)
 
 const hasKey = computed(() => !!status.value?.configured)
+const loadFailed = ref(false)
 const mcpEndpoint = computed(() => `${window.location.hostname}:9000/mcp`)
 
 const configJson = computed(() => {
@@ -227,6 +234,7 @@ const promptDirty = computed(() => {
 
 async function reload() {
   if (!domainStore.currentDomain) return
+  loadFailed.value = false
   try {
     const [access, kbs] = await Promise.all([
       kbApi.getMcpAccess(domainStore.currentDomain),
@@ -246,11 +254,15 @@ async function reload() {
     instructions.value = access.instructions ?? ''
     freshKey.value = ''
   } catch (e) {
+    // 加载失败不能伪装成"未配置密钥"：那会诱导用户点"生成密钥"把现役
+    // 密钥轮换掉，正在运行的 Agent 全部断连（2026-08-31 前端审查 M8）。
+    loadFailed.value = true
     ElMessage.error(await apiErrorDetail(e))
   }
 }
 
 async function rotate() {
+  if (loadFailed.value || status.value === null) return
   rotating.value = true
   try {
     const r = await kbApi.rotateMcpKey()

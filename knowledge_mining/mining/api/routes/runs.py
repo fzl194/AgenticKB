@@ -79,6 +79,8 @@ def _frozen_workflow_summary(
         return None
     summary = {
         "id": run.get("workflow_id") or manifest.get("workflowId"),
+        "name": manifest.get("workflowName"),
+        "template_key": manifest.get("templateKey"),
         "version": run.get("workflow_version") or manifest.get("workflowVersion"),
         "version_id": run.get("workflow_version_id"),
         "graph_hash": run.get("workflow_graph_hash") or manifest.get("graphHash"),
@@ -94,6 +96,77 @@ def _frozen_workflow_summary(
             "required_completion": execution.get("requiredCompletion") or [],
         })
     return summary
+
+
+_TERMINAL_NODE_STATUSES = {
+    "completed", "failed", "skipped", "fallback", "not_applicable",
+}
+_SUCCESS_NODE_STATUSES = {
+    "completed", "skipped", "fallback", "not_applicable",
+}
+_FULL_PROGRESS_RUN_STATUSES = {"completed"}
+
+
+def _workflow_progress(
+    *, manifest: dict[str, Any], node_rows: list[dict[str, Any]],
+    executable_documents: int, run_status: str,
+) -> dict[str, Any]:
+    """Compute progress from the frozen execution plan and latest node attempts."""
+    execution = manifest.get("executionPlan") or {}
+    input_order = list(execution.get("inputOrder") or ())
+    document_order = list(execution.get("documentOrder") or ())
+    global_order = list(execution.get("globalOrder") or ())
+    expected_units = (
+        len(input_order) + len(global_order)
+        + len(document_order) * max(0, int(executable_documents or 0))
+    )
+
+    latest: dict[tuple[str | None, str], dict[str, Any]] = {}
+    for row in node_rows:
+        key = (row.get("run_document_id"), str(row.get("node_id") or ""))
+        current = latest.get(key)
+        if current is None or int(row.get("attempt_no") or 0) >= int(
+            current.get("attempt_no") or 0
+        ):
+            latest[key] = row
+
+    completed_units = sum(
+        1 for row in latest.values()
+        if row.get("status") in _TERMINAL_NODE_STATUSES
+    )
+    stage_summary: dict[str, dict[str, int]] = {}
+    for row in latest.values():
+        operator_type = str(row.get("operator_type") or row.get("node_id") or "")
+        bucket = stage_summary.setdefault(operator_type, {"done": 0, "failed": 0})
+        if row.get("status") in _SUCCESS_NODE_STATUSES:
+            bucket["done"] += 1
+        elif row.get("status") == "failed":
+            bucket["failed"] += 1
+
+    active_rows = [
+        row for row in latest.values()
+        if row.get("status") in ("started", "running", "paused")
+    ]
+    active_rows.sort(key=lambda row: str(row.get("started_at") or ""))
+    current_stage = (
+        str(active_rows[-1].get("operator_type") or active_rows[-1].get("node_id"))
+        if active_rows else None
+    )
+    if run_status in _FULL_PROGRESS_RUN_STATUSES:
+        progress_percent = 100.0
+    elif expected_units:
+        progress_percent = min(
+            99.9, round(completed_units / expected_units * 100, 1),
+        )
+    else:
+        progress_percent = 0.0
+    return {
+        "expected_units": expected_units,
+        "completed_units": completed_units,
+        "progress_percent": progress_percent,
+        "current_stage": current_stage,
+        "stage_summary": stage_summary,
+    }
 
 
 class CancelRunResponse(BaseModel):
@@ -265,29 +338,15 @@ async def get_run(run_id: str, request: Request, domain: str = Query(..., min_le
         return result
 
 
-# 算子化工作流(execution_engine=workflow)逐模块事件映射到 PipelineFlow 的 12 阶段名。
-# 工作流节点事件写 mining_workflow_node_events，传统 StreamingPipeline 写 mining_run_stage_events；
-# get_run_stages 合并两表，让流水线可视化对两种执行引擎都生效。
-_WORKFLOW_NODE_TO_STAGES: dict[str, list[str]] = {
-    "parse_segment": ["parse", "segment"],
-    "enrich": ["enrich"],
-    "contextual_retrieval_enrich": ["discourse"],
-    "discourse_line": ["discourse"],
-    "retrieval_unit_build": ["retrieval_units"],
-    "embedding": ["embedding"],
-    "asset_persist": ["db_write"],
-    "entity_extract": ["entity_extract"],
-    "entity_resolve": ["resolve"],
-    "entity_relation_extract": ["entity_relations"],
-    "graph_write": ["graph_write"],
-    # input_ingest / mining_finalize / ontology_induction / *_review_gate 无对应 12 阶段槽位，跳过。
-}
 _WORKFLOW_NODE_STATUS_MAP: dict[str, str] = {
     "completed": "completed",
     "started": "started",
     "running": "started",
     "failed": "failed",
-    # not_applicable / skipped 不发，对应阶段保持 pending（灰），避免被误判为 running。
+    "skipped": "skipped",
+    "fallback": "fallback",
+    "not_applicable": "not_applicable",
+    "paused": "paused",
 }
 
 
@@ -295,9 +354,8 @@ _WORKFLOW_NODE_STATUS_MAP: dict[str, str] = {
 async def get_run_stages(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get stage timeline for a run.
 
-    合并 mining_run_stage_events（传统引擎：assemble_build/validate_build 等全局阶段）与
-    mining_workflow_node_events（算子化引擎：parse_segment/enrich/embedding 等逐模块），
-    后者按算子类型映射到 PipelineFlow 认得的阶段名。
+    合并 legacy stage events 与真实 workflow node events。Workflow 事件直接
+    暴露冻结算子类型，不再映射到旧 12 阶段模型。
     """
     pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
     await _require_run_domain(pool, run_id, domain)
@@ -312,32 +370,34 @@ async def get_run_stages(run_id: str, request: Request, domain: str = Query(...,
         )
         rows = [dict(r) for r in await cur.fetchall()]
         cur = await conn.execute(
-            "SELECT node_id, operator_type, status, started_at, duration_ms, "
-            "error_message, run_document_id "
+            "SELECT node_id, operator_type, status, attempt_no, started_at, "
+            "duration_ms, error_message, run_document_id "
             "FROM mining_workflow_node_events WHERE run_id = %s "
             "ORDER BY started_at",
             [run_id],
         )
         node_rows = await cur.fetchall()
 
-    for nr in node_rows:
-        op = nr["operator_type"] or nr["node_id"]
-        status = _WORKFLOW_NODE_STATUS_MAP.get(nr["status"])
+    for node in node_rows:
+        status = _WORKFLOW_NODE_STATUS_MAP.get(node["status"])
         if status is None:
             continue
-        for stage_name in _WORKFLOW_NODE_TO_STAGES.get(op, []):
-            rows.append({
-                "id": f"wf-{nr['node_id']}-{stage_name}-{nr['run_document_id'] or 'global'}",
-                "run_id": run_id,
-                "stage": stage_name,
-                "status": status,
-                "created_at": nr["started_at"],
-                "duration_ms": nr["duration_ms"],
-                "output_summary": None,
-                "error_message": nr["error_message"],
-                "run_document_id": nr["run_document_id"],
-            })
+        rows.append({
+            "id": (
+                f"wf-{node['node_id']}-{node['run_document_id'] or 'global'}-"
+                f"{node['attempt_no']}"
+            ),
+            "run_id": run_id,
+            "stage": node["operator_type"] or node["node_id"],
+            "status": status,
+            "created_at": node["started_at"],
+            "duration_ms": node["duration_ms"],
+            "output_summary": None,
+            "error_message": node["error_message"],
+            "run_document_id": node["run_document_id"],
+        })
 
+    rows.sort(key=lambda row: str(row.get("created_at") or ""))
     return {"run_id": run_id, "stages": rows}
 
 
@@ -456,7 +516,8 @@ async def get_run_progress(run_id: str, request: Request, domain: str = Query(..
     async with pool.connection() as conn:
         # Verify run exists
         run_cur = await conn.execute(
-            "SELECT id, status, current_stage, total_documents FROM mining_runs "
+            "SELECT id, status, current_stage, total_documents, execution_engine, "
+            "workflow_manifest_json FROM mining_runs "
             "WHERE id = %s AND domain = %s", [run_id, require_domain(domain)]
         )
         run = await run_cur.fetchone()
@@ -471,6 +532,14 @@ async def get_run_progress(run_id: str, request: Request, domain: str = Query(..
         )
         doc_rows = await doc_cur.fetchall()
         status_counts = {r["status"]: r["cnt"] for r in doc_rows}
+        executable_cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM mining_run_documents "
+            "WHERE run_id = %s AND action IN ('NEW', 'UPDATE')",
+            [run_id],
+        )
+        executable_documents = int(
+            (await executable_cur.fetchone())["n"] or 0
+        )
 
         # Stage summary: for each stage, count completed/failed
         stage_cur = await conn.execute(
@@ -516,6 +585,16 @@ async def get_run_progress(run_id: str, request: Request, domain: str = Query(..
         )
         global_done_stages = {r["stage"] for r in await global_cur.fetchall()}
 
+        node_rows: list[dict[str, Any]] = []
+        if run.get("execution_engine") == "workflow":
+            node_cur = await conn.execute(
+                "SELECT node_id, operator_type, run_document_id, status, "
+                "attempt_no, started_at FROM mining_workflow_node_events "
+                "WHERE run_id = %s",
+                [run_id],
+            )
+            node_rows = [dict(row) for row in await node_cur.fetchall()]
+
     total = run["total_documents"] or 0
     completed = status_counts.get("committed", 0)
     failed = status_counts.get("failed", 0)
@@ -535,6 +614,19 @@ async def get_run_progress(run_id: str, request: Request, domain: str = Query(..
         progress_percent = 100.0
     elif progress_percent >= 100.0:
         progress_percent = 99.9
+
+    if run.get("execution_engine") == "workflow" and isinstance(
+        run.get("workflow_manifest_json"), dict
+    ):
+        workflow_progress = _workflow_progress(
+            manifest=run["workflow_manifest_json"],
+            node_rows=node_rows,
+            executable_documents=executable_documents,
+            run_status=run["status"],
+        )
+        progress_percent = workflow_progress["progress_percent"]
+        current_stage = workflow_progress["current_stage"]
+        stage_summary = workflow_progress["stage_summary"]
 
     return {
         "run_id": run_id,
@@ -619,9 +711,31 @@ async def get_run_document_stages(
             "ORDER BY created_at",
             [run_id, doc_id],
         )
-        rows = await cur.fetchall()
+        rows = [dict(row) for row in await cur.fetchall()]
+        cur = await conn.execute(
+            "SELECT node_id, operator_type, status, attempt_no, started_at, duration_ms, "
+            "error_message FROM mining_workflow_node_events "
+            "WHERE run_id = %s AND run_document_id = %s ORDER BY started_at",
+            [run_id, doc_id],
+        )
+        for node in await cur.fetchall():
+            status = _WORKFLOW_NODE_STATUS_MAP.get(node["status"])
+            if status is None:
+                continue
+            rows.append({
+                "id": f"wf-{node['node_id']}-{doc_id}-{node['attempt_no']}",
+                "run_id": run_id,
+                "run_document_id": doc_id,
+                "stage": node["operator_type"] or node["node_id"],
+                "status": status,
+                "created_at": node["started_at"],
+                "duration_ms": node["duration_ms"],
+                "output_summary": None,
+                "error_message": node["error_message"],
+            })
 
-    return {"run_id": run_id, "document_id": doc_id, "stages": [dict(r) for r in rows]}
+    rows.sort(key=lambda row: str(row.get("created_at") or ""))
+    return {"run_id": run_id, "document_id": doc_id, "stages": rows}
 
 
 @router.get("/{run_id}/documents/{doc_id}/artifacts", dependencies=[Depends(require_run_read)])

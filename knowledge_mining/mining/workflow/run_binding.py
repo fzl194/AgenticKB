@@ -53,6 +53,8 @@ class WorkflowRunBinder:
             upload_batch_id=upload_batch_id,
             config_fingerprint=self.config_fingerprint(),
         )
+        manifest["workflowName"] = version.get("workflow_name")
+        manifest["templateKey"] = version.get("template_key")
         manifest["runOverrides"] = deepcopy(run_overrides or {})
         return WorkflowRunBinding(
             workflow_id=version["workflow_id"],

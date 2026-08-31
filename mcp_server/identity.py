@@ -65,17 +65,13 @@ class IdentityError(Exception):
     """无钥/错钥/后端不可达。message 面向 Agent（中文），可直接作为工具错误返回。"""
 
 
-#: MCP 工具族七件套（2026-08-31 用户拍板"功能类似必须合并"）：
-#: - get_content = get_evidence + get_document（读取原文/文件内容，ref 分流 ev_/doc_）
-#: - browse_knowledge = list_knowledge_bases + list_documents（domain→库→文档层级浏览）
+#: MCP 工具族三件套（2026-08-31 用户两轮拍板"功能类似必须合并"）：
+#: - get_knowledge = get_content + browse_knowledge + inspect_knowledge +
+#:   navigate_structure + query_structured_asset（一切读取行为，ref/库分流）
 #: 与 mcp_access_service.MCP_TOOL_NAMES 一一对应。
 TOOL_NAMES = frozenset({
     "search_knowledge",
-    "get_content",
-    "browse_knowledge",
-    "inspect_knowledge",
-    "navigate_structure",
-    "query_structured_asset",
+    "get_knowledge",
     "upload_document",
 })
 
@@ -135,11 +131,11 @@ class Identity:
             raise IdentityError(
                 "未指定 domain，且你的开放知识库跨越多个知识域："
                 f"{'、'.join(self.domains)}。请从中选择一个作为 domain 参数重试"
-                "（可用 browse_knowledge 浏览各域下的知识库）。"
+                "（可用 get_knowledge 不带参数浏览各域下的知识库）。"
             )
         raise IdentityError(
             "无法确定默认知识域：请显式指定 domain 参数"
-            "（可用 browse_knowledge 查看你开放的知识库）。"
+            "（可用 get_knowledge 不带参数查看你开放的知识库）。"
         )
 
 

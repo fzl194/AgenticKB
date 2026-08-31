@@ -22,27 +22,28 @@ class McpAccessError(KbError):
 KEY_PREFIX_TAG = "kbm_"
 _KEY_RANDOM_BYTES = 32
 
-#: MCP 工具族七件套（2026-08-31 用户拍板"功能类似必须合并"）——open_tools
+#: MCP 工具族三件套（2026-08-31 用户两轮拍板"功能类似必须合并"）——open_tools
 #: 白名单与描述键的校验基线，与 mcp_server 的工具注册一一对应：
-#: - get_content = get_evidence + get_document（读取原文/文件内容）
-#: - browse_knowledge = list_knowledge_bases + list_documents（层级浏览）
+#: - get_knowledge = get_content + browse_knowledge + inspect_knowledge +
+#:   navigate_structure + query_structured_asset（一切读取行为）
 MCP_TOOL_NAMES = frozenset({
     "search_knowledge",
-    "get_content",
-    "browse_knowledge",
-    "inspect_knowledge",
-    "navigate_structure",
-    "query_structured_asset",
+    "get_knowledge",
     "upload_document",
 })
 
-#: 工具族合并改名映射（2026-08-31 9→7）：旧名 → 新名。任一旧源开启即新工具
-#: 开启；全部旧源都不在清单（=显式关闭）则新工具不开启（关闭语义优先）。
+#: 工具族合并改名映射（2026-08-31 两轮 9→7→3）：旧名 → 新名。任一旧源开启
+#: 即新工具开启；全部旧源都不在清单（=显式关闭）则新工具不开启（关闭语义优先）。
 _RENAMED_TOOLS = {
-    "get_evidence": "get_content",
-    "get_document": "get_content",
-    "list_knowledge_bases": "browse_knowledge",
-    "list_documents": "browse_knowledge",
+    "get_evidence": "get_knowledge",
+    "get_document": "get_knowledge",
+    "list_knowledge_bases": "get_knowledge",
+    "list_documents": "get_knowledge",
+    "get_content": "get_knowledge",
+    "browse_knowledge": "get_knowledge",
+    "inspect_knowledge": "get_knowledge",
+    "navigate_structure": "get_knowledge",
+    "query_structured_asset": "get_knowledge",
 }
 
 

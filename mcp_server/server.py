@@ -1,4 +1,4 @@
-"""FastMCP 3.x server —— 用户级 MCP（2026-08-31 工具族收敛：七件套）。
+"""FastMCP 3.x server —— 用户级 MCP（2026-08-31 工具族收敛：三件套）。
 
 一个服务进程，按密钥"变脸"：每个用户看到自己的工具开关、自己的开放库、
 自己改过的提示词与工具描述。鉴权/个性化统一在 middleware 层：
@@ -7,11 +7,11 @@
 - on_list_tools：按开关过滤 + 描述文案替换
 - on_call_tool：开关检查；identity 注入 ContextVar 供工具函数取用
 
-工具族（用户拍板"功能类似只是维度/层级不同必须合并"）：
+工具族（用户拍板"功能类似只是维度/层级不同必须合并"——第二轮收敛到三件套）：
 - search_knowledge：唯一检索入口（domain 可免传——单域自动默认，多域报错带清单）
-- get_content：读取内容（合并 get_evidence + get_document；ev_ 证据展开 / doc_ 整文分页）
-- browse_knowledge：层级浏览（合并 list_knowledge_bases + list_documents；域→库→文档）
-- inspect_knowledge / navigate_structure / query_structured_asset：结构三件（不变）
+- get_knowledge：一切读取行为（ref 分流 ev_/doc_/st_ + 层级浏览 + 能力报告默认），
+  合并了 get_content / browse_knowledge / inspect_knowledge / navigate_structure /
+  query_structured_asset 五件——Agent 只需知道"有了 ref 或库名就调它"
 - upload_document：上传（不变）
 """
 from __future__ import annotations
@@ -41,21 +41,26 @@ from mcp_server.schemas import SearchInput
 DEFAULT_INSTRUCTIONS = """\
 你是多领域知识证据检索服务（用户级接入：调用必须携带 Bearer 密钥）。
 
-知识按三层组织：知识域（domain）→ 知识库（knowledge base）→ 文档（document）。
-密钥主人决定开放哪些知识库；一台部署通常只有一个 domain。
+只有三个工具：search_knowledge 模糊找、get_knowledge 深入读、upload_document 上传。
 
-检索从 search_knowledge 开始：query 是用户原问题，domain 可不传——开放库只覆盖
-一个域时自动使用该域；跨多域时返回错误并列出可用域，从清单中选一个重试即可。
+知识按三层组织：知识域（domain）→ 知识库（knowledge base）→ 文档（document）。
+密钥主人决定开放哪些知识库；一台部署通常只有一个 domain——domain 参数可不传，
+开放库只覆盖一个域时自动使用；跨多域时返回错误并列出可用域，选一个重试。
 不要根据问题内容猜测领域。
 
-检索返回证据列表（evidence），每条带 ref / type / content / source。工作流是
-渐进式的：先 search_knowledge 模糊找 → 对结果里的 structure_ref / document_ref 用
-inspect_knowledge 看真实能力（可导航关系、表格 schema、可过滤/聚合字段）→ 需要
-精确结构就用 navigate_structure（章节/父子/前后导航）或 query_structured_asset
-（对表格过滤/排序/聚合）→ 证据内容被截断（truncated=true）或需要读整篇文档时用
-get_content（ev_ ref 展开原文，doc_ ref 分页读整文）。要浏览自己有哪些域/库/文件
-用 browse_knowledge。工具返回的错误带稳定 code（如 unknown_field / out_of_scope /
-expired_ref），按提示修正参数重试即可。
+工作流：先用 get_knowledge 不带参数看自己有什么（返回域→库树），或直接
+search_knowledge 模糊检索（返回证据列表 evidence，每条带 ref/type/content/source）。
+之后一切深入都走 get_knowledge——它按你给的入口自动分流：
+- ref 是 ev_（search 结果 evidence[].ref）：给内容原文，truncated=true 时加 mode
+  选更大粒度 auto/exact/window/parent/whole_document；
+- ref 是 doc_（source.document_ref）：limit/cursor 分页读整篇文档；
+- ref 是 st_（structure_ref）：只传 ref 给能力报告（可导航关系、表格 schema、
+  可过滤聚合字段）；要查表格传 query（DSL：select/where/order_by/limit/
+  aggregate，字段名以能力报告的 columns 为准）；要沿结构走传 relation
+  （parent/children/previous/next/ancestors/descendants/container/caption/
+  footnotes/references）。
+工具返回的错误带稳定 code（如 unknown_field / out_of_scope / expired_ref），
+按提示修正参数重试即可。
 
 回答时应区分证据直接支持的内容、基于证据的推断，以及当前缺失或不确定的信息；
 不得编造命令、参数、约束、依赖或步骤。
@@ -175,7 +180,7 @@ def _serving_call(call, *args, **kwargs):
             if allowed:
                 hint = f"可用字段：{'、'.join(str(a) for a in allowed[:20])}。"
         elif exc.code == "structured_query_unavailable":
-            hint = "可退回 search_knowledge / get_content。"
+            hint = "可退回 search_knowledge，或只传 ref 给 get_knowledge 看能力报告。"
         elif exc.code in ("expired_ref", "out_of_scope"):
             hint = "请重新 search_knowledge 获取新 ref。"
         elif exc.code == "result_too_large":
@@ -235,156 +240,151 @@ def search_knowledge(
 
 
 @mcp.tool()
-def get_content(
-    ref: str,
-    domain: str | None = None,
-    kb_names: list[str] | None = None,
-    mode: str | None = None,
-    limit: int | None = None,
-    cursor: str | None = None,
-) -> dict:
-    """读取内容原文——按 ref 类型自动选择方式，一个工具覆盖两种读取需求。
-
-    - **ev_ ref**（search 结果 evidence[].ref）：取该条证据的完整/更大粒度原文。
-      search 结果 truncated=true 时用；可用 mode 控制粒度
-      auto|exact|window|parent|whole_document（默认 auto=预算内就大）。
-    - **doc_ ref**（search 结果 source.document_ref 或 browse_knowledge）：分页读取
-      整个文件的结构化章节（章节 outline + 切片分页）。可用 limit（每页切片数
-      ≤200，默认 100）；把响应里的 cursor 原样传回取下一页。
-
-    Args:
-        ref: ev_ 或 doc_ 开头的引用，原样传上游工具返回的值。st_ 结构引用不属于
-            本工具——结构导航用 navigate_structure，能力查询用 inspect_knowledge。
-        domain: 可选知识域（不传 = 开放库唯一域自动；跨多域时报错带清单）。
-        kb_names: 可选库范围（默认全部开放库）。
-        mode: 仅 ev_ ref 有效：展开粒度（见上）。
-        limit: 仅 doc_ ref 有效：每页切片数（≤200，默认 100）。
-        cursor: 仅 doc_ ref 有效：上一页返回的 cursor，原样传回翻页。
-    """
-    ident = _identity()
-    kb_ids = _scope_kbs(ident, kb_names)
-    resolved = _domain(ident, domain)
-    ref = str(ref or "")
-    if ref.startswith("ev_"):
-        return _serving_call(
-            backend.get_evidence, ident.username, kb_ids, resolved, ref, mode)
-    if ref.startswith("doc_"):
-        return _serving_call(
-            backend.get_document, ident.username, kb_ids, resolved, ref, limit, cursor)
-    raise ToolError(
-        f"get_content 只接受 ev_（证据）或 doc_（文档）ref，收到 {ref[:16]!r}。"
-        "结构引用（st_）请用 navigate_structure / inspect_knowledge。"
-    )
-
-
-@mcp.tool()
-def inspect_knowledge(
-    ref: str, domain: str | None = None, kb_names: list[str] | None = None,
-) -> dict:
-    """查看一个 ref 背后的真实能力：可导航关系、表格 schema、可过滤/聚合字段。
-
-    输入 search 结果里的任意 ref（evidence[].ref / structure_ref / source.document_ref）
-    都可以。返回 capabilities（can_navigate / can_query_structured / can_aggregate）、
-    允许的 relations、表格资产清单（带可直接用于 query_structured_asset 的 asset ref）
-    与字段 display name/type/operations。**下钻前先 inspect**——比盲试省得多。
-
-    Args:
-        ref: ev_/st_/doc_ 任意一种 ref。
-        domain: 可选知识域（不传 = 开放库唯一域自动；跨多域时报错带清单）。
-        kb_names: 可选库范围。
-    """
-    ident = _identity()
-    kb_ids = _scope_kbs(ident, kb_names)
-    resolved = _domain(ident, domain)
-    return _serving_call(backend.inspect_knowledge, ident.username, kb_ids, resolved, ref)
-
-
-@mcp.tool()
-def navigate_structure(
-    ref: str, relation: str, domain: str | None = None,
-    kb_names: list[str] | None = None, depth: int | None = None,
-    limit: int | None = None, cursor: str | None = None,
-) -> dict:
-    """沿白名单结构关系导航：st_ ref → 相邻/父子/祖先/后代节点摘要列表。
-
-    允许的 relation（先 inspect_knowledge 确认目标支持哪些）：
-    parent / children / previous / next / ancestors / descendants / container /
-    caption / footnotes / references。返回节点的公开 st_ ref，可继续导航。
-
-    Args:
-        ref: st_ 开头的结构引用（search 结果的 structure_ref 或上次导航结果）。
-        relation: 白名单关系之一。
-        domain: 可选知识域（不传 = 开放库唯一域自动；跨多域时报错带清单）。
-        kb_names: 可选库范围。
-        depth: ancestors/descendants 的层数（默认 1，上限 3）。
-        limit: 返回条数（默认 50，上限 200）。
-        cursor: 分页 cursor（原样传回上一页返回值）。
-    """
-    ident = _identity()
-    kb_ids = _scope_kbs(ident, kb_names)
-    resolved = _domain(ident, domain)
-    return _serving_call(backend.navigate_structure, ident.username, kb_ids, resolved,
-                         ref, relation, depth, limit, cursor)
-
-
-@mcp.tool()
-def query_structured_asset(
-    asset_ref: str, query: dict, domain: str | None = None,
-    kb_names: list[str] | None = None,
-) -> dict:
-    """对表格类资产做 schema-bound 精确查询：过滤/投影/排序/聚合（不是模糊搜索）。
-
-    字段名、类型、可用操作来自 inspect_knowledge（asset 的 columns[].name 与
-    operations），不是内部列名。未知字段/类型不符会返回带 code 的错误与可用字段清单，
-    按提示修正即可。
-
-    Args:
-        asset_ref: st_ 开头的表格资产引用（search 结果 structure_ref 或 inspect 返回
-            的 assets[].ref）。
-        query: 查询 DSL，例如 {"select": ["型号", "最大功耗"],
-            "where": [{"field": "最大功耗", "op": "lte", "value": 100}],
-            "order_by": [{"field": "最大功耗", "direction": "asc"}], "limit": 20}；
-            聚合用 {"aggregate": {"op": "avg", "field": "最大功耗"}, "where": [...]}。
-        domain: 可选知识域（不传 = 开放库唯一域自动；跨多域时报错带清单）。
-        kb_names: 可选库范围。
-    """
-    ident = _identity()
-    kb_ids = _scope_kbs(ident, kb_names)
-    resolved = _domain(ident, domain)
-    return _serving_call(backend.query_structured_asset, ident.username, kb_ids, resolved,
-                         asset_ref, query)
-
-
-@mcp.tool()
-def browse_knowledge(
+def get_knowledge(
+    ref: str | None = None,
     kb_name: str | None = None,
     domain: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    mode: str | None = None,
+    relation: str | None = None,
+    query: dict | None = None,
+    depth: int | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+    offset: int | None = None,
+    kb_names: list[str] | None = None,
 ) -> dict:
-    """浏览知识层级：知识域（domain）→ 知识库（knowledge base）→ 文档（document）。
+    """深入读取知识——一切读取行为都在这一个工具里，按你给的入口自动分流。
 
-    一个工具下钻三层，传什么看什么：
-    - 不传 kb_name：列出密钥主人开放的知识库，按知识域分组（可用 domain 参数
-      只看某个域）。返回含每个库的名称/描述——检索时用 kb_names 收窄就用这些名。
-      跨多域拿不准 domain 时先看这里。
-    - 传 kb_name：列出该知识库里的文件清单（名称/状态/大小，分页）。
+    知识层级：知识域（domain）→ 知识库（knowledge base）→ 文档（document）→
+    证据（evidence）→ 结构（structure）。入口优先级：ref > kb_name > 空。
+
+    分流矩阵（返回都带 "view" 字段自标识）：
+    | 你给的入口                        | 行为                     | view            |
+    |-----------------------------------|--------------------------|-----------------|
+    | 什么都不传                        | 域→库 顶层浏览           | kb_tree         |
+    | 只传 kb_name                      | 该库文件清单（分页）     | documents       |
+    | ref=ev_（mode 可选）              | 证据原文展开             | evidence_content|
+    | ref=doc_（limit/cursor 可选）     | 整篇文档分页             | document_content|
+    | 只传 ref=st_                      | **能力报告**（默认）：   | capabilities    |
+    |                                   | 可导航关系/表格 schema/  |                 |
+    |                                   | 可过滤聚合字段+下一步提示|                 |
+    | ref=st_ + query                   | 表格精确查询（DSL）      | table_rows/     |
+    |                                   |                          | aggregate       |
+    | ref=st_ + relation                | 结构关系导航             | navigation      |
+
+    ev_/doc_ 是内容引用——只传 ref 就直接给内容（默认粒度/首页）；st_ 是结构
+    引用——只传 ref 给能力报告，告诉你 relation/query 能传什么。ev_ 来自 search
+    结果 evidence[].ref（truncated=true 时加 mode 取全）；doc_ 来自
+    source.document_ref；st_ 来自 structure_ref 或导航结果。
 
     Args:
-        kb_name: 知识库名称（顶层返回的 name）。传了 = 列该库文档；不传 = 列域与库。
-        domain: 仅顶层有效：只看该知识域下的库。
-        limit: 每页条数（≤200，仅列文档时生效）。
-        offset: 分页偏移（仅列文档时生效）。
+        ref: 上游返回的引用。ev_ → 可用 mode；doc_ → 可用 limit/cursor；
+            st_ → 可用 query 或 relation；只传它 = 能力报告。
+        kb_name: 要看的目标知识库名（顶层浏览返回的 name）——传了列该库文件清单，
+            不能与 ref 同时传。
+        domain: 知识域。ref 分支 = 路由域（不传自动：单域默认，跨多域报错带清单）；
+            顶层分支 = 只看该域。
+        mode: 仅 ref=ev_ 有效：展开粒度 auto|exact|window|parent|whole_document
+            （默认 auto=预算内就大：父章节/整文优先）。truncated=true 的证据取全用。
+        relation: 仅 ref=st_ 有效：parent/children/previous/next/ancestors/
+            descendants/container/caption/footnotes/references 之一（能力报告的
+            relations 列出目标支持哪些）。
+        query: 仅 ref=st_（表格资产）有效：DSL {"select": ["列名"],
+            "where": [{"field":"列名","op":"lte","value":100}],
+            "order_by": [{"field":"列名","direction":"asc"}], "limit": 20}；
+            聚合 {"aggregate": {"op":"avg","field":"列名"}, "where":[…]}。
+            字段名以能力报告 assets[].columns[].name 为准——不是模糊搜索。
+        depth: 仅 relation=ancestors/descendants：层数（默认 1，上限 3）。
+        limit: 条数上限：doc_ 每页切片（≤200 默认100）/ navigation 条数（≤200
+            默认50）/ documents 每页（≤200 默认50）。
+        cursor: 分页游标：上一页返回的 cursor 原样传回（doc_ 与 navigation）。
+        offset: 仅 documents 视图：分页偏移。
+        kb_names: 仅 ref 分支：限定库范围（与 search_knowledge 的 kb_names 同义，
+            默认全部开放库）。注意与 kb_name（浏览目标库）是两回事。
     """
     ident = _identity()
-    if kb_name and str(kb_name).strip():
-        kb_id = _resolve_open_kb(ident, kb_name)
-        try:
-            return backend.list_documents(ident.username, kb_id, limit, offset)
-        except backend.ToolBackendError as exc:
-            raise ToolError(str(exc)) from None
-    # 顶层：开放库按域分组（mining 端点 ∩ 实时可见，含描述；不回内部 id——
-    # Agent 只需要 name（kb_names 参数按名称）与 domain（检索参数））
+    has_ref = bool(ref and str(ref).strip())
+    has_kb = bool(kb_name and str(kb_name).strip())
+    if has_ref and has_kb:
+        raise ToolError("ref 与 kb_name 不能同时传：ref=深入某个引用，kb_name=浏览某个库。")
+    if has_ref:
+        return _get_by_ref(ident, str(ref), domain, kb_names,
+                           mode, relation, query, depth, limit, cursor)
+    if has_kb:
+        return _list_kb_documents(ident, str(kb_name), limit, offset)
+    return _browse_top(ident, domain)
+
+
+def _get_by_ref(ident: Identity, ref: str, domain: str | None,
+                kb_names: list[str] | None, mode: str | None,
+                relation: str | None, query: dict | None,
+                depth: int | None, limit: int | None, cursor: str | None) -> dict:
+    """ref 分流：ev_ 内容 / doc_ 分页 / st_ 按 query|relation|能力报告。"""
+    kb_ids = _scope_kbs(ident, kb_names)
+    resolved = _domain(ident, domain)
+    username = ident.username
+
+    if ref.startswith("ev_"):
+        if relation or query:
+            raise ToolError(
+                "ev_ 是证据引用，只支持原文展开（mode 参数）。要导航结构或查表格，"
+                "请改传该证据的 structure_ref（st_）。"
+            )
+        out = _serving_call(backend.get_evidence, username, kb_ids, resolved, ref, mode)
+        return {**out, "view": "evidence_content"}
+
+    if ref.startswith("doc_"):
+        if relation or query or mode:
+            raise ToolError(
+                "doc_ 是文档引用，只支持分页读取（limit/cursor）。要导航结构或查表格，"
+                "请改传 search 结果里的 structure_ref（st_）。"
+            )
+        out = _serving_call(
+            backend.get_document, username, kb_ids, resolved, ref, limit, cursor)
+        return {**out, "view": "document_content"}
+
+    # st_（或其他形状）：query > relation > 能力报告
+    if query is not None:
+        if relation:
+            raise ToolError(
+                "query 与 relation 不能同时传：query=查这个表格，relation=沿结构导航。"
+            )
+        out = _serving_call(
+            backend.query_structured_asset, username, kb_ids, resolved, ref, query)
+        return {**out, "view": (
+            "aggregate" if isinstance(query, dict) and query.get("aggregate")
+            else "table_rows")}
+    if relation and str(relation).strip():
+        if mode:
+            raise ToolError("mode（展开粒度）只用于 ev_ 证据引用，与 relation 互斥。")
+        out = _serving_call(
+            backend.navigate_structure, username, kb_ids, resolved,
+            ref, str(relation), depth, limit, cursor)
+        return {**out, "view": "navigation"}
+    if mode:
+        raise ToolError(
+            "mode（展开粒度）只用于 ev_ 证据引用。st_ 结构引用请用 relation 导航、"
+            "query 查表格，或只传 ref 看能力报告。"
+        )
+    out = _serving_call(backend.inspect_knowledge, username, kb_ids, resolved, ref)
+    return {**out, "view": "capabilities"}
+
+
+def _list_kb_documents(ident: Identity, kb_name: str,
+                       limit: int | None, offset: int | None) -> dict:
+    kb_id = _resolve_open_kb(ident, kb_name)
+    try:
+        out = backend.list_documents(ident.username, kb_id,
+                                     limit if limit is not None else 50,
+                                     offset or 0)
+    except backend.ToolBackendError as exc:
+        raise ToolError(str(exc)) from None
+    return {**out, "view": "documents"}
+
+
+def _browse_top(ident: Identity, domain: str | None) -> dict:
+    """顶层：开放库按域分组（mining 端点 ∩ 实时可见，含描述；不回内部 id——
+    Agent 只需要 name（检索/浏览参数按名称）与 domain（检索参数））。"""
     try:
         listing = backend.list_knowledge_bases(ident.username)
     except backend.ToolBackendError as exc:
@@ -410,12 +410,9 @@ def browse_knowledge(
                 f"知识域 {wanted!r} 下没有开放的知识库。当前有库的知识域：{available}。"
             )
     return {
+        "view": "kb_tree",
         "domains": [
-            {
-                "domain": d,
-                "knowledge_bases": groups[d],
-            }
-            for d in order
+            {"domain": d, "knowledge_bases": groups[d]} for d in order
         ],
         "default_domain": order[0] if len(order) == 1 else None,
         "hint": (
@@ -434,7 +431,7 @@ def upload_document(kb_name: str, filename: str, content_b64: str) -> dict:
     检索到。上传需要对该库有编辑权限。
 
     Args:
-        kb_name: 目标知识库名称（browse_knowledge 顶层返回的 name）。
+        kb_name: 目标知识库名称（get_knowledge 顶层浏览返回的 name）。
         filename: 文件名（含扩展名，如 "手册.pdf"；不含路径）。
         content_b64: 文件内容的 base64 编码。
     """

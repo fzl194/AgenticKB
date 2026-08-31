@@ -1,13 +1,11 @@
-"""2026-08-31 工具族收敛（9→7）与 domain 免传的纯逻辑契约。
+"""2026-08-31 工具族收敛（两轮 9→7→3）的纯逻辑契约。
 
 覆盖：
 - Identity.resolve_domain 三态（唯一域自动 / 多域带清单报错 / 显式优先且校验）
-- get_content 按 ref 前缀分流（ev_ 证据展开 / doc_ 整文分页 / st_ 拒绝）
-- browse_knowledge 层级（顶层按域分组 / 传 kb_name 列文档 / domain 过滤）
+- get_knowledge 分流矩阵：kb_tree / documents / capabilities / evidence_content /
+  document_content / table_rows / navigation 七种 view，与参数互斥的显式报错
 """
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -69,95 +67,116 @@ def test_no_domain_info_requires_explicit() -> None:
     assert bare.resolve_domain("odn") == "odn"
 
 
-# ── get_content 分流 ─────────────────────────────────────────────────────
+# ── get_knowledge 分流矩阵 ───────────────────────────────────────────────
 
 
-def test_get_content_routes_by_ref_prefix(monkeypatch) -> None:
+def _patch_backend(monkeypatch, ident=SINGLE):
+    """替身 identity 与五个 backend 通道；返回调用记录。"""
     calls: list[tuple] = []
-    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
+    monkeypatch.setattr(server, "_identity", lambda: ident)
+
+    def note(kind, ret=None):
+        def _fn(*args):
+            calls.append((kind,) + args)
+            return ret if ret is not None else {}
+        return _fn
+
+    monkeypatch.setattr(server.backend, "get_evidence", note("evidence", {"content": "x"}))
+    monkeypatch.setattr(server.backend, "get_document", note("document", {"segments": []}))
+    monkeypatch.setattr(server.backend, "inspect_knowledge", note("inspect", {"capabilities": {}}))
+    monkeypatch.setattr(server.backend, "navigate_structure", note("navigate", {"nodes": []}))
     monkeypatch.setattr(
-        server.backend, "get_evidence",
-        lambda username, kb_ids, domain, ref, mode=None:
-            calls.append(("ev", domain, ref, mode)) or {"content": "x"},
-    )
+        server.backend, "query_structured_asset", note("query", {"rows": []}))
     monkeypatch.setattr(
-        server.backend, "get_document",
-        lambda username, kb_ids, domain, ref, limit=None, cursor=None:
-            calls.append(("doc", domain, ref, limit, cursor)) or {"outline": []},
-    )
-
-    out = server.get_content("ev_ABC", None)
-    assert out == {"content": "x"}
-    out = server.get_content("doc_XYZ", None, limit=10, cursor="c1")
-    assert out == {"outline": []}
-    assert calls == [
-        ("ev", "cloud_core_network", "ev_ABC", None),
-        ("doc", "cloud_core_network", "doc_XYZ", 10, "c1"),
-    ]
-
-
-def test_get_content_rejects_structure_ref(monkeypatch) -> None:
-    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
-    with pytest.raises(ToolError, match="navigate_structure"):
-        server.get_content("st_ABC", None)
-
-
-# ── browse_knowledge 层级 ────────────────────────────────────────────────
-
-
-def _patch_listing(monkeypatch, kbs: list[dict]) -> None:
-    monkeypatch.setattr(server, "_identity", lambda: MULTI)
+        server.backend, "list_documents", note("docs", {"documents": []}))
     monkeypatch.setattr(
         server.backend, "list_knowledge_bases",
-        lambda username: {"knowledge_bases": kbs},
-    )
+        lambda username: {"knowledge_bases": [
+            {"id": "kb-1", "name": "网络手册库", "domain": "cloud_core_network"}]})
+    return calls
 
 
-def test_browse_top_level_groups_by_domain(monkeypatch) -> None:
-    _patch_listing(monkeypatch, [
-        {"id": "kb-1", "name": "网络手册库", "description": "核心网手册",
-         "domain": "cloud_core_network"},
-        {"id": "kb-2", "name": "通用库", "domain": "generic"},
-    ])
-    out = server.browse_knowledge()
-    assert [g["domain"] for g in out["domains"]] == [
-        "cloud_core_network", "generic"]
-    assert out["domains"][0]["knowledge_bases"] == [
-        {"name": "网络手册库", "description": "核心网手册"}]
-    # 内部 id 不暴露；default_domain 只在唯一域时给出
-    assert "id" not in out["domains"][0]["knowledge_bases"][0]
-    assert out["default_domain"] is None
+def test_bare_call_returns_kb_tree(monkeypatch) -> None:
+    _patch_backend(monkeypatch)
+    out = server.get_knowledge()
+    assert out["view"] == "kb_tree"
+    assert out["default_domain"] == "cloud_core_network"
+    assert out["domains"][0]["knowledge_bases"] == [{"name": "网络手册库"}]
 
 
-def test_browse_domain_filter_and_unknown(monkeypatch) -> None:
-    _patch_listing(monkeypatch, [
-        {"id": "kb-1", "name": "网络手册库", "domain": "cloud_core_network"},
-        {"id": "kb-2", "name": "通用库", "domain": "generic"},
-    ])
-    out = server.browse_knowledge(domain="generic")
-    assert [g["domain"] for g in out["domains"]] == ["generic"]
-    assert out["default_domain"] == "generic"
-    with pytest.raises(ToolError, match="没有开放的知识库.*generic"):
-        server.browse_knowledge(domain="odn")
+def test_kb_name_lists_documents(monkeypatch) -> None:
+    calls = _patch_backend(monkeypatch)
+    out = server.get_knowledge(kb_name="网络手册库", limit=10, offset=5)
+    assert out["view"] == "documents"
+    assert calls == [("docs", "alice", "kb-1", 10, 5)]
 
 
-def test_browse_with_kb_name_lists_documents(monkeypatch) -> None:
-    seen: list[tuple] = []
-    monkeypatch.setattr(server, "_identity", lambda: MULTI)
-    monkeypatch.setattr(
-        server.backend, "list_documents",
-        lambda username, kb_id, limit, offset:
-            seen.append((kb_id, limit, offset)) or {"documents": []},
-    )
-    out = server.browse_knowledge(kb_name="网络手册库", limit=10, offset=5)
-    assert out == {"documents": []}
-    assert seen == [("kb-1", 10, 5)]
+def test_bare_ref_semantics_per_ref_type(monkeypatch) -> None:
+    """ev_/doc_ 是内容引用（只传 ref 直接给内容）；st_ 是结构引用（给能力报告）。"""
+    calls = _patch_backend(monkeypatch)
+    assert server.get_knowledge(ref="ev_X")["view"] == "evidence_content"
+    assert server.get_knowledge(ref="doc_X")["view"] == "document_content"
+    assert server.get_knowledge(ref="st_X")["view"] == "capabilities"
+    assert [c[0] for c in calls] == ["evidence", "document", "inspect"]
 
 
-def test_tool_registry_is_the_seven_piece_family() -> None:
+def test_ev_ref_with_mode_returns_evidence_content(monkeypatch) -> None:
+    calls = _patch_backend(monkeypatch)
+    out = server.get_knowledge(ref="ev_ABC", mode="whole_document")
+    assert out["view"] == "evidence_content"
+    assert out["content"] == "x"
+    assert calls == [("evidence", "alice", ["kb-1"], "cloud_core_network", "ev_ABC", "whole_document")]
+
+
+def test_doc_ref_paginates(monkeypatch) -> None:
+    calls = _patch_backend(monkeypatch)
+    out = server.get_knowledge(ref="doc_ABC", limit=2, cursor="c1")
+    assert out["view"] == "document_content"
+    assert calls == [("document", "alice", ["kb-1"], "cloud_core_network", "doc_ABC", 2, "c1")]
+
+
+def test_st_ref_with_query_runs_structured_query(monkeypatch) -> None:
+    calls = _patch_backend(monkeypatch)
+    out = server.get_knowledge(ref="st_T", query={"select": ["列A"]})
+    assert out["view"] == "table_rows"
+    agg = server.get_knowledge(ref="st_T", query={"aggregate": {"op": "avg", "field": "列A"}})
+    assert agg["view"] == "aggregate"
+    assert calls[0] == ("query", "alice", ["kb-1"], "cloud_core_network", "st_T", {"select": ["列A"]})
+
+
+def test_st_ref_with_relation_navigates(monkeypatch) -> None:
+    calls = _patch_backend(monkeypatch)
+    out = server.get_knowledge(ref="st_N", relation="children", depth=1, limit=20)
+    assert out["view"] == "navigation"
+    assert calls == [("navigate", "alice", ["kb-1"], "cloud_core_network",
+                      "st_N", "children", 1, 20, None)]
+
+
+def test_parameter_conflicts_are_explicit_errors(monkeypatch) -> None:
+    _patch_backend(monkeypatch)
+    # ref 与 kb_name 互斥
+    with pytest.raises(ToolError, match="ref 与 kb_name 不能同时传"):
+        server.get_knowledge(ref="st_X", kb_name="网络手册库")
+    # ev_ 不支持导航/查表 → 指向 structure_ref
+    with pytest.raises(ToolError, match="structure_ref"):
+        server.get_knowledge(ref="ev_X", relation="children")
+    with pytest.raises(ToolError, match="structure_ref"):
+        server.get_knowledge(ref="ev_X", query={"select": []})
+    # doc_ 同理
+    with pytest.raises(ToolError, match="structure_ref"):
+        server.get_knowledge(ref="doc_X", relation="children")
+    # query 与 relation 互斥
+    with pytest.raises(ToolError, match="query 与 relation 不能同时传"):
+        server.get_knowledge(ref="st_X", relation="children", query={"select": []})
+    # mode 只对 ev_ 有效（不静默忽略）
+    with pytest.raises(ToolError, match="mode.*只用于 ev_"):
+        server.get_knowledge(ref="st_X", mode="whole_document")
+    with pytest.raises(ToolError, match="mode.*只用于 ev_"):
+        server.get_knowledge(ref="st_X", relation="children", mode="exact")
+
+
+def test_tool_registry_is_the_three_piece_family() -> None:
     from mcp_server.identity import TOOL_NAMES
     assert TOOL_NAMES == frozenset({
-        "search_knowledge", "get_content", "browse_knowledge",
-        "inspect_knowledge", "navigate_structure",
-        "query_structured_asset", "upload_document",
+        "search_knowledge", "get_knowledge", "upload_document",
     })

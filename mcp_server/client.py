@@ -364,7 +364,7 @@ def _search_via_paradigm(
                 "error": "kb_not_found",
                 "message": (
                     f"知识域 {inp.domain!r} 下没有可检索的知识库内容。"
-                    "请检查 domain 是否正确（可用 browse_knowledge 查看开放的知识域），"
+                    "请检查 domain 是否正确（可用 get_knowledge 不带参数查看开放的知识域），"
                     "或确认目标库已完成挖掘。"
                 ),
             }

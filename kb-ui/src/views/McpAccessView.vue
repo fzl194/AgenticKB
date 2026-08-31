@@ -148,17 +148,12 @@ import type { McpAccessStatus } from '@/types/kb'
 const kbApi = useKbApi()
 const domainStore = useDomainStore()
 
-/** 七件套（与后端 MCP_TOOL_NAMES 一致）；label 为默认文案摘要。
- * 2026-08-31 工具族收敛：get_content = get_evidence + get_document（读取原文/
- * 文件内容）；browse_knowledge = list_knowledge_bases + list_documents（域→库→
- * 文档层级浏览）。 */
+/** 三件套（与后端 MCP_TOOL_NAMES 一致）；label 为默认文案摘要。
+ * 2026-08-31 工具族两轮收敛：get_knowledge = get_content + browse_knowledge +
+ * inspect + navigate + query_structured（一切读取行为，ref/库分流，默认能力报告）。 */
 const ALL_TOOLS = [
-  { name: 'search_knowledge', label: '按开放库检索知识证据（domain 单域免传）' },
-  { name: 'get_content', label: '读取内容原文（ev_ 证据展开 / doc_ 整文分页）' },
-  { name: 'browse_knowledge', label: '浏览知识层级：域 → 知识库 → 文档' },
-  { name: 'inspect_knowledge', label: '渐进披露结构能力与表格资产' },
-  { name: 'navigate_structure', label: '按关系导航知识结构' },
-  { name: 'query_structured_asset', label: 'schema 化查询表格资产' },
+  { name: 'search_knowledge', label: '检索知识证据（domain 单域免传）' },
+  { name: 'get_knowledge', label: '深入读取：浏览层级 / 取原文 / 看能力 / 导航 / 查表格' },
   { name: 'upload_document', label: '上传文件入库（不自动挖掘）' },
 ] as const
 

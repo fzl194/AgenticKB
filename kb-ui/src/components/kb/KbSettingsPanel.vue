@@ -30,12 +30,12 @@
       </el-form>
     </div>
 
-    <div v-if="canWrite" class="kb-settings__danger">
+    <div v-if="canManageLifecycle" class="kb-settings__danger">
       <div class="kb-settings__danger-text">
         <div class="kb-settings__danger-title">删除知识库</div>
         <div class="kb-settings__danger-desc">
           软删除：知识库对所有人不可见；库内已上传文档与已挖掘知识保留，不会物理删除。
-          此操作不可在 UI 撤销。
+          删除后原名称可重新使用；历史数据仍保留。
         </div>
       </div>
       <el-button type="danger" plain :loading="deleting" @click="confirmDelete">
@@ -58,6 +58,9 @@ const emit = defineEmits<{ updated: []; deleted: [] }>()
 const kbApi = useKbApi()
 const saving = ref(false)
 const deleting = ref(false)
+const canManageLifecycle = computed(
+  () => props.kb.my_role === 'owner' || props.kb.my_role === 'admin',
+)
 
 const form = reactive<{
   name: string
@@ -108,7 +111,7 @@ async function save() {
 async function confirmDelete() {
   try {
     await ElMessageBox.confirm(
-      `确定删除知识库「${props.kb.name}」？该操作不可在 UI 撤销。`,
+      `确定删除知识库「${props.kb.name}」？删除后原名称可重新使用，历史数据仍保留。`,
       '删除知识库',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     )

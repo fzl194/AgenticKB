@@ -55,7 +55,6 @@ declare module 'vue' {
     EmptyState: typeof import('./src/components/common/EmptyState.vue')['default']
     EvidenceCard: typeof import('./src/components/search/EvidenceCard.vue')['default']
     ForceGraph: typeof import('./src/components/charts/ForceGraph.vue')['default']
-    FullTextDrawer: typeof import('./src/components/search/FullTextDrawer.vue')['default']
     Header: typeof import('./src/components/layout/Header.vue')['default']
     JsonSchemaParamForm: typeof import('./src/components/workflow/JsonSchemaParamForm.vue')['default']
     KbCard: typeof import('./src/components/dashboard/KbCard.vue')['default']

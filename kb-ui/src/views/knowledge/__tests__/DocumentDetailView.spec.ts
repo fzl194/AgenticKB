@@ -6,7 +6,6 @@ const api = vi.hoisted(() => ({
   getDocument: vi.fn(),
   getDocumentSegments: vi.fn(),
   getDocumentUnits: vi.fn(),
-  getDocumentRelations: vi.fn(),
   downloadDocument: vi.fn(),
   removeDocument: vi.fn(),
 }))
@@ -49,7 +48,6 @@ describe('DocumentDetailView lifecycle interactions', () => {
     api.getDocument.mockReset().mockResolvedValue(document)
     api.getDocumentSegments.mockReset().mockResolvedValue({ items: [], total: 0 })
     api.getDocumentUnits.mockReset().mockResolvedValue({ items: [], total: 0 })
-    api.getDocumentRelations.mockReset().mockResolvedValue({ items: [], total: 0 })
     api.downloadDocument.mockReset()
     api.removeDocument.mockReset()
     ui.confirm.mockReset().mockResolvedValue('confirm')
@@ -103,7 +101,6 @@ describe('DocumentDetailView lifecycle interactions', () => {
   it('does_not_let_an_old_segment_load_start_or_invalidate_new_domain_preloads', async () => {
     let resolveOldSegments!: (value: { items: unknown[]; total: number }) => void
     let resolveNewUnits!: (value: { items: Array<{ id: string }>; total: number }) => void
-    let resolveNewRelations!: (value: { items: Array<{ id: string }>; total: number }) => void
     api.getDocument
       .mockResolvedValueOnce(document)
       .mockResolvedValueOnce({ ...document, id: 'doc-new' })
@@ -113,33 +110,21 @@ describe('DocumentDetailView lifecycle interactions', () => {
     api.getDocumentUnits
       .mockImplementationOnce(() => new Promise(resolve => { resolveNewUnits = resolve }))
       .mockResolvedValue({ items: [{ id: 'unit-old' }], total: 1 })
-    api.getDocumentRelations
-      .mockImplementationOnce(() => new Promise(resolve => { resolveNewRelations = resolve }))
-      .mockResolvedValue({ items: [{ id: 'relation-old' }], total: 1 })
     const wrapper = shallowMount(DocumentDetailView, { props: { docId: 'doc-1' } })
     await flushPromises()
 
     useDomainStore().currentDomain = 'civil_engineering'
     await flushPromises()
     expect(api.getDocumentUnits).toHaveBeenCalledTimes(1)
-    expect(api.getDocumentRelations).toHaveBeenCalledTimes(1)
 
     resolveOldSegments({ items: [], total: 0 })
     await flushPromises()
     resolveNewUnits({ items: [{ id: 'unit-new' }], total: 1 })
-    resolveNewRelations({ items: [{ id: 'relation-new' }], total: 1 })
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as {
-      units: Array<{ id: string }>
-      relations: Array<{ id: string }>
-    }
+    const vm = wrapper.vm as unknown as { units: Array<{ id: string }> }
     expect(vm.units).toEqual([{ id: 'unit-new' }])
-    expect(vm.relations).toEqual([{ id: 'relation-new' }])
     expect(api.getDocumentUnits).not.toHaveBeenCalledWith(
-      'doc-1', 'odn', expect.any(Object),
-    )
-    expect(api.getDocumentRelations).not.toHaveBeenCalledWith(
       'doc-1', 'odn', expect.any(Object),
     )
     wrapper.unmount()

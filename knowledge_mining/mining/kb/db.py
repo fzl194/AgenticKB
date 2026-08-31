@@ -910,7 +910,7 @@ WITH cur AS (
         self, kb_id: str, document_id: str, *, max_rows: int = 2000,
     ) -> dict[str, Any]:
         """文档当前知识：查「包含该文档的最新 validated/published build」对应的 snapshot，
-        返回该 snapshot 的 segments / retrieval_units / entity_mentions / relations。
+        返回该 snapshot 的正式 segments / retrieval_units。研究实体与关系不进入产品 API。
 
         注意：不能只读「KB 全局最新 build」——KB 多次/选择性挖掘下，每次 mine 产生的 build
         只含当次入选文档（增量父级继承未生效），全局最新 build 未必包含此文档，会误判 mined:False。
@@ -958,25 +958,6 @@ WITH cur AS (
                 [snap_id, max_rows],
             )
             units = [dict(r) for r in await cur.fetchall()]
-            cur = await conn.execute(
-                """SELECT node_type, mention_text, canonical_name, resolve_status
-                   FROM asset_segment_entity_mentions
-                   WHERE document_snapshot_id = %s ORDER BY id""",
-                [snap_id],
-            )
-            mentions = [dict(r) for r in await cur.fetchall()]
-            cur = await conn.execute(
-                """SELECT r.relation_type, r.weight, r.confidence, r.distance,
-                          src.raw_text AS source_segment_text,
-                          dst.raw_text AS target_segment_text
-                   FROM asset_raw_segment_relations r
-                   JOIN asset_raw_segments src ON src.id = r.source_segment_id
-                   JOIN asset_raw_segments dst ON dst.id = r.target_segment_id
-                   WHERE r.document_snapshot_id = %s
-                   ORDER BY r.id""",
-                [snap_id],
-            )
-            relations = [dict(r) for r in await cur.fetchall()]
             return {
                 "mined": True,
                 "truncated": segments_truncated,
@@ -985,8 +966,6 @@ WITH cur AS (
                 "document_snapshot_id": snap_id,
                 "segments": segments,
                 "retrieval_units": units,
-                "entity_mentions": mentions,
-                "relations": relations,
             }
 
     # ---------------------------------------------------------------- members

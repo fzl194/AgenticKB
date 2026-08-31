@@ -68,7 +68,7 @@
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item @click="rename(kb)">改名</el-dropdown-item>
-                <el-dropdown-item @click="remove(kb)" divided>删除知识库</el-dropdown-item>
+                <el-dropdown-item v-if="canManageLifecycle(kb)" @click="remove(kb)" divided>删除知识库</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -76,9 +76,13 @@
       </div>
 
       <EmptyState
-        v-if="!loading && !kbs.length"
+        v-if="!loading && !loadError && !kbs.length"
         text="当前域还没有知识库，点击右上角「新建知识库」开始"
       />
+      <div v-if="!loading && loadError" class="kb-list__error">
+        <span>{{ loadError }}</span>
+        <el-button size="small" @click="load">重试</el-button>
+      </div>
     </div>
 
     <KbCreateDialog v-model="showCreate" :domain="domainStore.currentDomain" @created="load" />
@@ -104,24 +108,36 @@ const kbApi = useKbApi()
 
 const kbs = ref<KbSummary[]>([])
 const loading = ref(false)
+const loadError = ref('')
 const showCreate = ref(false)
 const miningId = ref<string | null>(null)
+let loadGeneration = 0
 
 function canWrite(kb: KbSummary): boolean {
   return kb.my_role === 'owner' || kb.my_role === 'editor' || kb.my_role === 'admin'
 }
 
 async function load() {
-  if (!domainStore.currentDomain) return
+  const domain = domainStore.currentDomain
+  if (!domain) return
+  const generation = ++loadGeneration
   loading.value = true
+  loadError.value = ''
   try {
-    kbs.value = await kbApi.listKbs(domainStore.currentDomain)
+    const result = await kbApi.listKbs(domain)
+    if (generation !== loadGeneration || domain !== domainStore.currentDomain) return
+    kbs.value = result
   } catch (e) {
+    if (generation !== loadGeneration || domain !== domainStore.currentDomain) return
     kbs.value = []
-    ElMessage.error(await apiErrorDetail(e))
+    loadError.value = await apiErrorDetail(e)
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
+}
+
+function canManageLifecycle(kb: KbSummary): boolean {
+  return kb.my_role === 'owner' || kb.my_role === 'admin'
 }
 
 function enter(kb: KbSummary) {
@@ -160,7 +176,7 @@ async function rename(kb: KbSummary) {
 async function remove(kb: KbSummary) {
   try {
     await ElMessageBox.confirm(
-      `确定删除知识库「${kb.name}」？软删除：对所有人不可见，库内文档与已挖知识保留。此操作不可在 UI 撤销。`,
+      `确定删除知识库「${kb.name}」？软删除后对所有人不可见，历史数据保留，原名称可重新使用。`,
       '删除知识库',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     )

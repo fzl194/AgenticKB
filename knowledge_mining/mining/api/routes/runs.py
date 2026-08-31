@@ -894,7 +894,6 @@ async def get_run_document_units(
     }
 
 
-@router.get("/{run_id}/documents/{doc_id}/relations", dependencies=[Depends(require_run_read)])
 async def get_run_document_relations(
     run_id: str, doc_id: str, request: Request,
     domain: str = Query(..., min_length=1),
@@ -1086,38 +1085,6 @@ async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., 
             raise HTTPException(404, f"Run {run_id} not found")
         run_domain = run["domain"]
 
-        # 本体确认: 该领域待审本体候选数
-        cand_cur = await conn.execute(
-            "SELECT COUNT(*) AS n FROM ontology_candidates "
-            "WHERE domain_id = %s AND status = 'proposed'", [run_domain]
-        )
-        proposed_candidates = (await cand_cur.fetchone())["n"]
-
-        # 本体线 entity_extract 产出：逃生口候选数（source='escape_hatch'，含待审/已处理）
-        esc_cur = await conn.execute(
-            "SELECT COUNT(*) AS n FROM ontology_candidates "
-            "WHERE domain_id = %s AND source = 'escape_hatch'", [run_domain]
-        )
-        escape_hatch_candidates = (await esc_cur.fetchone())["n"]
-
-        # 实体确认: 该 run 处理快照下的待审 mention 数
-        ment_cur = await conn.execute(
-            "SELECT COUNT(*) AS n FROM asset_segment_entity_mentions m "
-            "JOIN mining_run_documents d ON d.document_snapshot_id = m.document_snapshot_id "
-            "WHERE d.run_id = %s AND m.resolve_status = 'pending'", [run_id]
-        )
-        pending_mentions = (await ment_cur.fetchone())["n"]
-
-        # 该 run 落图规模（对象/边按 domain 计；MVP 不按 snapshot 精确切分）
-        ent_cur = await conn.execute(
-            "SELECT COUNT(*) AS n FROM ontology_entities WHERE domain_id = %s", [run_domain]
-        )
-        entity_count = (await ent_cur.fetchone())["n"]
-        rel_cur = await conn.execute(
-            "SELECT COUNT(*) AS n FROM ontology_entity_relations WHERE domain_id = %s", [run_domain]
-        )
-        relation_count = (await rel_cur.fetchone())["n"]
-
         stage_cur = await conn.execute(
             "SELECT id, run_id, run_document_id, stage, status, created_at, "
             "duration_ms, output_summary, error_message "
@@ -1167,9 +1134,7 @@ async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., 
         "status": run["status"],
         "current_stage": run.get("current_stage"),
         "subloop_stage": run["subloop_stage"],
-        "ontology_version_id": run["ontology_version_id"],
         "awaiting_review": run["status"] == "awaiting_review",
-        "active_gate": run["subloop_stage"] if run["status"] == "awaiting_review" else None,
         "counts": {
             "total_documents": run["total_documents"],
             "committed": run["committed_count"],
@@ -1178,11 +1143,6 @@ async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., 
             "failed": run["failed_count"],
             "skipped": run["skipped_count"],
         },
-        "ontology_proposed_candidates": proposed_candidates,
-        "entity_pending_mentions": pending_mentions,
-        "entity_count": entity_count,
-        "relation_count": relation_count,
-        "escape_hatch_candidates": escape_hatch_candidates,
         "execution_engine": run.get("execution_engine") or "legacy",
         "workflow": _frozen_workflow_summary(dict(run), include_graph=True),
         "active_node_id": run.get("active_node_id"),
@@ -1192,10 +1152,6 @@ async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., 
         "node_events": node_events,
         "documents": documents,
         "warnings": warnings,
-        "asset_counts": {
-            "entities": entity_count,
-            "relations": relation_count,
-        },
         "build_id": run.get("build_id"),
     }
 

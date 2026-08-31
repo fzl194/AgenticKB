@@ -49,6 +49,7 @@ export interface KbDetail {
   status: KbStatus
   /** 选定的挖掘范式（workflow id）。null 表示未选范式，触发整库挖掘会被后端 400。 */
   mining_workflow_id: string | null
+  default_paradigm_id: string | null
   deleted_at: string | null
   created_at: string
   updated_at: string
@@ -147,8 +148,9 @@ export interface KbMineResult {
 export type KbRunStatus =
   | 'queued'
   | 'running'
-  | 'succeeded'
-  | 'completed_with_errors'
+  | 'completed'
+  | 'interrupted'
+  | 'awaiting_review'
   | 'failed'
   | 'cancelled'
   | string

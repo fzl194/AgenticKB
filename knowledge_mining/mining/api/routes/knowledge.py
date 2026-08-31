@@ -445,7 +445,6 @@ async def get_document_units(
     }
 
 
-@router.get("/documents/{document_id}/relations")
 async def get_document_relations(
     document_id: str,
     request: Request,
@@ -613,7 +612,6 @@ async def list_units(
     }
 
 
-@router.get("/relations")
 async def list_relations(
     request: Request,
     domain: str = Query(...),

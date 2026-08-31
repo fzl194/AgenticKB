@@ -58,7 +58,7 @@ export interface MiningRun {
   new_count: number
   updated_count: number
   build_id?: string
-  error_message?: string
+  error_summary?: string | null
   config?: Record<string, unknown>
   execution_engine?: 'legacy' | 'workflow'
   workflow_id?: string | null
@@ -335,17 +335,13 @@ export interface LlmTaskDetail extends LlmTask {
   parsed_output?: Record<string, unknown>
 }
 
-// ─── 本体 / 知识图谱（B7）───
-
 export interface RunTrace {
   run_id: string
   domain: string
   status: string
   current_stage?: string | null
   subloop_stage?: string | null
-  ontology_version_id?: string | null
   awaiting_review: boolean
-  active_gate?: string | null
   counts: {
     total_documents: number
     committed: number
@@ -354,11 +350,6 @@ export interface RunTrace {
     failed: number
     skipped: number
   }
-  ontology_proposed_candidates: number
-  entity_pending_mentions: number
-  entity_count: number
-  relation_count: number
-  escape_hatch_candidates?: number
   execution_engine?: MiningSubmissionEngine
   workflow: FrozenMiningWorkflowSummary | null
   active_node_id?: string | null
@@ -373,7 +364,6 @@ export interface RunTrace {
     code: string
     message: string
   }>
-  asset_counts: { entities: number; relations: number }
   build_id?: string | null
 }
 

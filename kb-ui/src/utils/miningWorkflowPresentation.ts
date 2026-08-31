@@ -17,6 +17,22 @@ export const MINING_OPERATOR_FAMILIES: readonly MiningOperatorFamily[] = [
   { key: 'asset_publish', label: '资产与发布', types: ['asset_persist', 'mining_finalize'] },
 ]
 
+export const MINING_OPERATOR_LABELS: Readonly<Record<string, string>> = {
+  input_ingest: '输入发现',
+  document_parse: '文档解析',
+  segment_compile: '切片编译',
+  retrieval_unit_project: '检索表示投影',
+  query_expansion_generate: '问题别名生成',
+  hierarchical_summary_generate: '层级摘要生成',
+  embedding: '向量化',
+  asset_persist: '资产持久化',
+  mining_finalize: '构建收尾',
+}
+
+export function miningOperatorLabel(operatorType: string): string {
+  return MINING_OPERATOR_LABELS[operatorType] ?? operatorType
+}
+
 export const MINING_ZONE_LABELS: Record<MiningExecutionZone, string> = {
   input: '输入阶段',
   document: '逐文档',

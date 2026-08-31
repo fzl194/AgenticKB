@@ -283,7 +283,7 @@ export function useKbApi() {
       return extractItems<KbRunRecord>(data)
     },
 
-    /** 单文档已挖掘知识（切片分段 / 检索单元 / 实体提及）。 */
+    /** 单文档正式检索资产（切片分段 / 检索单元）。 */
     async getDocumentKnowledge(kbId: string, docId: string): Promise<DocumentKnowledge> {
       const { data } = await client.get(`/api/kb/${kbId}/documents/${docId}/knowledge`)
       return extractOne<DocumentKnowledge>(data)

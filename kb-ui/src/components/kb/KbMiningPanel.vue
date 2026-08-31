@@ -69,7 +69,7 @@
               <div class="kb-mining__progress-bar">
                 <div
                   class="kb-mining__progress-fill kb-mining__progress-fill--done"
-                  :style="{ width: pct(row.committed_count, row.total_documents) + '%' }"
+                  :style="{ width: pct((row.committed_count ?? 0) + (row.skipped_count ?? 0), row.total_documents) + '%' }"
                 ></div>
                 <div
                   class="kb-mining__progress-fill kb-mining__progress-fill--fail"
@@ -77,7 +77,7 @@
                 ></div>
               </div>
               <span class="kb-mining__progress-text">
-                {{ row.committed_count ?? 0 }}/{{ row.total_documents ?? 0 }}
+                {{ processedDocumentCount(row) }}/{{ row.total_documents ?? 0 }}
                 <span v-if="(row.failed_count ?? 0) > 0" class="kb-mining__progress-fail">
                   ·失败 {{ row.failed_count }}
                 </span>
@@ -123,7 +123,11 @@
           </template>
         </el-table-column>
         <template #empty>
-          <EmptyState text="还没有挖掘记录。到「文件」tab 多选文档后点「挖掘选中」触发。" />
+          <div v-if="runsError" class="kb-mining__error">
+            <span>{{ runsError }}</span>
+            <el-button size="small" @click="loadRuns">重试</el-button>
+          </div>
+          <EmptyState v-else text="还没有挖掘记录。到「文件」tab 多选文档后点「挖掘选中」触发。" />
         </template>
       </el-table>
     </div>
@@ -138,8 +142,14 @@ import { ElMessage } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { useMiningWorkflowApi } from '@/api/miningWorkflow'
 import { apiErrorDetail } from '@/api/proxyClient'
+import {
+  isActiveRunStatus,
+  processedDocumentCount,
+  runStatusLabel,
+  runStatusTagType,
+} from '@/utils/runStatus'
 import EmptyState from '@/components/common/EmptyState.vue'
-import type { KbRunRecord, KbRunStatus } from '@/types/kb'
+import type { KbRunRecord } from '@/types/kb'
 import type { MiningWorkflowOption } from '@/types/miningWorkflow'
 
 const props = defineProps<{
@@ -164,13 +174,19 @@ const workflowId = ref<string | null>(props.selectedWorkflowId)
 
 const runs = ref<KbRunRecord[]>([])
 const loadingRuns = ref(false)
+const runsError = ref('')
 const mining = ref(false)
 const forceRedo = ref(false)
 
 let pollTimer: number | null = null
+let runsGeneration = 0
 
 watch(() => props.selectedWorkflowId, (v) => { workflowId.value = v })
-watch(() => props.kbId, () => { loadOptions(); loadRuns() })
+watch(() => props.kbId, () => {
+  clearPolling()
+  loadOptions()
+  loadRuns()
+})
 
 // ── 范式目录 ──
 async function loadOptions() {
@@ -226,15 +242,21 @@ async function triggerMine() {
 
 // ── 挖掘记录 ──
 async function loadRuns() {
+  const kbId = props.kbId
+  const generation = ++runsGeneration
   loadingRuns.value = true
+  runsError.value = ''
   try {
-    runs.value = await kbApi.getKbRuns(props.kbId)
+    const result = await kbApi.getKbRuns(kbId)
+    if (generation !== runsGeneration || kbId !== props.kbId) return
+    runs.value = result
     schedulePolling()
   } catch (e) {
+    if (generation !== runsGeneration || kbId !== props.kbId) return
     runs.value = []
-    ElMessage.error(await apiErrorDetail(e))
+    runsError.value = await apiErrorDetail(e)
   } finally {
-    loadingRuns.value = false
+    if (generation === runsGeneration) loadingRuns.value = false
   }
 }
 
@@ -243,20 +265,23 @@ function onRowClick(row: KbRunRecord) {
 }
 
 function hasActiveRun(): boolean {
-  return runs.value.some((r) => r.status === 'queued' || r.status === 'running')
+  return runs.value.some((r) => isActiveRunStatus(r.status))
 }
 
 /** running/queued 时 3s 轮询直到终态。 */
 function schedulePolling() {
   clearPolling()
   if (!hasActiveRun()) return
+  const kbId = props.kbId
   pollTimer = window.setTimeout(async () => {
     try {
-      runs.value = await kbApi.getKbRuns(props.kbId)
+      const result = await kbApi.getKbRuns(kbId)
+      if (kbId !== props.kbId) return
+      runs.value = result
     } catch {
       // 静默失败，下次 tick 再试
     } finally {
-      schedulePolling()
+      if (kbId === props.kbId) schedulePolling()
     }
   }, 3000)
 }
@@ -273,32 +298,6 @@ function pct(part: number | null, total: number | null): number {
   const t = total ?? 0
   if (t <= 0) return 0
   return Math.min(100, Math.round(((part ?? 0) / t) * 100))
-}
-
-function runStatusLabel(s: KbRunStatus): string {
-  switch (s) {
-    case 'queued': return '排队中'
-    case 'running': return '进行中'
-    case 'succeeded': return '成功'
-    case 'completed_with_errors': return '部分失败'
-    case 'failed': return '失败'
-    case 'cancelled': return '已取消'
-    default: return s
-  }
-}
-
-function runStatusTagType(
-  s: KbRunStatus,
-): 'success' | 'warning' | 'info' | 'danger' | 'primary' {
-  switch (s) {
-    case 'succeeded': return 'success'
-    case 'running': return 'primary'
-    case 'queued': return 'warning'
-    case 'completed_with_errors': return 'warning'
-    case 'failed': return 'danger'
-    case 'cancelled': return 'info'
-    default: return 'info'
-  }
 }
 
 function formatTime(t: string | null): string {

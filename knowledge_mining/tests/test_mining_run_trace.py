@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from knowledge_mining.mining.api.routes import runs
+from knowledge_mining.mining.api.app import create_app
 
 
 class Cursor:
@@ -107,6 +108,14 @@ async def _async_value(value):
     return value
 
 
+def test_formal_product_does_not_mount_graph_research_endpoints():
+    paths = {route.path for route in create_app().routes}
+    assert not any(path.startswith("/api/ontology") for path in paths)
+    assert "/api/knowledge/relations" not in paths
+    assert "/api/knowledge/documents/{document_id}/relations" not in paths
+    assert "/api/runs/{run_id}/documents/{doc_id}/relations" not in paths
+
+
 def workflow_run():
     manifest = {
         "schemaVersion": "1.0",
@@ -180,7 +189,10 @@ async def test_workflow_trace_comes_only_from_frozen_run_and_domain_events(monke
     }]
     assert body["stage_events"][0]["stage"] == "ingest"
     assert body["documents"][0]["document_key"] == "doc:/a.md"
-    assert body["asset_counts"] == {"entities": 7, "relations": 8}
+    assert "asset_counts" not in body
+    assert "ontology_version_id" not in body
+    assert "entity_count" not in body
+    assert "relation_count" not in body
 
 
 @pytest.mark.asyncio
@@ -206,4 +218,4 @@ async def test_legacy_trace_retains_fields_and_has_null_workflow(monkeypatch):
     assert body["workflow"] is None
     assert body["node_events"] == []
     assert "stage_events" in body
-    assert "asset_counts" in body
+    assert "asset_counts" not in body

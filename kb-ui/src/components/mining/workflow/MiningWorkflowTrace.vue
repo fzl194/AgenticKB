@@ -31,7 +31,7 @@
             :style="{ left: `${node.x}px`, top: `${node.y}px` }"
           >
             <div class="trace-node__top">
-              <strong>{{ node.operatorType }}</strong>
+              <strong>{{ miningOperatorLabel(node.operatorType) }}</strong>
               <span>{{ statusLabel(node.nodeId) }}</span>
             </div>
             <code>{{ node.nodeId }}</code>
@@ -54,8 +54,6 @@
 
       <footer class="workflow-trace__footer">
         <span>节点事件 {{ trace.node_events.length }}</span>
-        <span>实体 {{ trace.asset_counts.entities }}</span>
-        <span>关系 {{ trace.asset_counts.relations }}</span>
         <span v-if="trace.build_id">最终 Build/Release：<strong>{{ trace.build_id }}</strong></span>
       </footer>
     </template>
@@ -66,6 +64,7 @@
 import { computed } from 'vue'
 import type { RunTrace } from '@/types'
 import type { MiningWorkflowNodeEvent } from '@/types/miningWorkflow'
+import { miningOperatorLabel } from '@/utils/miningWorkflowPresentation'
 
 const props = defineProps<{ trace: RunTrace }>()
 const NODE_WIDTH = 190

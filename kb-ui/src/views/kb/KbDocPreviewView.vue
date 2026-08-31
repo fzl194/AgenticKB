@@ -244,71 +244,6 @@
           </div>
         </el-tab-pane>
 
-        <el-tab-pane v-if="mentions.length" :label="`实体提及 (${mentions.length})`" name="mentions">
-          <div class="doc-preview__knowledge">
-            <el-table :data="mentions" class="kb-table" :header-cell-style="{ background: 'transparent' }">
-              <el-table-column label="节点类型" min-width="120">
-                <template #default="{ row }">
-                  <span v-if="row.node_type">{{ row.node_type }}</span>
-                  <span v-else class="doc-preview__muted">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="提及文本" min-width="200">
-                <template #default="{ row }">
-                  <span v-if="row.mention_text">{{ row.mention_text }}</span>
-                  <span v-else class="doc-preview__muted">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="规范名" min-width="180">
-                <template #default="{ row }">
-                  <span v-if="row.canonical_name">{{ row.canonical_name }}</span>
-                  <span v-else class="doc-preview__muted">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="解析状态" width="120">
-                <template #default="{ row }">
-                  <el-tag
-                    v-if="row.resolve_status"
-                    :type="resolveStatusTagType(row.resolve_status)"
-                    size="small"
-                    effect="plain"
-                  >
-                    {{ row.resolve_status }}
-                  </el-tag>
-                  <span v-else class="doc-preview__muted">—</span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-        </el-tab-pane>
-
-        <el-tab-pane v-if="relations.length" :label="`关系图谱 (${relations.length})`" name="relations">
-          <div class="doc-preview__knowledge">
-            <el-table :data="relations" class="kb-table" :header-cell-style="{ background: 'transparent' }">
-              <el-table-column label="关系类型" width="120">
-                <template #default="{ row }">
-                  <el-tag size="small" effect="plain">{{ relationLabel(row.relation_type) }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="源段" min-width="220">
-                <template #default="{ row }">
-                  <span class="doc-preview__rel-text">{{ row.source_segment_text }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="目标段" min-width="220">
-                <template #default="{ row }">
-                  <span class="doc-preview__rel-text">{{ row.target_segment_text }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="权重" width="80">
-                <template #default="{ row }">{{ fmtNum(row.weight) }}</template>
-              </el-table-column>
-              <el-table-column label="置信度" width="90">
-                <template #default="{ row }">{{ fmtNum(row.confidence) }}</template>
-              </el-table-column>
-            </el-table>
-          </div>
-        </el-tab-pane>
       </template>
     </el-tabs>
   </div>
@@ -327,7 +262,7 @@ import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
 import type { Component } from 'vue'
-import type { KbDocEntityMention, KbDocRelation, KbDocument, KbDocRetrievalUnit } from '@/types/kb'
+import type { KbDocument, KbDocRetrievalUnit } from '@/types/kb'
 
 const PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 const TEXT_RENDER_LIMIT = 200_000
@@ -353,10 +288,8 @@ const fullText = ref<string | null>(null)
 const renderLimit = ref(TEXT_RENDER_LIMIT)
 
 const units = ref<KbDocRetrievalUnit[]>([])
-const mentions = ref<KbDocEntityMention[]>([])
-const relations = ref<KbDocRelation[]>([])
 const knowledgeMined = ref(false)
-const activeTab = ref<'preview' | 'structured' | 'units' | 'mentions' | 'relations'>('preview')
+const activeTab = ref<'preview' | 'structured' | 'units'>('preview')
 
 // 结构化数据各卡片独立收缩（默认全开）。
 const openCards = ref<string[]>(['snapshot', 'outline', 'segments', 'elements', 'tables'])
@@ -449,8 +382,6 @@ function cleanup() {
 
 function resetKnowledge() {
   units.value = []
-  mentions.value = []
-  relations.value = []
   knowledgeMined.value = false
   activeTab.value = 'preview'
   parseResult.value = null
@@ -535,14 +466,12 @@ async function load() {
     doc.value = d
     loading.value = false
     void loadPreview()
-    // 已挖掘文档：拉知识资产（检索单元/实体/关系）；接口失败时按 status==='mined' 回退
+    // 已挖掘文档只呈现正式检索资产；研究实体/关系不进入产品面。
     if (d.status === 'mined' || d.status === 'published') {
       const knowledge = await kbApi.getDocumentKnowledge(props.kbId, props.docId).catch(() => null)
       if (knowledge && knowledge.mined) {
         knowledgeMined.value = true
         units.value = knowledge.retrieval_units ?? []
-        mentions.value = knowledge.entity_mentions ?? []
-        relations.value = knowledge.relations ?? []
       } else {
         knowledgeMined.value = true // 状态显示已挖但接口失败：允许进入知识视图，Tab 按实际数据动态出
       }
@@ -568,37 +497,6 @@ async function download() {
 
 function back() {
   router.push(`/kb/${props.kbId}`)
-}
-
-const RELATION_LABELS: Record<string, string> = {
-  elaborates: '详述', contrast: '对比', contrasts_with: '对比',
-  sequences: '顺序', previous: '前序', next: '后继',
-  causes: '因果', results_in: '因果', evidences: '佐证',
-  summarizes: '总结', justifies: '论证', enables: '使能',
-  purposes: '目的', references: '引用', exemplifies: '例证',
-  same_section: '同节', same_parent_section: '同级',
-  section_header_of: '标题',
-}
-function relationLabel(t: string | null): string {
-  if (!t) return '—'
-  return RELATION_LABELS[t] ?? t
-}
-function fmtNum(n: number | null): string {
-  if (n === null || n === undefined) return '—'
-  return Number.isInteger(n) ? String(n) : n.toFixed(2)
-}
-
-function resolveStatusTagType(s: string): 'success' | 'warning' | 'info' {
-  switch (s) {
-    case 'resolved':
-    case 'linked':
-      return 'success'
-    case 'unresolved':
-    case 'ambiguous':
-      return 'warning'
-    default:
-      return 'info'
-  }
 }
 
 onMounted(load)

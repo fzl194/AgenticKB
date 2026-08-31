@@ -349,6 +349,10 @@ class NewChainServices:
     retrieval_project_service: RetrieProjectFacade
     embedding_service: Any
     asset_persist_service: Any
+    # 29号 M3 接线：两实验算子门面（llm 未配置 → None → handler FALLBACK
+    # degraded，不阻断基础资产——与 24号 §5.5/§5.6 失败语义一致）。
+    query_expansion_service: Any = None
+    hierarchical_summary_service: Any = None
 
 
 def build_new_chain_services(
@@ -368,6 +372,7 @@ def build_new_chain_services(
     asset_writer: Any | None = None,
     pool: Any | None = None,
     sync_pool: Any | None = None,
+    llm_generator: Any | None = None,
 ) -> NewChainServices:
     """组合根：默认组装 memory 组件（测试/开发）；传入 PG/MinIO 即生产.
 
@@ -525,6 +530,57 @@ def build_new_chain_services(
             embedding_store=embedding_store,
             writer=asset_writer,
         ),
+        # 29号 M3 生产接线：llm_generator（/execute 客户端）存在时构造两
+        # 实验算子门面。alias_store 复用主表示 store 是安全的——28轮已实现
+        # replace_aliases_for_snapshot 子集替换（不清基础表示）。
+        query_expansion_service=(
+            _build_query_expansion_service(
+                representation_store, llm_generator,
+            )
+        ),
+        hierarchical_summary_service=(
+            _build_hierarchical_summary_service(
+                segment_store, representation_store, llm_generator,
+            )
+        ),
+    )
+
+
+def _build_query_expansion_service(
+    representation_store: Any, llm_generator: Any,
+) -> Any:
+    if llm_generator is None:
+        return None
+    from knowledge_mining.mining.retrieval_projection.llm_generation import (
+        LLMQuestionGenerator,
+    )
+    from knowledge_mining.mining.retrieval_projection.query_expansion import (
+        QueryExpansionFacade,
+    )
+
+    return QueryExpansionFacade(
+        representation_store=representation_store,
+        alias_store=representation_store,
+        generator=LLMQuestionGenerator(llm_generator),
+    )
+
+
+def _build_hierarchical_summary_service(
+    segment_store: Any, representation_store: Any, llm_generator: Any,
+) -> Any:
+    if llm_generator is None:
+        return None
+    from knowledge_mining.mining.retrieval_projection.llm_generation import (
+        LLMSummarizer,
+    )
+    from knowledge_mining.mining.retrieval_projection.summary import (
+        HierarchicalSummaryFacade,
+    )
+
+    return HierarchicalSummaryFacade(
+        segment_store=segment_store,
+        alias_store=representation_store,
+        summarizer=LLMSummarizer(llm_generator),
     )
 
 

@@ -101,8 +101,8 @@ const form = ref<{
 const templates: Array<{ key: MiningTemplateKey; label: string; description: string }> = [
   { key: 'hybrid_assets', label: '标准混合资产（推荐）', description: '零 LLM 默认线：结构保真切片 + 类型化搜索投影（含表格行/章节）+ 策略化向量。' },
   { key: 'lexical_assets', label: '轻量关键词资产', description: '仅解析/切片/搜索投影（无向量）：低成本、无 embedding 服务的 lexical-only 场景。' },
-  { key: 'query_alias_assets', label: '问题别名增强资产（实验）', description: '标准混合链 + 离线问题别名生成；增强算子批次9 接线（当前 LLM 不可用即降级，仅产出基础资产）。' },
-  { key: 'longdoc_assets', label: '长文档全局增强资产（实验）', description: '标准混合链 + 标题树层级摘要；增强算子批次9 接线（当前 LLM 不可用即降级，仅产出基础资产）。' },
+  { key: 'query_alias_assets', label: '问题别名增强资产（实验）', description: '标准混合链 + 离线问题别名生成（已接线生产 LLM）；LLM 不可用自动降级，基础资产不受影响。' },
+  { key: 'longdoc_assets', label: '长文档全局增强资产（实验）', description: '标准混合链 + 标题树层级摘要（已接线生产 LLM）；LLM 不可用自动降级，基础资产不受影响。' },
 ]
 const selectedTemplateDescription = computed(() => templates.find(item => item.key === form.value.template_key)?.description ?? '')
 

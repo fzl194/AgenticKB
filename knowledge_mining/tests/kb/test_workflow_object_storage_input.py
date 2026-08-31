@@ -103,11 +103,13 @@ def test_kb_workflow_prepares_document_states_from_object_storage_identities(mon
         retrieval_project_service=object(),
         embedding_service=object(),
         asset_persist_service=object(),
+        query_expansion_service=None,
+        hierarchical_summary_service=None,
     )
     monkeypatch.setattr(
         run_job,
         "_build_workflow_object_input_services",
-        lambda *, sync_pool, embedding_generator=None: v2_services,
+        lambda *, sync_pool, embedding_generator=None, llm_generator=None: v2_services,
     )
     monkeypatch.setattr(
         run_job,
@@ -178,6 +180,8 @@ def test_kb_workflow_services_use_control_plane_object_store_config(monkeypatch)
         "sync_pool": "sync-pool",
         # 批次8 联调（feea1b0）：组合根透传 embedding_generator（None=无向量线）
         "embedding_generator": None,
+        # 29号 M3 接线：生成客户端透传（None=实验算子 FALLBACK degraded）
+        "llm_generator": None,
     }
 
 

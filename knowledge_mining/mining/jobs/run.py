@@ -840,6 +840,7 @@ def _publish_workflow_job(
 
 def _build_workflow_object_input_services(
     *, sync_pool: Any, embedding_generator: Any | None = None,
+    llm_generator: Any | None = None,
 ) -> Any:
     """Compose v2 KB services from the control-plane MinIO configuration.
 
@@ -865,6 +866,7 @@ def _build_workflow_object_input_services(
         object_store=make_object_store(config),
         sync_pool=sync_pool,
         embedding_generator=embedding_generator,
+        llm_generator=llm_generator,
     )
 
 
@@ -1363,12 +1365,21 @@ class _WorkflowJobServices:
         services = _build_workflow_object_input_services(
             sync_pool=self.asset_db.pool,
             embedding_generator=self.pipeline_config.embedding_generator,
+            llm_generator=_init_llm_generator(
+                getattr(self, "llm_base_url", None),
+                knowledge_domain=getattr(self, "profile", None) and self.profile.domain_id,
+            ),
         )
         self.document_parse_service = services.document_parse_service
         self.segment_compile_service = services.segment_compile_service
         self.retrieval_project_service = services.retrieval_project_service
         self.embedding_service = services.embedding_service
         self.asset_persist_service = services.asset_persist_service
+        # 29号 M3 接线：两实验算子门面（未配置 → None → handler FALLBACK）
+        self.query_expansion_service = services.query_expansion_service
+        self.hierarchical_summary_service = (
+            services.hierarchical_summary_service
+        )
         self._object_input_services_ready = True
 
 
@@ -2119,6 +2130,25 @@ def _run_graph_write(
     except Exception:
         logger.warning("graph_write (B5) failed for %s; continuing", domain_id, exc_info=True)
         return None
+
+
+def _init_llm_generator(
+    llm_base_url: str | None,
+    *,
+    knowledge_domain: str | None = None,
+) -> Any | None:
+    """29号 M3 接线：llm_service /execute 生成客户端（None = 未配置 →
+    实验算子 FALLBACK degraded，基础资产不受影响）。"""
+    if not llm_base_url:
+        return None
+
+    from knowledge_mining.mining.retrieval_projection.llm_generation import (
+        LLMServiceGenerationClient,
+    )
+    return LLMServiceGenerationClient(
+        base_url=llm_base_url,
+        knowledge_domain=knowledge_domain,
+    )
 
 
 def _init_embedding(

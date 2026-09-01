@@ -43,6 +43,8 @@ SYNC_DIRS=(
     "runtime:serving"
 )
 DEPENDENCY_MANIFESTS="pyproject.toml agent_serving_java/pom.xml kb-ui/package.json"
+# 发布清单（版本号）：pack 带上，apply 变更时 restart control（主控启动时读它上报版本）。
+RELEASE_MANIFEST="releases.json"
 APP_CONTAINER_NAME="${APP_CONTAINER_NAME:-cmkb}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cmkb}"
 
@@ -124,6 +126,9 @@ cmd_pack() {
         || find "$PACK_STAGE" -name '.env' | grep -q .; then
         die "暂存区包含 config/ 或 .env，内部错误，中止"
     fi
+
+    # 发布清单：随包携带（apply 侧变更检测，变了 restart control）
+    [ -f "$RELEASE_MANIFEST" ] && cp -- "$RELEASE_MANIFEST" "$PACK_STAGE/$RELEASE_MANIFEST"
 
     echo "=== 正在打包 ==="
     tar -czf "$archive" -C "$PACK_STAGE" .
@@ -278,6 +283,27 @@ cmd_apply() {
         needed="$needed $services"
         echo "已更新：$dir"
     done
+
+    # 发布清单：变了才覆盖 + 计入 control 重启。
+    # 同 inode 截断写（cat > 目标）：单文件 bind-mount 挂的是 inode，
+    # mv/rm 换文件会让容器内挂载与磁盘脱钩——绝不能换文件。
+    if [ -f "$STAGE_DIR/$RELEASE_MANIFEST" ]; then
+        if [ ! -f "$RELEASE_MANIFEST" ] || ! cmp -s "$STAGE_DIR/$RELEASE_MANIFEST" "$RELEASE_MANIFEST"; then
+            if [ -f "$RELEASE_MANIFEST" ]; then
+                cat -- "$STAGE_DIR/$RELEASE_MANIFEST" > "$RELEASE_MANIFEST"
+            else
+                # 宿主机还没有（未走过镜像补齐的异常态）：直接落文件
+                cp -- "$STAGE_DIR/$RELEASE_MANIFEST" "$RELEASE_MANIFEST"
+            fi
+            case " $needed " in
+                *" control "*) ;;
+                *) needed="$needed control" ;;
+            esac
+            echo "已更新：$RELEASE_MANIFEST（restart control 生效新版本号）"
+        else
+            echo "无变化：$RELEASE_MANIFEST"
+        fi
+    fi
 
     # 4. 按依赖顺序重启受影响服务 + 健康检查
     needed="$(printf '%s' "$needed" | tr ' ' '\n' | sort -u | tr '\n' ' ')"

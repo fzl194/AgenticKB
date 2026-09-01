@@ -82,6 +82,12 @@ services:
       - ./mcp_server:/app/mcp_server
       - ./databases:/app/databases
 
+      # 发布清单（版本号）：主控启动时读 /app/releases.json 上报部署版本。
+      # 单文件 bind-mount 的坑：容器持有的是 inode，宿主机 rename/cat> 替换文件
+      # 后挂载会与磁盘内容脱钩。因此 deploy-sync.sh apply 对它只做"同 inode
+      # 截断写"（先写 .new 再 cat 回去），绝不能用 mv 换文件。
+      - ./releases.json:/app/releases.json
+
       # 前端静态产物与 Java jar 同样走"宿主机目录即真相源"：
       # deploy-sync.sh apply 直接换宿主机目录即可生效（deploy-server.sh 首次补齐）。
       # 注意 jar 必须挂目录（./runtime）而非单文件——单文件 bind-mount

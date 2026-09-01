@@ -649,10 +649,15 @@ replace_code_preserving_config() {
     CODE_INSTALLED_TARGETS=""
     CODE_BACKED_UP_TARGETS=""
 
-    for target in knowledge_mining llm_service main_control_service mcp_server databases kb-ui-dist runtime reset_db.py; do
+    for target in knowledge_mining llm_service main_control_service mcp_server databases kb-ui-dist runtime reset_db.py releases.json; do
         if [ -e "$target" ] || [ -L "$target" ]; then
             mv "$target" "$CODE_BACKUP_DIR/$target"
             CODE_BACKED_UP_TARGETS="$CODE_BACKED_UP_TARGETS $target"
+        fi
+        if [ "$target" = "releases.json" ]; then
+            # 版本号跟随镜像 --force 走（与 deploy-build.sh 打包版本一致）；
+            # 宿主机已有版本号想保留的话，走增量同步链路管理。
+            docker cp "$TMP_CONTAINER_NAME:/app/$target" "$CODE_STAGE_DIR/$target"
         fi
         mv "$CODE_STAGE_DIR/$target" "$target"
         CODE_INSTALLED_TARGETS="$CODE_INSTALLED_TARGETS $target"
@@ -675,6 +680,7 @@ stage_code_from_image() {
         docker cp "$TMP_CONTAINER_NAME:/app/$dir/." "$CODE_STAGE_DIR/$dir/"
     done
     docker cp "$TMP_CONTAINER_NAME:/app/reset_db.py" "$CODE_STAGE_DIR/reset_db.py"
+    docker cp "$TMP_CONTAINER_NAME:/app/releases.json" "$CODE_STAGE_DIR/releases.json"
 
     if [ "$FORCE_CONFIG" = false ] && [ -d main_control_service/config ]; then
         rm -rf "$CODE_STAGE_DIR/main_control_service/config"
@@ -753,6 +759,11 @@ deploy_from_image() {
         done
         if [ ! -f reset_db.py ]; then
             docker cp "$TMP_CONTAINER_NAME:/app/reset_db.py" ./reset_db.py
+        fi
+        # 发布清单：宿主机真相源（compose 单文件挂载到 /app/releases.json）。
+        # 已存在则保留——内网版本号不被外网镜像重置。
+        if [ ! -f releases.json ]; then
+            docker cp "$TMP_CONTAINER_NAME:/app/releases.json" ./releases.json
         fi
 
         if [ "$FORCE_CONFIG" = true ]; then

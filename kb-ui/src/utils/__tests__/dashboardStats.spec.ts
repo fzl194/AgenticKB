@@ -21,7 +21,7 @@ function stats(over: Partial<KbStats> = {}): KbStats {
     },
     assets: {
       snapshots: 10, segments: 300, retrieval_units: 420,
-      entity_mentions: 88, relations: 210,
+      embeddings: 88,
     },
     retrieval_unit_types: { raw_text: 200, summary: 120, entity_card: 100 },
     mining_trend: [

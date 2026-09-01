@@ -151,13 +151,12 @@
           v-loading="artifactsLoading"
         >
           <el-table-column label="类型" width="120" prop="unit_type" />
-          <el-table-column label="标题" min-width="200" prop="title" />
+          <el-table-column label="结构上下文" min-width="200" prop="title" />
           <el-table-column label="内容" min-width="300">
             <template #default="{ row }">
               <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`unit-${row.id ?? row.title}`) }" @click="toggleExpand(`unit-${row.id ?? row.title}`)">{{ row.text || '-' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="权重" width="80" prop="weight" />
         </el-table>
         <div class="tab-pagination" v-if="unitTotal > PAGE_SIZE">
           <el-pagination v-model:current-page="unitPage" :page-size="PAGE_SIZE" :total="unitTotal" layout="prev, pager, next" size="small" />

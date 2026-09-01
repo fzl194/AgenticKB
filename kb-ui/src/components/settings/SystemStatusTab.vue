@@ -159,7 +159,7 @@
           <StatsCard label="快照" :value="stats?.snapshots ?? '-'" icon="📸" />
           <StatsCard label="段落" :value="stats?.segments ?? '-'" icon="📝" />
           <StatsCard label="检索单元" :value="stats?.retrieval_units ?? '-'" icon="🔎" />
-          <StatsCard label="关系" :value="stats?.relations ?? '-'" icon="🔗" />
+          <StatsCard label="向量" :value="stats?.embeddings ?? '-'" icon="🧲" />
         </div>
 
         <div class="sys-status__chart">

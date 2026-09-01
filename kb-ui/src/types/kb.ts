@@ -294,8 +294,7 @@ export interface KbAssetCounts {
   snapshots: number
   segments: number
   retrieval_units: number
-  entity_mentions: number
-  relations: number
+  embeddings: number
 }
 
 /** 挖掘趋势的一天。后端已补齐空天（补零），前端直接照数组画，不必自己填缺口。 */

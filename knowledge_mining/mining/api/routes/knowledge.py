@@ -101,27 +101,27 @@ SELECT
        FROM asset_raw_segment_relations rel
        JOIN active_scope scope
          ON scope.document_snapshot_id = rel.document_snapshot_id) AS relations,
-    (SELECT COUNT(DISTINCT u.id)
-       FROM asset_retrieval_units u
+    (SELECT COUNT(DISTINCT u.representation_id)
+       FROM asset_retrieval_units_v2 u
        JOIN active_scope scope
-         ON scope.document_snapshot_id = u.document_snapshot_id) AS retrieval_units,
-    (SELECT COUNT(DISTINCT e.id)
-       FROM asset_retrieval_embeddings e
-       JOIN asset_retrieval_units u ON u.id = e.retrieval_unit_id
+         ON scope.document_snapshot_id = u.snapshot_id) AS retrieval_units,
+    (SELECT COUNT(DISTINCT e.embedding_id)
+       FROM asset_retrieval_embeddings_v2 e
        JOIN active_scope scope
-         ON scope.document_snapshot_id = u.document_snapshot_id) AS embeddings
+         ON scope.document_snapshot_id = e.snapshot_id) AS embeddings
 """,
             _active_scope_params(domain, channel),
         )
         counts = dict(await cur.fetchone())
 
+        # 2026-09-01 v2 口径：representation_type
         cur = await conn.execute(
             _ACTIVE_SCOPE_CTE
-            + "SELECT u.unit_type, COUNT(DISTINCT u.id) AS c "
-            "FROM asset_retrieval_units u "
+            + "SELECT u.representation_type AS unit_type, COUNT(DISTINCT u.representation_id) AS c "
+            "FROM asset_retrieval_units_v2 u "
             "JOIN active_scope scope "
-            "  ON scope.document_snapshot_id = u.document_snapshot_id "
-            "GROUP BY u.unit_type",
+            "  ON scope.document_snapshot_id = u.snapshot_id "
+            "GROUP BY u.representation_type",
             _active_scope_params(domain, channel),
         )
         type_dist = {row["unit_type"]: row["c"] for row in await cur.fetchall()}

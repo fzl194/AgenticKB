@@ -594,14 +594,14 @@ WITH cur AS (
         return counts
 
     async def stats_assets(self, *, kb_ids: list[str]) -> dict[str, int]:
-        """当前知识的资产量：快照 / 切片 / 检索单元 / 实体提及 / 切片关系。
+        """当前知识的资产量：快照 / 切片 / 检索单元 / 向量。
 
-        四个 COUNT 共用一个 CTE 扫描，而不是四次独立查询 —— 定位当前快照集本身是这段
-        里最贵的部分，没有理由付四遍。
+        2026-09-01 口径切换：v2 算子链只写 ``asset_retrieval_units_v2`` /
+        ``asset_retrieval_embeddings_v2``（旧链表恒 0）；实体提及/切片关系两
+        指标随实体本体线下线移除，新增向量数。
         """
         empty = {
-            "snapshots": 0, "segments": 0, "retrieval_units": 0,
-            "entity_mentions": 0, "relations": 0,
+            "snapshots": 0, "segments": 0, "retrieval_units": 0, "embeddings": 0,
         }
         if not kb_ids:
             return empty
@@ -613,31 +613,31 @@ WITH cur AS (
                       (SELECT COUNT(*) FROM asset_raw_segments s
                          JOIN cur ON cur.document_snapshot_id = s.document_snapshot_id)
                         AS segments,
-                      (SELECT COUNT(*) FROM asset_retrieval_units u
-                         JOIN cur ON cur.document_snapshot_id = u.document_snapshot_id)
+                      (SELECT COUNT(*) FROM asset_retrieval_units_v2 u
+                         JOIN cur ON cur.document_snapshot_id = u.snapshot_id)
                         AS retrieval_units,
-                      (SELECT COUNT(*) FROM asset_segment_entity_mentions m
-                         JOIN cur ON cur.document_snapshot_id = m.document_snapshot_id)
-                        AS entity_mentions,
-                      (SELECT COUNT(*) FROM asset_raw_segment_relations r
-                         JOIN cur ON cur.document_snapshot_id = r.document_snapshot_id)
-                        AS relations""",
+                      (SELECT COUNT(*) FROM asset_retrieval_embeddings_v2 e
+                         JOIN cur ON cur.document_snapshot_id = e.snapshot_id)
+                        AS embeddings""",
                 {"kb": kb_ids},
             )
             row = await cur.fetchone()
             return {k: int(row[k]) for k in empty} if row else empty
 
     async def stats_retrieval_unit_types(self, *, kb_ids: list[str]) -> dict[str, int]:
-        """检索单元类型分布（只回非零的类型；前端按拿到的键渲染，不假定全集）。"""
+        """检索单元类型分布（只回非零的类型；前端按拿到的键渲染，不假定全集）。
+
+        2026-09-01 口径切换：v2 表 representation_type。
+        """
         if not kb_ids:
             return {}
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 f"""{self._CURRENT_SNAPSHOT_CTE}
-                    SELECT u.unit_type, COUNT(*) AS c
-                    FROM asset_retrieval_units u
-                    JOIN cur ON cur.document_snapshot_id = u.document_snapshot_id
-                    GROUP BY u.unit_type
+                    SELECT u.representation_type AS unit_type, COUNT(*) AS c
+                    FROM asset_retrieval_units_v2 u
+                    JOIN cur ON cur.document_snapshot_id = u.snapshot_id
+                    GROUP BY u.representation_type
                     ORDER BY c DESC""",
                 {"kb": kb_ids},
             )

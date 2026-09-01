@@ -770,9 +770,9 @@ async def get_run_document_artifacts(
         )
         segment_count = (await seg_cur.fetchone())["c"]
 
-        # Count retrieval units
+        # Count retrieval units（2026-09-01 v2 口径：新算子链只写 *_v2 表）
         unit_cur = await conn.execute(
-            "SELECT COUNT(*) as c FROM asset_retrieval_units WHERE document_snapshot_id = %s",
+            "SELECT COUNT(*) as c FROM asset_retrieval_units_v2 WHERE snapshot_id = %s",
             [snapshot_id],
         )
         unit_count = (await unit_cur.fetchone())["c"]
@@ -868,21 +868,24 @@ async def get_run_document_units(
         if not snapshot_id:
             return {"run_id": run_id, "document_id": doc_id, "snapshot_id": None, "total": 0, "limit": limit, "offset": offset, "items": []}
 
-        where = "AND unit_type = %s" if unit_type else ""
+        # 2026-09-01 v2 口径：representation_type 兼容旧 unit_type 过滤参数；
+        # 列做字段别名映射（unit_type/title/text），前端表格零改动。
+        where = "AND representation_type = %s" if unit_type else ""
         params: list[str] = [snapshot_id] + ([unit_type] if unit_type else [])
 
         count_cur = await conn.execute(
-            f"SELECT COUNT(*) as c FROM asset_retrieval_units WHERE document_snapshot_id = %s {where}",
+            f"SELECT COUNT(*) as c FROM asset_retrieval_units_v2 WHERE snapshot_id = %s {where}",
             params,
         )
         total = (await count_cur.fetchone())["c"]
 
         cur = await conn.execute(
-            f"SELECT id, unit_key, unit_type, target_type, title, text, "
-            f"block_type, semantic_role, weight, created_at "
-            f"FROM asset_retrieval_units "
-            f"WHERE document_snapshot_id = %s {where} "
-            f"ORDER BY created_at LIMIT %s OFFSET %s",
+            f"SELECT representation_id AS id, representation_type AS unit_type, "
+            f"target_type, structural_context AS title, content_text AS text, "
+            f"ordinal, snapshot_id "
+            f"FROM asset_retrieval_units_v2 "
+            f"WHERE snapshot_id = %s {where} "
+            f"ORDER BY ordinal NULLS LAST, representation_id LIMIT %s OFFSET %s",
             params + [limit, offset],
         )
         rows = await cur.fetchall()
@@ -982,8 +985,8 @@ async def get_run_artifacts(run_id: str, request: Request, domain: str = Query(.
         segment_count = (await seg_cur.fetchone())["c"]
 
         unit_cur = await conn.execute(
-            f"SELECT COUNT(*) as c FROM asset_retrieval_units "
-            f"WHERE document_snapshot_id IN ({placeholders})", snapshot_ids
+            f"SELECT COUNT(*) as c FROM asset_retrieval_units_v2 "
+            f"WHERE snapshot_id IN ({placeholders})", snapshot_ids
         )
         unit_count = (await unit_cur.fetchone())["c"]
 

@@ -408,10 +408,6 @@ onMounted(reload)
   color: var(--kb-text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .kb-search__item-src {

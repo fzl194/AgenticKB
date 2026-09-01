@@ -29,10 +29,22 @@ services:
     #
     # 如果直接执行 docker compose up，
     # 则保留镜像中原本的自动启动行为。
+    #
+    # 产物自举：kb-ui-dist 与 runtime 是 bind-mount，宿主机目录为空时
+    # （首次 up 由 Docker 自动创建）会遮蔽镜像内置产物——nginx 403、
+    # serving 找不到 jar。启动时若挂载点为空，先从镜像自带副本补齐。
     command:
       - /bin/bash
       - -c
       - |
+        if [ ! -e /app/kb-ui-dist/index.html ] && [ -e /image-seed/kb-ui-dist/index.html ]; then
+          cp -a /image-seed/kb-ui-dist/. /app/kb-ui-dist/
+          echo "kb-ui-dist: 已从镜像种子补齐宿主机空目录"
+        fi
+        if [ ! -e /app/runtime/agent_serving.jar ] && [ -e /image-seed/runtime/agent_serving.jar ]; then
+          cp -a /image-seed/runtime/agent_serving.jar /app/runtime/
+          echo "runtime: 已从镜像种子补齐宿主机空目录"
+        fi
         if printenv CMKB_ORDERED_STARTUP | grep -qx '1'; then
           sed -i 's/^autostart=true/autostart=false/' /etc/supervisor/conf.d/cmkb.conf
         fi
@@ -69,6 +81,13 @@ services:
       - ./main_control_service:/app/main_control_service
       - ./mcp_server:/app/mcp_server
       - ./databases:/app/databases
+
+      # 前端静态产物与 Java jar 同样走"宿主机目录即真相源"：
+      # deploy-sync.sh apply 直接换宿主机目录即可生效（deploy-server.sh 首次补齐）。
+      # 注意 jar 必须挂目录（./runtime）而非单文件——单文件 bind-mount
+      # 在文件被 mv/rename 替换时会失效，目录挂载则始终跟随目录内最新文件。
+      - ./kb-ui-dist:/app/kb-ui-dist
+      - ./runtime:/app/runtime
 
     environment:
       # 是否启用按依赖顺序启动服务。

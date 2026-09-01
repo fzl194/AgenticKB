@@ -64,8 +64,12 @@ RUN python -c "import openpyxl, xlrd, pptx, pdfplumber, pdfminer, docx, lxml, mi
     || (echo "错误：文档解析链依赖缺失，无法解析对应格式" >&2; exit 1)
 
 # ── 从构建阶段复制产物 ──
-COPY --from=build-java /build/target/*.jar /app/agent_serving.jar
-COPY --from=build-ui /build/dist /app/kb-ui-dist
+# 产物落两份：/app/... 是运行时路径（bind-mount 覆盖后即宿主机真相源）；
+# /image-seed/... 是镜像内备份——容器启动命令发现挂载点为空时从种子自举
+# （否则空 bind-mount 遮蔽产物：nginx 403、serving 找不到 jar）。
+COPY --from=build-java /build/target/*.jar /image-seed/runtime/agent_serving.jar
+COPY --from=build-ui /build/dist /image-seed/kb-ui-dist
+RUN cp -a /image-seed/runtime /app/runtime && cp -a /image-seed/kb-ui-dist /app/kb-ui-dist
 
 # ── Python 服务代码 ──
 COPY knowledge_mining/ ./knowledge_mining/

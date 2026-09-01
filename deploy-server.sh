@@ -568,32 +568,35 @@ show_completion() {
 }
 
 sync_serving_jar() {
-    # Java 服务不走 bind-mount（Python 目录才挂载），jar 烤在镜像里。
-    # 若宿主机存在新构建的 jar（mvn -DskipTests package），容器重建后同步进去；
-    # 否则容器沿用镜像内置 jar。镜像本身重建时（docker build）同样会带上新 jar。
+    # jar 走 bind-mount（./runtime，容器 /app/runtime）：宿主机目录即真相源。
+    # 若宿主机存在新构建的 jar（mvn -DskipTests package），落盘到 ./runtime；
+    # 否则沿用 ./runtime 现有版本（首次部署时已从镜像补齐）。容器重建不回退。
     local jar
     jar="$(ls -t agent_serving_java/target/agent-serving-*.jar 2>/dev/null | head -1 || true)"
     if [ -n "$jar" ]; then
         echo "=== 正在同步 serving jar: $(basename "$jar") ==="
-        # docker cp 而非 compose cp：旧版 docker-compose 无 cp 子命令，容器名固定。
-        if ! docker cp "$jar" "$APP_CONTAINER_NAME:/app/agent_serving.jar"; then
-            die "无法将 serving jar 复制进容器：$jar"
-        fi
+        mkdir -p runtime
+        # 先写临时名再原子 mv：避免写一半时 serving 重启读到残缺 jar。
+        cp -- "$jar" runtime/agent_serving.jar.tmp
+        mv -- runtime/agent_serving.jar.tmp runtime/agent_serving.jar
     else
-        echo "=== 未发现本地构建的 serving jar，沿用镜像内置版本 ==="
+        echo "=== 未发现本地构建的 serving jar，沿用 ./runtime 现有版本 ==="
     fi
 }
 
 sync_kb_ui_dist() {
-    # 前端与 jar 同理：kb-ui-dist 烤在镜像里且无 bind-mount，重启容器不会更新。
-    # 宿主机 kb-ui/dist 存在（npm run build 产物）则整目录替换进容器（先落 .new 再原子换名）。
+    # 前端同理：./kb-ui-dist bind-mount（容器 /app/kb-ui-dist）。
+    # 宿主机 kb-ui/dist 存在（npm run build 产物）则原子替换宿主机目录。
     if [ -d kb-ui/dist ]; then
         echo "=== 正在同步 kb-ui 前端产物 ==="
-        docker exec "$APP_CONTAINER_NAME" sh -c "rm -rf /app/kb-ui-dist.new && mkdir -p /app/kb-ui-dist.new" || die "容器预备目录失败"
-        docker cp kb-ui/dist/. "$APP_CONTAINER_NAME:/app/kb-ui-dist.new" || die "无法复制 kb-ui 产物"
-        docker exec "$APP_CONTAINER_NAME" sh -c "rm -rf /app/kb-ui-dist.old && mv /app/kb-ui-dist /app/kb-ui-dist.old && mv /app/kb-ui-dist.new /app/kb-ui-dist && rm -rf /app/kb-ui-dist.old" || die "无法切换 kb-ui 目录"
+        rm -rf kb-ui-dist.new
+        cp -a kb-ui/dist kb-ui-dist.new
+        rm -rf kb-ui-dist.old
+        mv kb-ui-dist kb-ui-dist.old
+        mv kb-ui-dist.new kb-ui-dist
+        rm -rf kb-ui-dist.old
     else
-        echo "=== 未发现 kb-ui/dist（先 cd kb-ui && npm run build），沿用镜像内置前端 ==="
+        echo "=== 未发现 kb-ui/dist（先 cd kb-ui && npm run build），沿用现有前端 ==="
     fi
 }
 
@@ -646,7 +649,7 @@ replace_code_preserving_config() {
     CODE_INSTALLED_TARGETS=""
     CODE_BACKED_UP_TARGETS=""
 
-    for target in knowledge_mining llm_service main_control_service mcp_server databases reset_db.py; do
+    for target in knowledge_mining llm_service main_control_service mcp_server databases kb-ui-dist runtime reset_db.py; do
         if [ -e "$target" ] || [ -L "$target" ]; then
             mv "$target" "$CODE_BACKUP_DIR/$target"
             CODE_BACKED_UP_TARGETS="$CODE_BACKED_UP_TARGETS $target"
@@ -667,7 +670,7 @@ stage_code_from_image() {
 
     CODE_STAGE_DIR="$(mktemp -d "${PWD}/.cmkb-code-stage.XXXXXX")"
     echo "=== 正在从镜像暂存完整代码快照 ==="
-    for dir in knowledge_mining llm_service main_control_service mcp_server databases; do
+    for dir in knowledge_mining llm_service main_control_service mcp_server databases kb-ui-dist runtime; do
         mkdir -p "$CODE_STAGE_DIR/$dir"
         docker cp "$TMP_CONTAINER_NAME:/app/$dir/." "$CODE_STAGE_DIR/$dir/"
     done
@@ -692,24 +695,32 @@ apply_config_only() {
 
 deploy_from_image() {
     # 默认选择当前目录中的版本化离线镜像；也允许显式指定 IMAGE_ARCHIVE。
+    # 兼容 .tar.gz（当前格式）与 .tar.zst（历史格式）。
     if [ -z "$IMAGE_ARCHIVE" ]; then
-        IMAGE_ARCHIVE="$(find . -maxdepth 1 -type f -name 'cmkb-*.tar.zst' -print -quit)"
+        IMAGE_ARCHIVE="$(find . -maxdepth 1 -type f \( -name 'cmkb-*.tar.gz' -o -name 'cmkb-*.tar.zst' \) -print -quit)"
     fi
 
     # 当前目录有镜像归档就先校验再加载；没有则使用已存在的本地镜像。
     if [ -n "$IMAGE_ARCHIVE" ] && [ -f "$IMAGE_ARCHIVE" ]; then
-        command -v zstd >/dev/null || die "未安装 zstd，无法解压离线镜像"
         CHECKSUM_FILE="${IMAGE_ARCHIVE}.sha256"
         [ -f "$CHECKSUM_FILE" ] || die "缺少校验文件：$CHECKSUM_FILE"
         echo "=== 校验离线镜像完整性 ==="
         sha256sum -c "$CHECKSUM_FILE" || die "离线镜像校验失败，请重新传输"
 
         echo "=== 加载离线镜像：$IMAGE_ARCHIVE ==="
-        zstd -dc "$IMAGE_ARCHIVE" | docker load
+        case "$IMAGE_ARCHIVE" in
+            *.tar.zst)
+                command -v zstd >/dev/null || die "未安装 zstd，无法解压 $IMAGE_ARCHIVE（新格式为 .tar.gz，建议重新导出）"
+                zstd -dc "$IMAGE_ARCHIVE" | docker load
+                ;;
+            *)
+                gzip -dc "$IMAGE_ARCHIVE" | docker load
+                ;;
+        esac
     elif docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
         echo "=== 未找到离线镜像归档，使用已存在的本地镜像：$IMAGE_NAME ==="
     else
-        die "既无 cmkb-*.tar.zst 离线镜像，本地也没有镜像 $IMAGE_NAME。"
+        die "既无 cmkb-*.tar.(gz|zst) 离线镜像，本地也没有镜像 $IMAGE_NAME。"
     fi
 
     echo "=== 验证镜像内的文档解析依赖 ==="
@@ -734,7 +745,7 @@ deploy_from_image() {
         replace_code_preserving_config
     else
         echo "=== 代码目录仅在缺失或为空时从镜像补齐 ==="
-        for dir in knowledge_mining llm_service main_control_service mcp_server databases; do
+        for dir in knowledge_mining llm_service main_control_service mcp_server databases kb-ui-dist runtime; do
             if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
                 mkdir -p "$dir"
                 docker cp "$TMP_CONTAINER_NAME:/app/$dir/." "./$dir/"

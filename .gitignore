@@ -50,6 +50,7 @@
 !pyproject.toml
 !deploy-build.sh
 !deploy-server.sh
+!deploy-sync.sh
 !releases.json
 !reset_db.py
 !tools/
@@ -94,6 +95,17 @@ agent_serving_zdy/target/
 
 # === Docker build artifacts ===
 cmkb.tar
+# 增量同步包（deploy-sync.sh pack 产物）与宿主机运行时产物目录
+sync-*.tar.gz
+sync-*.tar.gz.sha256
+cmkb-*.tar.zst
+cmkb-*.tar.zst.sha256
+kb-ui-dist/
+runtime/
+.cmkb-sync-stage.*
+.cmkb-pack-stage.*
+.cmkb-code-stage.*
+.cmkb-code-backup.*
 
 # === 运行时日志（docker-compose 把 ./logs 挂进容器 /app/logs）===
 logs/

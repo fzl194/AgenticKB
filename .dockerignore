@@ -12,6 +12,14 @@ cmkb*.tar
 cmkb*.tar.zst
 *.zst
 *.sha256
+# 增量同步包（deploy-sync.sh pack 产物）与宿主机运行时产物目录同理
+sync-*.tar.gz
+kb-ui-dist/
+runtime/
+.cmkb-sync-stage.*
+.cmkb-pack-stage.*
+.cmkb-code-stage.*
+.cmkb-code-backup.*
 logs/
 
 # 不需要打包的目录

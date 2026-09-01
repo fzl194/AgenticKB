@@ -3,7 +3,6 @@
     <!-- Header -->
     <div class="kb-list__header">
       <div class="kb-list__header-left">
-        <h2 class="kb-list__title">知识库</h2>
         <span class="kb-list__count">{{ kbs.length }} 个</span>
         <span class="kb-list__domain">@ {{ domainStore.currentDomain }}</span>
       </div>

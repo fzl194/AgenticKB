@@ -3,7 +3,6 @@
     <!-- Header -->
     <div class="llm-view__header">
       <div class="llm-view__title-wrap">
-        <h2 class="llm-view__title">LLM 服务</h2>
         <span class="llm-view__scope">当前知识域：{{ domainStore.currentDomain }}</span>
       </div>
       <el-button @click="loadAll" :loading="loading">

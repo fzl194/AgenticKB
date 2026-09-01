@@ -81,8 +81,6 @@ const pageTitles: Record<string, string> = {
   paradigm: '检索范式',
   'paradigm-edit': '检索范式',
   'mcp-access': 'MCP 接入',
-  knowledge: '知识资产',
-  'knowledge-detail': '文档详情',
   llm: 'LLM 服务',
   'llm-task-detail': 'LLM 服务',
   settings: '系统设置',

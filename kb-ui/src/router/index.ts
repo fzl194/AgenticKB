@@ -66,17 +66,6 @@ const router = createRouter({
           props: true,
         },
         {
-          path: 'knowledge',
-          name: 'knowledge',
-          component: () => import('@/views/knowledge/DocumentsView.vue'),
-        },
-        {
-          path: 'knowledge/:docId',
-          name: 'knowledge-detail',
-          component: () => import('@/views/knowledge/DocumentDetailView.vue'),
-          props: true,
-        },
-        {
           path: 'llm',
           name: 'llm',
           component: () => import('@/views/LlmView.vue'),
@@ -113,7 +102,6 @@ const router = createRouter({
 const ADMIN_ROUTES = new Set([
   'mining-workflows', 'mining-workflow-editor',
   'paradigm', 'paradigm-edit',
-  'knowledge', 'knowledge-detail',
   'llm', 'llm-task-detail', 'settings',
 ])
 

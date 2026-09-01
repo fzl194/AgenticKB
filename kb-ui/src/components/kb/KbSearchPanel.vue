@@ -73,13 +73,14 @@
         <div v-for="(ev, i) in evidence" :key="ev.ref ?? i" class="kb-search__item">
           <div class="kb-search__item-head">
             <span class="kb-search__item-type">{{ ev.type || '证据' }}</span>
-            <el-button
-              v-if="ev.ref?.startsWith('ev_')"
-              size="small" text type="primary"
-              :loading="expanding === ev.ref"
-              @click="expandEvidence(ev)"
-            >{{ expanded[ev.ref!] ? '收起' : '查看完整' }}</el-button>
-            <span v-if="ev.truncated && !expanded[ev.ref ?? '']" class="kb-search__item-trunc" title="内容被预算截断；点「查看完整」取回全文">截断</span>
+            <span v-if="ev.ref?.startsWith('ev_')" class="kb-search__item-actions">
+              <span v-if="ev.truncated && !expanded[ev.ref ?? '']" class="kb-search__item-trunc" title="内容被预算截断；点「查看完整」取回全文">截断</span>
+              <el-button
+                size="small" text type="primary"
+                :loading="expanding === ev.ref"
+                @click="expandEvidence(ev)"
+              >{{ expanded[ev.ref!] ? '收起' : '查看完整' }}</el-button>
+            </span>
           </div>
           <p class="kb-search__item-text" :class="{ 'is-clamp': !expanded[ev.ref ?? ''] && ev.content && ev.content.length > 400 }">
             {{ expanded[ev.ref ?? ''] ? (fullContent[ev.ref ?? ''] ?? ev.content) : ev.content }}
@@ -149,8 +150,10 @@ async function expandEvidence(ev: EvidenceItem) {
   if (!fullContent.value[ref]) {
     expanding.value = ref
     try {
+      // 一律 whole_document：用户点的是「查看完整」——parent 粒度常与已展示
+      // 内容相同，点了没视觉变化（2026-09-01 用户反馈）。
       const item = await servingApi.getEvidenceFull(
-        ref, domainStore.currentDomain, props.kb.id, ev.truncated ? 'whole_document' : 'parent')
+        ref, domainStore.currentDomain, props.kb.id, 'whole_document')
       fullContent.value[ref] = item.content ?? ''
     } catch (e) {
       ElMessage.error('取回完整原文失败，请稍后重试')
@@ -428,4 +431,6 @@ onMounted(reload)
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+.kb-search__item-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 </style>

@@ -1,10 +1,8 @@
 import type {
   MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus,
-  KnowledgeDocument, KnowledgeSegment, KnowledgeUnit,
-  MiningBatchSummary, LifecycleRemovalResult,
+  KnowledgeSegment, KnowledgeUnit,
   RunTrace,
 } from '@/types'
-import type { PaginatedResponse } from '@/types'
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 
 export function useMiningApi() {
@@ -115,83 +113,6 @@ export function useMiningApi() {
       return { content: data, format }
     },
 
-    async getDocumentRawContent(docId: string): Promise<{ content: string; format: string }> {
-      const { data, headers } = await client.get(`/api/knowledge/documents/${docId}/raw-content`, {
-        responseType: 'text',
-      })
-      const format = headers['x-content-format'] || 'plain'
-      return { content: data, format }
-    },
-
-
-
-
-    // Knowledge assets
-    // domain 通常由 proxyClient 拦截器自动注入；下架/下载等破坏性操作可显式传入
-    // domain 以「钉住」发起时的领域，避免请求在途中领域切换导致误操作（拦截器会
-    // 尊重显式传入的 domain，优先于默认注入值）。
-    async getDocuments(params?: {
-      domain?: string; limit?: number; offset?: number; source_batch_id?: string; unclassified?: boolean
-    }): Promise<PaginatedResponse<KnowledgeDocument>> {
-      const { data } = await client.get('/api/knowledge/documents', { params })
-      return data
-    },
-
-    async getBatches(domain?: string): Promise<{ items: MiningBatchSummary[] }> {
-      const { data } = await client.get('/api/knowledge/batches', {
-        params: domain ? { domain } : undefined,
-      })
-      return data
-    },
-
-    async downloadDocument(documentId: string, domain?: string): Promise<{
-      blob: Blob; contentDisposition: string | null
-    }> {
-      const response = await client.get(`/api/knowledge/documents/${documentId}/download`, {
-        params: domain ? { domain } : undefined,
-        responseType: 'blob',
-      })
-      const contentDisposition = response.headers['content-disposition']
-      return {
-        blob: response.data,
-        contentDisposition: typeof contentDisposition === 'string' ? contentDisposition : null,
-      }
-    },
-
-    async removeDocument(documentId: string, domain?: string): Promise<LifecycleRemovalResult> {
-      const { data } = await client.delete(`/api/knowledge/documents/${documentId}`, {
-        params: domain ? { domain } : undefined,
-      })
-      return extractOne<LifecycleRemovalResult>(data)
-    },
-
-    async removeBatch(sourceBatchId: string, domain?: string): Promise<LifecycleRemovalResult> {
-      const { data } = await client.delete(`/api/knowledge/batches/${sourceBatchId}`, {
-        params: domain ? { domain } : undefined,
-      })
-      return extractOne<LifecycleRemovalResult>(data)
-    },
-
-    async getDocument(docId: string): Promise<KnowledgeDocument> {
-      const { data } = await client.get(`/api/knowledge/documents/${docId}`)
-      return extractOne<KnowledgeDocument>(data)
-    },
-
-    async getDocumentSegments(docId: string, params?: {
-      limit?: number; offset?: number
-    }): Promise<{ document_id: string; snapshot_id: string; total: number; items: KnowledgeSegment[] }> {
-      const { data } = await client.get(`/api/knowledge/documents/${docId}/segments`, { params })
-      return data
-    },
-
-    async getDocumentUnits(docId: string, params?: {
-      unit_type?: string; limit?: number; offset?: number
-    }): Promise<{ document_id: string; snapshot_id: string; total: number; items: KnowledgeUnit[] }> {
-      const { data } = await client.get(`/api/knowledge/documents/${docId}/units`, { params })
-      return data
-    },
-
-    // 挖掘过程透视 — 冻结 Workflow、节点事件和文档执行状态
     async getRunTrace(runId: string): Promise<RunTrace> {
       const { data } = await client.get(`/api/runs/${runId}/trace`)
       return data

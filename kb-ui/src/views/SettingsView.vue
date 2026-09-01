@@ -1,7 +1,6 @@
 <template>
   <div class="settings-view">
     <div class="settings-view__header">
-      <h2 class="settings-view__title">系统设置</h2>
     </div>
 
     <div v-if="store.error" class="settings-view__alert">

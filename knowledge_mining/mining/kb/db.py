@@ -324,11 +324,12 @@ class KbDB:
                      (SELECT COUNT(*) FROM latest) AS documents,
                      (SELECT COUNT(*) FROM asset_raw_segments s
                        JOIN latest ON s.document_snapshot_id = latest.document_snapshot_id) AS segments,
-                     (SELECT COUNT(*) FROM asset_retrieval_units u
-                       JOIN latest ON u.document_snapshot_id = latest.document_snapshot_id) AS retrieval_units,
-                     (SELECT COUNT(*) FROM asset_retrieval_embeddings e
-                       JOIN asset_retrieval_units u ON u.id = e.retrieval_unit_id
-                       JOIN latest ON u.document_snapshot_id = latest.document_snapshot_id) AS embeddings,
+                     -- 2026-09-01 用户反馈：旧链表恒 0——v2 算子链只写
+                     -- asset_retrieval_units_v2 / _embeddings_v2（按 snapshot_id 关联）。
+                     (SELECT COUNT(*) FROM asset_retrieval_units_v2 u
+                       JOIN latest ON u.snapshot_id = latest.document_snapshot_id) AS retrieval_units,
+                     (SELECT COUNT(*) FROM asset_retrieval_embeddings_v2 e
+                       JOIN latest ON e.snapshot_id = latest.document_snapshot_id) AS embeddings,
                      (SELECT COALESCE(
                                (b.summary_json ->> 'embedding_fallback')::boolean,
                                false)

@@ -2,7 +2,6 @@
   <div class="workflow-list">
     <header class="workflow-list__header">
       <div>
-        <h2>挖掘范式</h2>
         <p>全局共享，不随 Domain 切换；发布后可在上传文件挖掘时选择精确版本。</p>
       </div>
       <el-button type="primary" data-test="create-workflow" @click="openCreate">新建范式</el-button>

@@ -2,7 +2,6 @@
   <div class="mcp-view">
     <div class="mcp-view__head">
       <div>
-        <h2 class="mcp-view__title">MCP 接入</h2>
         <p class="mcp-view__desc">
           你的 Agent（dify / 扣子 / Claude 等）连平台知识库的唯一入口。一个服务、一把钥匙：
           下方所有配置只影响你自己的 Agent，其他人互不可见。

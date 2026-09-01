@@ -1,17 +1,8 @@
-import axios from 'axios'
-import { createPinia, setActivePinia } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { useMiningApi } from '@/api/mining'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
 import { apiErrorDetail } from '@/api/proxyClient'
-import { useDomainStore } from '@/stores/domain'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
-
-type RequestConfig = {
-  baseURL?: string
-  params?: Record<string, unknown>
-  responseType?: string
-}
 
 describe('download helpers', () => {
   afterEach(() => {
@@ -132,63 +123,5 @@ describe('apiErrorDetail', () => {
       },
     }
     await expect(apiErrorDetail(error)).resolves.toBe('挖掘范式不存在')
-  })
-})
-
-describe('knowledge document download request', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    localStorage.clear()
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it('uses_the_explicit_domain_for_both_query_and_proxy_path', async () => {
-    let interceptor: ((config: RequestConfig) => RequestConfig) | undefined
-    const observedConfigs: RequestConfig[] = []
-    const blob = new Blob(['document'])
-    const get = vi.fn(async (_url: string, config: RequestConfig = {}) => {
-      const resolved = interceptor ? interceptor(config) : config
-      observedConfigs.push(resolved)
-      return {
-        data: blob,
-        headers: { 'content-disposition': 'attachment; filename="report.pdf"' },
-      }
-    })
-    const fakeClient = {
-      interceptors: {
-        request: {
-          use: vi.fn((handler: (config: RequestConfig) => RequestConfig) => {
-            interceptor = handler
-            return 0
-          }),
-        },
-      },
-      get,
-    }
-    vi.spyOn(axios, 'create').mockReturnValue(fakeClient as never)
-    const store = useDomainStore()
-    store.currentDomain = 'domain-b'
-
-    const result = await useMiningApi().downloadDocument('doc-1', 'domain-a')
-
-    expect(get).toHaveBeenCalledWith(
-      '/api/knowledge/documents/doc-1/download',
-      expect.objectContaining({
-        params: { domain: 'domain-a' },
-        responseType: 'blob',
-      }),
-    )
-    expect(observedConfigs[0]).toMatchObject({
-      baseURL: '/api/control-plane/api/v1/proxy/domain-a/mining',
-      params: { domain: 'domain-a' },
-      responseType: 'blob',
-    })
-    expect(result).toEqual({
-      blob,
-      contentDisposition: 'attachment; filename="report.pdf"',
-    })
   })
 })

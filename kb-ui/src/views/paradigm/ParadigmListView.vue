@@ -2,7 +2,6 @@
   <div class="pd-list">
     <div class="pd-list__head">
       <div>
-        <h2 class="pd-list__title">检索范式</h2>
         <p class="pd-list__sub">可插拔检索算子 DAG —— 拖拽编排、发布版本；范式跨域通用，用哪个库检索由知识库自己绑定</p>
       </div>
       <el-button type="primary" :icon="Plus" @click="openCreate">新建范式</el-button>

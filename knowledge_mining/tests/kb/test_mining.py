@@ -57,6 +57,7 @@ async def _client(async_pool):
         async_pool=_async_pool, sync_pool=lambda _d: None,
     )
     app.state.workflow_run_binder = SimpleNamespace(resolve=_resolve_binding)
+    app.state.domain_run_dispatcher = SimpleNamespace(kick=lambda _domain: None)
 
     app.include_router(kb_router)
     app.include_router(docs_router)
@@ -143,6 +144,47 @@ async def test_mine_owner_202_creates_run_row(async_pool, upload_root, monkeypat
 
         # 等 stub 线程释放域锁，避免污染后续测试
         await asyncio.sleep(0.3)
+
+
+async def test_same_kb_is_rejected_but_different_kb_can_queue(
+    async_pool, upload_root, monkeypatch,
+):
+    """PG E2E: one open Run per KB, while another KB in the domain queues."""
+    monkeypatch.setattr(
+        "knowledge_mining.mining.kb.routes.mining.resolve_domain",
+        lambda _d: {"default_channel": "prod"},
+    )
+    async with await _client(async_pool) as c:
+        headers = kb_headers("queue-owner")
+        kb_a = await _make_kb_with_upload(c, headers, name="queue-a")
+        kb_b = await _make_kb_with_upload(c, headers, name="queue-b")
+        for kb_id in (kb_a, kb_b):
+            response = await c.patch(
+                f"/api/kb/{kb_id}",
+                json={"mining_workflow_id": "wf-test"},
+                headers=headers,
+            )
+            assert response.status_code == 200, response.text
+
+        first = await c.post(f"/api/kb/{kb_a}/mine", headers=headers)
+        duplicate = await c.post(f"/api/kb/{kb_a}/mine", headers=headers)
+        other = await c.post(f"/api/kb/{kb_b}/mine", headers=headers)
+
+        assert first.status_code == 202, first.text
+        assert duplicate.status_code == 409, duplicate.text
+        assert duplicate.json()["detail"]["code"] == "kb_mining_busy"
+        assert duplicate.json()["detail"]["details"]["run_id"] == first.json()["run_id"]
+        assert other.status_code == 202, other.text
+        async with async_pool.connection() as conn:
+            cursor = await conn.execute(
+                """SELECT kb_id, status FROM mining_runs
+                   WHERE kb_id = ANY(%s) ORDER BY started_at, id""",
+                ([kb_a, kb_b],),
+            )
+            rows = await cursor.fetchall()
+        assert [(row["kb_id"], row["status"]) for row in rows] == [
+            (kb_a, "queued"), (kb_b, "queued"),
+        ]
 
 
 async def test_mine_force_redo_propagates_to_metadata(async_pool, upload_root, monkeypatch):

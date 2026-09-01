@@ -8,8 +8,6 @@ Start:
 from __future__ import annotations
 
 import logging
-import os
-import asyncio
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
@@ -49,8 +47,8 @@ from knowledge_mining.mining.workflow.run_binding import WorkflowRunBinder
 from knowledge_mining.mining.api.startup_recovery import (
     recover_startup_runs,
     schedule_lease_expiry_sweep,
-    schedule_startup_resumes,
 )
+from knowledge_mining.mining.api.domain_run_queue import build_domain_run_dispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +139,9 @@ async def lifespan(app: FastAPI):
 
     # Domain-specific async/sync pools are opened lazily by API dependencies.
     app.state.domain_pools = DomainPoolManager(cfg)
+    app.state.domain_run_dispatcher = build_domain_run_dispatcher(
+        app.state.domain_pools, cfg,
+    )
 
     from knowledge_mining.mining.infra.domain_pack import load_domain_registry
     from knowledge_mining.mining.api.routes.runs import _utcnow
@@ -151,9 +152,8 @@ async def lifespan(app: FastAPI):
         if isinstance(entry, dict) and entry.get("enabled", True)
     )
 
-    async def _resume_workflow_after_restart(run_id: str, domain: str) -> None:
-        from knowledge_mining.mining.jobs.run import resume
-        await asyncio.to_thread(resume, run_id, domain=domain, db_config=cfg)
+    async def _wake_domain_queue(_run_id: str, domain: str) -> None:
+        app.state.domain_run_dispatcher.kick(domain)
 
     recovery = await recover_startup_runs(
         domain_ids=enabled_domains,
@@ -162,14 +162,11 @@ async def lifespan(app: FastAPI):
     )
     if recovery.interrupted_run_ids:
         logger.warning("Startup recovery interrupted %d abandoned run(s)", len(recovery.interrupted_run_ids))
-    if recovery.workflow_runs:
-        schedule_startup_resumes(recovery, _resume_workflow_after_restart)
-        logger.info("Scheduled %d workflow run resume(s) in background", len(recovery.workflow_runs))
     # P07-S2：重启瞬间仍持有效租约的 Run，等租约到期后补一轮标记 + 恢复。
     schedule_lease_expiry_sweep(
         domain_ids=enabled_domains,
         domain_pools=app.state.domain_pools,
-        resume_workflow=_resume_workflow_after_restart,
+        resume_workflow=_wake_domain_queue,
     )
 
     async def _active_ontology_id(domain: str) -> str | None:
@@ -203,10 +200,16 @@ async def lifespan(app: FastAPI):
     # 好几秒才弹进入队列"的根因。放启动期一次性付，请求期 import 命中缓存→瞬完。
     import knowledge_mining.mining.jobs.run  # noqa: F401  (warm sys.modules cache)
 
+    # queued rows survive restarts; interrupted rows are resumed by the same
+    # one-domain-at-a-time dispatcher before ordinary FIFO work.
+    for domain in enabled_domains:
+        app.state.domain_run_dispatcher.kick(domain)
+
     logger.info("Mining API started — PostgreSQL %s:%d/%s", cfg.pg_host, cfg.pg_port, cfg.pg_dbname)
 
     yield
 
+    app.state.domain_run_dispatcher.close()
     await app.state.domain_pools.close()
     await pool.close()
     logger.info("Mining API stopped")

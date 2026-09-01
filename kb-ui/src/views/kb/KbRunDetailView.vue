@@ -37,11 +37,11 @@
           </div>
           <div class="metric">
             <span class="metric__value">{{ formatDuration(miningStore.currentRun.started_at, miningStore.currentRun.finished_at) }}</span>
-            <span class="metric__label">耗时</span>
+            <span class="metric__label">总历时</span>
           </div>
           <div class="metric">
             <span class="metric__value">{{ formatTime(miningStore.currentRun.started_at) }}</span>
-            <span class="metric__label">开始时间</span>
+            <span class="metric__label">提交时间</span>
           </div>
         </div>
       </div>

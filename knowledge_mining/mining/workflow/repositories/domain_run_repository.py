@@ -34,6 +34,8 @@ class AsyncDomainRunRepository:
         binding: WorkflowRunBinding | None,
         started_at: str,
         preflight_manifest: dict[str, Any] | None = None,
+        kb_id: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
     ) -> str:
         if execution_engine == "workflow":
             if binding is None or not all((
@@ -53,9 +55,11 @@ class AsyncDomainRunRepository:
                        id, input_path, domain, status, current_stage, started_at,
                        channel, execution_engine, workflow_id, workflow_version,
                        workflow_version_id, workflow_graph_hash,
-                       workflow_manifest_json, preflight_manifest_json
+                       workflow_manifest_json, preflight_manifest_json,
+                       kb_id, metadata_json
                    ) VALUES (
-                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                       %s, %s
                    )""",
                 (
                     run_id,
@@ -72,9 +76,27 @@ class AsyncDomainRunRepository:
                     binding.graph_hash if binding else None,
                     Jsonb(binding.manifest) if binding else None,
                     Jsonb(preflight_manifest) if preflight_manifest else None,
+                    kb_id,
+                    Jsonb(metadata_json or {}),
                 ),
             )
         return run_id
+
+    async def find_open_run_for_kb(self, kb_id: str) -> dict[str, Any] | None:
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(
+                """SELECT id, status, started_at
+                   FROM mining_runs
+                   WHERE kb_id = %s
+                     AND status IN (
+                         'queued', 'running', 'awaiting_review', 'interrupted'
+                     )
+                   ORDER BY started_at, id
+                   LIMIT 1""",
+                (kb_id,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
 
 class DomainRunRepository:

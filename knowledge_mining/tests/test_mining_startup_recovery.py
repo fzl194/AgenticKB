@@ -76,6 +76,8 @@ async def test_startup_recovery_interrupts_stale_runs_and_resumes_workflow_only(
     await task
     assert resumed == [("workflow-1", "d1")]
     assert "UPDATE mining_runs" in first.connection_impl.sql
+    assert "status = 'running'" in first.connection_impl.sql
+    assert "status IN ('queued', 'running')" not in first.connection_impl.sql
     assert "RETURNING id, domain, execution_engine" in first.connection_impl.sql
     assert first.connection_impl.params[0] == "2026-08-25T00:00:00+00:00"
 

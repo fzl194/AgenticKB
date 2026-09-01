@@ -46,7 +46,7 @@ async def recover_startup_runs(
                        SET status = 'interrupted', finished_at = %s,
                            metadata_json = COALESCE(metadata_json, '{}'::jsonb)
                                || '{\"interrupted_by\": \"restart\"}'::jsonb
-                       WHERE domain = %s AND status IN ('queued', 'running')
+                       WHERE domain = %s AND status = 'running'
                          AND finished_at IS NULL
                          AND (worker_id IS NULL OR lease_until IS NULL OR lease_until < NOW())
                        RETURNING id, domain, execution_engine""",

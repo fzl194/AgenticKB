@@ -30,8 +30,12 @@
         >
           <el-checkbox v-model="forceRedo">强制重挖</el-checkbox>
         </el-tooltip>
-        <el-button v-if="canWrite" type="primary" :loading="mining" :disabled="!workflowId" @click="triggerMine">
-          <el-icon class="el-icon--left"><Cpu /></el-icon>{{ forceRedo ? '强制整库重挖' : '整库挖掘' }}
+        <el-button
+          v-if="canWrite" type="primary" :loading="mining"
+          :disabled="!workflowId || !!busyRun" data-testid="mine-kb"
+          @click="triggerMine"
+        >
+          <el-icon class="el-icon--left"><Cpu /></el-icon>{{ mineButtonLabel }}
         </el-button>
         <el-button :loading="loadingRuns" @click="loadRuns">
           <el-icon class="el-icon--left"><Refresh /></el-icon>
@@ -43,7 +47,7 @@
       尚未选择挖掘范式。在「文件」tab 多选文档后点「挖掘选中」前，请先绑定一个已发布范式。
     </p>
     <p v-else class="kb-mining__tip">
-      点「整库挖掘」对本库新增/变更文档做增量挖掘；或在「文件」tab 多选文档 →「挖掘选中」。点下方任一任务查看实时进度与流水线。
+      点「整库挖掘」对本库文档发起挖掘；或在「文件」tab 多选文档 →「挖掘选中」。点下方任一任务查看实时进度与流水线。
     </p>
 
     <!-- 挖掘记录列表（行可点 → 任务详情：实时进度 + 12 阶段流水线） -->
@@ -106,7 +110,7 @@
             <span v-else class="kb-mining__muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="开始时间" min-width="160">
+        <el-table-column label="提交时间" min-width="160">
           <template #default="{ row }">{{ formatTime(row.started_at) }}</template>
         </el-table-column>
         <el-table-column label="错误摘要" min-width="180">
@@ -135,7 +139,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Cpu, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -178,6 +182,16 @@ const runsError = ref('')
 const mining = ref(false)
 const forceRedo = ref(false)
 
+const busyRun = computed(() => runs.value.find((run) =>
+  ['queued', 'running', 'awaiting_review', 'interrupted'].includes(run.status),
+) ?? null)
+const mineButtonLabel = computed(() => {
+  if (busyRun.value?.status === 'queued') return '排队中'
+  if (busyRun.value?.status === 'running') return '挖掘中'
+  if (busyRun.value) return '任务待处理'
+  return forceRedo.value ? '强制整库重挖' : '整库挖掘'
+})
+
 let pollTimer: number | null = null
 let runsGeneration = 0
 
@@ -218,17 +232,21 @@ async function onWorkflowChange(value: string | null) {
   }
 }
 
-// ── 触发整库挖掘（无 document_ids = 对本库新增/变更文档增量挖掘）──
+// ── 触发整库挖掘（无 document_ids = 提交本库全部当前文档）──
 async function triggerMine() {
   if (!workflowId.value) {
     ElMessage.warning('请先选择挖掘范式')
+    return
+  }
+  if (busyRun.value) {
+    ElMessage.warning(mineButtonLabel.value)
     return
   }
   mining.value = true
   try {
     const res = await kbApi.mineKb(props.kbId, undefined, forceRedo.value)
     ElMessage.success(
-      `${forceRedo.value ? '强制整库重挖' : '整库挖掘'}已排队（run ${res.run_id.slice(0, 8)}）` +
+      `${forceRedo.value ? '强制整库重挖' : '整库挖掘'}已加入队列（run ${res.run_id.slice(0, 8)}）` +
         (res.auto_force_redo ? '（范式已变更，自动强制重挖）' : ''),
     )
     await loadRuns()

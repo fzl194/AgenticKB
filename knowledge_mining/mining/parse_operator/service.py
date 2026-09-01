@@ -139,6 +139,18 @@ class DocumentParseService:
         if rejection is not None:
             return await self._reject_scanned(frozen, plan, primary_fp, rejection)
 
+        # 旧二进制 .doc（Word 97-2003）→ docx（2026-09-01 用户反馈）：v2 算子
+        # 链此前无旧链 ingestion 预处理的等价物——registry 无 parser 支持
+        # application/msword，plan 兜底 legacy_markdown 直接 UnsupportedFormat。
+        try:
+            frozen = await self._convert_legacy_doc(frozen)
+        except Exception as exc:  # noqa: BLE001 —— 转换失败留痕为 FAILED 终态
+            return await self._reject_scanned(
+                frozen, plan, primary_fp,
+                f"doc_to_docx_failed: {type(exc).__name__}: {exc}",
+                guard="legacy_doc",
+            )
+
         rid = run_id or _new_id("parse")
         await self._parse_runs.insert(ParseRunRecord(
             id=rid,
@@ -288,6 +300,18 @@ class DocumentParseService:
         rejection = await self._scanned_pdf_rejection(frozen)
         if rejection is not None:
             return await self._reject_scanned(frozen, plan, primary_fp, rejection)
+
+        # 旧二进制 .doc（Word 97-2003）→ docx（2026-09-01 用户反馈）：v2 算子
+        # 链此前无旧链 ingestion 预处理的等价物——registry 无 parser 支持
+        # application/msword，plan 兜底 legacy_markdown 直接 UnsupportedFormat。
+        try:
+            frozen = await self._convert_legacy_doc(frozen)
+        except Exception as exc:  # noqa: BLE001 —— 转换失败留痕为 FAILED 终态
+            return await self._reject_scanned(
+                frozen, plan, primary_fp,
+                f"doc_to_docx_failed: {type(exc).__name__}: {exc}",
+                guard="legacy_doc",
+            )
 
         rid = run_id or _new_id("parse")
         await self._parse_runs.insert(ParseRunRecord(
@@ -439,8 +463,91 @@ class DocumentParseService:
             )
         return None
 
+    #: docx MIME（application/vnd.openxmlformats-officedocument.wordprocessingml.document）
+    _DOCX_MIME = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+    async def _convert_legacy_doc(self, frozen: FrozenInput) -> FrozenInput:
+        """application/msword（.doc）→ docx 后重定向 frozen（原地无副作用）。
+
+        非-msword 原样返回。转换走 LibreOffice（doc_to_docx，与旧链同一
+        实现）；产物按源内容哈希命名写回对象存储（``原key--doc2docx-<hash>.docx``），
+        **原始对象不动**——下载/审计仍取原件。幂等：产物对象已存在（同源
+        hash 重复挖掘）直接复用，不重复转换。
+
+        ``source_raw_hash``/``size`` 更新为**转换产物**的实际值——shadow
+        reader 按本字段校验流字节；幂等探针键（document_id, source_raw_hash,
+        parser_fp）随之绑定转换产物（转换器版本变化 → 产物变化 → 重解析，
+        语义正确）。
+        """
+        if (frozen.mime or "").lower() != "application/msword":
+            return frozen
+        from knowledge_mining.mining.ingestion.doc_preprocessing import (
+            doc_to_docx,
+        )
+        from knowledge_mining.mining.contracts.storage.types import PutOptions
+
+        source = ObjectLocation(
+            bucket=frozen.bucket, object_key=frozen.object_key,
+            version_id=frozen.object_version_id,
+        )
+        target_key = f"{frozen.object_key}--doc2docx-{frozen.source_raw_hash[:16]}.docx"
+        target = ObjectLocation(bucket=frozen.bucket, object_key=target_key)
+
+        import hashlib
+        docx_bytes: bytes
+        new_hash: str
+        try:
+            existing = await self._store.stat(target)
+        except Exception:
+            existing = None
+        if existing is not None and existing.sha256:
+            new_hash = existing.sha256
+            docx_size = existing.size
+        else:
+            data = b"".join(
+                [chunk async for chunk in self._store.get_stream(source)]
+            )
+            import tempfile
+            from pathlib import Path
+            tmp_in = Path(tempfile.mkstemp(suffix=".doc")[1])
+            try:
+                tmp_in.write_bytes(data)
+                converted = doc_to_docx(tmp_in)
+                docx_bytes = converted.read_bytes()
+            finally:
+                tmp_in.unlink(missing_ok=True)
+            new_hash = hashlib.sha256(docx_bytes).hexdigest()
+
+            async def _one_shot():
+                yield docx_bytes
+
+            await self._store.put_stream(
+                target, _one_shot(),
+                PutOptions(
+                    artifact_class="derived",
+                    mime=self._DOCX_MIME,
+                    content_length=len(docx_bytes),
+                    expected_sha256=new_hash,
+                    metadata={"converted_from": "application/msword",
+                              "source_sha256": frozen.source_raw_hash},
+                ),
+            )
+            docx_size = len(docx_bytes)
+
+        from dataclasses import replace as _replace
+        return _replace(
+            frozen,
+            mime=self._DOCX_MIME,
+            object_key=target_key,
+            object_version_id=None,
+            source_raw_hash=new_hash,
+            size=docx_size,
+        )
+
     async def _reject_scanned(self, frozen, plan, primary_fp: str,
-                              message: str):
+                              message: str, *, guard: str = "scanned_pdf"):
         """扫描件守卫的失败终态：run + attempt 完整留痕（不走解析链）。"""
         rid = _new_id("parse")
         await self._parse_runs.insert(ParseRunRecord(
@@ -455,7 +562,7 @@ class DocumentParseService:
             started_at=_utcnow(),
             metadata_json=json.dumps(
                 {"mode": "m4-operator", "plan_id": plan.plan_id,
-                 "guard": "scanned_pdf"},
+                 "guard": guard},
                 ensure_ascii=False, sort_keys=True,
             ),
         ))
@@ -464,7 +571,7 @@ class DocumentParseService:
         await self._advance(rid, "PARSING")  # 状态机：FAILED 只能从 PARSING 进入
         await self._attempts.append(self._attempt(
             rid, 0, plan.primary_parser_id, "primary", "FAILED", _utcnow(),
-            error_message=f"scanned_pdf_needs_ocr: {message}",
+            error_message=f"{guard}: {message}",
         ))
         await self._advance(rid, "FAILED", error_message=message,
                             finished_at=_utcnow())

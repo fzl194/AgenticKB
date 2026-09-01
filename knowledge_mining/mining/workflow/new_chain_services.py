@@ -178,6 +178,13 @@ class DocumentParseFacade:
         mime = _as_str(
             getattr(raw_file, "mime", None), "text/plain",
         )
+        if mime == "application/msword":
+            # 旧二进制 .doc：parse service 入口先转 docx（见
+            # parse_operator.service._convert_legacy_doc），计划按 docx 链选。
+            mime = (
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            )
         parser_ids = tuple(
             candidate.parser_id for candidate in registry.all()
             if candidate.supports(mime)

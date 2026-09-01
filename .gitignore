@@ -50,6 +50,7 @@
 !pyproject.toml
 !deploy-build.sh
 !deploy-server.sh
+!releases.json
 !reset_db.py
 !tools/
 !tools/**

@@ -74,6 +74,7 @@ declare module 'vue' {
     PipelineFlow: typeof import('./src/components/kb/PipelineFlow.vue')['default']
     PreprocessNotice: typeof import('./src/components/kb/PreprocessNotice.vue')['default']
     QueryList: typeof import('./src/components/dashboard/QueryList.vue')['default']
+    ReleaseVersion: typeof import('./src/components/layout/ReleaseVersion.vue')['default']
     ReloadConfigTab: typeof import('./src/components/settings/ReloadConfigTab.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

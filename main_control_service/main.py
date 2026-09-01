@@ -18,6 +18,10 @@ from main_control_service.proxy import (
     proxy_request,
 )
 from main_control_service.service import YamlConfigService
+from main_control_service.release_info import (
+    default_release_manifest_path,
+    load_current_release,
+)
 
 
 def _find_auth_mw(request: Request) -> AuthMiddleware | None:
@@ -78,10 +82,14 @@ def create_app(
     *,
     config_dir: Path | None = None,
     settings: MainControlSettings | None = None,
+    release_manifest_path: Path | None = None,
 ) -> FastAPI:
     cfg = settings or MainControlSettings()
     effective_config_dir = config_dir or cfg.config_dir
     service = YamlConfigService(config_dir=effective_config_dir)
+    release_info = load_current_release(
+        release_manifest_path or default_release_manifest_path()
+    )
     ip_whitelist_path = effective_config_dir / "system" / "ip_whitelist.yaml"
 
     @asynccontextmanager
@@ -97,7 +105,7 @@ def create_app(
 
     app = FastAPI(
         title="Main Control Service",
-        version="2.0.0",
+        version=release_info["version"],
         description="YAML config center for CoreMasterKB services — full CRUD.",
         lifespan=lifespan,
     )
@@ -121,7 +129,16 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "mode": "yaml_crud"}
+        return {
+            "status": "ok",
+            "mode": "yaml_crud",
+            "version": release_info["version"],
+        }
+
+    @app.get("/api/v1/version")
+    def version() -> dict[str, object]:
+        """Return the immutable release record baked into this deployment."""
+        return release_info
 
     # ------------------------------------------------------------------
     # Auth — login / me（SKIP_PATHS 免 token）/ reload-auth（admin-only）

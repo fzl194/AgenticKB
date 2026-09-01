@@ -7,7 +7,15 @@ set -Eeuo pipefail
 command -v docker >/dev/null || { echo "错误：未安装 Docker" >&2; exit 1; }
 command -v zstd >/dev/null || { echo "错误：未安装 zstd，无法压缩离线镜像" >&2; exit 1; }
 
-VERSION="${CMKB_VERSION:-$(git rev-parse --short HEAD)}"
+RELEASE_MANIFEST="releases.json"
+[ -f "$RELEASE_MANIFEST" ] || { echo "错误：缺少发布清单 $RELEASE_MANIFEST" >&2; exit 1; }
+MANIFEST_VERSION="$(sed -nE 's/^[[:space:]]*"current"[[:space:]]*:[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$RELEASE_MANIFEST" | head -n 1)"
+[ -n "$MANIFEST_VERSION" ] || { echo "错误：发布清单 current 必须是 MAJOR.MINOR.PATCH" >&2; exit 1; }
+if [ -n "${CMKB_VERSION:-}" ] && [ "$CMKB_VERSION" != "$MANIFEST_VERSION" ]; then
+  echo "错误：CMKB_VERSION=$CMKB_VERSION 与发布清单版本 $MANIFEST_VERSION 不一致" >&2
+  exit 1
+fi
+VERSION="$MANIFEST_VERSION"
 IMAGE_NAME="coremasterkb-app:${VERSION}"
 ARCHIVE="cmkb-${VERSION}.tar.zst"
 

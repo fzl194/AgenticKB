@@ -12,6 +12,7 @@ vi.mock('@/stores/auth', () => ({
 }))
 
 import Sidebar from '../Sidebar.vue'
+import ReleaseVersion from '../ReleaseVersion.vue'
 import { useBrandStore } from '@/stores/brand'
 
 describe('Sidebar navigation', () => {
@@ -22,6 +23,8 @@ describe('Sidebar navigation', () => {
 
   it('keeps admin/exploration pages and hides removed asset/graph entries', () => {
     const wrapper = shallowMount(Sidebar)
+
+    expect(wrapper.findComponent(ReleaseVersion).exists()).toBe(true)
 
     // 保留的 admin / 探索面
     expect(wrapper.text()).toContain('检索范式')

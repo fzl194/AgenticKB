@@ -29,6 +29,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /**
  * {@code evidence_hydrate} — 搜索表示命中 → 真实证据的唯一主链算子（批次8 R5，25 号 §6.8）。
@@ -535,6 +536,10 @@ public class EvidenceHydrateOperator implements Operator {
                                             Map<String, EvidenceDocumentRow> docSources,
                                             Map<String, TableAssetRow> tableAssets,
                                             Map<String, List<TableCellRow>> tableCells) {
+        // 2026-09-01 用户反馈：行命中展示整表（表格才是可读单元；行只作命中定位）。
+        // cells 已按 tableRef 批量在手——直接重建整表视图；evidenceType 升 "table"，
+        // 同表多行/整表命中由 assemble 的同 ref 互含去重合并为一条。cells 缺失时
+        // 回退旧行文本（自描述行 + 表头回填），保持"读得到"优先。
         String tableRef = TargetRefFormat.tableRefOf(w.parsed());
         Integer rowIndex = TargetRefFormat.rowIndexOf(w.parsed());
         String assetRef = TargetRefFormat.tableAssetRef(w.parsed().documentRef(), tableRef);
@@ -549,8 +554,35 @@ public class EvidenceHydrateOperator implements Operator {
                     "表头: " + String.join(" / ", header), null, null, assetRef));
         }
 
+        if (cells != null && !cells.isEmpty()) {
+            // 整表重建：按行分组渲染"列=值"（与行片同构的自描述格式，保持一致性）
+            Map<Integer, List<TableCellRow>> byRow = new TreeMap<>();
+            for (TableCellRow c : cells) {
+                if (!Boolean.TRUE.equals(c.getIsHeader())) {
+                    byRow.computeIfAbsent(c.getRowIndex(), k -> new ArrayList<>()).add(c);
+                }
+            }
+            for (Map.Entry<Integer, List<TableCellRow>> entry : byRow.entrySet()) {
+                List<TableCellRow> rowCells = entry.getValue();
+                rowCells.sort(java.util.Comparator.comparing(
+                        TableCellRow::getColumnIndex, java.util.Comparator.nullsLast(Integer::compareTo)));
+                List<String> values = new ArrayList<>(rowCells.size());
+                for (TableCellRow c : rowCells) {
+                    values.add((c.getColumnName() != null ? c.getColumnName() + "=" : "")
+                            + (c.getValue() == null ? "" : c.getValue()));
+                }
+                String text = String.join(" | ", values);
+                fragments.add(new HydratedEvidence.EvidenceFragment("row", text,
+                        sectionPathOf(rep), null, assetRef));
+            }
+            Map<String, Object> extra = rowIndex != null ? Map.of("rowIndex", rowIndex) : Map.of();
+            return build(w, rep, "table", tableRef, null, null, null, fragments, MODE_EXACT,
+                    structureRefs(assetRef), asset != null, provenance(rep, extra), docSources);
+        }
+
+        // cells 缺失（如未过 readiness）→ 源表示行文本回退（旧行为）
         List<String> rowValues = new ArrayList<>();
-        if (cells != null && rowIndex != null) {
+        if (rowIndex != null && cells != null) {
             for (TableCellRow c : cells) {
                 if (rowIndex.equals(c.getRowIndex()) && !Boolean.TRUE.equals(c.getIsHeader())) {
                     rowValues.add((c.getColumnName() != null ? c.getColumnName() + "=" : "")
@@ -562,7 +594,6 @@ public class EvidenceHydrateOperator implements Operator {
             fragments.add(new HydratedEvidence.EvidenceFragment("row",
                     String.join(" | ", rowValues), sectionPathOf(rep), null, assetRef));
         } else if (rep != null && rep.getContentText() != null && !rep.getContentText().isEmpty()) {
-            // cells 缺失（如未过 readiness）→ 源表示行文本（已带"列为值"序列化）回退
             fragments.add(new HydratedEvidence.EvidenceFragment("row", rep.getContentText(),
                     sectionPathOf(rep), null, assetRef));
         } else {

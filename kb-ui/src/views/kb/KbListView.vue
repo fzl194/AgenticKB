@@ -50,6 +50,7 @@
           <span class="kb-card__meta-item">
             <el-icon><Document /></el-icon>{{ kb.document_count }} 个文档
           </span>
+          <span class="kb-card__meta-item">创建者：{{ kb.owner_name || '—' }}</span>
           <span class="kb-card__meta-item">{{ formatDate(kb.created_at) }}</span>
         </div>
 

@@ -29,6 +29,7 @@ export interface KbSummary {
   name: string
   description: string | null
   owner_id: string
+  owner_name?: string
   visibility: KbVisibility
   /** 选定的挖掘范式（workflow id）。后端 list_visible 已下发。 */
   mining_workflow_id: string | null

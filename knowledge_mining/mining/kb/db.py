@@ -387,9 +387,11 @@ class KbDB:
                               kb.owner_id, kb.visibility, kb.created_at,
                               kb.mining_workflow_id, kb.default_paradigm_id,
                               'admin' AS my_role,
+                              COALESCE(NULLIF(u.display_name, ''), u.username) AS owner_name,
                               (SELECT COUNT(*) FROM asset_documents d
                                WHERE d.kb_id = kb.id AND d.deleted_at IS NULL) AS document_count
                        FROM knowledge_bases kb
+                       LEFT JOIN kb_users u ON u.id = kb.owner_id
                        WHERE kb.domain = %(dom)s AND kb.status = 'active'
                        ORDER BY kb.created_at DESC""",
                     {"dom": domain},
@@ -406,9 +408,11 @@ class KbDB:
                                            AND m.role = 'editor') THEN 'editor'
                             ELSE 'viewer'
                           END AS my_role,
+                          COALESCE(NULLIF(u.display_name, ''), u.username) AS owner_name,
                           (SELECT COUNT(*) FROM asset_documents d
                            WHERE d.kb_id = kb.id AND d.deleted_at IS NULL) AS document_count
                    FROM knowledge_bases kb
+                   LEFT JOIN kb_users u ON u.id = kb.owner_id
                    WHERE kb.domain = %(dom)s AND kb.status = 'active'
                      AND (kb.owner_id = %(uid)s
                           OR kb.visibility = 'public'

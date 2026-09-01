@@ -70,7 +70,11 @@ class KbService:
                 visibility=visibility, description=description, metadata=metadata,
             )
         except UniqueViolation as exc:
-            raise Duplicate(f"{domain}/{name}") from exc
+            # 面向用户的错误文案（此前是裸 "domain/name"，前端弹窗原样展示）
+            raise Duplicate(
+                f"创建失败：该知识域下你名下已有同名的活跃知识库「{name}」"
+                "（同名可复用条件：原库已删除/归档，或换一个名称）"
+            ) from exc
 
     async def list_visible(self, *, user_id: str, domain: str) -> list[dict[str, Any]]:
         _validate_domain(domain)
@@ -99,7 +103,9 @@ class KbService:
         try:
             updated = await self._db.update_kb(kb_id, fields=fields)
         except UniqueViolation as exc:
-            raise Duplicate(f"duplicate active KB name: {fields.get('name')}") from exc
+            raise Duplicate(
+                f"重命名失败：目标名称「{fields.get('name')}」在你的活跃知识库中已存在"
+            ) from exc
         if updated is None:
             raise NotFound(kb_id)
         return updated
@@ -128,7 +134,10 @@ class KbService:
         try:
             restored = await self._db.restore_kb(kb_id)
         except UniqueViolation as exc:
-            raise Duplicate(f"duplicate active KB name: {kb.get('name')}") from exc
+            raise Duplicate(
+                f"恢复失败：同名活跃知识库「{kb.get('name')}」已存在——"
+                "先删除/重命名现有库后再恢复"
+            ) from exc
         if restored is None:
             # Idempotent race: another authorized request may have restored the
             # row after our initial deleted-state read.

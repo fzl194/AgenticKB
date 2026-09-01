@@ -265,7 +265,10 @@ class EvidenceHydrateOperatorTest {
 
             assertThat(out).hasSize(1);
             HydratedEvidence e = out.get(0);
-            assertThat(e.evidenceType()).isEqualTo("table_row");
+            // 2026-09-01 行命中 → 整表视图：evidenceType 升 table（cells 在手直接
+            // 重建整表；同表多条命中由 assemble 同 ref 互含去重）。命中行 ordinal
+            // 仍在 provenance。
+            assertThat(e.evidenceType()).isEqualTo("table");
             assertThat(e.orderedFragments()).extracting(HydratedEvidence.EvidenceFragment::kind)
                     .containsExactly("caption", "header", "row");
             assertThat(e.contentText()).contains("设备清单").contains("表头: 型号 / 最大功耗")

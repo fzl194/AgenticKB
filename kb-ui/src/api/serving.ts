@@ -43,6 +43,20 @@ export function useServingApi() {
     },
 
     /**
+     * ev_ ref -> 完整原文（2026-09-01）：检索面板把截断证据展开为完整内容。
+     * 与 MCP get_content(ev_) 同源（ref 反查带授权），经平台前端通道。
+     */
+    async getEvidenceFull(
+      ref: string, domain: string, kbId?: string, mode?: string,
+    ): Promise<EvidenceItem> {
+      const params: Record<string, unknown> = { domain }
+      if (kbId) params.kbId = kbId
+      if (mode) params.mode = mode
+      const { data } = await client.get(`/api/v1/evidence/${ref}`, { params })
+      return data
+    },
+
+    /**
      * 三层解析：这个库组合该走哪条检索范式（库级 > 官方默认）。
      * 批次6「知识库检索 tab」与 MCP 路由共用同一判定。
      */

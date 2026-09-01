@@ -193,7 +193,16 @@ public class AssembleOperator implements Operator {
         // table ⊃ 其 table_row（b.parentRef = table_ref；用 structureRefs 里的 asset ref 判定）
         if ("table".equals(a.targetType())) {
             String assetRef = a.structureRefs().isEmpty() ? null : a.structureRefs().get(0);
-            return assetRef != null && b.parentRef() != null && assetRef.endsWith("#table:" + b.parentRef());
+            if (assetRef == null) {
+                return false;
+            }
+            if ("table".equals(b.targetType())) {
+                // 2026-09-01：行命中现展开为整表视图（evidenceType=table）——同快照
+                // 同表的多条证据（行1/行3/整表候选）互含去重，只保留最先（rerank 最优）一条。
+                String bAssetRef = b.structureRefs().isEmpty() ? null : b.structureRefs().get(0);
+                return assetRef.equals(bAssetRef);
+            }
+            return b.parentRef() != null && assetRef.endsWith("#table:" + b.parentRef());
         }
         // segment span 覆盖：同 parent，a 窗口 ⊇ b 的 exact ordinal
         if ("segment".equals(a.targetType()) && "segment".equals(b.targetType())

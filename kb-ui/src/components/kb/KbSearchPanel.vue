@@ -73,9 +73,17 @@
         <div v-for="(ev, i) in evidence" :key="ev.ref ?? i" class="kb-search__item">
           <div class="kb-search__item-head">
             <span class="kb-search__item-type">{{ ev.type || '证据' }}</span>
-            <span v-if="ev.truncated" class="kb-search__item-trunc" title="内容被预算截断；MCP 侧可用 get_evidence 取完整原文">截断</span>
+            <el-button
+              v-if="ev.ref?.startsWith('ev_')"
+              size="small" text type="primary"
+              :loading="expanding === ev.ref"
+              @click="expandEvidence(ev)"
+            >{{ expanded[ev.ref!] ? '收起' : '查看完整' }}</el-button>
+            <span v-if="ev.truncated && !expanded[ev.ref ?? '']" class="kb-search__item-trunc" title="内容被预算截断；点「查看完整」取回全文">截断</span>
           </div>
-          <p class="kb-search__item-text">{{ ev.content }}</p>
+          <p class="kb-search__item-text" :class="{ 'is-clamp': !expanded[ev.ref ?? ''] && ev.content && ev.content.length > 400 }">
+            {{ expanded[ev.ref ?? ''] ? (fullContent[ev.ref ?? ''] ?? ev.content) : ev.content }}
+          </p>
           <div v-if="sourceLabelOf(ev)" class="kb-search__item-src">来源：{{ sourceLabelOf(ev) }}</div>
         </div>
       </div>
@@ -126,6 +134,33 @@ const searching = ref(false)
 const searched = ref(false)
 const error = ref('')
 const evidence = ref<EvidenceItem[]>([])
+// 证据展开（2026-09-01）：默认长文本折叠 400 字，点「查看完整」取回全文
+const expanded = ref<Record<string, boolean>>({})
+const fullContent = ref<Record<string, string>>({})
+const expanding = ref('')
+
+async function expandEvidence(ev: EvidenceItem) {
+  const ref = ev.ref ?? ''
+  if (!ref) return
+  if (expanded.value[ref]) {
+    expanded.value[ref] = false
+    return
+  }
+  if (!fullContent.value[ref]) {
+    expanding.value = ref
+    try {
+      const item = await servingApi.getEvidenceFull(
+        ref, domainStore.currentDomain, props.kb.id, ev.truncated ? 'whole_document' : 'parent')
+      fullContent.value[ref] = item.content ?? ''
+    } catch (e) {
+      ElMessage.error('取回完整原文失败，请稍后重试')
+      return
+    } finally {
+      expanding.value = ''
+    }
+  }
+  expanded.value[ref] = true
+}
 const hasMore = ref(false)
 const effective = ref<{ name: string; version: number; sourceLabel: string } | null>(null)
 const configurationError = ref('')
@@ -385,5 +420,12 @@ onMounted(reload)
 .kb-search__muted {
   color: var(--kb-text-tertiary);
   font-size: 12px;
+}
+
+.kb-search__item-text.is-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 </style>

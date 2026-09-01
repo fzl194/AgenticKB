@@ -201,17 +201,29 @@ def _level(element: Any) -> int:
     return int(level) if isinstance(level, int) and level > 0 else 1
 
 
+#: 表格预览行上限（完整数据走结构化查询/query_structured_asset，预览只做诊断）。
+_PREVIEW_ROW_LIMIT = 50
+
+
 def _table_summary(asset: TableAsset) -> dict[str, Any]:
+    # 2026-09-01 用户反馈修复：①preview 曾取 range(min(rows, 5)) 且不过滤
+    # is_header——首行表头与前端列 label 重复渲染、23 行表只见 5 行；
+    # ②"rows" 曾是含表头的总行数，与切片行片数/结构化查询行数不一致。
+    # 现在：rows = 数据行数；preview = 前 _PREVIEW_ROW_LIMIT 个数据行。
+    header_rows = {c.row_index for c in asset.cells if c.is_header}
     header = [
         c.text for c in sorted(
             (c for c in asset.cells
-             if c.is_header and c.row_index == 0),
+             if c.is_header and c.row_index == min(header_rows, default=-1)),
             key=lambda c: c.column_index,
         )
     ]
+    data_row_indexes = [
+        r for r in range(asset.rows) if r not in header_rows
+    ]
     return {
         "table_id": asset.table_id,
-        "rows": asset.rows,
+        "rows": len(data_row_indexes),
         "columns": asset.columns,
         "header": header,
         "preview": [
@@ -219,7 +231,7 @@ def _table_summary(asset: TableAsset) -> dict[str, Any]:
                 (c for c in asset.cells if c.row_index == r),
                 key=lambda c: c.column_index,
             )]
-            for r in range(min(asset.rows, 5))
+            for r in data_row_indexes[:_PREVIEW_ROW_LIMIT]
         ],
     }
 

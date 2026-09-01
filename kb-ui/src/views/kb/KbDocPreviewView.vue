@@ -215,6 +215,9 @@
                       </template>
                     </el-table-column>
                   </el-table>
+                  <p v-if="t.rows > t.preview.length" class="doc-preview__muted">
+                    仅预览前 {{ t.preview.length }} 行（共 {{ t.rows }} 行数据行）——完整数据可经 MCP query_structured_asset 查询。
+                  </p>
                 </div>
               </el-collapse-item>
             </el-collapse>

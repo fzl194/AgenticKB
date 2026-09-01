@@ -65,9 +65,6 @@ const ALL_NAV = [
   { path: '/mcp', label: 'MCP 接入', icon: Key, requiresAdmin: false },
   { path: '/mining/workflows', label: '挖掘范式', icon: Management, requiresAdmin: true },
   { path: '/paradigm', label: '检索范式', icon: Connection, requiresAdmin: true },
-  // { path: '/entities', label: '实体图谱', icon: Connection, requiresAdmin: true },
-  // { path: '/ontology', label: '本体版本', icon: Collection, requiresAdmin: true },
-  // { path: '/ontology/graph', label: '本体图谱', icon: DataLine, requiresAdmin: true },
   { path: '/llm', label: 'LLM 服务', icon: Cpu, requiresAdmin: true },
   { path: '/settings', label: '系统设置', icon: Setting, requiresAdmin: true },
 ]

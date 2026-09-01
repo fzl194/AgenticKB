@@ -1,10 +1,8 @@
 import type {
   MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus,
-  KnowledgeDocument, KnowledgeSegment, KnowledgeUnit, KnowledgeRelation,
+  KnowledgeDocument, KnowledgeSegment, KnowledgeUnit,
   MiningBatchSummary, LifecycleRemovalResult,
-  RunTrace, OntologyVersion, OntologyNodeType, OntologyRelationType, ActiveOntology, OntologyDraft, OntologyCandidate,
-  PendingMention, GraphEntity, EntityNeighbors, GraphEvidence,
-  EntityMutationResult,
+  RunTrace,
 } from '@/types'
 import type { PaginatedResponse } from '@/types'
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
@@ -97,13 +95,6 @@ export function useMiningApi() {
       unit_type?: string; limit?: number; offset?: number
     }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; total: number; items: KnowledgeUnit[] }> {
       const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/units`, { params })
-      return data
-    },
-
-    async getRunDocumentRelations(runId: string, docId: string, params?: {
-      limit?: number; offset?: number
-    }): Promise<{ run_id: string; document_id: string; snapshot_id: string | null; total: number; items: KnowledgeRelation[] }> {
-      const { data } = await client.get(`/api/runs/${runId}/documents/${docId}/relations`, { params })
       return data
     },
 
@@ -200,34 +191,6 @@ export function useMiningApi() {
       return data
     },
 
-    async getDocumentRelations(docId: string, params?: {
-      limit?: number; offset?: number
-    }): Promise<{ document_id: string; snapshot_id: string; total: number; items: KnowledgeRelation[] }> {
-      try {
-        const { data } = await client.get(`/api/knowledge/documents/${docId}/relations`, { params })
-        return data
-      } catch {
-        return { document_id: docId, snapshot_id: '', total: 0, items: [] }
-      }
-    },
-
-    async getSegments(params?: { limit?: number }): Promise<PaginatedResponse<KnowledgeSegment>> {
-      const { data } = await client.get('/api/knowledge/segments', { params })
-      return data
-    },
-
-    async getUnits(params?: { limit?: number }): Promise<PaginatedResponse<KnowledgeUnit>> {
-      const { data } = await client.get('/api/knowledge/units', { params })
-      return data
-    },
-
-    async getRelations(params?: { limit?: number; offset?: number }): Promise<PaginatedResponse<KnowledgeRelation>> {
-      const { data } = await client.get('/api/knowledge/relations', { params })
-      return data
-    },
-
-    // ── 本体 / 知识图谱（B7）──
-
     // 挖掘过程透视 — 冻结 Workflow、节点事件和文档执行状态
     async getRunTrace(runId: string): Promise<RunTrace> {
       const { data } = await client.get(`/api/runs/${runId}/trace`)
@@ -240,115 +203,6 @@ export function useMiningApi() {
       return data
     },
 
-    // 本体版本
-    async getOntologyVersions(domain?: string): Promise<{ domain: string; items: OntologyVersion[] }> {
-      const { data } = await client.get('/api/ontology/versions', { params: domain ? { domain } : undefined })
-      return data
-    },
-
-    async getActiveOntology(domain?: string): Promise<ActiveOntology> {
-      const { data } = await client.get('/api/ontology/active', { params: domain ? { domain } : undefined })
-      return data
-    },
-
-    // 上传一份本体 YAML 文本引种 v1
-    async bootstrapOntology(yamlText: string, domain?: string, sourceName?: string): Promise<Record<string, unknown>> {
-      const { data } = await client.post('/api/ontology/bootstrap', {
-        yaml_text: yamlText, domain, source_name: sourceName,
-      })
-      return data
-    },
-
-    // 本体确认评审
-    async getOntologyCandidates(params?: { domain?: string; status?: string }): Promise<{ items: OntologyCandidate[] }> {
-      const { data } = await client.get('/api/ontology/candidates', { params })
-      return data
-    },
-
-    async reviewCandidate(candidateId: string, body: { action: string; new_name?: string; note?: string }): Promise<Record<string, unknown>> {
-      const { data } = await client.post(`/api/ontology/candidates/${candidateId}/review`, body)
-      return data
-    },
-
-    async promoteCandidates(domain?: string): Promise<{ new_version_id: string | null; promoted: boolean }> {
-      const { data } = await client.post('/api/ontology/promote', domain ? { domain } : {})
-      return data
-    },
-
-    // 本体图谱编辑器：草稿读 / 整份覆盖式存 / 发布
-    async getOntologyDraft(domain?: string): Promise<OntologyDraft> {
-      const { data } = await client.get('/api/ontology/draft', { params: domain ? { domain } : undefined })
-      return data
-    },
-
-    async saveOntologyDraft(
-      domain: string,
-      payload: { node_types: OntologyNodeType[]; relation_types: OntologyRelationType[] },
-    ): Promise<{ domain: string; draft_version_id: string }> {
-      const { data } = await client.put('/api/ontology/draft', { domain, ...payload })
-      return data
-    },
-
-    async publishOntologyDraft(domain: string): Promise<{ domain: string; new_version_id: string }> {
-      const { data } = await client.post('/api/ontology/draft/publish', { domain })
-      return data
-    },
-
-    // 实体确认
-    async getPendingMentions(runId?: string): Promise<{ items: PendingMention[] }> {
-      const { data } = await client.get('/api/mentions/pending', { params: runId ? { run_id: runId } : undefined })
-      return data
-    },
-
-    async resolveMention(mentionId: string, body: { action: string; entity_id?: string; domain?: string; canonical_name?: string; node_type?: string }): Promise<Record<string, unknown>> {
-      const { data } = await client.post(`/api/mentions/${mentionId}/resolve`, body)
-      return data
-    },
-
-    async resolveMentionsBatch(body: { mention_ids: string[]; action: string; entity_id?: string; domain?: string; node_type?: string }): Promise<{ action: string; total: number; ok: number; failed: number; results: Array<Record<string, unknown>> }> {
-      const { data } = await client.post('/api/mentions/resolve-batch', body)
-      return data
-    },
-
-    async suggestEntities(params: { mention_text: string; node_type: string; domain?: string; limit?: number }): Promise<{ items: GraphEntity[] }> {
-      const { data } = await client.get('/api/mentions/suggest', { params })
-      return data
-    },
-
-    // 知识图谱浏览
-    async getGraphEntities(params?: { domain?: string; type?: string; q?: string; limit?: number; offset?: number }): Promise<{ total: number; items: GraphEntity[] }> {
-      const { data } = await client.get('/api/graph/entities', { params })
-      return data
-    },
-
-    async getEntityNeighbors(entityId: string, hops = 1): Promise<EntityNeighbors> {
-      const { data } = await client.get(`/api/graph/entities/${entityId}/neighbors`, { params: { hops } })
-      return data
-    },
-
-    async mergeEntities(primaryId: string, dropIds: string[], domain?: string): Promise<EntityMutationResult> {
-      const { data } = await client.post('/api/graph/entities/merge', {
-        primary_id: primaryId, drop_ids: dropIds, domain,
-      })
-      return data
-    },
-    async retypeEntity(entityId: string, newType: string, domain?: string): Promise<EntityMutationResult> {
-      const { data } = await client.post(`/api/graph/entities/${entityId}/retype`, {
-        new_type: newType, domain,
-      })
-      return data
-    },
-    async deleteEntity(entityId: string, domain?: string): Promise<{ deleted: boolean }> {
-      const { data } = await client.delete(`/api/graph/entities/${entityId}`, {
-        params: domain ? { domain } : undefined,
-      })
-      return data
-    },
-
-    async getTargetEvidence(targetId: string): Promise<{ target_id: string; items: GraphEvidence[] }> {
-      const { data } = await client.get(`/api/graph/evidence/${targetId}`)
-      return data
-    },
   }
 }
 

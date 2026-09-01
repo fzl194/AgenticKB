@@ -1,145 +1,23 @@
-# Scenario pack for the generic domain.
-# General-purpose knowledge base with no domain-specific command vocabulary.
-# Used as a fallback or for non-5G content.
-
-display_name: "Generic"
-
-# ===========================================================================
-# ONTOLOGY — shared entity taxonomy
-# ===========================================================================
-
-ontology:
-  entity_types:
-    - concept
-    - term
-    - parameter
-
-  strong_entity_types: []
-
-# ===========================================================================
-# MINING — domain-specific mining pipeline configuration
-# ===========================================================================
-
+# Scenario pack（2026-09-01 精简：对齐 v2 算子链）
+#
+# 实体/本体线（ontology 分区、mining.llm_templates 实体与篇章理解模板）与旧检索
+# 引擎（serving.route_policy 通道权重、query_understanding）已随产品线下线——
+# 相关配置删除。当前各配置面的真相源：
+#   - 挖掘链与参数：挖掘范式模板（mining workflow templates，四套官方预置）
+#   - 挖掘 LLM 提示词：knowledge_mining/mining/retrieval_projection/llm_generation.py
+#     （doc2query / 层级摘要；版本冻结进 provenance）
+#   - LLM provider/model：main_control_service/config/system/llm_service.yaml
+#   - 检索管线：检索范式 DAG（范式编辑器/官方预置）
+# 本文件保留：display_name（域显示名）与 eval_questions（质量评估问题集，
+# 批次9 质量评估套件消费）。
+display_name: Generic
 mining:
-  # Semantic roles for this domain (generic — broad roles)
-  semantic_roles:
-    - concept
-    - parameter
-    - example
-    - note
-    - procedure_step
-    - constraint
-
-  role_keyword_rules: []
-  heading_role_keywords: []
-  extractor_rules: []
-
   retrieval_policy:
-    raw_text: primary
-    generated_question: auxiliary
-    entity_card: "off"
-    table_row: "off"
-    max_questions_per_segment: 2
-    max_entity_cards_per_segment: 0
-    contextual_retrieval: "off"
-    min_confidence: 0.5
-    max_distance: 5
-    discourse_window_size: 15
-    min_questionworthy_tokens: 50
-    not_questionworthy_roles:
-      - navigation
-      - toc
-      - metadata
-
+    contextual_retrieval: 'off'
   eval_questions:
-    - id: q001
-      question: "什么是 PDU 会话？"
-    - id: q002
-      question: "如何查询系统当前配置？"
-    - id: q003
-      question: "系统连接失败怎么处理？"
-
-# ===========================================================================
-# SERVING
-# ===========================================================================
-
-serving:
-  query_understanding: {}
-
-  route_policy:
-    default:
-      lexical_bm25:
-        weight: 1.0
-        top_k: 50
-      dense_vector:
-        weight: 1.0
-        top_k: 50
-      entity_exact:
-        weight: 0.6
-        top_k: 15
-
-    concept_lookup:
-      dense_vector:
-        weight: 1.2
-        top_k: 60
-      lexical_bm25:
-        weight: 1.0
-        top_k: 50
-      entity_exact:
-        weight: 0.4
-        top_k: 10
-
-    troubleshooting:
-      lexical_bm25:
-        weight: 1.1
-        top_k: 50
-      dense_vector:
-        weight: 0.9
-        top_k: 40
-      entity_exact:
-        weight: 0.6
-        top_k: 15
-
-    procedure:
-      lexical_bm25:
-        weight: 1.1
-        top_k: 50
-      dense_vector:
-        weight: 0.9
-        top_k: 40
-      entity_exact:
-        weight: 0.5
-        top_k: 10
-
-    comparison:
-      dense_vector:
-        weight: 1.2
-        top_k: 60
-      lexical_bm25:
-        weight: 1.0
-        top_k: 50
-      entity_exact:
-        weight: 0.5
-        top_k: 10
-
-    navigational:
-      lexical_bm25:
-        weight: 1.2
-        top_k: 30
-      entity_exact:
-        weight: 1.0
-        top_k: 10
-      dense_vector:
-        weight: 0.4
-        top_k: 10
-
-    general:
-      lexical_bm25:
-        weight: 1.0
-        top_k: 50
-      dense_vector:
-        weight: 1.0
-        top_k: 50
-      entity_exact:
-        weight: 0.6
-        top_k: 15
+  - id: q001
+    question: 什么是 PDU 会话？
+  - id: q002
+    question: 如何查询系统当前配置？
+  - id: q003
+    question: 系统连接失败怎么处理？

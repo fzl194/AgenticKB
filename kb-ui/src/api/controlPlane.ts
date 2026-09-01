@@ -7,6 +7,11 @@ installAuthInterceptors(client)
 
 export function useControlPlaneApi() {
   return {
+    async getReleaseInfo(): Promise<ReleaseInfo> {
+      const { data } = await client.get('/api/v1/version')
+      return data as ReleaseInfo
+    },
+
     // ── System config ──
     async listSystemConfigs(): Promise<string[]> {
       const { data } = await client.get('/api/v1/system')
@@ -105,6 +110,13 @@ export interface ControlPlaneDomainSummary {
   enabled: boolean
   default_channel: string
   scenario_pack_ref: string
+}
+
+export interface ReleaseInfo {
+  version: string
+  released_at: string
+  title: string
+  changes: string[]
 }
 
 export interface ServiceReloadResult {

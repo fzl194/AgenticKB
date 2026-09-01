@@ -42,13 +42,27 @@ class OfflineDeploymentContractTests(unittest.TestCase):
         script = _read("deploy-build.sh")
 
         self.assertIn("set -Eeuo pipefail", script)
-        self.assertIn("git rev-parse --short HEAD", script)
+        self.assertIn('RELEASE_MANIFEST="releases.json"', script)
+        self.assertIn("MANIFEST_VERSION", script)
+        self.assertNotIn("git rev-parse --short HEAD", script)
         self.assertIn("cmkb-${VERSION}.tar.zst", script)
         self.assertIn("docker run --rm", script)
         self.assertIn("command -v libreoffice", script)
         self.assertIn("import openpyxl, xlrd", script)
         self.assertIn("zstd -T0 -19", script)
         self.assertIn("sha256sum", script)
+
+
+    def test_runtime_image_contains_the_release_manifest(self) -> None:
+        dockerfile = _read("docker/Dockerfile")
+
+        self.assertIn("COPY releases.json ./releases.json", dockerfile)
+
+
+    def test_release_manifest_is_tracked_by_the_whitelist_gitignore(self) -> None:
+        gitignore = _read(".gitignore").splitlines()
+
+        self.assertIn("!releases.json", gitignore)
 
 
     def test_offline_deploy_checks_integrity_before_loading_and_validates_image(self) -> None:

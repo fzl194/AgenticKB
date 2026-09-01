@@ -78,6 +78,7 @@ COPY mcp_server/ ./mcp_server/
 # 它们随 main_control_service/ 一起进镜像，是 Python 与 Java 共用的唯一真相源。
 # 镜像只携带配置模板；生产 .env 由部署主机挂载
 COPY .env.example ./
+COPY releases.json ./releases.json
 COPY reset_db.py ./
 COPY databases/ ./databases/
 

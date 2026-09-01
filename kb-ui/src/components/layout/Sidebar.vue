@@ -32,6 +32,7 @@
         <span class="sidebar__domain-dot" />
         <span class="sidebar__domain-name">{{ domainStore.currentDomainInfo?.display_name || domainStore.currentDomain }}</span>
       </div>
+      <ReleaseVersion />
     </div>
   </aside>
 </template>
@@ -46,6 +47,7 @@ import {
 import { useDomainStore } from '@/stores/domain'
 import { useBrandStore, resolveIcon } from '@/stores/brand'
 import { useAuthStore } from '@/stores/auth'
+import ReleaseVersion from './ReleaseVersion.vue'
 
 const route = useRoute()
 const domainStore = useDomainStore()
@@ -187,6 +189,9 @@ function isActive(path: string): boolean {
 .sidebar__footer {
   padding: 14px 20px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .sidebar__domain {

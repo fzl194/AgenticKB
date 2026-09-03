@@ -376,6 +376,52 @@ def create_app(
         )
 
     # ------------------------------------------------------------------
+    # Admin — one-click backend restart（nginx 不动，前端是重启期间的观测面）
+    # ------------------------------------------------------------------
+
+    @app.post("/api/v1/admin/restart")
+    def restart_backend(request: Request) -> Response:
+        from main_control_service import restart_services
+
+        if not restart_services.supervisor_available():
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "supervisor 不可用：一键重启仅支持容器化部署"},
+            )
+        if restart_services.is_active(restart_services.read_status()):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "restart_in_progress"},
+            )
+        user = getattr(request.state, "user", None) or {}
+        triggered_by = str(user.get("username") or "unknown")
+        # 先写 running 占位再拉编排进程：双击竞态下第二个请求能看到 running。
+        restart_services.write_status({
+            "state": "running",
+            "triggered_by": triggered_by,
+            "started_at": restart_services.now_iso(),
+            "finished_at": None,
+            "plan": [s.program for s in restart_services.restart_plan()],
+            "completed": [],
+            "current": None,
+            "error": None,
+        })
+        restart_services.spawn_orchestrator(triggered_by)
+        return JSONResponse(
+            status_code=202,
+            content={"ok": True, "triggered_by": triggered_by},
+        )
+
+    @app.get("/api/v1/admin/restart/status")
+    def restart_status() -> dict:
+        from main_control_service import restart_services
+
+        status = restart_services.read_status()
+        if not status:
+            return {"state": "idle", "active": False}
+        return {**status, "active": restart_services.is_active(status)}
+
+    # ------------------------------------------------------------------
     # Reverse proxy — domain-aware routing to backend services
     # ------------------------------------------------------------------
 

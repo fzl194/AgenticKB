@@ -99,6 +99,17 @@ export function useControlPlaneApi() {
       const { data } = await client.get(`/api/v1/logs/${name}`, { params })
       return data
     },
+
+    // ── One-click backend restart（编排进程独立于 control，见后端 restart_services）──
+    async triggerRestart(): Promise<RestartTriggerResult> {
+      const { data } = await client.post('/api/v1/admin/restart')
+      return data
+    },
+
+    async getRestartStatus(): Promise<RestartStatus> {
+      const { data } = await client.get('/api/v1/admin/restart/status')
+      return data
+    },
   }
 }
 
@@ -161,4 +172,25 @@ export interface LogContent {
   /** true = 只扫描了文件尾部若干 MB，更早的内容不在结果里 */
   truncated: boolean
   filtered: boolean
+}
+
+export interface RestartTriggerResult {
+  ok: boolean
+  triggered_by: string
+}
+
+export interface RestartStatus {
+  state: 'idle' | 'running' | 'done' | 'failed'
+  /** 后端判定：running 且未超过陈旧阈值（10 分钟） */
+  active?: boolean
+  triggered_by?: string
+  started_at?: string
+  finished_at?: string
+  /** 依赖序计划（program 名） */
+  plan?: string[]
+  completed?: string[]
+  current?: string | null
+  error?: string | null
+  /** done/failed 时附带的 supervisor 快照 */
+  services?: { name: string; status: string }[]
 }

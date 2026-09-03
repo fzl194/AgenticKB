@@ -119,6 +119,8 @@
           :icon="svc.icon"
         />
       </div>
+      <!-- 重启完成后刷新上方的健康卡。仅 site-admin 渲染（组件内部判定）。 -->
+      <ServiceRestartCard @restarted="loadHealth" />
     </section>
 
     <!-- ── 域级知识资产 ────────────────────────────────────────────── -->
@@ -185,6 +187,7 @@ import type { HealthStatus, KnowledgeStats } from '@/types'
 import type { OpsUsage } from '@/types/ops'
 import StatsCard from '@/components/common/StatsCard.vue'
 import ServiceHealthCard from '@/components/common/ServiceHealthCard.vue'
+import ServiceRestartCard from '@/components/settings/ServiceRestartCard.vue'
 import PieChart from '@/components/charts/PieChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
 import QueryList from '@/components/dashboard/QueryList.vue'

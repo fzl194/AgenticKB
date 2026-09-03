@@ -11,12 +11,24 @@ const miningApi = vi.hoisted(() => ({ getStats: vi.fn(), getHealth: vi.fn() }))
 const servingApi = vi.hoisted(() => ({ getHealth: vi.fn() }))
 const llmApi = vi.hoisted(() => ({ getHealth: vi.fn() }))
 const opsApi = vi.hoisted(() => ({ getUsage: vi.fn() }))
+const controlPlaneApi = vi.hoisted(() => ({ getRestartStatus: vi.fn() }))
 const domainRef = vi.hoisted(() => ({ current: null as { value: string } | null }))
+const roleRef = vi.hoisted(() => ({ current: null as { value: string } | null }))
 
 vi.mock('@/api/mining', () => ({ useMiningApi: () => miningApi }))
 vi.mock('@/api/serving', () => ({ useServingApi: () => servingApi }))
 vi.mock('@/api/llm', () => ({ useLlmApi: () => llmApi }))
 vi.mock('@/api/ops', () => ({ useOpsApi: () => opsApi }))
+vi.mock('@/api/controlPlane', () => ({ useControlPlaneApi: () => controlPlaneApi }))
+vi.mock('@/stores/auth', async () => {
+  const { ref } = await import('vue')
+  roleRef.current = ref('member')
+  return {
+    useAuthStore: () => ({
+      get siteRole() { return roleRef.current!.value },
+    }),
+  }
+})
 vi.mock('@/stores/domain', async () => {
   const { ref } = await import('vue')
   domainRef.current = ref('cloud_core_network')
@@ -86,6 +98,7 @@ describe('系统状态 tab', () => {
     llmApi.getHealth.mockResolvedValue({ status: 'ok' })
     opsApi.getUsage.mockResolvedValue(usage())
     miningApi.getStats.mockResolvedValue(stats())
+    controlPlaneApi.getRestartStatus.mockResolvedValue({ state: 'idle', active: false })
   })
 
   it('标注口径，不让人把域级数字当成全部知识', async () => {
@@ -208,5 +221,11 @@ describe('系统状态 tab', () => {
     // 服务状态那三张卡还在
     expect(wrapper.findAllComponents({ name: 'ServiceHealthCard' })).toHaveLength(3)
     expect(wrapper.text()).toContain('知识资产')
+  })
+
+  it('member 看不到一键重启入口', async () => {
+    const wrapper = await mountTab()
+
+    expect(wrapper.find('[data-testid="service-restart"]').exists()).toBe(false)
   })
 })

@@ -81,6 +81,7 @@ declare module 'vue' {
     RunResultPanel: typeof import('./src/components/paradigm/RunResultPanel.vue')['default']
     ServiceHealthCard: typeof import('./src/components/common/ServiceHealthCard.vue')['default']
     ServiceLogsTab: typeof import('./src/components/settings/ServiceLogsTab.vue')['default']
+    ServiceRestartCard: typeof import('./src/components/settings/ServiceRestartCard.vue')['default']
     Sidebar: typeof import('./src/components/layout/Sidebar.vue')['default']
     StatsCard: typeof import('./src/components/common/StatsCard.vue')['default']
     StatusBadge: typeof import('./src/components/common/StatusBadge.vue')['default']

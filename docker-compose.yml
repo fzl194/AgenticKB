@@ -57,7 +57,7 @@ services:
       - "127.0.0.1:${CMKB_MINING_PORT:-8901}:8901"   # 知识挖掘服务 knowledge_mining
       - "127.0.0.1:${CMKB_CONTROL_PORT:-8910}:8910"  # 主控服务 main_control_service
       - "127.0.0.1:${CMKB_SERVING_PORT:-8081}:8081"  # 在线检索服务 agent_serving_java
-      - "127.0.0.1:${CMKB_MCP_PORT:-9000}:9000"      # MCP 服务 mcp_server
+      - "${CMKB_MCP_PORT:-9000}:9000"      # MCP 服务 mcp_server
 
     volumes:
       # Docker 命名卷，用于持久化上传文件。
@@ -92,7 +92,7 @@ services:
       # deploy-sync.sh apply 直接换宿主机目录即可生效（deploy-server.sh 首次补齐）。
       # 注意 jar 必须挂目录（./runtime）而非单文件——单文件 bind-mount
       # 在文件被 mv/rename 替换时会失效，目录挂载则始终跟随目录内最新文件。
-      - ./kb-ui-dist:/app/kb-ui-dist
+      - ./kb-ui-dist:/app/kb-ui-dist:Z
       - ./runtime:/app/runtime
 
     environment:

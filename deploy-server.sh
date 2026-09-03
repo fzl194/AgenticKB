@@ -285,7 +285,7 @@ preflight_ports() {
                 echo "错误：宿主机端口 $port 已被容器 '$container' 占用。" >&2
                 conflict=true
             fi
-        done < <(docker ps --filter "publish=$port" --format '{{.Names}}')
+        done < <(docker ps --format '{{.Names}}\t{{.Ports}}' | awk -F '\t' -v host_port="$port" 'index($2, ":" host_port "->") { print $1 }')
     done < <(published_ports | sort -u)
 
     if [ "$conflict" = true ]; then

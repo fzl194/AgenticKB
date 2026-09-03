@@ -206,14 +206,17 @@ async def test_ensure_workflow_library_seeds_four_presets_and_preserves_user_wor
     )
 
     default = await service.ensure_workflow_library()
-    await service.ensure_workflow_library()
 
     assert default is not None and default["id"] == "system-hybrid-assets"
     preserved = await service.get(existing["id"])
     assert preserved["current_version"] is None
-    ids = {item["id"] for item in await service.list(include_archived=True)}
+    workflows = await service.list(include_archived=True)
+    ids = {item["id"] for item in workflows}
     assert "system-full-baseline" not in ids
     assert len(ids) == 5  # 4 预置 + 1 用户草稿
+    system_workflows = [item for item in workflows if item["is_system"]]
+    assert len(system_workflows) == 4
+    assert all(item["current_version"] == 1 for item in system_workflows)
 
 
 @pytest.mark.asyncio

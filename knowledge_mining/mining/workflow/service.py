@@ -390,6 +390,7 @@ class WorkflowService:
 
     async def ensure_workflow_library(self) -> dict | None:
         """M6：4 套预置幂等 seed + 首版发布 + 模板漂移重发布（只补自己的种子）."""
+        await self.ensure_system_workflows()
         for preset in MINING_PRESETS:
             workflow = await self.repository.get_workflow(preset.workflow_id)
             if workflow is None:
@@ -403,7 +404,7 @@ class WorkflowService:
                 )
             else:
                 await self._refresh_drifted_system_preset(preset, workflow)
-        return await self.ensure_system_workflows()
+        return await self.repository.get_workflow(DEFAULT_WORKFLOW_ID)
 
     async def _refresh_drifted_system_preset(
         self, preset: Any, workflow: dict

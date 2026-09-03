@@ -114,3 +114,6 @@ logs/
 /docker/vendor/libreoffice-debs.tar.gz
 
 var/
+
+# deploy-sync 依赖清单基线（pack 自动落盘，下次 pack 对比）
+.cmkb-sync-last/

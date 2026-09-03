@@ -5,7 +5,7 @@
 #
 # 用法：
 #   bash deploy-sync.sh pack                    # 外网：打增量包（产物 + Python 源码）。
-#                                                #   会先提醒版本决策：是否升级 releases.json
+#                                                #   会先提醒版本决策：显示当前版本并要你确认
 #   bash deploy-sync.sh pack --code-only        # 外网：只打 Python 源码（jar/dist 未变时，包最小）
 #   bash deploy-sync.sh apply <sync-*.tar.gz>   # 内网：校验、同 inode 内容同步、按需重启服务
 #
@@ -76,63 +76,26 @@ read_release_version() {
     sed -n 's/^[[:space:]]*"current":[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -n 1
 }
 
-# 版本决策（用户要求：每次同步前提醒）。升级则写入 releases.json：
-# current 指针 + releases 数组头部插入新条目（前端弹窗与 /health 版本即随包走）。
-update_release_manifest() {
-    local new_version="$1" note="$2"
-    python - "$RELEASE_MANIFEST" "$new_version" "$note" <<'PY'
-import datetime
-import json
-import sys
-
-path, version, note = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path, encoding="utf-8") as f:
-    data = json.load(f)
-if any(rel.get("version") == version for rel in data.get("releases", [])):
-    sys.exit(f"版本 {version} 已存在于 releases.json，请换一个版本号")
-data["current"] = version
-data.setdefault("releases", []).insert(0, {
-    "version": version,
-    "released_at": datetime.date.today().isoformat(),
-    "title": (note or f"版本 {version} 增量更新")[:60],
-    "changes": [note] if note else [f"版本 {version} 增量更新"],
-})
-with open(path, "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-PY
-}
-
+# 版本决策（用户要求：每次同步前提醒，由人来决定是否继续）。
+# 版本号本身由 releases.json 管理（需要升级时让 Claude 先改好文件）——
+# 脚本只提醒当前版本并要求确认；回车/输 y 继续，输 n 中止去改版本。
 remind_version_decision() {
-    local current answer new_version note
+    local current answer
     current="$(read_release_version "$RELEASE_MANIFEST")"
     echo "=== 版本决策 ==="
     echo "当前发布版本：${current:-<无 releases.json>}"
+    echo "（版本号在 releases.json 里维护；该升级时先让 Claude 改好再 pack）"
     if [ ! -t 0 ] && [ "${SYNC_FORCE_VERSION_ASK:-0}" != "1" ]; then
-        echo "（非交互环境：跳过版本决策，沿用 $current。"
-        echo "  如需升级版本号，请手动编辑 releases.json 后重新 pack，"
-        echo "  或设 SYNC_FORCE_VERSION_ASK=1 强制交互。）"
+        echo "（非交互环境：跳过确认，直接以版本 $current 打包。）"
         return 0
     fi
-    read -r -p "本次同步是否升级版本号？[y/N] " answer
+    read -r -p "确认以版本 ${current:-<无>} 打本次增量包？[Y/n] " answer
     case "$answer" in
-        y|Y) ;;
-        *)
-            echo "沿用 $current（releases.json 无变化，apply 不触发因版本号的重启）。"
-            return 0
+        n|N)
+            die "已中止：先更新 releases.json（升版本让 Claude 改），再重新 pack。"
             ;;
     esac
-    while :; do
-        read -r -p "新版本号（如 1.0.1）： " new_version
-        if [ -z "$new_version" ] || [ "$new_version" = "$current" ]; then
-            echo "版本号为空或与当前相同，请重输。"
-            continue
-        fi
-        break
-    done
-    read -r -p "一句话更新说明（回车用默认）： " note
-    update_release_manifest "$new_version" "$note" || die "写入 releases.json 失败"
-    echo "已升级版本：$current -> $new_version（将随本次增量包生效）"
+    echo "已确认：本次增量包版本 ${current:-<无>}。"
 }
 
 cmd_pack() {

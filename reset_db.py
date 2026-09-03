@@ -1,227 +1,460 @@
-"""
-CoreMasterKB 数据库重置脚本
-- 读取 .env 中的 PG 连接信息
-- DROP 所有业务表、索引、触发器、函数
-- 按 databases/ 下的 SQL 文件重新建表
+"""清空 CoreMasterKB PostgreSQL 业务数据，保留当前数据库结构。
 
-用法：python reset_db.py
+默认只预览目标表：
+    python reset_db.py
+
+确认无误后执行：
+    python reset_db.py --execute
+
+连接配置读取 ``main_control_service/config/system/database.yaml``。脚本不操作
+MinIO、Docker volumes 或主控 SQLite；服务重启后由各服务的启动自愈逻辑补齐
+schema，并重新播种 admin、系统工作流等基础数据。
 """
 from __future__ import annotations
 
-import os
+import argparse
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Sequence
 
-# ── 加载 .env ──────────────────────────────────────────────
+
 REPO_ROOT = Path(__file__).resolve().parent
-ENV_FILE = REPO_ROOT / ".env"
-
-if not ENV_FILE.exists():
-    print(f"[ERROR] .env not found: {ENV_FILE}")
-    sys.exit(1)
-
-# 手动解析 .env（不依赖 pydantic-settings，减少依赖）
-_env = {}
-for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-    line = line.strip()
-    if not line or line.startswith("#"):
-        continue
-    if "=" in line:
-        k, v = line.split("=", 1)
-        _env[k.strip()] = v.strip()
-
-PG_HOST = _env.get("PG_HOST", "")
-PG_PORT = _env.get("PG_PORT", "5432")
-PG_DBNAME = _env.get("PG_DBNAME", "")
-PG_USER = _env.get("PG_USER", "")
-PG_PASSWORD = _env.get("PG_PASSWORD", "")
-PG_SSLMODE = _env.get("PG_SSLMODE", "disable")
-PG_GSSENCMODE = _env.get("PG_GSSENCMODE", "disable")
-
-if not all([PG_HOST, PG_DBNAME, PG_USER]):
-    print("[ERROR] PG_HOST / PG_DBNAME / PG_USER must be set in .env")
-    sys.exit(1)
-
-CONNINFO = (
-    f"host={PG_HOST} port={PG_PORT} dbname={PG_DBNAME} "
-    f"user={PG_USER} password={PG_PASSWORD} "
-    f"sslmode={PG_SSLMODE} gssencmode={PG_GSSENCMODE}"
+DEFAULT_CONFIG_PATH = (
+    REPO_ROOT / "main_control_service" / "config" / "system" / "database.yaml"
+)
+DEFAULT_DOMAIN_REGISTRY_PATH = (
+    REPO_ROOT / "main_control_service" / "config" / "domain_registry.yaml"
+)
+DEFAULT_AUTH_CONFIG_PATH = (
+    REPO_ROOT / "main_control_service" / "config" / "system" / "auth.yaml"
 )
 
-# ── 所有要 DROP 的表（按依赖顺序，子表先删） ─────────────────
-# 注：用 DROP TABLE ... CASCADE，顺序容错；但仍按依赖从子到父排，便于阅读。
-ALL_TABLES = [
-    # ontology 概念层（FK 指向 asset_* / mining_runs，必须先于它们删）
-    "ontology_evidence_nodes",
-    "ontology_candidates",
-    "asset_segment_entity_mentions",   # 段↔实体桥接表，定义在 ontology DDL 文件里
-    "ontology_entity_relations",
-    "ontology_alias_dictionary",
-    "ontology_entities",
-    "ontology_relation_types",
-    "ontology_node_types",
-    "ontology_versions",
-    # agent_llm_runtime（LLM 服务）
-    "agent_llm_events",
-    "agent_llm_results",
-    "agent_llm_attempts",
-    "agent_llm_requests",
-    "agent_llm_tasks",
-    "agent_llm_prompt_templates",
-    "agent_llm_model_calls",
-    # mining_runtime（挖掘服务）
-    "mining_workflow_node_events",
-    "mining_run_stage_events",
-    "mining_run_documents",
-    "mining_runs",
-    # mining_control（全局 Workflow 定义）
-    "mining_workflow_versions",
-    "mining_workflows",
-    # asset_core（资产核心）
-    "asset_retrieval_embeddings",
-    "asset_retrieval_units",
-    "asset_raw_segment_relations",
-    "asset_raw_segments",
-    "asset_build_document_snapshots",
-    "asset_publish_releases",
-    "asset_builds",
-    "asset_document_snapshot_links",
-    "asset_document_snapshots",
-    "asset_documents",
-    "asset_source_batches",
-    # kb management（asset_documents.kb_id → knowledge_bases；CASCADE 容错）
-    "kb_folders",
-    "kb_members",
-    "knowledge_bases",
-    "kb_users",
-]
+_MANAGED_TABLE_NAMES = frozenset(
+    {
+        "agent_llm_attempts",
+        "agent_llm_events",
+        "agent_llm_model_calls",
+        "agent_llm_prompt_templates",
+        "agent_llm_requests",
+        "agent_llm_results",
+        "agent_llm_tasks",
+        "asset_build_document_snapshots",
+        "asset_builds",
+        "asset_document_snapshot_links",
+        "asset_document_snapshots",
+        "asset_documents",
+        "asset_file_audit_events",
+        "asset_parse_run_attempts",
+        "asset_parse_runs",
+        "asset_publish_releases",
+        "asset_raw_segment_relations",
+        "asset_raw_segments",
+        # 历史影子迁移残表：现役代码零引用，但老库里有，清业务数据应一并清空。
+        "asset_raw_segments_staging",
+        "asset_retrieval_embeddings",
+        "asset_retrieval_embeddings_v2",
+        "asset_retrieval_embeddings_v2_staging",
+        "asset_retrieval_units",
+        "asset_retrieval_units_v2",
+        "asset_retrieval_units_v2_staging",
+        "asset_segment_element_links",
+        "asset_segment_entity_mentions",
+        "asset_snapshot_readiness",
+        "asset_snapshot_readiness_staging",
+        "asset_source_batches",
+        "asset_storage_object_refs",
+        "asset_storage_objects",
+        "asset_storage_operations",
+        "asset_storage_quotas",
+        "asset_structure_edges",
+        "asset_structure_edges_staging",
+        "asset_structure_nodes",
+        "asset_structure_nodes_staging",
+        "asset_structured_assets",
+        "asset_structured_assets_staging",
+        "asset_table_cells",
+        "asset_table_cells_staging",
+        "asset_upload_sessions",
+        "kb_folders",
+        "kb_members",
+        "kb_users",
+        "knowledge_bases",
+        "mcp_access",
+        "mcp_open_kbs",
+        "mining_run_documents",
+        "mining_run_stage_events",
+        "mining_runs",
+        "mining_workflow_node_events",
+        "mining_workflow_versions",
+        "mining_workflows",
+        "ontology_alias_dictionary",
+        "ontology_candidates",
+        "ontology_entities",
+        "ontology_entity_relations",
+        "ontology_evidence_nodes",
+        "ontology_node_types",
+        "ontology_relation_types",
+        "ontology_versions",
+        "operator_paradigm",
+        "operator_paradigm_version",
+        "serving_query_cache",
+        "serving_query_logs",
+    }
+)
 
-# 要 DROP 的触发器函数
-ALL_FUNCTIONS = [
-    "asset_retrieval_units_search_vector_update()",
-    "populate_embedding_vector_vec()",
-]
+_DISCOVER_TABLES_SQL = """
+SELECT n.nspname, c.relname
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relkind IN ('r', 'p')
+  AND NOT c.relispartition
+ORDER BY n.nspname, c.relname
+"""
 
-# 要 DROP 的触发器
-ALL_TRIGGERS = [
-    ("asset_retrieval_units", "trg_asset_retrieval_units_search_vector"),
-    ("asset_retrieval_embeddings", "trg_populate_embedding_vector"),
-]
-
-# ── 要执行的建表 SQL 文件（按顺序） ─────────────────────────
-# 顺序与 knowledge_mining 的 ensure_schema（mining/infra/pg_schema.py）保持一致：
-#   asset_core 002 先建（它装 pg_trgm / vector 扩展），
-#   mining_runtime 002/003/004 增量迁移紧随其后，
-#   mining_runtime 005 增加 Workflow Run 绑定和节点事件，
-#   asset_core 003（domain 隔离）在 002 之后，
-#   ontology 在 Domain DDL 中必须最后——它的外键指向 asset_* 和 mining_runs，
-#   mining_control 最后应用且只属于主库。
-#
-# 不含 serving_query_logs / serving_query_cache 与 operator_paradigm*：那些是
-# agent_serving_java 自有表，由它自己在启动/建池时创建
-# （ServingRuntimeSchemaInitializer / ParadigmSchemaInitializer）。它们写在按域路由的
-# DataSource 上，这个脚本只连 .env 那一个库，本来也覆盖不全。见 db_tables.OPTIONAL_TABLES。
-SCHEMA_FILES = [
-    # LLM runtime（llm_service 自管，同库；重建后重启 llm_service 会从 pack 重新注册 prompt 模板）
-    REPO_ROOT / "databases" / "agent_llm_runtime" / "schemas" / "002_agent_llm_runtime_postgresql.sql",
-    # ── 顺序对齐 pg_schema.domain_schema_paths（含 KB 中心化挖掘的 005/006/007）──
-    REPO_ROOT / "databases" / "asset_core" / "schemas" / "002_asset_core_postgresql.sql",   # 扩展 + asset 基表
-    # KB 四表
-    REPO_ROOT / "databases" / "kb" / "schemas" / "001_kb_users.sql",
-    # Phase 2 鉴权列（ALTER kb_users 加 password_hash + site_role，必须在 001 之后）
-    REPO_ROOT / "databases" / "kb" / "schemas" / "006_kb_users_auth.sql",
-    REPO_ROOT / "databases" / "kb" / "schemas" / "002_knowledge_bases.sql",
-    # visibility 收口(private/public,砍 shared;ALTER knowledge_bases CHECK,必须紧跟 002)
-    REPO_ROOT / "databases" / "kb" / "schemas" / "007_kb_visibility_narrow.sql",
-    REPO_ROOT / "databases" / "kb" / "schemas" / "003_kb_members.sql",
-    REPO_ROOT / "databases" / "kb" / "schemas" / "004_kb_folders.sql",
-    # asset_documents 的 KB 列 + 文件元信息（需 knowledge_bases + asset_documents）
-    REPO_ROOT / "databases" / "asset_core" / "schemas" / "004_kb_isolation.sql",
-    REPO_ROOT / "databases" / "asset_core" / "schemas" / "005_kb_file_meta.sql",
-    # KB 挖掘范式绑定（knowledge_bases.mining_workflow_id）
-    REPO_ROOT / "databases" / "kb" / "schemas" / "005_kb_mining_binding.sql",
-    # mining_runtime（含 workflow 绑定 / 节点事件 / preflight）
-    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "002_mining_runtime_postgresql.sql",
-    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "003_mining_runtime_domain.sql",
-    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "004_mining_runtime_run_stage.sql",
-    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "005_mining_workflow_runtime.sql",
-    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "006_mining_run_preflight.sql",
-    # asset_core 域隔离 + snapshot workflow 绑定 + KB build 归属（需 mining_runs 已建）
-    REPO_ROOT / "databases" / "asset_core" / "schemas" / "003_asset_core_domain_isolation.sql",
-    REPO_ROOT / "databases" / "asset_core" / "schemas" / "004_asset_snapshot_workflow_binding.sql",
-    REPO_ROOT / "databases" / "asset_core" / "schemas" / "006_asset_build_kb.sql",
-    # mining_runs 的 kb_id
-    REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "007_mining_run_kb.sql",
-    REPO_ROOT / "databases" / "asset_core" / "schemas" / "007_asset_block_type_image.sql",
-    # ontology（Domain DDL 中必须最后——FK 指向 asset_* / mining_runs）
-    REPO_ROOT / "databases" / "ontology" / "schemas" / "001_ontology_concept_postgresql.sql",
-    # ── control（全局 Workflow 定义，主库最后）──
-    REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql",
-]
+_OTHER_SESSIONS_SQL = """
+SELECT pid,
+       COALESCE(usename, '<unknown>'),
+       COALESCE(application_name, '<unnamed>'),
+       COALESCE(client_addr::text, 'local'),
+       COALESCE(state, '<unknown>')
+FROM pg_catalog.pg_stat_activity
+WHERE datname = current_database()
+  AND pid <> pg_backend_pid()
+  AND backend_type = 'client backend'
+ORDER BY pid
+"""
 
 
-def drop_all(cur):
-    """删除所有触发器、表、函数"""
-    print("\n=== Step 1: DROP existing objects ===")
+@dataclass(frozen=True)
+class DatabaseConfig:
+    host: str
+    port: int
+    dbname: str
+    user: str
+    password: str = field(default="", repr=False)
+    sslmode: str = "disable"
+    gssencmode: str = "disable"
 
-    # 1. DROP triggers
-    for table, trigger in ALL_TRIGGERS:
-        cur.execute(f"DROP TRIGGER IF EXISTS {trigger} ON {table}")
-        print(f"  DROP TRIGGER {trigger} ON {table}")
+    @property
+    def target_id(self) -> str:
+        return f"{self.host}:{self.port}/{self.dbname}"
 
-    # 2. DROP tables（CASCADE 会连带删索引）
-    for t in ALL_TABLES:
-        cur.execute(f"DROP TABLE IF EXISTS {t} CASCADE")
-        print(f"  DROP TABLE {t}")
-
-    # 3. DROP functions
-    for fn in ALL_FUNCTIONS:
-        cur.execute(f"DROP FUNCTION IF EXISTS {fn} CASCADE")
-        print(f"  DROP FUNCTION {fn}")
-
-    # 4. DROP extensions if needed (vector is usually kept)
-    # Uncomment if you want a full clean:
-    # cur.execute("DROP EXTENSION IF EXISTS vector CASCADE")
-    # cur.execute("DROP EXTENSION IF EXISTS pg_trgm CASCADE")
-
-    print("  Done.")
-
-
-def create_all(cur):
-    """按顺序执行 schema SQL 文件"""
-    print("\n=== Step 2: CREATE tables from schema files ===")
-    for sql_file in SCHEMA_FILES:
-        if not sql_file.exists():
-            print(f"  [WARN] File not found, skipping: {sql_file}")
-            continue
-        sql = sql_file.read_text(encoding="utf-8")
-        cur.execute(sql)
-        print(f"  Executed: {sql_file.name}")
-    print("  Done.")
+    def connection_kwargs(self) -> dict[str, Any]:
+        """Return a new psycopg kwargs mapping without logging credentials."""
+        return {
+            "host": self.host,
+            "port": self.port,
+            "dbname": self.dbname,
+            "user": self.user,
+            "password": self.password,
+            "sslmode": self.sslmode,
+            "gssencmode": self.gssencmode,
+        }
 
 
-def main():
+def _database_config_from_mapping(data: dict[str, Any]) -> DatabaseConfig:
+    required = ("host", "dbname", "user")
+    missing = [name for name in required if not str(data.get(name, "")).strip()]
+    if missing:
+        raise ValueError(f"database config missing required fields: {', '.join(missing)}")
+
     try:
+        port = int(data.get("port", 5432))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("database config port must be an integer") from exc
+
+    return DatabaseConfig(
+        host=str(data["host"]).strip(),
+        port=port,
+        dbname=str(data["dbname"]).strip(),
+        user=str(data["user"]).strip(),
+        password=str(data.get("password", "")),
+        sslmode=str(data.get("sslmode", "disable")),
+        gssencmode=str(data.get("gssencmode", "disable")),
+    )
+
+
+def load_database_config(path: str | Path = DEFAULT_CONFIG_PATH) -> DatabaseConfig:
+    """Load the default PostgreSQL target from the control-plane YAML."""
+    config_path = Path(path)
+    if not config_path.is_file():
+        raise ValueError(f"database config not found: {config_path}")
+
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover - production dependency guard
+        raise RuntimeError("PyYAML is required to read database.yaml") from exc
+
+    parsed = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(parsed, dict):
+        raise ValueError(f"invalid database config: {config_path}")
+    if str(parsed.get("driver", "postgresql")).lower() != "postgresql":
+        raise ValueError("reset_db only supports driver=postgresql")
+
+    default = parsed.get("default")
+    if not isinstance(default, dict):
+        raise ValueError("database config missing mapping: default")
+    return _database_config_from_mapping(default)
+
+
+def load_database_targets(
+    database_path: str | Path = DEFAULT_CONFIG_PATH,
+    domain_registry_path: str | Path = DEFAULT_DOMAIN_REGISTRY_PATH,
+    *,
+    default_only: bool = False,
+) -> list[DatabaseConfig]:
+    """Load and physically deduplicate default plus inline domain databases."""
+    default = load_database_config(database_path)
+    targets: dict[tuple[str, int, str], DatabaseConfig] = {
+        (default.host.lower(), default.port, default.dbname): default
+    }
+
+    if default_only:
+        return list(targets.values())
+
+    registry_path = Path(domain_registry_path)
+    if not registry_path.is_file():
+        raise ValueError(f"domain registry not found: {registry_path}")
+
+    import yaml
+
+    parsed = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    domains = parsed.get("domains", {}) if isinstance(parsed, dict) else {}
+    if not isinstance(domains, dict):
+        raise ValueError("domain registry field 'domains' must be a mapping")
+
+    for domain_name, entry in domains.items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"domain {domain_name!r} must be a mapping")
+        inline = entry.get("database")
+        if inline is None:
+            continue
+        if not isinstance(inline, dict):
+            raise ValueError(f"domain {domain_name!r} database must be a mapping")
+        config = _database_config_from_mapping(inline)
+        identity = (config.host.lower(), config.port, config.dbname)
+        targets.setdefault(identity, config)
+
+    return list(targets.values())
+
+
+def validate_admin_bootstrap(path: str | Path = DEFAULT_AUTH_CONFIG_PATH) -> None:
+    """Ensure one restart can recreate a login-capable admin after truncation."""
+    auth_path = Path(path)
+    if not auth_path.is_file():
+        raise ValueError(f"auth config not found: {auth_path}")
+
+    import yaml
+
+    parsed = yaml.safe_load(auth_path.read_text(encoding="utf-8")) or {}
+    bootstrap = parsed.get("bootstrap", {}) if isinstance(parsed, dict) else {}
+    password = bootstrap.get("admin_password", "") if isinstance(bootstrap, dict) else ""
+    if not isinstance(password, str):
+        raise ValueError("auth bootstrap.admin_password must be a string")
+    if password in {"", "change-me-on-first-login"}:
+        raise ValueError(
+            "auth bootstrap.admin_password is empty or a placeholder; "
+            "configure it before clearing kb_users"
+        )
+
+
+def quote_identifier(value: str) -> str:
+    """Quote one PostgreSQL identifier sourced from the system catalog."""
+    return '"' + value.replace('"', '""') + '"'
+
+
+def build_truncate_statement(tables: Sequence[tuple[str, str]]) -> str | None:
+    """Build one atomic TRUNCATE for all managed tables."""
+    if not tables:
+        return None
+    qualified = [
+        f"{quote_identifier(schema)}.{quote_identifier(table)}"
+        for schema, table in tables
+    ]
+    return f"TRUNCATE TABLE {', '.join(qualified)} RESTART IDENTITY"
+
+
+def _is_managed_table(table: str) -> bool:
+    return table in _MANAGED_TABLE_NAMES
+
+
+def discover_public_tables(cursor: Any) -> list[tuple[str, str]]:
+    """Return non-partition-child tables from the public schema."""
+    cursor.execute(_DISCOVER_TABLES_SQL)
+    return [(str(schema), str(table)) for schema, table in cursor.fetchall()]
+
+
+def assert_no_other_sessions(cursor: Any) -> None:
+    """Refuse reset while application pools or other client sessions remain."""
+    cursor.execute(_OTHER_SESSIONS_SQL)
+    sessions = cursor.fetchall()
+    if not sessions:
+        return
+    details = ", ".join(
+        f"pid={pid} user={user} app={app} client={client} state={state}"
+        for pid, user, app, client, state in sessions
+    )
+    raise RuntimeError(
+        "other PostgreSQL client sessions are still connected; "
+        f"stop CoreMasterKB before reset ({details})"
+    )
+
+
+def validate_managed_tables(tables: Sequence[tuple[str, str]]) -> None:
+    """Refuse to clear a database that appears shared with another product."""
+    unknown = [table for _schema, table in tables if not _is_managed_table(table)]
+    if unknown:
+        raise ValueError(
+            "refusing to clear unknown public tables: " + ", ".join(sorted(unknown))
+        )
+
+
+def truncate_public_tables(cursor: Any) -> list[str]:
+    """Discover and truncate every current CoreMasterKB table atomically."""
+    tables = discover_public_tables(cursor)
+    validate_managed_tables(tables)
+    statement = build_truncate_statement(tables)
+    if statement is not None:
+        cursor.execute(statement)
+    return [f"{schema}.{table}" for schema, table in tables]
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="清空 CoreMasterKB PostgreSQL 数据，保留最新表结构。"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="database.yaml 路径",
+    )
+    parser.add_argument(
+        "--domain-registry",
+        type=Path,
+        default=DEFAULT_DOMAIN_REGISTRY_PATH,
+        help="domain_registry.yaml 路径；用于发现并去重域数据库",
+    )
+    parser.add_argument(
+        "--auth-config",
+        type=Path,
+        default=DEFAULT_AUTH_CONFIG_PATH,
+        help="auth.yaml 路径；执行前验证 admin 可在重启时重新播种",
+    )
+    parser.add_argument(
+        "--default-only",
+        action="store_true",
+        help="只清 database.yaml 的 default；必须显式指定才忽略域数据库",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="实际执行；省略时只预览目标库和表",
+    )
+    return parser
+
+
+def _print_target(config: DatabaseConfig, tables: Sequence[tuple[str, str]]) -> None:
+    print(
+        f"Target: {config.host}:{config.port}/{config.dbname} "
+        f"(user={config.user}, schema=public)"
+    )
+    print(f"Managed tables: {len(tables)}")
+    for schema, table in tables:
+        print(f"  - {schema}.{table}")
+
+
+def _inspect_target(
+    psycopg: Any,
+    config: DatabaseConfig,
+    *,
+    require_quiet: bool,
+) -> list[tuple[str, str]]:
+    with psycopg.connect(**config.connection_kwargs()) as conn:
+        with conn.cursor() as cursor:
+            tables = discover_public_tables(cursor)
+            validate_managed_tables(tables)
+            if require_quiet:
+                assert_no_other_sessions(cursor)
+            return tables
+
+
+def _clear_target(psycopg: Any, config: DatabaseConfig) -> list[str]:
+    with psycopg.connect(**config.connection_kwargs()) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SET LOCAL lock_timeout = '10s'")
+            cursor.execute("SET LOCAL statement_timeout = '120s'")
+            assert_no_other_sessions(cursor)
+            return truncate_public_tables(cursor)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    try:
+        targets = load_database_targets(
+            args.config,
+            args.domain_registry,
+            default_only=args.default_only,
+        )
         import psycopg
+
+        inspected = [
+            (
+                config,
+                _inspect_target(psycopg, config, require_quiet=args.execute),
+            )
+            for config in targets
+        ]
+        for config, tables in inspected:
+            _print_target(config, tables)
+
+        if not args.execute:
+            print("Dry run only. Re-run with --execute to clear these tables.")
+            return 0
+
+        validate_admin_bootstrap(args.auth_config)
+        print("WARNING: all rows in the tables above will be permanently deleted.")
+        for config, _tables in inspected:
+            phrase = f"RESET {config.target_id}"
+            confirmation = input(f"Type '{phrase}' to proceed: ")
+            if confirmation != phrase:
+                print("Aborted before clearing any database.")
+                return 0
+
+        total = 0
+        completed_targets: list[str] = []
+        try:
+            for config, _tables in inspected:
+                cleared = _clear_target(psycopg, config)
+                total += len(cleared)
+                completed_targets.append(config.target_id)
+                print(f"Cleared {len(cleared)} tables in {config.target_id}.")
+        except Exception:
+            if completed_targets:
+                print(
+                    "[ERROR] partial multi-database reset; already cleared: "
+                    + ", ".join(completed_targets),
+                    file=sys.stderr,
+                )
+            raise
+
+        print(f"Cleared {total} PostgreSQL tables; schema was preserved.")
+        print("MinIO object bytes and Docker volumes were not modified.")
+        print("PostgreSQL upload/object metadata was cleared.")
+        print("Restart services with: bash deploy-server.sh --apply-config")
+        return 0
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
     except ImportError:
-        print("[ERROR] psycopg is required. Install with: pip install psycopg[binary]")
-        sys.exit(1)
-
-    print(f"Connecting to: {PG_HOST}:{PG_PORT}/{PG_DBNAME} (user={PG_USER})")
-    print("WARNING: This will DELETE ALL DATA in the tables listed above!")
-    confirm = input("Type 'YES' to proceed: ")
-    if confirm != "YES":
-        print("Aborted.")
-        sys.exit(0)
-
-    with psycopg.connect(CONNINFO, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            drop_all(cur)
-            create_all(cur)
-
-    print("\n=== Database reset complete ===")
-    print("All tables dropped and recreated from latest schema files.")
+        print("[ERROR] psycopg is required; run this script in the app image.", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - CLI boundary, keep rollback semantics
+        print(f"[ERROR] database reset failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

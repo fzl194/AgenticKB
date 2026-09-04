@@ -138,7 +138,8 @@ public class InspectService {
         if (asset != null) {
             return inspectAsset(ref, snapshotId, asset);
         }
-        StructureNodeRow node = toolMapper.selectNode(snapshotId, internalRef);
+        // A0-2：document ref 双变体（历史快照裸 ref / 新快照 #document）
+        StructureNodeRow node = StructureNodeLookup.find(toolMapper, snapshotId, internalRef);
         if (node == null) {
             throw StructureToolException.invalidRef("目标结构节点不存在（ref 可能已失效）");
         }

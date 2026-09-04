@@ -186,14 +186,22 @@ export interface KbDocSegment {
   normalized_text: string | null
 }
 
-/** 文档已挖掘知识的检索单元。 */
+/** 文档当前可搜索版本的正式 v2 检索表示（对外公开类型词表）。 */
 export interface KbDocRetrievalUnit {
-  unit_key: string
+  representation_id: string
+  /** 公开类型九词：prose/section/document/table/table_row/list/code/formula/figure_caption */
   unit_type: string | null
-  title: string | null
   text: string | null
-  block_type: string | null
-  semantic_role: string | null
+  /** 章节上下文（标题面包屑） */
+  structural_context: string | null
+}
+
+/** 搜索辅助表示（query_alias/summary_alias）：只助召回，不作为可引用原文。 */
+export interface KbDocSearchAssistUnit {
+  representation_id: string
+  unit_type: string | null
+  text: string | null
+  structural_context: string | null
 }
 
 /** 文档已挖掘知识的实体提及。 */
@@ -220,7 +228,11 @@ export interface DocumentKnowledge {
   build_id: string | null
   document_snapshot_id: string | null
   segments?: KbDocSegment[]
+  /** 正式 v2 检索表示（A0-5；默认只含可返回的原始证据表示） */
   retrieval_units?: KbDocRetrievalUnit[]
+  /** 搜索辅助表示（alias，高级信息）——不冒充原文知识 */
+  search_assist_units?: KbDocSearchAssistUnit[]
+  units_source?: string
   entity_mentions?: KbDocEntityMention[]
   relations?: KbDocRelation[]
 }

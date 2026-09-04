@@ -77,6 +77,36 @@ class ParadigmRequestsFiltersTest {
     }
 
     @Test
+    @DisplayName("A0-4: evidence_types 公开词表——list/code 接受并规范化为内部表示；内部别名兼容；枚举外值带允许清单")
+    void evidenceTypeVocabularyNormalization() throws Exception {
+        // 公开词 list/code 可原样传入（evidence[].type 回传筛选）——边界规范化为内部表示
+        var args = ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"evidence_types\": [\"code\", \"list\", \"table\"]}}"), null);
+        assertThat(args.filters()).containsEntry(
+                "evidence_types", java.util.List.of("code_block", "list_group", "table"));
+
+        // 历史内部词兼容（不破已下发调用方）
+        var legacy = ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"evidence_types\": [\"list_group\"]}}"), null);
+        assertThat(legacy.filters()).containsEntry(
+                "evidence_types", java.util.List.of("list_group"));
+
+        // 枚举外值：错误消息带公开词允许清单（用户/Agent 可修正）
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"evidence_types\": [\"vector\"]}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:evidence_types")
+                .hasMessageContaining("prose")
+                .hasMessageContaining("figure_caption");
+
+        // alias 不是对外证据类型（alias 只助召回，不作为证据筛选面）
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"evidence_types\": [\"query_alias\"]}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:evidence_types");
+    }
+
+    @Test
     @DisplayName("未传 within/filters → 空 map（宽检索，不加任何隐式约束）")
     void absentFiltersStayEmpty() throws Exception {
         var args = ParadigmRequests.toRunArgs(M.readTree("{\"query\": \"q\"}"), null);

@@ -116,9 +116,35 @@
 
       <!-- Pipeline Flow -->
       <div class="run-detail__section">
-        <h4 class="section-label">Pipeline 阶段</h4>
+        <div class="run-detail__stage-header">
+          <h4 class="section-label" style="margin-bottom: 0">Pipeline 阶段</h4>
+          <!-- A0-6：历史 legacy Run（真实记录过实体/本体阶段）如实标识，
+               不因兼容组件宣称当前产品仍有实体/本体能力 -->
+          <el-tag
+            v-if="isLegacyRun"
+            size="small" effect="plain" type="info"
+            data-testid="legacy-run-tag"
+          >历史任务</el-tag>
+        </div>
         <MiningWorkflowTrace v-if="trace?.workflow" :trace="trace" />
-        <PipelineFlow v-else :stage-events="miningStore.stages" :all-docs-settled="allDocsSettled" />
+        <!-- A0-6：真实阶段事件存在才渲染流程条（PipelineFlow 按事件推导，
+             不再回退固定实体/本体阶段） -->
+        <PipelineFlow
+          v-else-if="miningStore.stages.length"
+          :stage-events="miningStore.stages" :all-docs-settled="allDocsSettled"
+        />
+        <div
+          v-else-if="traceFailed"
+          class="run-detail__stages-unavailable"
+          data-testid="stages-unavailable"
+        >
+          任务阶段暂不可用
+          <el-button
+            size="small" text type="primary"
+            data-testid="stages-retry"
+            @click="fetchTrace"
+          >重试</el-button>
+        </div>
       </div>
 
       <!-- Documents Table -->
@@ -219,6 +245,9 @@ const miningApi = useMiningApi()
 const activeDocFilter = ref('all')
 const initialLoading = ref(true)
 const trace = ref<RunTrace | null>(null)
+// A0-6：trace 拉取失败不再静默——无真实阶段事件时显示「暂不可用 + 重试」，
+// 而不是回退到固定的实体/本体/落图阶段条
+const traceFailed = ref(false)
 let traceGeneration = 0
 const resuming = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -357,9 +386,28 @@ async function fetchTrace() {
       generation === traceGeneration
       && domain === domainStore.currentDomain
       && runId === props.runId
-    ) trace.value = result
-  } catch { /* trace 是叠加视图，失败不影响主流程 */ }
+    ) {
+      trace.value = result
+      traceFailed.value = false
+    }
+  } catch {
+    if (generation === traceGeneration) traceFailed.value = true
+  }
 }
+
+// 历史 legacy 阶段键（仅实体/本体/落图旧链——run.py 现行无条件阶段
+// parse/segment/enrich/discourse/retrieval_units/embedding/db_write 都不属于）。
+// 注意：enrich（段落理解）与 discourse（语篇分析）是当前链阶段，
+// 误入此集合会把所有现役 Run 标成「历史任务」。
+const LEGACY_STAGE_KEYS = new Set([
+  'entity_extract', 'resolve', 'entity_relations',
+  'graph_write', 'graph_write_final', 'ontology_induction',
+  'build_relations', 'commit_segments', 'discourse_relations',
+])
+
+/** 该 Run 是否真实记录过旧链阶段（历史任务标识） */
+const isLegacyRun = computed(() =>
+  miningStore.stages.some(s => LEGACY_STAGE_KEYS.has(s.stage)))
 
 async function handleResume() {
   resuming.value = true
@@ -617,6 +665,16 @@ watch(() => miningStore.documentsPage, () => {
 }
 
 /* Section */
+.run-detail__stage-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.run-detail__stages-unavailable {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--kb-text-tertiary); font-size: 13px;
+  padding: 18px 16px;
+  border: 1px dashed var(--kb-border-light); border-radius: 8px;
+}
+
 .run-detail__section {
   background: var(--kb-bg-card);
   border-radius: var(--kb-radius);

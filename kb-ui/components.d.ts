@@ -15,6 +15,7 @@ declare module 'vue' {
     BarChart: typeof import('./src/components/charts/BarChart.vue')['default']
     BrandAppearanceTab: typeof import('./src/components/settings/BrandAppearanceTab.vue')['default']
     CodeSyncTab: typeof import('./src/components/settings/CodeSyncTab.vue')['default']
+    DocumentStructureGraph: typeof import('./src/components/kb/DocumentStructureGraph.vue')['default']
     DomainDetailTab: typeof import('./src/components/settings/DomainDetailTab.vue')['default']
     DomainManageTab: typeof import('./src/components/settings/DomainManageTab.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']

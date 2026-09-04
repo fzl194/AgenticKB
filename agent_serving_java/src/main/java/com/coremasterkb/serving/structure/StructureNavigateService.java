@@ -86,12 +86,14 @@ public class StructureNavigateService {
         }
         int effDepth = clamp(depth == null ? DEFAULT_DEPTH : depth, 1, MAX_DEPTH);
         int effLimit = clamp(limit == null ? DEFAULT_LIMIT : limit, 1, MAX_LIMIT);
-        int offset = Cursors.decode(cursor);
+        int offset = Cursors.decodeOffset(cursor);
 
         EvidenceRefResolver.ResolvedRef resolved =
                 refService.resolve(structureRef, domain, kbIds, username);
         String snapshotId = resolved.snapshotId();
-        StructureNodeRow node = toolMapper.selectNode(snapshotId, resolved.internalRef());
+        // A0-2：document ref 双变体（历史快照裸 ref / 新快照 #document）
+        StructureNodeRow node = StructureNodeLookup.find(toolMapper, snapshotId,
+                resolved.internalRef());
         if (node == null) {
             throw StructureToolException.invalidRef("目标结构节点不存在（ref 可能已失效）");
         }
@@ -118,7 +120,7 @@ public class StructureNavigateService {
             default -> true;
         };
         List<StructureNodeRow> trimmed = hasMore ? rows.subList(0, effLimit) : rows;
-        String nextCursor = hasMore ? Cursors.encode(offset + effLimit) : null;
+        String nextCursor = hasMore ? Cursors.encodeOffset(offset + effLimit) : null;
 
         return new NavigateResult(
                 structureRef, relation, effDepth, effLimit,

@@ -35,6 +35,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { MiningRunStage } from '@/types'
 
 const props = withDefaults(defineProps<{
@@ -48,11 +49,14 @@ interface PipelineStage {
   key: string
   label: string
   backendKeys: string[]
-  line?: 'discourse' | 'ontology'  // 篇章线 / 本体线（L4 §15）
+  line?: 'discourse' | 'ontology'  // 篇章线 / 本体线（历史 legacy 阶段）
   scope?: 'document' | 'global'    // 逐文档阶段 / 全局尾段（落图、建库发布）。默认逐文档
 }
 
-const stages: PipelineStage[] = [
+// 阶段目录（标签映射，含历史 legacy 阶段——旧 Run 的真实事件要能显示名字）。
+// A0-6：渲染条目按 stageEvents 动态推导——不再预渲染固定 12 阶段骨架，
+// 新链 Run 不出现「实体抽取/落图」等当前产品不存在的阶段。
+const STAGE_CATALOG: PipelineStage[] = [
   { key: 'parse', label: '解析', backendKeys: ['parse'] },
   { key: 'segment', label: '分段', backendKeys: ['segment'] },
   { key: 'enrich', label: '段落理解', backendKeys: ['enrich'], line: 'discourse' },
@@ -67,6 +71,12 @@ const stages: PipelineStage[] = [
   { key: 'build', label: '构建&发布', backendKeys: ['assemble_build', 'validate_build'], scope: 'global' },
 ]
 
+// 只有真实记录到事件的阶段才渲染（目录顺序，与事件到达顺序无关）
+const stages = computed<PipelineStage[]>(() => {
+  const seen = new Set(props.stageEvents.map(e => e.stage))
+  return STAGE_CATALOG.filter(s => s.backendKeys.some(k => seen.has(k)))
+})
+
 const stageIcons: Record<string, string> = {
   parse: '🔍', segment: '✂️', enrich: '🧠', entity_extract: '🏷️',
   resolve: '🔗', entity_relations: '🕸️', discourse: '💬',
@@ -78,7 +88,7 @@ function findStageEvents(stage: PipelineStage): MiningRunStage[] {
 }
 
 function getStageStatus(key: string): string {
-  const stage = stages.find(s => s.key === key)
+  const stage = stages.value.find(s => s.key === key)
   if (!stage) return 'pending'
   const events = findStageEvents(stage)
   if (events.length === 0) return 'pending'
@@ -100,7 +110,7 @@ function getStageStatus(key: string): string {
 }
 
 function getStageDuration(key: string): number {
-  const stage = stages.find(s => s.key === key)
+  const stage = stages.value.find(s => s.key === key)
   if (!stage) return 0
   return findStageEvents(stage)
     .filter(e => e.status === 'completed' && e.duration_ms != null)

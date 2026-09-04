@@ -289,8 +289,16 @@ export function useKbApi() {
       return extractOne<DocumentKnowledge>(data)
     },
 
-    async getDocumentParseResult(kbId: string, docId: string): Promise<ParseResult> {
-      const { data } = await client.get(`/api/kb/${kbId}/documents/${docId}/parse-result`)
+    /**
+     * 结构化数据（A0-1 双视图）。不传 view → 后端默认 current_serving
+     * （该文档当前被搜索使用的版本）；latest_revision = 最新上传版本的解析。
+     */
+    async getDocumentParseResult(
+      kbId: string, docId: string, view?: 'current_serving' | 'latest_revision',
+    ): Promise<ParseResult> {
+      const query = view ? `?${new URLSearchParams({ view })}` : ''
+      const { data } = await client.get(
+        `/api/kb/${kbId}/documents/${docId}/parse-result${query}`)
       return data as ParseResult
     },
   }

@@ -180,18 +180,21 @@ public class EvidenceToolService {
         String snapshotId = resolved.snapshotId();
         int effLimit = Math.max(1, Math.min(
                 limit == null ? DEFAULT_DOCUMENT_LIMIT : limit, MAX_DOCUMENT_LIMIT));
-        int offset = Cursors.decode(cursor);
+        // A0-3：cursor = 上一页最后一条实际 ordinal（排他下界）；空 cursor 起点 -1
+        //（SQL 是 ordinal > after——此前起点 0 漏掉 segment 0）。
+        int after = Cursors.decodeAfter(cursor);
 
         int total = toolMapper.countSegments(snapshotId);
         List<SegmentTextRow> rows =
-                toolMapper.selectSegmentsPage(snapshotId, offset, effLimit + 1);
+                toolMapper.selectSegmentsPage(snapshotId, after, effLimit + 1);
         boolean hasMore = rows.size() > effLimit;
         List<SegmentView> segments = new ArrayList<>(Math.min(rows.size(), effLimit));
         for (int i = 0; i < Math.min(rows.size(), effLimit); i++) {
             segments.add(toView(rows.get(i)));
         }
 
-        List<SectionSummary> sections = offset == 0
+        boolean firstPage = after == Cursors.START;
+        List<SectionSummary> sections = firstPage
                 ? toolMapper.selectSectionOutline(snapshotId, OUTLINE_CAP).stream()
                         .map(n -> new SectionSummary(
                                 codec.encodeStructure(snapshotId, n.getRef()),
@@ -208,8 +211,18 @@ public class EvidenceToolService {
             source.put("relative_path", doc.getRelativePath());
         }
 
+        // 下一页游标记录本页最后一条实际 ordinal——编号稀疏时仍不漏不重
+        //（此前 offset+effLimit 假设编号连续，跳号会漏行）。ordinal 缺失的
+        // 数据异常态不给游标（客户端重查），不制造不可解码的 a:-1。
+        String nextCursor = null;
+        if (hasMore && !rows.isEmpty()) {
+            Integer last = rows.get(Math.min(rows.size(), effLimit) - 1).getOrdinal();
+            if (last != null) {
+                nextCursor = Cursors.encodeAfter(last);
+            }
+        }
         return new DocumentResult(documentRef, source, sections, segments, total,
-                hasMore ? Cursors.encode(offset + effLimit) : null, hasMore);
+                nextCursor, hasMore);
     }
 
     private static SegmentView toView(SegmentTextRow row) {

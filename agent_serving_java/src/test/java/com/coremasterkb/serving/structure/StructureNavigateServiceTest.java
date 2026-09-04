@@ -202,14 +202,48 @@ class StructureNavigateServiceTest {
     }
 
     @Test
+    @DisplayName("A0-2: children({doc}#document) 历史快照（节点与 parent 均裸 ref）返回顶层章节")
+    void childrenOfDocumentRefOnLegacySnapshot() {
+        String ref = stRef("doc:/spec#document");
+        // 历史快照：#document 精确 miss，document 节点行是裸 ref，section parent 也是裸 ref
+        when(toolMapper.selectNode(SNAP, "doc:/spec#document")).thenReturn(null);
+        when(toolMapper.selectNode(SNAP, "doc:/spec"))
+                .thenReturn(node("document", "doc:/spec", null, null));
+        when(toolMapper.selectChildren(eq(SNAP), eq("doc:/spec"), anyInt(), anyInt()))
+                .thenReturn(List.of(node("section", SECTION, "doc:/spec", 1)));
+
+        var out = service.navigate(ref, "children", null, null, null,
+                "odn", List.of("kb-1"), "alice");
+
+        assertThat(out.nodes()).hasSize(1);
+        assertThat(out.nodes().get(0).node_type()).isEqualTo("section");
+    }
+
+    @Test
+    @DisplayName("A0-2: descendants({doc}#document) 新快照直接按 #document ref 展开")
+    void descendantsOfDocumentRefOnNewSnapshot() {
+        String ref = stRef("doc:/spec#document");
+        when(toolMapper.selectNode(SNAP, "doc:/spec#document"))
+                .thenReturn(node("document", "doc:/spec#document", null, null));
+        when(toolMapper.selectDescendants(eq(SNAP), eq("doc:/spec#document"), anyInt(), anyInt(), anyInt()))
+                .thenReturn(List.of(node("section", SECTION, "doc:/spec#document", 1)));
+
+        var out = service.navigate(ref, "descendants", null, null, null,
+                "odn", List.of("kb-1"), "alice");
+
+        assertThat(out.nodes()).hasSize(1);
+        assertThat(out.nodes().get(0).node_type()).isEqualTo("section");
+    }
+
+    @Test
     @DisplayName("cursor 往返：encode → decode 稳定；非法 cursor → typed error")
     void cursorRoundTrip() {
-        String token = Cursors.encode(120);
-        assertThat(Cursors.decode(token)).isEqualTo(120);
-        assertThat(Cursors.decode(null)).isZero();
-        assertThat(Cursors.decode("")).isZero();
+        String token = Cursors.encodeOffset(120);
+        assertThat(Cursors.decodeOffset(token)).isEqualTo(120);
+        assertThat(Cursors.decodeOffset(null)).isZero();
+        assertThat(Cursors.decodeOffset("")).isZero();
 
-        assertThatThrownBy(() -> Cursors.decode("not-a-cursor!!"))
+        assertThatThrownBy(() -> Cursors.decodeOffset("not-a-cursor!!"))
                 .isInstanceOf(StructureToolException.class)
                 .extracting(e -> ((StructureToolException) e).code())
                 .isEqualTo("unsupported_operation");

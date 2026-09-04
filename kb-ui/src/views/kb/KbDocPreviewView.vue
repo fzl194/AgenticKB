@@ -97,7 +97,35 @@
           </div>
 
           <template v-else-if="parseResult">
-            <!-- 各区块独立收缩；顺序：快照 → 大纲 → 切片 → 元素 → 表格 -->
+            <!-- A0-1 版本横幅：当前可搜索版本 vs 最新上传版本 -->
+            <div
+              v-if="parseResult.versioning"
+              class="doc-preview__version-banner"
+              :class="{ 'doc-preview__version-banner--stale': !parseResult.versioning.in_sync }"
+              data-testid="doc-version-banner"
+            >
+              <template v-if="parseResult.versioning.in_sync">
+                当前可搜索版本与最新上传版本一致（rev.{{ parseResult.versioning.latest?.source_content_revision ?? '—' }}）
+              </template>
+              <template v-else-if="parseResult.versioning.serving">
+                当前可搜索 rev.{{ parseResult.versioning.serving.source_content_revision ?? '—' }}；
+                最新上传 rev.{{ parseResult.versioning.latest?.source_content_revision ?? '—' }} 尚未进入搜索
+              </template>
+              <template v-else>
+                以下为最新上传版本（rev.{{ parseResult.versioning.latest?.source_content_revision ?? '—' }}）的解析结果，
+                尚未进入搜索——搜索与 Agent 读取暂不可用
+              </template>
+              <el-button
+                v-if="parseResult.versioning.serving && !parseResult.versioning.in_sync"
+                size="small" text type="primary"
+                data-testid="doc-version-toggle"
+                @click="toggleParseView"
+              >
+                {{ parseView === 'current_serving' ? '查看最新解析' : '查看当前可搜索版本' }}
+              </el-button>
+            </div>
+
+            <!-- 各区块独立收缩；顺序：快照 → 结构图 → 大纲 → 切片 → 元素 → 表格 -->
             <el-collapse v-model="openCards" class="doc-preview__cards">
               <!-- 知识快照 -->
               <el-collapse-item name="snapshot" title="知识快照">
@@ -129,6 +157,19 @@
                     <span class="doc-preview__mono">{{ parseResult.snapshot.compiler_fingerprint || '默认' }}</span>
                   </div>
                 </div>
+              </el-collapse-item>
+
+              <!-- 将同一份线上结构化结果编排成确定性文档结构图，不引入推断关系。 -->
+              <el-collapse-item
+                v-if="parseResult.outline.length || parseResult.tables.length"
+                name="structure-graph"
+                title="文档结构图"
+              >
+                <DocumentStructureGraph
+                  v-if="activeTab === 'structured' && openCards.includes('structure-graph')"
+                  :document-title="doc?.document_name || parseResult.snapshot.title || '未命名文档'"
+                  :result="parseResult"
+                />
               </el-collapse-item>
 
               <!-- 文档大纲 -->
@@ -216,7 +257,7 @@
                     </el-table-column>
                   </el-table>
                   <p v-if="t.rows > t.preview.length" class="doc-preview__muted">
-                    仅预览前 {{ t.preview.length }} 行（共 {{ t.rows }} 行数据行）——完整数据可经 MCP query_structured_asset 查询。
+                    仅预览前 {{ t.preview.length }} 行（共 {{ t.rows }} 行数据行）——完整表格查询目前可通过 Agent 的 get_knowledge 表格查询能力使用。
                   </p>
                 </div>
               </el-collapse-item>
@@ -232,18 +273,40 @@
         </div>
       </el-tab-pane>
       <template v-if="knowledgeMined">
-        <el-tab-pane v-if="units.length" :label="`检索单元 (${units.length})`" name="units">
+        <el-tab-pane v-if="units.length || assistUnits.length" :label="`检索单元 (${units.length})`" name="units">
           <div class="doc-preview__knowledge">
-            <div class="doc-preview__units">
-              <div v-for="(u, i) in units" :key="u.unit_key || i" class="doc-preview__unit">
+            <div v-if="!units.length" class="doc-preview__muted">
+              当前可搜索版本没有可返回的原始证据表示——可能挖掘未完成或未生成检索表示。
+            </div>
+            <div v-else class="doc-preview__units" data-testid="doc-retrieval-units">
+              <div v-for="(u, i) in units" :key="u.representation_id || i" class="doc-preview__unit">
                 <div class="doc-preview__unit-head">
                   <el-tag v-if="u.unit_type" size="small" effect="plain">{{ u.unit_type }}</el-tag>
-                  <el-tag v-if="u.semantic_role" size="small" effect="light">{{ u.semantic_role }}</el-tag>
-                  <span class="doc-preview__unit-title">{{ u.title || u.unit_key }}</span>
+                  <span v-if="u.structural_context" class="doc-preview__seg-path">{{ u.structural_context }}</span>
                 </div>
                 <pre v-if="u.text" class="doc-preview__seg-text">{{ u.text }}</pre>
               </div>
             </div>
+
+            <!-- A0-5：搜索辅助表示（alias）——只助召回，不作为可引用原文 -->
+            <el-collapse v-if="assistUnits.length" class="doc-preview__assist">
+              <el-collapse-item name="assist">
+                <template #title>
+                  <span class="doc-preview__assist-title">
+                    搜索辅助表示（{{ assistUnits.length }}）——帮助召回，不是原文
+                  </span>
+                </template>
+                <div class="doc-preview__units" data-testid="doc-search-assist">
+                  <div v-for="(u, i) in assistUnits" :key="u.representation_id || i" class="doc-preview__unit">
+                    <div class="doc-preview__unit-head">
+                      <el-tag size="small" effect="plain">{{ u.unit_type }}</el-tag>
+                      <span class="doc-preview__seg-path">搜索辅助</span>
+                    </div>
+                    <pre v-if="u.text" class="doc-preview__seg-text">{{ u.text }}</pre>
+                  </div>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </div>
         </el-tab-pane>
 
@@ -261,11 +324,12 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useKbApi } from '@/api/kb'
 import type { ParseResult } from '@/api/mining'
+import DocumentStructureGraph from '@/components/kb/DocumentStructureGraph.vue'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
 import type { Component } from 'vue'
-import type { KbDocument, KbDocRetrievalUnit } from '@/types/kb'
+import type { KbDocument, KbDocRetrievalUnit, KbDocSearchAssistUnit } from '@/types/kb'
 
 const PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 const TEXT_RENDER_LIMIT = 200_000
@@ -291,11 +355,15 @@ const fullText = ref<string | null>(null)
 const renderLimit = ref(TEXT_RENDER_LIMIT)
 
 const units = ref<KbDocRetrievalUnit[]>([])
+const assistUnits = ref<KbDocSearchAssistUnit[]>([])
 const knowledgeMined = ref(false)
 const activeTab = ref<'preview' | 'structured' | 'units'>('preview')
+// A0-1：结构化数据视图（默认 current_serving；最新解析显式切换）
+const parseView = ref<'current_serving' | 'latest_revision'>('current_serving')
+let parseGeneration = 0
 
 // 结构化数据各卡片独立收缩（默认全开）。
-const openCards = ref<string[]>(['snapshot', 'outline', 'segments', 'elements', 'tables'])
+const openCards = ref<string[]>(['snapshot', 'structure-graph', 'outline', 'segments', 'elements', 'tables'])
 
 // M5 结构化数据（新链知识快照）：尽力加载，404 = 尚未走新链更新知识
 const parseResult = ref<ParseResult | null>(null)
@@ -322,13 +390,20 @@ function tableRows(t: { preview: string[][] }): string[][] {
 }
 
 async function loadParseResult() {
+  // 代际守卫：快速切换视图时旧响应不得覆盖新视图（对齐 KbRunDetailView.fetchTrace）
+  const generation = ++parseGeneration
   parseResult.value = null
   parseError.value = ''
   parseRetryable.value = false
   parseLoading.value = true
   try {
-    parseResult.value = await kbApi.getDocumentParseResult(props.kbId, props.docId)
+    // A0-1：默认（current_serving）不传 view——后端默认即当前可搜索版本
+    const result = parseView.value === 'latest_revision'
+      ? await kbApi.getDocumentParseResult(props.kbId, props.docId, 'latest_revision')
+      : await kbApi.getDocumentParseResult(props.kbId, props.docId)
+    if (generation === parseGeneration) parseResult.value = result
   } catch (e) {
+    if (generation !== parseGeneration) return
     // 对抗评审 HIGH-1：按 HTTP 状态码分支（文案正则永远匹配不到后端
     // detail）；404 = 未走新链（引导），503 = 未接线，其余原样展示。
     const status = (e as { response?: { status?: number } })?.response?.status
@@ -341,7 +416,7 @@ async function loadParseResult() {
       parseError.value = await apiErrorDetail(e)
     }
   } finally {
-    parseLoading.value = false
+    if (generation === parseGeneration) parseLoading.value = false
   }
 }
 
@@ -385,11 +460,20 @@ function cleanup() {
 
 function resetKnowledge() {
   units.value = []
+  assistUnits.value = []
   knowledgeMined.value = false
   activeTab.value = 'preview'
   parseResult.value = null
   parseError.value = ''
   parseRetryable.value = false
+  parseView.value = 'current_serving'
+}
+
+/** A0-1：当前可搜索版本 ↔ 最新解析 切换 */
+function toggleParseView() {
+  parseView.value = parseView.value === 'current_serving'
+    ? 'latest_revision' : 'current_serving'
+  void loadParseResult()
 }
 
 const textTruncated = computed(() => (fullText.value?.length ?? 0) > renderLimit.value)
@@ -475,6 +559,7 @@ async function load() {
       if (knowledge && knowledge.mined) {
         knowledgeMined.value = true
         units.value = knowledge.retrieval_units ?? []
+        assistUnits.value = knowledge.search_assist_units ?? []
       } else {
         knowledgeMined.value = true // 状态显示已挖但接口失败：允许进入知识视图，Tab 按实际数据动态出
       }
@@ -593,6 +678,20 @@ onUnmounted(cleanup)
 }
 
 /* M5 结构化数据 */
+.doc-preview__version-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--kb-border-light); border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 12px;
+  font-size: 13px; color: var(--kb-text-secondary);
+  background: var(--kb-bg-card);
+}
+.doc-preview__version-banner--stale {
+  border-color: var(--el-color-warning-light-5);
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+}
+.doc-preview__assist-title { font-size: 13px; font-weight: 600; }
+.doc-preview__assist { margin-top: 12px; }
 .doc-preview__cards {
   --el-collapse-border-color: var(--kb-border-light);
 }

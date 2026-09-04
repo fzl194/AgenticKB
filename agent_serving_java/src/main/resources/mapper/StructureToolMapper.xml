@@ -114,12 +114,24 @@
     </select>
 
     <select id="selectDocumentRefCandidates" resultMap="refRowMap">
-        SELECT n.snapshot_id, n.ref
-        FROM asset_structure_nodes n
-        WHERE n.node_type = 'document'
-          AND n.snapshot_id IN
-        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
-        ORDER BY n.snapshot_id ASC, n.ref ASC
+        <!-- A0-2：doc_ 按「裸 documentRef」编码（evidence source.document_ref 的
+             既有基准）。历史快照 document 节点 ref 即裸值；新快照（mining 修复后）
+             节点 ref 为 {doc}#document——候选空间并入 units target_ref 的文档
+             前缀投影，保证两种身份的 doc_ 都能解析。 -->
+        SELECT u.snapshot_id, u.ref FROM (
+            SELECT n.snapshot_id, n.ref
+            FROM asset_structure_nodes n
+            WHERE n.node_type = 'document'
+              AND n.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+            UNION
+            SELECT DISTINCT r.snapshot_id, split_part(r.target_ref, '#document', 1) AS ref
+            FROM asset_retrieval_units_v2 r
+            WHERE r.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+              AND r.target_ref LIKE '%#document'
+        ) u
+        ORDER BY u.snapshot_id ASC, u.ref ASC
         LIMIT #{limit}
     </select>
 

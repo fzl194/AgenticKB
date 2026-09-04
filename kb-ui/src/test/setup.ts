@@ -13,7 +13,9 @@ Object.defineProperty(globalThis, 'ResizeObserver', {
 
 config.global.stubs = {
   RouterLink: { template: '<a><slot /></a>' },
-  ElButton: { template: '<button @click="$emit(\'click\')"><slot /></button>' },
+  // el-button 无 emits 声明（@click 是原生 fallthrough）——stub 纯透传：
+  // 若 $emit('click') 会与 fallthrough onClick 双通道，点击 handler 执行两次。
+  ElButton: { template: '<button><slot /></button>' },
   ElIcon: { template: '<i><slot /></i>' },
   ElTable: { template: '<div><slot /></div>' },
   ElTableColumn: { template: '<div><slot :row="{}" /></div>' },

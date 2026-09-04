@@ -160,6 +160,60 @@ class InspectServiceTest {
                 .isEqualTo("invalid_ref");
     }
 
+    @Test
+    @DisplayName("A0-2: st_={doc}#document 在历史快照（document 节点 ref 为裸 ref）上可 inspect")
+    void documentStructureRefOnLegacySnapshot() {
+        when(refService.resolve(anyString(), anyString(), anyList(), anyString()))
+                .thenReturn(new EvidenceRefResolver.ResolvedRef(
+                        SNAP, EvidenceRefResolver.RefKind.STRUCTURE, "doc:/spec#document"));
+        when(toolMapper.selectNode(SNAP, "doc:/spec#document")).thenReturn(null);
+        when(toolMapper.selectNode(SNAP, "doc:/spec")).thenReturn(
+                node("document", "doc:/spec"));
+
+        var out = service.inspect(ST, "odn", List.of("kb-1"), "alice");
+
+        assertThat(out.node_type()).isEqualTo("document");
+        assertThat(out.relations()).contains("children", "descendants");
+    }
+
+    @Test
+    @DisplayName("A0-2: 新快照 document 节点 ref=#document 直接命中（无回退查询）")
+    void documentStructureRefOnNewSnapshot() {
+        when(refService.resolve(anyString(), anyString(), anyList(), anyString()))
+                .thenReturn(new EvidenceRefResolver.ResolvedRef(
+                        SNAP, EvidenceRefResolver.RefKind.STRUCTURE, "doc:/spec#document"));
+        when(toolMapper.selectNode(SNAP, "doc:/spec#document")).thenReturn(
+                node("document", "doc:/spec#document"));
+
+        var out = service.inspect(ST, "odn", List.of("kb-1"), "alice");
+
+        assertThat(out.node_type()).isEqualTo("document");
+    }
+
+    @Test
+    @DisplayName("A0-2: 两个变体都不存在 → invalid_ref（不默默跳到错误文档）")
+    void documentStructureRefUnresolvableRejected() {
+        when(refService.resolve(anyString(), anyString(), anyList(), anyString()))
+                .thenReturn(new EvidenceRefResolver.ResolvedRef(
+                        SNAP, EvidenceRefResolver.RefKind.STRUCTURE, "doc:/gone#document"));
+        when(toolMapper.selectNode(SNAP, "doc:/gone#document")).thenReturn(null);
+        when(toolMapper.selectNode(SNAP, "doc:/gone")).thenReturn(null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.inspect(ST, "odn", List.of("kb-1"), "alice"))
+                .isInstanceOf(StructureToolException.class)
+                .extracting(e -> ((StructureToolException) e).code())
+                .isEqualTo("invalid_ref");
+    }
+
+    private static StructureNodeRow node(String type, String ref) {
+        StructureNodeRow n = new StructureNodeRow();
+        n.setSnapshotId(SNAP);
+        n.setNodeType(type);
+        n.setRef(ref);
+        return n;
+    }
+
     private static TableAssetRow asset(String readiness) {
         TableAssetRow a = new TableAssetRow();
         a.setSnapshotId(SNAP);

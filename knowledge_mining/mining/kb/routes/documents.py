@@ -68,8 +68,20 @@ async def document_parse_result(
     request: Request,
     user: dict[str, Any] = Depends(current_user),
     kbdb: KbDB = Depends(get_kb_db),
+    view: str = "current_serving",
 ):
-    """Return the current document revision's structured result to KB members."""
+    """结构化数据（A0-1 双视图，默认 current_serving）.
+
+    - current_serving：该文档当前被搜索/Agent 使用的版本（与 Java serving 对
+      该文档的选择规则一致——按 kb 层 build 反查，不由「最新解析成功」冒充）；
+      无 current_serving 时回落展示 latest 并标记「尚未进入搜索」；
+    - latest_revision：当前上传文件的最新解析结果。
+    响应含 versioning（serving/latest 快照身份、in_sync、latest_state）。
+    """
+    if view not in ("current_serving", "latest_revision"):
+        raise HTTPException(
+            422, "view must be 'current_serving' or 'latest_revision'"
+        )
     if not await kbdb.is_visible(kb_id=kb_id, user_id=user["id"]):
         raise HTTPException(404, "Document not found")
     document = await kbdb.get_document_identity(document_id)
@@ -78,9 +90,12 @@ async def document_parse_result(
     service = await get_parse_result_service(request, domain=document["domain"])
     from knowledge_mining.mining.contracts.storage.errors import StorageObjectMissing
 
+    # serving 上下文（两视图都返回对比信息）：按 Java serving 同规则反查
+    serving = await kbdb.get_current_serving_snapshot(kb_id, document_id)
     try:
         result = await service.get_parse_result(
             domain=document["domain"], document_id=document_id,
+            view=view, serving=serving,
         )
     except StorageObjectMissing:
         raise HTTPException(409, "Current parsed artifact is unavailable") from None

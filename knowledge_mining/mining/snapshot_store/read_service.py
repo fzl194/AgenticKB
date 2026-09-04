@@ -28,6 +28,36 @@ from knowledge_mining.mining.segment_compiler.service import SegmentStore
 _PREVIEW_CHARS = 400
 
 
+class _LinkLike:
+    """kb 层 serving 上下文 dict → link 属性形状（snapshot 卡片消费）."""
+
+    def __init__(self, mapping: Any) -> None:
+        self.source_storage_object_id = mapping.get("source_storage_object_id")
+        self.source_content_revision = mapping.get("source_content_revision")
+
+
+def _serving_summary(serving: Any) -> dict[str, Any] | None:
+    if not serving:
+        return None
+    return {
+        "document_snapshot_id": serving.get("document_snapshot_id"),
+        "build_id": serving.get("build_id"),
+        "source_content_revision": serving.get("source_content_revision"),
+        "snapshot_created_at": serving.get("snapshot_created_at"),
+    }
+
+
+def _latest_summary(latest: Any) -> dict[str, Any] | None:
+    if latest is None:
+        return None
+    snapshot, link = latest
+    return {
+        "document_snapshot_id": snapshot.id,
+        "source_content_revision": link.source_content_revision,
+        "created_at": snapshot.created_at,
+    }
+
+
 class ParseResultReadService:
     """document -> 最新新链快照的结构化数据视图（只读）."""
 
@@ -47,26 +77,76 @@ class ParseResultReadService:
         self._documents = documents
 
     async def get_parse_result(
-        self, *, domain: str, document_id: str
+        self, *, domain: str, document_id: str,
+        view: str = "latest_revision",
+        serving: Any | None = None,
     ) -> dict[str, Any] | None:
+        """结构化数据视图（A0-1 双视图）.
+
+        - ``view="current_serving"``：该文档当前被搜索/Agent 使用的版本——
+          ``serving`` 为 kb 层按 Java serving 同规则查出的快照上下文
+          （含 document_snapshot_id/build_id/source_content_revision）。无
+          current_serving（未挖掘/失败/移除）时回落展示 latest，并在
+          versioning 里明确标记，不冒充当前知识；
+        - ``view="latest_revision"``：当前上传文件的最新解析结果（可能尚未
+          进入搜索）。
+
+        既有调用方（不传 view/serving）行为不变。
+        """
         current = await self._documents.get(document_id) if self._documents else None
         if self._documents is not None and current is None:
             return None
         if current is None:
-            found = await self._snapshots.latest_for_document(document_id, domain)
+            latest = await self._snapshots.latest_for_document(document_id, domain)
         else:
-            found = await self._snapshots.latest_for_document(
+            latest = await self._snapshots.latest_for_document(
                 document_id,
                 domain,
                 source_storage_object_id=current.storage_object_id,
                 source_content_revision=current.content_revision,
             )
-        if found is None:
+
+        # 视图选择：current_serving 优先 serving 快照；缺失回落 latest。
+        # serving 存在但快照行不可得（域池与 kb 池不一致的异常态）→ 显式 409
+        #（路由映射 StorageObjectMissing），不静默用 latest 冒充当前可搜索内容。
+        chosen = None
+        if view == "current_serving" and serving is not None:
+            serving_snapshot = await self._snapshots.get(
+                str(serving.get("document_snapshot_id") or "")
+            )
+            if serving_snapshot is None:
+                from knowledge_mining.mining.contracts.storage.errors import (
+                    StorageObjectMissing,
+                )
+                raise StorageObjectMissing(
+                    "current serving snapshot row unavailable"
+                )
+            chosen = (serving_snapshot, _LinkLike(serving))
+        if chosen is None:
+            chosen = latest
+        if chosen is None:
             return None
-        snapshot, link = found
+        snapshot, link = chosen
         doc = await self._load_ir(snapshot.parse_ir_storage_object_id)
         segments = await self._segments.list_for_snapshot(snapshot.id)
+
+        serving_id = str(serving.get("document_snapshot_id") or "") if serving else None
+        latest_id = latest[0].id if latest is not None else None
+        versioning = {
+            "view": view,
+            "serving": _serving_summary(serving),
+            "latest": _latest_summary(latest),
+            "in_sync": bool(serving_id and serving_id == latest_id),
+            # latest 解析是否已进入当前搜索：not_in_search 时页面必须明示
+            "latest_state": (
+                "no_results" if latest_id is None
+                else "in_search" if serving_id == latest_id
+                else "not_in_search"
+            ),
+        }
         return {
+            "view": view,
+            "versioning": versioning,
             "snapshot": {
                 "id": snapshot.id,
                 "title": snapshot.title,
@@ -201,7 +281,7 @@ def _level(element: Any) -> int:
     return int(level) if isinstance(level, int) and level > 0 else 1
 
 
-#: 表格预览行上限（完整数据走结构化查询/query_structured_asset，预览只做诊断）。
+#: 表格预览行上限（完整数据走 Agent 的 get_knowledge 表格查询能力，预览只做诊断）。
 _PREVIEW_ROW_LIMIT = 50
 
 

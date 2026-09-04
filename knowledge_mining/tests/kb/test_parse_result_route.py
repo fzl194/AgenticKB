@@ -26,6 +26,11 @@ class _KbDb:
     async def get_document_identity(self, document_id: str) -> dict | None:
         return self._documents.get(document_id)
 
+    async def get_current_serving_snapshot(self, kb_id: str, document_id: str):
+        # A0-1：路由会查 current_serving 上下文；本文件不构造 build 数据 → None
+        #（路由按「无 serving 回落 latest + 标记」处理，断言不受影响）。
+        return None
+
 
 class _MissingIrSnapshots:
     """代理快照仓储：读到快照后让 IR 取数抛 StorageObjectMissing."""

@@ -77,10 +77,28 @@ final class ParadigmRequests {
         }
         // 29号 R06a：值 schema 校验——错误类型必须 typed 400，绝不静默退化成
         // 宽检索（此前 stringValues 遇非数组直接返回空 = 全量结果）。
+        // A0-4：evidence_types 在此边界按公开词表校验并规范化为内部 representation_type
+        // （list→list_group、code→code_block）——下游（pushdown/SQL）只见内部词。
+        Map<String, Object> normalized = new LinkedHashMap<>();
         for (Map.Entry<String, Object> e : merged.entrySet()) {
-            validateFilterValue(e.getKey(), e.getValue());
+            normalized.put(e.getKey(), normalizeFilterValue(e.getKey(), e.getValue()));
         }
-        return Map.copyOf(merged);
+        return Map.copyOf(normalized);
+    }
+
+    /** 单个 filter 值的形状校验 + 边界规范化（数组、非空串、长度上限、ref kind、类型枚举）。 */
+    private static Object normalizeFilterValue(String key, Object value) {
+        validateFilterValue(key, value);
+        if (!"evidence_types".equals(key)) {
+            return value;
+        }
+        // A0-4：公开词 → 内部 representation_type（list→list_group、code→code_block；
+        // 历史内部词恒等透传）——filter 面收公开词，存储面只有内部词。
+        List<String> out = new ArrayList<>();
+        for (Object item : (List<?>) value) {
+            out.add(EvidenceTypeVocabulary.toRepresentationType((String) item));
+        }
+        return List.copyOf(out);
     }
 
     /** 单个 filter 值的形状校验（数组、非空串、长度上限、ref kind 匹配、类型枚举）。 */
@@ -112,9 +130,10 @@ final class ParadigmRequests {
                     }
                 }
                 case "evidence_types" -> {
-                    if (!EVIDENCE_TYPES.contains(s)) {
+                    if (EvidenceTypeVocabulary.toRepresentationType(s) == null) {
                         throw new IllegalArgumentException(
-                                "filter_value_invalid:evidence_types: 未知类型 " + s + "；允许：" + EVIDENCE_TYPES);
+                                "filter_value_invalid:evidence_types: 未知类型 " + s
+                                        + "；允许：" + EvidenceTypeVocabulary.PUBLIC_TYPES);
                     }
                 }
                 case "asset_types" -> {
@@ -132,11 +151,6 @@ final class ParadigmRequests {
         int cut = Math.min(ref.length(), 4);
         return ref.substring(0, ref.indexOf('_') > 0 ? Math.min(ref.indexOf('_') + 1, cut + 1) : cut) + "…";
     }
-
-    /** §5.3 representation type 枚举（evidence_types 值域）。 */
-    private static final Set<String> EVIDENCE_TYPES = Set.of(
-            "prose", "section", "document", "table", "table_row", "list_group",
-            "code_block", "formula", "figure_caption", "query_alias", "summary_alias");
 
     /** 源内容类型枚举（asset_types 值域；projector content_type 词表）。 */
     private static final Set<String> ASSET_TYPES = Set.of(

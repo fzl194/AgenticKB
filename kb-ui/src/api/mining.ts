@@ -164,7 +164,29 @@ export interface ParseResultSegment {
   token_count?: number | null
 }
 
+/** A0-1 版本对比：当前可搜索版本 vs 最新上传版本的解析。 */
+export interface ParseResultVersioning {
+  view: 'current_serving' | 'latest_revision'
+  serving: {
+    document_snapshot_id: string
+    build_id: string | null
+    source_content_revision: number | null
+  } | null
+  latest: {
+    document_snapshot_id: string
+    source_content_revision: number | null
+  } | null
+  /** 当前搜索与最新解析是否同一快照 */
+  in_sync: boolean
+  /** latest 解析是否已进入当前搜索：in_search / not_in_search / no_results */
+  latest_state: 'in_search' | 'not_in_search' | 'no_results'
+}
+
 export interface ParseResult {
+  /** 本响应采用的视图（A0-1） */
+  view?: 'current_serving' | 'latest_revision'
+  /** 版本对比信息（A0-1：serving/latest 快照身份、in_sync、latest_state） */
+  versioning?: ParseResultVersioning
   snapshot: {
     id: string
     title: string | null

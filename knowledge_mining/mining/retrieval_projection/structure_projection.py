@@ -53,14 +53,18 @@ def project_structure(
     document_ref: str,
 ) -> StructureProjection:
     materialized = tuple(segments)
+    # A0-2：document 节点 ref 与 retrieval 的 document target_ref 同身份
+    # （{doc}#document）——此前裸 {doc} 让 st_（按 target_ref 编码）可解码但
+    # inspect/children 按节点表精确匹配不到。所有指向文档节点的 parent 同步用该 ref。
+    doc_node_ref = f"{document_ref}#document"
     nodes: list[dict[str, Any]] = [
-        {"node_type": "document", "ref": document_ref, "title": document_ref}
+        {"node_type": "document", "ref": doc_node_ref, "title": document_ref}
     ]
     edges: list[dict[str, Any]] = []
     seen_sections: dict[tuple[tuple[int, str], ...], str] = {}
 
     for segment in materialized:
-        parent_ref = document_ref
+        parent_ref = doc_node_ref
         chain = tuple(segment.heading_chain)
         for depth in range(1, len(chain) + 1):
             path = chain[:depth]
@@ -116,7 +120,7 @@ def project_structure(
             nodes.append({
                 "node_type": "table", "ref": f"{document_ref}#table:{table_ref}",
                 "parent_ref": _section_ref(document_ref, tuple(segment.heading_chain))
-                if segment.heading_chain else document_ref,
+                if segment.heading_chain else doc_node_ref,
             })
         if segment.block_type == "table_row" and header:
             row_index = int(metadata.get("row_index", len(cells)))

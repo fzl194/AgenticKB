@@ -138,6 +138,48 @@ LEFT JOIN LATERAL (
 # 完整派生（六态）= 归属收敛的 run 关联 + release 关联。列表/详情用它。
 _STATUS_JOIN_SQL = _RUN_DOC_JOIN_SQL + _RELEASE_JOIN_SQL
 
+#: 对外检索单元类型（A0-5 公开九词；与 Java EvidenceTypeVocabulary.PUBLIC_TYPES
+#: 同一套词表——两侧修改必须同步，契约测试各自钉住九词全集）。
+_REP_TYPE_TO_PUBLIC: dict[str, str] = {
+    "prose": "prose",
+    "section": "section",
+    "document": "document",
+    "table": "table",
+    "table_row": "table_row",
+    "code_block": "code",
+    "list_group": "list",
+    "formula": "formula",
+    "figure_caption": "figure_caption",
+}
+
+#: 搜索辅助表示（只助召回，不作为可引用原文——不进默认检索单元清单）.
+_ALIAS_REP_TYPES = {"query_alias", "summary_alias"}
+
+
+def _project_v2_units(rows: list[dict[str, Any]]) -> tuple[list[dict], list[dict]]:
+    """v2 检索表示行 → （默认清单, 搜索辅助清单）.
+
+    - 默认清单：可返回的原始证据表示，对外类型用公开九词；
+    - 搜索辅助：query_alias/summary_alias（只助召回，不作为可引用原文）；
+    - returnable=FALSE 且非 alias 的行两侧都不进（不可引用也不助展示）。
+    """
+    units: list[dict[str, Any]] = []
+    assist: list[dict[str, Any]] = []
+    for row in rows:
+        rep_type = row.get("representation_type") or ""
+        item = {
+            "representation_id": row.get("representation_id"),
+            "unit_type": _REP_TYPE_TO_PUBLIC.get(rep_type, rep_type),
+            "text": row.get("content_text"),
+            "structural_context": row.get("structural_context"),
+        }
+        if rep_type in _ALIAS_REP_TYPES:
+            item["unit_type"] = rep_type  # alias 不在公开词表，按原类型标记
+            assist.append(item)
+        elif row.get("returnable"):
+            units.append(item)
+    return units, assist
+
 
 class KbDB:
     """Async repository over kb_users / knowledge_bases / kb_members.
@@ -911,34 +953,65 @@ WITH cur AS (
             )
             return [dict(r) for r in await cur.fetchall()]
 
-    async def get_document_knowledge(
-        self, kb_id: str, document_id: str, *, max_rows: int = 2000,
-    ) -> dict[str, Any]:
-        """文档当前知识：查「包含该文档的最新 validated/published build」对应的 snapshot，
-        返回该 snapshot 的正式 segments / retrieval_units。研究实体与关系不进入产品 API。
+    async def get_current_serving_snapshot(
+        self, kb_id: str, document_id: str,
+    ) -> dict[str, Any] | None:
+        """单篇文档的「当前可搜索版本」快照（A0-1）。
 
-        注意：不能只读「KB 全局最新 build」——KB 多次/选择性挖掘下，每次 mine 产生的 build
-        只含当次入选文档（增量父级继承未生效），全局最新 build 未必包含此文档，会误判 mined:False。
-        改为按 document_id 反查最新含它的 build，才能稳定拿到该文档最近一次挖掘的知识。
+        规则与 Java serving 的 ``AssetBuildDocumentSnapshotMapper.selectLatestKbSnapshots``
+        逐语义对齐（契约：两处修改必须同步）：
+        - 只看该文档**自身 KB**（``b.kb_id = d.kb_id``）的 validated/published build；
+        - 先 ``DISTINCT ON (document_id)`` 取最新一行（**不看** selection_status），
+          再过滤 ``selection_status='active'``——先滤后取会让被后续 build 标记
+          ``removed`` 的文档错误回退到旧 build 的 active 行；
+        - 文档软删（``deleted_at``）视为无当前可搜索版本。
+
+        返回 snapshot 身份 + link 来源版本 + build；无 → None。
         """
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """SELECT bs.document_snapshot_id, bs.build_id
-                   FROM asset_build_document_snapshots bs
-                   JOIN asset_builds b ON b.id = bs.build_id
-                   WHERE bs.document_id = %s
-                     AND bs.selection_status = 'active'
-                     AND b.kb_id = %s
-                     AND b.status IN ('validated', 'published')
-                   ORDER BY b.created_at DESC
+                """SELECT t.document_snapshot_id, t.build_id,
+                          l.source_storage_object_id, l.source_content_revision,
+                          s.created_at AS snapshot_created_at
+                   FROM (
+                       SELECT DISTINCT ON (bs.document_id)
+                              bs.document_snapshot_id, bs.build_id, bs.selection_status
+                       FROM asset_build_document_snapshots bs
+                       JOIN asset_builds b ON b.id = bs.build_id
+                       JOIN asset_documents d ON d.id = bs.document_id
+                       WHERE bs.document_id = %s
+                         AND b.status IN ('validated', 'published')
+                         AND b.kb_id = d.kb_id
+                         AND d.kb_id = %s
+                         AND d.deleted_at IS NULL
+                       ORDER BY bs.document_id, b.created_at DESC, b.id DESC
+                   ) t
+                   JOIN asset_document_snapshot_links l
+                     ON l.document_snapshot_id = t.document_snapshot_id
+                   JOIN asset_document_snapshots s ON s.id = t.document_snapshot_id
+                   WHERE t.selection_status = 'active'
+                   ORDER BY l.linked_at DESC
                    LIMIT 1""",
                 [document_id, kb_id],
             )
             row = await cur.fetchone()
-            if row is None:
-                return {"mined": False, "build_id": None}
-            snap_id = row["document_snapshot_id"]
-            build_id = row["build_id"]
+            return dict(row) if row else None
+
+    async def get_document_knowledge(
+        self, kb_id: str, document_id: str, *, max_rows: int = 2000,
+    ) -> dict[str, Any]:
+        """文档当前知识：current_serving 快照的正式 segments / retrieval_units.
+
+        快照选择复用 {@link get_current_serving_snapshot}（与 Java serving 同规则）。
+        A0-1 修复：此前先滤 ``selection_status='active'`` 再取最新——文档被后续
+        build 标记 ``removed`` 时会错误回退旧 build 的 active 行；且未排除软删文档。
+        """
+        serving = await self.get_current_serving_snapshot(kb_id, document_id)
+        if serving is None:
+            return {"mined": False, "build_id": None}
+        snap_id = serving["document_snapshot_id"]
+        build_id = serving["build_id"]
+        async with self._pool.connection() as conn:
             # 批次3-问题2：四类知识读全部限量（窗口函数带出精确总数）——
             # 几千切片的大文档不再一次整包（截断标志随响应返回前端）。
             cur = await conn.execute(
@@ -956,13 +1029,15 @@ WITH cur AS (
             segments = [{k: v for k, v in r.items() if k != "_total"}
                         for r in seg_rows[:max_rows]]
             cur = await conn.execute(
-                """SELECT unit_key, unit_type, title, text, block_type, semantic_role
-                   FROM asset_retrieval_units
-                   WHERE document_snapshot_id = %s ORDER BY unit_key
+                """SELECT representation_id, representation_type, content_text,
+                          structural_context, returnable
+                   FROM asset_retrieval_units_v2
+                   WHERE snapshot_id = %s ORDER BY representation_id
                    LIMIT %s""",
                 [snap_id, max_rows],
             )
-            units = [dict(r) for r in await cur.fetchall()]
+            unit_rows = [dict(r) for r in await cur.fetchall()]
+            units, assist = _project_v2_units(unit_rows)
             return {
                 "mined": True,
                 "truncated": segments_truncated,
@@ -970,7 +1045,11 @@ WITH cur AS (
                 "build_id": build_id,
                 "document_snapshot_id": snap_id,
                 "segments": segments,
+                # A0-5：正式 v2 检索表示（公开类型 + 章节上下文；默认只列
+                # 可返回的原始证据）；alias 是搜索辅助，单独放行供高级信息展示。
+                "units_source": "asset_retrieval_units_v2",
                 "retrieval_units": units,
+                "search_assist_units": assist,
             }
 
     # ---------------------------------------------------------------- members

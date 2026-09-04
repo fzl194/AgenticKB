@@ -61,16 +61,8 @@ public class EvidenceHydrateOperator implements Operator {
     static final String MODE_PARENT = "parent";
     static final String MODE_WHOLE_DOCUMENT = "whole_document";
 
-    /** 公开协议类型映射（§5.3）：representation_type → evidence type；target_type 兜底映射。 */
-    private static final Map<String, String> REP_TYPE_TO_PUBLIC = Map.of(
-            "prose", "prose",
-            "code_block", "code",
-            "list_group", "list",
-            "formula", "formula",
-            "figure_caption", "figure_caption",
-            "section", "section",
-            "table", "table",
-            "table_row", "table_row");
+    /** 公开协议类型映射（§5.3 / A0-4）：representation_type → evidence type，单一真相源
+     * {@link com.coremasterkb.serving.operator.api.EvidenceTypeVocabulary}；target_type 兜底映射。 */
 
     private static final String PARAM_SCHEMA = """
             {"type":"object","properties":{
@@ -779,7 +771,8 @@ public class EvidenceHydrateOperator implements Operator {
 
     private static String publicTypeOf(UnitV2Row rep, Work w) {
         if (rep != null && rep.getRepresentationType() != null) {
-            String mapped = REP_TYPE_TO_PUBLIC.get(rep.getRepresentationType());
+            String mapped = com.coremasterkb.serving.operator.api.EvidenceTypeVocabulary
+                    .toPublicType(rep.getRepresentationType());
             if (mapped != null) {
                 return mapped;
             }

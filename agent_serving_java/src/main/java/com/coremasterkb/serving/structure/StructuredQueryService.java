@@ -175,7 +175,7 @@ public class StructuredQueryService {
             throw StructureToolException.resultTooLarge(
                     "limit 超上限 " + MAX_LIMIT + "——请用 cursor 分页或收窄过滤条件");
         }
-        int offset = Cursors.decode(spec.cursor());
+        int offset = Cursors.decodeOffset(spec.cursor());
 
         List<StructureToolMapper.StructuredRow> rows = toolMapper.selectStructuredRows(
                 resolved.snapshotId(), asset.getTableRef(), criteria,
@@ -186,7 +186,7 @@ public class StructuredQueryService {
             projected.add(projectRow(rows.get(i), select));
         }
         return new QueryResult(assetRef, asset.getTableRef(), fields, projected,
-                hasMore ? Cursors.encode(offset + limit) : null, hasMore, null);
+                hasMore ? Cursors.encodeOffset(offset + limit) : null, hasMore, null);
     }
 
     // ------------------------------------------------------------------ schema

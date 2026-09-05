@@ -94,13 +94,19 @@ def asset_persist_handler(
                 error_code="asset_persist_failed",
                 error_message=str(exc),
             )
-        commit_document = getattr(runtime.services, "commit_document", None)
-        if commit_document is not None and state.context.document_id:
-            commit_document(
+        # 36号根因 2：staging 完成不等于入库——只写文档身份（stage），
+        # status 保持 processing。committed 由 mining_finalize 在文档级
+        # readiness 分区 + Build 事务成功后回写（brief §六）。
+        stage_document = getattr(runtime.services, "stage_document", None)
+        if stage_document is not None and state.context.document_id:
+            stage_document(
                 state.run_document_id,
                 state.context.document_id,
                 state.context.snapshot_ref or "",
             )
+        dropped_duplicate_cells = int(
+            getattr(outcome, "dropped_duplicate_cells", 0) or 0
+        )
         persisted = state.context.with_updates(
             document_id=getattr(outcome, "document_id", None)
             or state.context.document_id,
@@ -111,12 +117,25 @@ def asset_persist_handler(
                 "readiness": dict(getattr(outcome, "readiness", {}) or {}),
                 "schema_version": getattr(outcome, "schema_version", None),
                 "tokenizer_version": getattr(outcome, "tokenizer_version", None),
+                "dropped_duplicate_cells": dropped_duplicate_cells,
             },
         )
 
         capability = frozenset({"assets_persisted"})
+        warnings = (
+            (
+                OperatorWarning(
+                    "duplicate_table_cells_dropped",
+                    f"dropped {dropped_duplicate_cells} duplicate table cells",
+                    {"count": dropped_duplicate_cells},
+                ),
+            )
+            if dropped_duplicate_cells > 0
+            else ()
+        )
         return OperatorResult(
             state.with_context(persisted, capabilities=capability),
             capability,
             OperatorStatus.SUCCESS,
+            warnings=warnings,
         )

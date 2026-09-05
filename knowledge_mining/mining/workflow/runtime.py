@@ -37,6 +37,22 @@ class MiningWorkflowRuntime:
             context.services.run_id = run_id
 
     def execute(self) -> WorkflowRuntimeResult:
+        return self._execute_with_replay(frozenset())
+
+    def resume(self) -> WorkflowRuntimeResult:
+        """36号 §八/§十一：resume 必须强制 replay mining_finalize.
+
+        v1.0.1 历史 Run 的 finalize 节点曾无条件记录 completed（真实结果
+        未透传）——复用该事件会把失败 Run 错误收尾。finalize 的重放是
+        幂等的：_rebuild_from_run_documents 从 mining_run_documents 重建
+        staged 事实，重新按文档级 readiness 划分并组装 Build。
+        """
+        return self._execute_with_replay(None)
+
+    def _execute_with_replay(
+        self, replay_nodes: frozenset[str] | None,
+    ) -> WorkflowRuntimeResult:
+        """公共执行骨架：replay_nodes=None 表示由 resume 语义推导重放集."""
         manifest = self.context.runtime_repository.load_manifest(self.run_id)
         plan = self._verify_and_build_plan(manifest)
         document_states = self._execute_input(plan)
@@ -51,7 +67,11 @@ class MiningWorkflowRuntime:
         if not document_result.outcomes:
             capabilities.add("assets_persisted")
         self.context.services.initial_global_capabilities = frozenset(capabilities)
-        global_result = GlobalExecutor(self.context).execute(plan)
+        if replay_nodes is None:
+            replay_nodes = self._resume_replay_nodes(plan)
+        global_result = GlobalExecutor(self.context).execute(
+            plan, replay_nodes=replay_nodes,
+        )
         capabilities.update(global_result.capabilities)
         return WorkflowRuntimeResult(
             self.run_id,
@@ -60,8 +80,14 @@ class MiningWorkflowRuntime:
             global_result.pause_step,
         )
 
-    def resume(self) -> WorkflowRuntimeResult:
-        return self.execute()
+    def _resume_replay_nodes(self, plan: ExecutionPlan) -> frozenset[str]:
+        """resume 时必须重放的节点：mining_finalize（staged 事实重建收尾）."""
+        finalize_node_id = self._finalize_node_id(plan)
+        return (
+            frozenset({finalize_node_id})
+            if finalize_node_id is not None
+            else frozenset()
+        )
 
     def publish(self) -> WorkflowRuntimeResult:
         manifest = self.context.runtime_repository.load_manifest(self.run_id)

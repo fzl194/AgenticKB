@@ -142,30 +142,11 @@ async def mine_kb(
             detail={"code": "workflow_store_unavailable", "message": "Unable to resolve the selected mining paradigm", "details": {}},
         )
 
-    # 档2：范式签名变更自动失效。签名 = workflow_id:version:graph_hash，比对上一条已完成 run；
-    # 不同（范式/版本/图变了）则自动 force_redo，让派生资产重生。用户也可显式 force_redo。
+    # 36号：范式签名进入逐文档增量判定，不再据此把整个 KB 自动
+    # force_redo。显式 force_redo 仅由用户请求控制。
     signature = f"{binding.workflow_id}:{binding.workflow_version}:{binding.graph_hash}"
-    user_force_redo = bool(body and body.force_redo)
     auto_force_redo = False
-    prev_sig: str | None = None
-    async with pool.connection() as conn:
-        cur = await conn.execute(
-            "SELECT metadata_json->>'signature' AS sig FROM mining_runs "
-            "WHERE kb_id = %s AND status IN ('completed', 'succeeded', 'completed_with_errors') "
-            "ORDER BY finished_at DESC NULLS LAST LIMIT 1",
-            [kb_id],
-        )
-        _prev = await cur.fetchone()
-        if _prev and _prev["sig"]:
-            prev_sig = _prev["sig"]
-            if prev_sig != signature:
-                auto_force_redo = True
-    force_redo = user_force_redo or auto_force_redo
-    if auto_force_redo:
-        logger.info(
-            "KB %s paradigm signature changed (%s -> %s); auto force_redo",
-            kb_id, prev_sig, signature,
-        )
+    force_redo = bool(body and body.force_redo)
 
     run_id = uuid.uuid4().hex
     started_at = _utcnow()

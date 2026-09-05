@@ -149,8 +149,18 @@ class RuntimeTracker:
         self._db.insert_run_document(patched)
         return patched.id
 
-    def start_document(self, rd_id: str) -> None:
-        self._db.update_run_document(rd_id, status="processing")
+    def start_document(
+        self, rd_id: str, *, retry_required: bool = False,
+    ) -> None:
+        self._db.update_run_document(
+            rd_id,
+            status="processing",
+            clear_error_message=True,
+            clear_finished_at=True,
+            metadata_patch=(
+                {"retry_required": True} if retry_required else None
+            ),
+        )
 
     def commit_document(
         self,
@@ -164,6 +174,24 @@ class RuntimeTracker:
             document_id=document_id,
             document_snapshot_id=document_snapshot_id,
             finished_at=_utcnow(),
+        )
+
+    def stage_document(
+        self,
+        rd_id: str,
+        document_id: str,
+        document_snapshot_id: str,
+    ) -> None:
+        """36号根因 2：asset_persist 成功后的 staged 事实——只写身份.
+
+        status 保持 processing（crash resume 由 identity + asset_persist
+        node event 判定重试边界，不再依赖 status='committed'）；
+        committed 由 mining_finalize 在 Build 事务成功后回写。
+        """
+        self._db.update_run_document(
+            rd_id,
+            document_id=document_id,
+            document_snapshot_id=document_snapshot_id,
         )
 
     def fail_document(self, rd_id: str, error_message: str) -> None:

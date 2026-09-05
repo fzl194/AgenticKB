@@ -212,8 +212,8 @@ async def test_mine_force_redo_propagates_to_metadata(async_pool, upload_root, m
         await asyncio.sleep(0.3)
 
 
-async def test_mine_auto_force_redo_on_signature_change(async_pool, upload_root, monkeypatch):
-    """档2：上一条已完成 run 的范式签名与本次不同 → 自动 force_redo（无需用户显式指定）。"""
+async def test_mine_signature_change_does_not_auto_force_redo(async_pool, upload_root, monkeypatch):
+    """范式签名变化交给逐文档 UPDATE，不再自动把整个 KB force_redo。"""
     monkeypatch.setattr("knowledge_mining.mining.jobs.run.run", lambda *a, **k: None)
     monkeypatch.setattr(
         "knowledge_mining.mining.kb.routes.mining.resolve_domain",
@@ -238,6 +238,6 @@ async def test_mine_auto_force_redo_on_signature_change(async_pool, upload_root,
         r = await c.post(f"/api/kb/{kb_id}/mine", headers=h)
         assert r.status_code == 202, r.text
         body = r.json()
-        assert body["auto_force_redo"] is True
-        assert body["force_redo"] is True
+        assert body["auto_force_redo"] is False
+        assert body["force_redo"] is False
         await asyncio.sleep(0.3)

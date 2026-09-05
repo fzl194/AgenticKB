@@ -145,7 +145,10 @@ class DocumentExecutor:
             ),
             None,
         )
-        if persist_node is not None and self._is_committed(
+        # finalize-rejected 文档保留旧 identity/persist event 供诊断；再次
+        # resume 必须重跑，而不能复用上一次 completed persist。
+        retry_rejected = "retry_rejected" in initial.tags
+        if not retry_rejected and persist_node is not None and self._is_committed(
             run_id, persist_node.node_id, initial.run_document_id
         ):
             document_id, snapshot_id = self.repository.document_persist_marker(
@@ -368,9 +371,18 @@ class DocumentExecutor:
         self, run_id: str, node_id: str, run_document_id: str
     ) -> bool:
         marker = self.repository.document_persist_marker(run_document_id)
-        return marker is not None and self.repository.is_node_completed(
-            run_id, node_id, run_document_id
+        if marker is None:
+            return False
+        if self.repository.is_node_completed(run_id, node_id, run_document_id):
+            return True
+        # 36号根因 2：ingest-SKIP（carry-forward）与 legacy committed 行
+        # 没有 persist node event——不重跑执行链。
+        status_getter = getattr(
+            self.repository, "run_document_status", None
         )
+        if status_getter is not None:
+            return status_getter(run_document_id) in {"committed", "skipped"}
+        return False
 
     def _ontology_applicable(self) -> bool:
         frozen = self.runtime.manifest.get("ontologyApplicable")

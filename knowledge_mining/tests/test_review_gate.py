@@ -46,19 +46,23 @@ def test_no_gate_auto_release(monkeypatch) -> None:
 
 def test_rebuild_counts_and_decisions() -> None:
     rt = SimpleNamespace(get_run_documents=lambda rid: [
-        {"status": "committed", "document_id": "d1", "document_snapshot_id": "s1",
-         "document_key": "k1", "action": "NEW"},
-        {"status": "committed", "document_id": "d2", "document_snapshot_id": "s2",
-         "document_key": "k2", "action": "UPDATE"},
-        {"status": "failed", "document_id": None, "document_snapshot_id": None,
+        {"id": "rd-1", "status": "committed", "document_id": "d1",
+         "document_snapshot_id": "s1", "document_key": "k1", "action": "NEW"},
+        {"id": "rd-2", "status": "committed", "document_id": "d2",
+         "document_snapshot_id": "s2", "document_key": "k2", "action": "UPDATE"},
+        {"id": "rd-3", "status": "failed", "document_id": None, "document_snapshot_id": None,
          "document_key": "k3", "action": "NEW"},
-        {"status": "skipped", "document_id": None, "document_snapshot_id": None,
+        {"id": "rd-4", "status": "skipped", "document_id": None, "document_snapshot_id": None,
          "document_key": "k4", "action": "SKIP"},
     ])
-    sd, counts = _rebuild_from_run_documents(rt, "run1")
-    assert [d["document_snapshot_id"] for d in sd] == ["s1", "s2"]
-    assert counts == {"committed_count": 2, "new_count": 1, "updated_count": 1,
-                      "failed_count": 1, "skipped_count": 1}
+    # 36号三分区：committed 历史行进 staged 候选（finalize 按文档级 readiness
+    # 分区后才定 committed_count——草稿计数里 committed 恒 0）。
+    index = _rebuild_from_run_documents(rt, "run1")
+    assert [c["document_snapshot_id"] for c in index.candidates] == ["s1", "s2"]
+    # A terminal SKIPPED row without a reusable document/snapshot identity is
+    # a required-pipeline rejection, not an incremental carry-forward.
+    assert index.counts == {"committed_count": 0, "new_count": 1, "updated_count": 1,
+                            "failed_count": 2, "skipped_count": 0}
 
 
 # ---- Gate1：OntologyStore 候选裁决 + 升版 ----

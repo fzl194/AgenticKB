@@ -139,13 +139,19 @@ class DomainRunRepository:
     def document_persist_marker(
         self, run_document_id: str
     ) -> tuple[str, str] | None:
-        """Return the committed asset identity used as the retry boundary."""
+        """Return the staged asset identity used as the retry boundary.
+
+        36号根因 2：staged≠committed——asset_persist 成功即写身份但 status
+        保持 processing；identity（document_id + snapshot）+ asset_persist
+        node event 是重试边界，不再依赖 status='committed'。增量 carry 的
+        skipped 行也保留 identity；failed 行必须重跑，不返回 marker。
+        """
         with self.pool.connection() as conn:
             cursor = conn.execute(
                 """SELECT document_id, document_snapshot_id
                    FROM mining_run_documents
                    WHERE id = %s
-                     AND status = 'committed'
+                     AND status IN ('committed', 'processing', 'skipped')
                      AND document_id IS NOT NULL
                      AND document_snapshot_id IS NOT NULL""",
                 (run_document_id,),
@@ -154,6 +160,18 @@ class DomainRunRepository:
         if row is None:
             return None
         return str(row["document_id"]), str(row["document_snapshot_id"])
+
+    def run_document_status(self, run_document_id: str) -> str | None:
+        """36号：persist 快速路径需要区分 staged（processing）与
+        ingest-SKIP（skipped）/legacy（committed）——后者没有 persist node event
+        但不得重新进入执行链。"""
+        with self.pool.connection() as conn:
+            cursor = conn.execute(
+                "SELECT status FROM mining_run_documents WHERE id = %s",
+                (run_document_id,),
+            )
+            row = cursor.fetchone()
+        return str(row["status"]) if row else None
 
     def set_active_node(
         self,

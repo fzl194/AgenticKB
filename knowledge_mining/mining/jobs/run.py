@@ -283,6 +283,23 @@ def _metadata_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _is_retry_rejected_row(row: dict[str, Any] | None) -> bool:
+    """Whether a same-Run document must ignore reusable node events.
+
+    The marker is persisted before execution starts so a second crash cannot
+    lose the retry intent after the row has already moved back to processing.
+    """
+    if not row:
+        return False
+    if row.get("status") == "failed":
+        return True
+    metadata = _metadata_dict(row.get("metadata_json"))
+    return bool(
+        row.get("status") == "processing"
+        and metadata.get("retry_required") is True
+    )
+
+
 def _kb_object_documents(
     asset_db: AssetCoreDB,
     *,
@@ -684,10 +701,13 @@ def _resume_legacy(
             return {"run_id": run_id, "status": current.get("status", "cancelled")}
         runtime_db.commit()
         _finalize_graph(asset_db, tracker, run_id, profile)
-        snapshot_decisions, counts = _rebuild_from_run_documents(runtime_db, run_id)
+        # 36号：_rebuild 返回三分区 index（不再返回二元组）。legacy resume
+        # 走旧整批语义（document_index=None）。
+        index = _rebuild_from_run_documents(runtime_db, run_id)
+        legacy_decisions, legacy_counts = _legacy_finalize_inputs(index)
         return _finalize_run(
             asset_db, runtime_db, tracker, run_id, run_data["source_batch_id"],
-            snapshot_decisions, counts, run_data["total_documents"],
+            legacy_decisions, legacy_counts, run_data["total_documents"],
             False, publish_on_partial_failure, profile,
             channel=run_data["channel"],
         )
@@ -988,6 +1008,12 @@ class _WorkflowJobServices:
         """批次8 M5：新链 persist 成功后回写文档身份（对齐旧 commit_document）."""
         self.tracker.commit_document(run_document_id, document_id, snapshot_id)
 
+    def stage_document(
+        self, run_document_id: str, document_id: str, snapshot_id: str,
+    ) -> None:
+        """36号根因 2：asset_persist 成功只 stage（identity），不提前 committed."""
+        self.tracker.stage_document(run_document_id, document_id, snapshot_id)
+
     def _mark_document_outcome(
         self, run_document_id: str, status: str, message: str,
     ) -> None:
@@ -1008,6 +1034,60 @@ class _WorkflowJobServices:
     def input_ingest(self, input_spec: Any, runtime: Any):
         del input_spec, runtime
         return self._prepare_document_states()
+
+    def _classify_kb_increment(self, docs: list[Any]):
+        """36号 §五：KB 增量判定（集合化 NEW/SKIP/RETRY/UPDATE）.
+
+        输入事实批量预取（kb_incremental.fetch_kb_increment_context：
+        KB Build 成员+快照签名、readiness、最近尝试——3+1 个集合查询），
+        不做逐文档 N+1。RETRY 落库映射 UPDATE，原因写
+        ``metadata.incremental_decision``。
+        """
+        from knowledge_mining.mining.jobs.kb_incremental import (
+            KbDocInput,
+            classify_kb_documents,
+            fetch_kb_increment_context,
+        )
+
+        run_row = self.runtime_db.get_run(self.run_id) or {}
+        meta = run_row.get("metadata_json") or {}
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        kb_id = str(meta.get("kb_id") or "")
+        capabilities, _fallback = _paradigm_capability_signature(
+            run_row, self.runtime_db, self.run_id,
+        )
+        doc_inputs = [
+            KbDocInput(
+                document_id=str(d.document_id),
+                storage_object_id=str(getattr(d, "storage_object_id", "") or ""),
+                content_revision=int(getattr(d, "content_revision", 0) or 0),
+            )
+            for d in docs
+        ]
+        facts, readiness, attempts, build_finished_at = (
+            fetch_kb_increment_context(
+                self.asset_db,
+                self.runtime_db,
+                kb_id=kb_id,
+                document_ids=[d.document_id for d in doc_inputs],
+                require_dense=(
+                    capabilities is None or "embedding" in capabilities
+                ),
+            )
+        )
+        return classify_kb_documents(
+            docs=doc_inputs,
+            build_facts=facts,
+            readiness_by_snapshot=readiness,
+            last_attempts=attempts,
+            workflow_version_id=run_row.get("workflow_version_id"),
+            workflow_graph_hash=run_row.get("workflow_graph_hash"),
+            build_finished_at=build_finished_at,
+            require_dense=(
+                capabilities is None or "embedding" in capabilities
+            ),
+        )
 
     def count_pending_entity_mentions(self, run_id: str) -> int:
         return workflow_count_pending_entity_mentions(self.asset_db, run_id)
@@ -1127,6 +1207,12 @@ class _WorkflowJobServices:
             )
         self.pipeline_config.batch_id = batch_id
 
+        # 36号 §五：KB object input 的增量判定（集合化）。分类事实不可读
+        # 时必须让 Run 显式失败；静默回退会把大库全部重处理。
+        kb_increment_decisions: dict[str, Any] = {}
+        if is_kb_object_input and not force_redo:
+            kb_increment_decisions = self._classify_kb_increment(docs)
+
         existing_rows = {
             row["document_key"]: row
             for row in self.runtime_db.get_run_documents(self.run_id)
@@ -1141,6 +1227,7 @@ class _WorkflowJobServices:
         }
         states = []
         for doc in docs:
+            decision = None
             doc_key = (
                 getattr(doc, "document_key", None)
                 if is_kb_object_input
@@ -1223,8 +1310,27 @@ class _WorkflowJobServices:
                     # KB-scoped object identity.  Do not fall back to the
                     # legacy storage_path lifecycle lookup (which implicitly
                     # ties workers to an upload directory).
-                    lifecycle = getattr(doc, "existing_doc", None)
-                    lifecycle_action = "UPDATE"
+                    lifecycle = dict(getattr(doc, "existing_doc", None) or {}) or None
+                    # 36号 §五：增量判定替代硬编码 UPDATE——内容/范式未变且
+                    # readiness 完整的文档 SKIP（carry-forward serving 快照，
+                    # 不进执行链）；RETRY/UPDATE/NEW 进链重挖（差异原因留痕）。
+                    decision = kb_increment_decisions.get(str(doc.document_id))
+                    if decision is None and not force_redo:
+                        raise RuntimeError(
+                            "KB increment classification omitted document "
+                            f"{doc.document_id}"
+                        )
+                    if decision is not None and decision.action == "SKIP" and decision.serving_snapshot_id:
+                        lifecycle = {
+                            "document_id": str(doc.document_id),
+                            "document_domain": self.profile.domain_id,
+                            "document_key": doc_key,
+                            "active_snapshot_id": decision.serving_snapshot_id,
+                            "active_source_batch_id": None,
+                        }
+                        lifecycle_action = "SKIP"
+                    else:
+                        lifecycle_action = "UPDATE"
                 else:
                     # G1 身份/位置分离：按 storage_path（含 <kb_id> 前缀、全库唯一）查身份，
                     # 而非 document_key。文件移动后位置变、document_key 冻结不变仍能命中同一身份。
@@ -1242,23 +1348,43 @@ class _WorkflowJobServices:
                 # force_redo：无视内容哈希去重，强制重跑（含 LLM 阶段）。先清空旧 snapshot 的派生
                 # 资产——否则 persist_document_assets 见已有切片会跳过持久化、旧单元（如 table_row）
                 # 也会按 unit_key upsert 残留。清空后 lifecycle 走 UPDATE 自然重生。
-                if force_redo and lifecycle_action in {"SKIP", "RESTORE"} and lifecycle:
+                if (
+                    force_redo
+                    and not is_kb_object_input
+                    and lifecycle_action in {"SKIP", "RESTORE"}
+                    and lifecycle
+                ):
                     _snap = lifecycle.get("active_snapshot_id") or lifecycle.get("historical_snapshot_id")
                     if _snap:
                         self.asset_db.clear_snapshot_derived_assets(_snap)
                     lifecycle_action = "UPDATE"
-                action = (
-                    "SKIP"
-                    if lifecycle_action in {"SKIP", "RESTORE"}
-                    else lifecycle_action
-                )
+                if is_kb_object_input and decision is not None:
+                    # KB 文档身份虽已存在，首次进入 Build 的动作仍是 NEW；
+                    # RETRY 已由分类器映射为 UPDATE。
+                    action = decision.action
+                else:
+                    action = (
+                        "SKIP"
+                        if lifecycle_action in {"SKIP", "RESTORE"}
+                        else lifecycle_action
+                    )
             existing = existing_rows.get(doc_key)
+            retry_rejected = _is_retry_rejected_row(existing)
             if existing is None:
                 run_document_id = uuid.uuid4().hex
                 metadata = {"file_size": doc.file_size}
                 _copy_preprocess_metadata(metadata, doc.metadata_json)
                 if planned is not None:
                     metadata["preflight_action"] = planned.get("selected_action")
+                if is_kb_object_input:
+                    # 36号 §五：增量判定原因留痕（RETRY 与 UPDATE 在落库
+                    # 动作上同为 UPDATE，差异必须可区分）。
+                    decision = kb_increment_decisions.get(str(doc.document_id))
+                    if decision is not None:
+                        metadata.update(
+                            incremental_decision=decision.decision,
+                            incremental_reason=decision.reason,
+                        )
                 if lifecycle_action == "SKIP" and lifecycle:
                     metadata.update(
                         source_batch_id=lifecycle.get("active_source_batch_id"),
@@ -1277,6 +1403,9 @@ class _WorkflowJobServices:
                     raw_content_hash=doc.raw_content_hash,
                     normalized_content_hash=doc.normalized_content_hash,
                     action=action,
+                    # KB input 在解析前已有稳定身份；早期失败也必须能被
+                    # 下一轮增量查询按 document_id 找到。
+                    document_id=(str(doc.document_id) if is_kb_object_input else None),
                     metadata_json=metadata,
                 ))
                 _log_preprocess_diagnostics(
@@ -1286,10 +1415,15 @@ class _WorkflowJobServices:
                     metadata=metadata,
                 )
                 if lifecycle_action == "SKIP" and lifecycle:
-                    self.tracker.commit_document(
+                    # 未变化是运行级 skipped，不伪装成新一次 committed；
+                    # identity 保留给 executor 的 carry 快路径和 Build 决策。
+                    self.tracker.stage_document(
                         run_document_id,
                         lifecycle["document_id"],
                         lifecycle["active_snapshot_id"],
+                    )
+                    self.tracker.skip_document(
+                        run_document_id, reason="unchanged",
                     )
                 elif lifecycle_action == "RESTORE" and lifecycle:
                     snapshot_id = lifecycle["historical_snapshot_id"]
@@ -1314,8 +1448,20 @@ class _WorkflowJobServices:
             else:
                 run_document_id = existing["id"]
                 action = existing.get("action") or action
-                if existing.get("status") != "committed":
-                    self.tracker.start_document(run_document_id)
+                if existing.get("status") not in {"committed", "skipped"}:
+                    if retry_rejected:
+                        self.tracker.start_document(
+                            run_document_id, retry_required=True,
+                        )
+                    else:
+                        self.tracker.start_document(run_document_id)
+
+            # 36号 §五：KB SKIP 文档不重执行——rd 在 ingest 已 skipped
+            # （并保留 serving 快照 identity），executor 的 persist 快路径按
+            # marker 立即 SUCCESS（零算子执行、携带 assets_persisted
+            # capability）。若不产 outcome，「SKIP carry + 其余全失败」的
+            # run 会因全局 capabilities 缺 assets_persisted 被 finalize
+            # 门禁误拦（E2E D' 追溯）。
 
             document_profile = DocumentProfile(
                 document_key=doc_key,
@@ -1336,6 +1482,7 @@ class _WorkflowJobServices:
                     "domain": lifecycle["document_domain"],
                     "document_key": lifecycle["document_key"],
                 }
+            retry_tags = (("retry_rejected",) if retry_rejected else ())
             states.append(DocumentState(
                 run_document_id,
                 doc_key,
@@ -1347,6 +1494,7 @@ class _WorkflowJobServices:
                     existing_doc=existing_doc,
                     document_id=getattr(doc, "document_id", None),
                 ),
+                tags=retry_tags,
             ))
         if self.action == "execute":
             self.tracker.finish_ingest(
@@ -1756,20 +1904,23 @@ def workflow_finalize_mining_strict(
     run_data = runtime_db.get_run(run_id)
     if run_data is None:
         raise LookupError(f"Run {run_id} not found")
-    decisions, counts = _rebuild_from_run_documents(runtime_db, run_id)
+    index = _rebuild_from_run_documents(runtime_db, run_id)
     return _finalize_run(
         asset_db,
         runtime_db,
         tracker,
         run_id,
         run_data.get("source_batch_id"),
-        decisions,
-        counts,
-        int(run_data.get("total_documents") or len(decisions)),
+        # 36号 §六：ingest SKIP 的 carry 决策直接作为决策输入；staged 候选
+        # 由 _finalize_run 按文档级 readiness 分区后加入。
+        index.skip_decisions,
+        index.counts,
+        int(run_data.get("total_documents") or len(index.candidates)),
         execution_mode == "assets_only",
         publish_on_partial_failure,
         profile,
         channel=channel,
+        document_index=index,
     )
 
 
@@ -1886,12 +2037,57 @@ def _recount_entities(gstore: Any, mention_rows: list[dict[str, Any]]) -> int:
     return len(ment)
 
 
+def _legacy_finalize_inputs(
+    index: "_RunDocumentIndex",
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """36号：legacy run 的 finalize 输入适配（HIGH-1 修复的提取版）.
+
+    legacy 行在 asset_persist 时即 committed（无分区语义）——candidates
+    即决策，committed_count 按候选数回填。
+    """
+    decisions = [
+        {
+            "document_id": c["document_id"],
+            "document_snapshot_id": c["document_snapshot_id"],
+            "document_key": c["document_key"],
+        }
+        for c in index.candidates
+    ] + list(index.skip_decisions)
+    counts = {**index.counts, "committed_count": len(index.candidates)}
+    return decisions, counts
+
+
+class _RunDocumentIndex:
+    """36号 §六：mining_run_documents 的三分区重建（finalize 文档级判定输入）.
+
+    - candidates：staged 文档（identity 已写，action≠SKIP）——含新语义的
+      processing+identity 与 v1.0.1 历史 committed 行（兼容恢复按 readiness
+      重新划分，不信旧 committed）；
+    - skip_decisions：ingest SKIP（status=skipped + identity）的 carry 决策；
+    - failed：已终态 failed 的文档（含原因）；
+    - counts：committed_count 由 finalize 分区后回填（draft 里只放
+      new/updated/skipped/failed）。
+    """
+
+    def __init__(self) -> None:
+        self.candidates: list[dict[str, Any]] = []
+        self.skip_decisions: list[dict[str, Any]] = []
+        self.failed: list[dict[str, Any]] = []
+        #: persist 前崩溃的僵尸行（processing 无 identity）——finalize 落
+        #: interrupted_before_persist 终态（36号审查 MED-3）
+        self.zombies: list[dict[str, Any]] = []
+        self.counts: dict[str, int] = {
+            "committed_count": 0, "new_count": 0, "updated_count": 0,
+            "failed_count": 0, "skipped_count": 0,
+        }
+
+
 def _rebuild_from_run_documents(
     runtime_db: MiningRuntimeDB, run_id: str,
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """从 mining_run_documents 重建 snapshot_decisions + 计数（resume 用，内存态已丢）。"""
-    snapshot_decisions: list[dict[str, Any]] = []
-    committed = new = updated = failed = skipped = 0
+) -> _RunDocumentIndex:
+    """从 mining_run_documents 重建三分区（resume/finalize 用，内存态已丢）。"""
+    index = _RunDocumentIndex()
+    new = updated = failed = skipped = 0
     for rd in runtime_db.get_run_documents(run_id):
         st = rd["status"]
         raw_metadata = rd.get("metadata_json") or {}
@@ -1903,40 +2099,70 @@ def _rebuild_from_run_documents(
         else:
             parsed_metadata = raw_metadata
         metadata = parsed_metadata if isinstance(parsed_metadata, dict) else {}
+        has_identity = bool(rd.get("document_id") and rd.get("document_snapshot_id"))
 
-        if st == "committed" and rd["document_id"] and rd["document_snapshot_id"]:
-            if rd["action"] == "SKIP":
-                skipped += 1
-                decision = {
-                    "document_id": rd["document_id"],
-                    "document_snapshot_id": rd["document_snapshot_id"],
-                    "document_key": rd["document_key"],
-                    "lifecycle_action": metadata.get("lifecycle_action") or "SKIP",
-                }
-                if "source_batch_id" in metadata:
-                    decision["source_batch_id"] = metadata["source_batch_id"]
-                snapshot_decisions.append(decision)
-                continue
-
-            committed += 1
+        if has_identity and st in ("committed", "processing") and rd["action"] != "SKIP":
+            # staged 候选（v1.0.1 committed 历史行同样进候选，按 readiness 重划）
+            index.candidates.append({
+                "run_document_id": rd["id"],
+                "document_id": rd["document_id"],
+                "document_snapshot_id": rd["document_snapshot_id"],
+                "document_key": rd["document_key"],
+                "action": rd["action"],
+                "metadata": metadata,
+            })
             if rd["action"] == "NEW":
                 new += 1
             elif rd["action"] == "UPDATE":
                 updated += 1
-            snapshot_decisions.append({
+        elif st in ("committed", "skipped") and has_identity and rd["action"] == "SKIP":
+            # ingest SKIP：carry-forward serving 快照
+            skipped += 1
+            decision = {
                 "document_id": rd["document_id"],
                 "document_snapshot_id": rd["document_snapshot_id"],
                 "document_key": rd["document_key"],
-            })
+                "lifecycle_action": metadata.get("lifecycle_action") or "SKIP",
+            }
+            if "source_batch_id" in metadata:
+                decision["source_batch_id"] = metadata["source_batch_id"]
+            index.skip_decisions.append(decision)
         elif st == "failed":
             failed += 1
+            index.failed.append({
+                "run_document_id": rd["id"],
+                "document_id": rd.get("document_id"),
+                "document_key": rd["document_key"],
+                "error_message": rd.get("error_message") or "",
+            })
         elif st == "skipped":
-            skipped += 1
-    counts = {
-        "committed_count": committed, "new_count": new, "updated_count": updated,
+            # Only SKIP rows with a reusable document/snapshot identity are
+            # valid carry-forward decisions (handled above).  A required
+            # operator ending SKIPPED before persistence produced no Build
+            # candidate and must make an all-empty Run fail visibly.
+            failed += 1
+            index.failed.append({
+                "run_document_id": rd["id"],
+                "document_id": rd.get("document_id"),
+                "document_key": rd["document_key"],
+                "error_message": (
+                    rd.get("error_message")
+                    or "required asset pipeline skipped before persistence"
+                ),
+            })
+        elif st == "processing" and not has_identity:
+            # persist 前崩溃的僵尸行：finalize 落终态（不留「永远处理中」）
+            failed += 1
+            index.zombies.append({
+                "run_document_id": rd["id"],
+                "document_id": rd.get("document_id"),
+                "document_key": rd["document_key"],
+            })
+    index.counts.update({
+        "new_count": new, "updated_count": updated,
         "failed_count": failed, "skipped_count": skipped,
-    }
-    return snapshot_decisions, counts
+    })
+    return index
 
 
 # ===================================================================
@@ -2594,6 +2820,28 @@ def _asset_activation_block_reason(
     return None
 
 
+def _document_rejection_reason(
+    readiness_row: Any, *, require_dense: bool,
+) -> str | None:
+    """36号 §六：单篇文档级 readiness 拒绝原因（None = 通过）.
+
+    原因码：readiness_missing / search_not_ready / embedding_incomplete。
+    完整性谓词与增量 SKIP 判定共用 ``kb_incremental.readiness_complete``
+    （36号审查 MED-4：单一真相源，两侧不得漂移）。
+    """
+    from knowledge_mining.mining.jobs.kb_incremental import readiness_complete
+
+    if not isinstance(readiness_row, dict) or not readiness_row:
+        return "readiness_missing"
+    if not readiness_row.get("search_ready"):
+        return "search_not_ready"
+    if require_dense and not readiness_complete(
+        readiness_row, require_dense=True,
+    ):
+        return "embedding_incomplete"
+    return None
+
+
 def _finalize_run(
     asset_db: AssetCoreDB,
     runtime_db: MiningRuntimeDB,
@@ -2608,8 +2856,15 @@ def _finalize_run(
     profile: DomainProfile,
     *,
     channel: str,
+    document_index: "_RunDocumentIndex | None" = None,
 ) -> dict[str, Any]:
-    """B6：Phase 2 建库 + 发布 + 收尾。首跑无 Gate 触发、或 resume 审完两道 Gate 后都走这里。"""
+    """B6：Phase 2 建库 + 发布 + 收尾。首跑无 Gate 触发、或 resume 审完两道 Gate 后都走这里。
+
+    36号 §六：``document_index`` 非空（workflow/KB run）时走**文档级分区**——
+    每篇 staged 文档按自身 readiness 划分 ready/rejected，单篇失败只拒该篇，
+    其余照常晋升建 Build；rejected 写明确原因码并 carry-forward parent 旧版本。
+    ``document_index`` 为 None（legacy folder run）维持整批语义。
+    """
     # publish 意图持久化在 mining_runs.metadata_json["publish"]（默认 True）。
     # KB 挖掘（mine_kb）写 False → 只 build 不 publish 到域级 active release，
     # 避免 B1（同域多 KB 互相 retire）。读 metadata 而非参数透传，确保 review gate
@@ -2621,14 +2876,139 @@ def _finalize_run(
         run_row, runtime_db, run_id,
     )
 
-    committed_count = counts["committed_count"]
-    new_count = counts["new_count"]
-    updated_count = counts["updated_count"]
-    failed_count = counts["failed_count"]
-    skipped_count = counts["skipped_count"]
+    committed_count = counts.get("committed_count", 0)
+    new_count = counts.get("new_count", 0)
+    updated_count = counts.get("updated_count", 0)
+    failed_count = counts.get("failed_count", 0)
+    skipped_count = counts.get("skipped_count", 0)
+
+    # ── 36号 §六：文档级分区（workflow/KB run）─────────────────────────
+    partition_ready: list[dict[str, Any]] = []
+    rejection_summary: list[dict[str, Any]] = []
+    existing_run_build: dict[str, Any] | None = None
+    if document_index is not None:
+        require_dense = capabilities is None or "embedding" in (capabilities or [])
+        build_for_run = getattr(asset_db, "get_validated_build_for_run", None)
+        if build_for_run is not None:
+            existing_run_build = build_for_run(run_id)
+
+        if existing_run_build is not None:
+            # Crash-safe idempotency boundary: the asset transaction already
+            # committed.  Reconcile runtime rows from exact Build membership;
+            # never promote again because promotion consumed staging.
+            active_members: set[tuple[str, str]] = set()
+            for row in (
+                asset_db.get_build_snapshots(existing_run_build["id"]) or []
+            ):
+                raw_metadata = row.get("metadata_json") or {}
+                if isinstance(raw_metadata, str):
+                    try:
+                        raw_metadata = json.loads(raw_metadata)
+                    except (TypeError, ValueError):
+                        raw_metadata = {}
+                produced_here = (
+                    isinstance(raw_metadata, dict)
+                    and raw_metadata.get("produced_by_run_id") == run_id
+                )
+                if row.get("selection_status") == "active" and produced_here:
+                    active_members.add((
+                        str(row.get("document_id")),
+                        str(row.get("document_snapshot_id")),
+                    ))
+            for cand in document_index.candidates:
+                member_key = (
+                    str(cand.get("document_id")),
+                    str(cand.get("document_snapshot_id")),
+                )
+                if member_key in active_members:
+                    partition_ready.append(cand)
+                else:
+                    rejection_summary.append({
+                        "run_document_id": cand.get("run_document_id"),
+                        "document_id": cand.get("document_id"),
+                        "document_key": cand.get("document_key"),
+                        "reason": "not_in_validated_build",
+                        "detail": (
+                            f"snapshot {cand.get('document_snapshot_id')} was "
+                            "not selected by the Run's validated Build"
+                        ),
+                    })
+        else:
+            frozen: dict[str, Any] = {}
+            if document_index.candidates:
+                snapshot_ids = sorted({
+                    str(c["document_snapshot_id"])
+                    for c in document_index.candidates
+                })
+                staging_loader = getattr(
+                    asset_db, "fetch_snapshot_readiness_staging", None,
+                )
+                frozen = (
+                    staging_loader(snapshot_ids)
+                    if staging_loader is not None
+                    else asset_db.fetch_snapshot_readiness(snapshot_ids)
+                ) or {}
+            for cand in document_index.candidates:
+                reason = _document_rejection_reason(
+                    frozen.get(str(cand["document_snapshot_id"])),
+                    require_dense=require_dense,
+                )
+                if reason is None:
+                    partition_ready.append(cand)
+                    snapshot_decisions.append({
+                        "document_id": cand["document_id"],
+                        "document_snapshot_id": cand["document_snapshot_id"],
+                        "document_key": cand["document_key"],
+                        "action": cand.get("action") or "UPDATE",
+                        "metadata_json": {
+                            **dict(cand.get("metadata") or {}),
+                            "produced_by_run_id": run_id,
+                        },
+                    })
+                else:
+                    rejection_summary.append({
+                        "run_document_id": cand.get("run_document_id"),
+                        "document_id": cand.get("document_id"),
+                        "document_key": cand.get("document_key"),
+                        "reason": reason,
+                        "detail": f"snapshot {cand.get('document_snapshot_id')}",
+                    })
+        for failed_doc in document_index.failed:
+            rejection_summary.append({
+                "run_document_id": failed_doc.get("run_document_id"),
+                "document_id": failed_doc.get("document_id"),
+                "document_key": failed_doc.get("document_key"),
+                "reason": "document_failed",
+                "detail": (failed_doc.get("error_message") or "")[:200],
+            })
+        # MED-3（36号审查）：persist 前崩溃的僵尸行（processing 无 identity）
+        # 落明确终态——不留「永远处理中」的计数黑洞。
+        for zombie in document_index.zombies:
+            rejection_summary.append({
+                "document_id": zombie.get("document_id"),
+                "document_key": zombie.get("document_key"),
+                "reason": "interrupted_before_persist",
+                "detail": "document crashed before asset_persist",
+            })
+        # 分区后的真实计数（rejected = 本轮新增失败 + 链上已失败 + 中断僵尸）。
+        # assets_only 只产 staging，不得把 ready 候选计为 committed。
+        committed_count = 0 if phase1_only else len(partition_ready)
+        failed_count = len(rejection_summary)
+        new_count = sum(
+            1 for c in partition_ready if c.get("action") == "NEW"
+        )
+        updated_count = sum(
+            1 for c in partition_ready if c.get("action") == "UPDATE"
+        )
+        counts = {**counts, "committed_count": committed_count,
+                  "failed_count": failed_count, "new_count": new_count,
+                  "updated_count": updated_count}
 
     # Phase 2: Build & Publish (unless phase1_only)
-    build_id = None
+    build_id = (
+        str(existing_run_build["id"])
+        if existing_run_build is not None else None
+    )
     release_id = None
     has_failures = failed_count > 0
 
@@ -2643,8 +3023,40 @@ def _finalize_run(
     readiness_ok = True
     activation_blocked_reason: str | None = None
 
-    # Build is always created if there are committed documents
-    if not phase1_only and snapshot_decisions:
+    kb_id = _run_meta.get("kb_id")
+    detect_removed_kb_docs = bool(kb_id) and not bool(
+        _run_meta.get("document_ids")
+    )
+    present_document_ids = (
+        asset_db.get_current_kb_document_ids(str(kb_id))
+        if detect_removed_kb_docs else None
+    )
+    has_kb_removals = False
+    if detect_removed_kb_docs:
+        parent = asset_db.get_latest_validated_kb_build(str(kb_id))
+        if parent is not None:
+            current_loader = getattr(
+                asset_db, "get_current_kb_build_snapshots", None,
+            )
+            parent_rows = (
+                current_loader(str(kb_id))
+                if current_loader is not None
+                else asset_db.get_build_snapshots(parent["id"])
+            )
+            has_kb_removals = any(
+                row.get("selection_status") == "active"
+                and str(row.get("document_id")) not in present_document_ids
+                for row in parent_rows
+            )
+
+    # Build is always created if there are committed documents.
+    # 36号分区模式：没有任何 ready 文档时不建新 Build——旧 Build 保持
+    # 当前可用（全失败不破坏检索），全量 SKIP 也无需重复建快照相同的 Build。
+    if existing_run_build is None and not phase1_only and (
+        snapshot_decisions or has_kb_removals
+    ) and (
+        document_index is None or partition_ready or has_kb_removals
+    ):
         _check_cancelled(runtime_db, run_id)
         if not tracker.set_run_phase(run_id, profile.domain_id, "publishing"):
             return {"run_id": run_id, "status": "cancelled"}
@@ -2654,13 +3066,48 @@ def _finalize_run(
             snapshot_decisions = classify_documents(
                 asset_db,
                 snapshot_decisions,
-                detect_remove=False,
+                # Full-KB input is authoritative for membership; selective
+                # input must carry every unselected parent document forward.
+                detect_remove=detect_removed_kb_docs,
                 domain=profile.domain_id,
                 channel=channel,
+                # 36号 §七：KB run 的比较父本是该 KB 最新 validated Build，
+                # 不是域级 active release（publish=False 的 KB Build 永远
+                # 不进域级 release，且同域其它 KB 的文档不得互为 parent）。
+                kb_id=kb_id,
+                present_document_ids=present_document_ids,
             )
 
             validated_snapshot_ids: list[str] = []
-            if capabilities is not None:
+            if document_index is not None:
+                # 36号 §六：文档级分区模式——ready 候选的快照集合；readiness
+                # 拒绝已在分区阶段完成，这里只聚合报告事实（不再整批门禁）。
+                validated_snapshot_ids = sorted({
+                    str(c["document_snapshot_id"]) for c in partition_ready
+                })
+                if validated_snapshot_ids:
+                    frozen_ready = asset_db.fetch_snapshot_readiness(
+                        validated_snapshot_ids,
+                    )
+                    reported = [
+                        frozen_ready[sid] for sid in validated_snapshot_ids
+                        if sid in frozen_ready
+                    ]
+                    readiness_summary = {
+                        "snapshots": len(validated_snapshot_ids),
+                        "reported": len(reported),
+                        "rejected": len(rejection_summary),
+                        "search_ready": sum(
+                            1 for f in reported if f.get("search_ready")
+                        ),
+                    }
+                readiness_ok = True
+                activate_assets = True
+                activation_blocked_reason = None
+                should_publish = publish and (
+                    not rejection_summary or publish_on_partial_failure
+                )
+            elif capabilities is not None:
                 validated_snapshot_ids = sorted({
                     str(d["document_snapshot_id"])
                     for d in snapshot_decisions
@@ -2720,18 +3167,21 @@ def _finalize_run(
                             "Run %s blocked from publish: readiness degraded %s",
                             run_id, readiness_summary,
                         )
-
-            activate_assets = _asset_activation_allowed(
-                readiness_ok=readiness_ok,
-                has_failures=has_failures,
-                publish_on_partial_failure=publish_on_partial_failure,
-            )
-            activation_blocked_reason = _asset_activation_block_reason(
-                readiness_ok=readiness_ok,
-                has_failures=has_failures,
-                publish_on_partial_failure=publish_on_partial_failure,
-            )
-            should_publish = publish and activate_assets
+                activate_assets = _asset_activation_allowed(
+                    readiness_ok=readiness_ok,
+                    has_failures=has_failures,
+                    publish_on_partial_failure=publish_on_partial_failure,
+                )
+                activation_blocked_reason = _asset_activation_block_reason(
+                    readiness_ok=readiness_ok,
+                    has_failures=has_failures,
+                    publish_on_partial_failure=publish_on_partial_failure,
+                )
+                should_publish = publish and activate_assets
+            else:
+                activate_assets = True
+                activation_blocked_reason = None
+                should_publish = publish
 
             if activate_assets:
                 # staging → final 与 Build 组装在同一事务内；readiness
@@ -2749,8 +3199,15 @@ def _finalize_run(
                     channel=channel,
                     kb_id=_run_meta.get("kb_id"),
                     capabilities=capabilities,
-                    embedding_fallback=embedding_fallback,
+                    # Every partition_ready document has complete dense
+                    # coverage.  Fallback events belong to rejected documents
+                    # and must not weaken validation for this Build.
+                    embedding_fallback=(
+                        False if document_index is not None
+                        else embedding_fallback
+                    ),
                     readiness_summary=readiness_summary,
+                    allow_empty=has_kb_removals,
                 )
 
                 # This read must see the build before the outer transaction commits.
@@ -2803,11 +3260,84 @@ def _finalize_run(
             )
         runtime_db.commit()
 
+    # ── 36号 §六：分区模式的 run_document 终态回写（Build 事务成功之后）──
+    if document_index is not None:
+        # ready 文档此刻才 committed（Build 已选中其快照、serving 可检索）
+        if not phase1_only:
+            for cand in partition_ready:
+                tracker.commit_document(
+                    str(cand["run_document_id"]),
+                    str(cand["document_id"]),
+                    str(cand["document_snapshot_id"]),
+                )
+        # rejected 文档：明确原因码；parent 有旧版本则已被 carry-forward
+        # （不进本 Build 决策 → assemble 沿用 parent 行，检索不受破坏）
+        rejected_by_rd = {
+            str(item.get("run_document_id")): item
+            for item in rejection_summary
+            if item.get("run_document_id") is not None
+        }
+        for cand in document_index.candidates:
+            rej = rejected_by_rd.get(str(cand["run_document_id"]))
+            if rej is None:
+                continue
+            tracker.fail_document(
+                str(cand["run_document_id"]),
+                f"{rej['reason']}: {rej.get('detail', '')}".strip(),
+            )
+        # Required pipeline SKIPPED rows are classified as failed above.  Make
+        # that terminal state durable so the next ordinary mining run retries
+        # them instead of treating the skipped attempt as successful history.
+        for failed_doc in document_index.failed:
+            run_document_id = failed_doc.get("run_document_id")
+            if run_document_id is not None:
+                tracker.fail_document(
+                    str(run_document_id),
+                    str(failed_doc.get("error_message") or "document_failed"),
+                )
+        # MED-3：僵尸行（persist 前崩溃）落终态，不留「永远处理中」
+        for zombie in document_index.zombies:
+            tracker.fail_document(
+                str(zombie["run_document_id"]),
+                "interrupted_before_persist: document crashed before asset_persist",
+            )
+        runtime_db.commit()
+
     # Determine final run status (use SQL-valid values only)
     # All docs failed -> "failed"; some failed -> "completed" with has_failures metadata
     run_status = "completed"
     run_metadata = None
-    if activation_blocked_reason is not None:
+    partial_success = False
+    if document_index is not None:
+        # 36号 §六分区模式：Build 成功 + 有失败 → completed + partial 元数据；
+        # 无任何产出（无 Build、无 committed、无 SKIP carry——全部失败/拒绝）
+        # → failed。SKIP carry 与失败并存时 run 仍是 completed（旧 Build 持续
+        # 可用，文档显示 update_failed），与 finalize handler 的判定一致
+        # （36号审查 MED-2：两侧条件不得漂移）。
+        staged_count = len(partition_ready) if phase1_only else 0
+        has_success = committed_count > 0 or skipped_count > 0 or staged_count > 0
+        if failed_count > 0 and has_success:
+            partial_success = True
+        if (
+            build_id is None and committed_count == 0 and skipped_count == 0
+            and staged_count == 0 and failed_count > 0
+        ):
+            run_status = "failed"
+        if partial_success or run_status == "failed":
+            existing_metadata = (runtime_db.get_run(run_id) or {}).get(
+                "metadata_json"
+            ) or {}
+            if isinstance(existing_metadata, str):
+                existing_metadata = json.loads(existing_metadata)
+            run_metadata = {
+                **(existing_metadata or {}),
+                "has_failures": failed_count > 0,
+                "partial_success": partial_success,
+                "failed_count": failed_count,
+                "committed_count": committed_count,
+                "skipped_count": skipped_count,
+            }
+    elif activation_blocked_reason is not None:
         run_status = "failed"
         existing_metadata = (runtime_db.get_run(run_id) or {}).get(
             "metadata_json"
@@ -2837,6 +3367,8 @@ def _finalize_run(
     if run_status == "failed":
         failure_summary = activation_blocked_reason or (
             f"All {failed_count} documents failed"
+            if document_index is None
+            else _partition_failure_summary(rejection_summary, failed_count)
         )
         updated = tracker.fail_run(
             run_id,
@@ -2886,7 +3418,28 @@ def _finalize_run(
         "skipped_count": skipped_count,
         "build_id": build_id,
         "release_id": release_id,
+        "staged_count": (
+            len(partition_ready)
+            if document_index is not None and phase1_only else 0
+        ),
+        # 36号 §十一：finalize 透传契约
+        "partial_success": partial_success,
+        "rejection_summary": rejection_summary,
     }
+
+
+def _partition_failure_summary(
+    rejection_summary: list[dict[str, Any]], failed_count: int,
+) -> str:
+    """36号：全失败 Run 的可读摘要（不再只报泛化的 readiness gate 文案）."""
+    reasons: dict[str, int] = {}
+    for item in rejection_summary:
+        reason = str(item.get("reason") or "unknown")
+        reasons[reason] = reasons.get(reason, 0) + 1
+    parts = ", ".join(f"{k}×{v}" for k, v in sorted(reasons.items()))
+    return f"{failed_count} documents rejected ({parts})" if parts else (
+        f"All {failed_count} documents failed"
+    )
 
 
 def _utcnow() -> str:

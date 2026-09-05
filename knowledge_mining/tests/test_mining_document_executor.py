@@ -127,6 +127,9 @@ class FakeEventRepository:
     def document_persist_marker(self, run_document_id):
         return self.markers.get(run_document_id)
 
+    def run_document_status(self, run_document_id):
+        return self.run_document_statuses.get(run_document_id)
+
     def seed(self, document_id: str, node_id: str, status: str) -> None:
         attempt = self.start_node(
             run_id="run-1",
@@ -363,3 +366,55 @@ def test_resume_skips_only_committed_asset_persist_documents() -> None:
     ]
     assert [event["attempt"] for event in parse_events] == [1, 2]
     assert all(event["status"] != "started" for event in repository.events[-2:])
+
+
+def test_ingest_skip_document_fast_paths_with_capability() -> None:
+    """36号（E2E D' 追溯）：KB 增量 SKIP 文档带 serving 快照 identity，
+    无任何 node event——executor 必须零算子执行
+    地快路径返回 SUCCESS 并携带 assets_persisted，否则「SKIP carry + 其余
+    文档全失败」的 run 会被 finalize 的 capabilities 门禁误拦。"""
+    calls = defaultdict(list)
+    registry = HandlerRegistry()
+    for name in ("parse_segment", "asset_persist"):
+        registry.register(name, "1", success_handler(calls, name))
+    repository = FakeEventRepository()
+    # SKIP 文档：marker（identity）+ 真实 skipped 状态，但从未跑过节点
+    repository.markers["s"] = ("document-skip", "snapshot-skip")
+    repository.run_document_statuses = {"s": "skipped"}
+
+    outcome = DocumentExecutor(runtime(registry, repository)).execute(
+        plan([node("parse_segment"), node("asset_persist")]),
+        [document_state("s")],
+        max_workers=1,
+    ).outcomes[0]
+
+    assert calls["s"] == []  # 零算子执行
+    assert outcome.status is OperatorStatus.SUCCESS
+    assert "assets_persisted" in outcome.state.capabilities
+    assert outcome.state.context.document_id == "document-skip"
+    assert outcome.state.context.snapshot_id == "snapshot-skip"
+
+
+def test_resume_rejected_document_replays_chain_despite_old_persist_marker() -> None:
+    """finalize-rejected 行再次 resume 时不得复用上次 completed persist。"""
+    calls = defaultdict(list)
+    registry = HandlerRegistry()
+    for name in ("parse_segment", "asset_persist"):
+        registry.register(name, "1", success_handler(calls, name))
+    repository = FakeEventRepository()
+    repository.markers["r"] = ("document-r", "snapshot-r")
+    repository.run_document_statuses = {"r": "processing"}
+    repository.seed("r", "asset_persist", "completed")
+
+    state = document_state("r")
+    state = type(state)(
+        state.run_document_id, state.doc_key, state.context,
+        state.capabilities, ("retry_rejected",),
+    )
+    outcome = DocumentExecutor(runtime(registry, repository)).execute(
+        plan([node("parse_segment"), node("asset_persist")]),
+        [state], max_workers=1,
+    ).outcomes[0]
+
+    assert calls["r"] == ["parse_segment", "asset_persist"]
+    assert outcome.status is OperatorStatus.SUCCESS

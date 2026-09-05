@@ -97,6 +97,13 @@ def test_kb_workflow_prepares_document_states_from_object_storage_identities(mon
     services.document_parse_service = None
     services.segment_compile_service = None
     services._object_input_services_ready = False
+    from knowledge_mining.mining.jobs.kb_incremental import KbIncrementDecision
+    services._classify_kb_increment = lambda docs: {
+        "doc-1": KbIncrementDecision(
+            document_id="doc-1", action="NEW", decision="new_document",
+            reason="document has never entered a validated KB build",
+        ),
+    }
     v2_services = SimpleNamespace(
         document_parse_service=object(),
         segment_compile_service=object(),
@@ -132,8 +139,37 @@ def test_kb_workflow_prepares_document_states_from_object_storage_identities(mon
     assert raw.file_path == "minio://agentickb-source/source/aa/manual.md"
     assert ctx.document_id == "doc-1"
     assert ctx.existing_doc == raw.existing_doc
+    assert services.tracker.registered[0].document_id == "doc-1"
+    assert services.tracker.registered[0].action == "NEW"
     assert services.document_parse_service is v2_services.document_parse_service
     assert services.segment_compile_service is v2_services.segment_compile_service
+
+
+def test_kb_increment_classification_failure_does_not_fall_back_to_full_run(monkeypatch):
+    """分类事实不可读时必须显式失败，不能把 19,789 篇静默改成全量 UPDATE。"""
+    import pytest
+
+    services = object.__new__(run_job._WorkflowJobServices)
+    services.action = "execute"
+    services.run_id = "run-1"
+    services.asset_db = _AssetDb()
+    services.runtime_db = _RuntimeDb()
+    services.tracker = _Tracker()
+    services.profile = SimpleNamespace(domain_id="plant-a")
+    services.channel = "prod"
+    services.input_path = "C:/must-not-be-scanned"
+    services.batch_params = BatchParams()
+    services.manifest = {"runtimeBinding": {"uploadBatchId": "batch-1"}}
+    services.pipeline_config = PipelineConfig(domain="plant-a")
+    services.document_parse_service = object()
+    services.segment_compile_service = object()
+    services._object_input_services_ready = True
+    services._classify_kb_increment = lambda docs: (_ for _ in ()).throw(
+        RuntimeError("increment facts unavailable")
+    )
+
+    with pytest.raises(RuntimeError, match="increment facts unavailable"):
+        services._prepare_document_states()
 
 
 def test_kb_workflow_services_use_control_plane_object_store_config(monkeypatch):

@@ -10,22 +10,39 @@
 from __future__ import annotations
 
 import json
+import heapq
+import itertools
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any
 
 from knowledge_mining.mining.contracts.file_management import (
     StorageObjectRepository,
 )
 from knowledge_mining.mining.contracts.parse_ir.types import (
+    Element,
     ParsedDocument,
     TableAsset,
 )
+from knowledge_mining.mining.contracts.segment_compiler import CompiledSegment
 from knowledge_mining.mining.contracts.storage.port import ObjectStorePort
 from knowledge_mining.mining.contracts.storage.types import ObjectLocation
 from knowledge_mining.mining.segment_compiler.service import SegmentStore
 
 #: 元素文本预览截断（前端列表展示用；全文在原文/快照 IR）。
 _PREVIEW_CHARS = 400
+_OUTLINE_LIMIT = 500
+_TABLE_LIMIT = 100
+_TABLE_REF_CHARS = 256
+_TABLE_CAPTION_CHARS = 240
+_ELEMENT_CONTEXT_LIMIT = 5000
+_TABLE_CONTEXT_SEGMENT_LIMIT = 2000
+
+
+def _bounded_text(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return value[:limit]
 
 
 class _LinkLike:
@@ -55,6 +72,159 @@ def _latest_summary(latest: Any) -> dict[str, Any] | None:
         "document_snapshot_id": snapshot.id,
         "source_content_revision": link.source_content_revision,
         "created_at": snapshot.created_at,
+    }
+
+
+@dataclass(frozen=True)
+class _ElementContext:
+    """Snapshot-local source order and active heading for one unique element."""
+
+    element: Element
+    order_index: int
+    section_element_id: str | None
+    parent_section_element_id: str | None
+
+
+def _element_contexts(doc: ParsedDocument) -> dict[str, _ElementContext]:
+    """Resolve snapshot-local sections only through explicit Parse IR parent links."""
+    selected = heapq.nsmallest(
+        _ELEMENT_CONTEXT_LIMIT,
+        enumerate(doc.elements),
+        key=lambda item: (item[1].order_index, item[0]),
+    )
+    selected_ids = {element.element_id for _position, element in selected}
+    counts: dict[str, int] = {element_id: 0 for element_id in selected_ids}
+    for element in doc.elements:
+        if element.element_id in counts:
+            counts[element.element_id] += 1
+
+    unique_elements = {
+        element.element_id: element
+        for element in doc.elements
+        if counts.get(element.element_id) == 1
+    }
+
+    def explicit_parent_section(element: Element) -> str | None:
+        parent_id = element.parent_id
+        seen: set[str] = set()
+        while parent_id and parent_id not in seen:
+            seen.add(parent_id)
+            parent = unique_elements.get(parent_id)
+            if parent is None:
+                return None
+            if parent.element_type in ("heading", "title"):
+                return parent.element_id
+            parent_id = parent.parent_id
+        return None
+
+    contexts: dict[str, _ElementContext] = {}
+    for _position, element in selected:
+        parent_section_id = explicit_parent_section(element)
+        section_id: str | None
+        if element.element_type in ("heading", "title"):
+            section_id = element.element_id
+        elif element.parent_id is not None:
+            section_id = parent_section_id
+        else:
+            section_id = None
+        if counts[element.element_id] == 1:
+            contexts[element.element_id] = _ElementContext(
+                element,
+                element.order_index,
+                section_id,
+                parent_section_id if element.element_type in ("heading", "title") else None,
+            )
+    return contexts
+
+
+def _segment_source_context(
+    segment: CompiledSegment,
+    contexts: dict[str, _ElementContext],
+) -> tuple[str | None, int | None, int | None]:
+    """Return section/start/end only when every source element is unambiguous."""
+    element_ids = tuple(dict.fromkeys(segment.element_ids))
+    if not element_ids or any(element_id not in contexts for element_id in element_ids):
+        return None, None, None
+    matched = [contexts[element_id] for element_id in element_ids]
+    section_ids = {item.section_element_id for item in matched}
+    section_element_id = next(iter(section_ids)) if len(section_ids) == 1 else None
+    orders = [item.order_index for item in matched]
+    return section_element_id, min(orders), max(orders)
+
+
+def _table_contexts(
+    segments: tuple[CompiledSegment, ...] | list[CompiledSegment],
+    contexts: dict[str, _ElementContext],
+    allowed_table_refs: set[str],
+) -> dict[str, dict[str, str | None]]:
+    """Resolve table identity/section/caption only through explicit table_ref facts."""
+    collected: dict[str, dict[str, set[str]]] = {}
+    for segment in itertools.islice(segments, _TABLE_CONTEXT_SEGMENT_LIMIT):
+        if segment.block_type not in {"table", "table_row"}:
+            continue
+        table_ref = _bounded_text(segment.metadata.get("table_ref"), _TABLE_REF_CHARS)
+        if table_ref is None or table_ref not in allowed_table_refs:
+            continue
+        bucket = collected.setdefault(
+            table_ref, {"sources": set(), "sections": set(), "captions": set()}
+        )
+        source_ids = {
+            element_id
+            for element_id in segment.element_ids
+            if element_id in contexts
+            and contexts[element_id].element.element_type == "table"
+        }
+        if len(source_ids) == 1:
+            bucket["sources"].update(source_ids)
+        section_element_id, _start, _end = _segment_source_context(segment, contexts)
+        if section_element_id is not None:
+            bucket["sections"].add(section_element_id)
+        caption = _bounded_text(
+            segment.metadata.get("table_caption"), _TABLE_CAPTION_CHARS,
+        )
+        if caption is not None:
+            bucket["captions"].add(caption)
+
+    def only(values: set[str]) -> str | None:
+        return next(iter(values)) if len(values) == 1 else None
+
+    return {
+        table_ref: {
+            "source_element_id": only(values["sources"]),
+            "parent_section_element_id": only(values["sections"]),
+            "caption": only(values["captions"]),
+        }
+        for table_ref, values in collected.items()
+    }
+
+
+def _segment_summary(
+    segment: CompiledSegment,
+    contexts: dict[str, _ElementContext],
+) -> dict[str, Any]:
+    section_element_id, source_order_start, source_order_end = (
+        _segment_source_context(segment, contexts)
+    )
+    return {
+        "segment_index": segment.segment_index,
+        "block_type": segment.block_type,
+        "semantic_role": segment.semantic_role,
+        "token_count": segment.token_count,
+        "table_kind": segment.metadata.get("table_kind"),
+        "view": segment.metadata.get("view"),
+        "heading_chain": [
+            {"level": level, "title": title}
+            for level, title in segment.heading_chain
+        ],
+        "text": segment.raw_text[:_PREVIEW_CHARS],
+        "element_ids": list(segment.element_ids),
+        "section_element_id": section_element_id,
+        "source_order_start": source_order_start,
+        "source_order_end": source_order_end,
+        "table_ref": _bounded_text(segment.metadata.get("table_ref"), _TABLE_REF_CHARS),
+        "table_caption": _bounded_text(
+            segment.metadata.get("table_caption"), _TABLE_CAPTION_CHARS,
+        ),
     }
 
 
@@ -129,6 +299,21 @@ class ParseResultReadService:
         snapshot, link = chosen
         doc = await self._load_ir(snapshot.parse_ir_storage_object_id)
         segments = await self._segments.list_for_snapshot(snapshot.id)
+        table_total = sum(
+            1 for asset in doc.structured_assets.values()
+            if isinstance(asset, TableAsset)
+        )
+        table_assets = list(itertools.islice(
+            (
+                asset for asset in doc.structured_assets.values()
+                if isinstance(asset, TableAsset)
+            ),
+            _TABLE_LIMIT,
+        ))
+        element_contexts = _element_contexts(doc)
+        table_contexts = _table_contexts(
+            segments, element_contexts, {asset.table_id for asset in table_assets},
+        )
 
         serving_id = str(serving.get("document_snapshot_id") or "") if serving else None
         latest_id = latest[0].id if latest is not None else None
@@ -144,6 +329,32 @@ class ParseResultReadService:
                 else "not_in_search"
             ),
         }
+        outline_total = sum(
+            1 for element in doc.elements
+            if element.element_type in ("heading", "title")
+        )
+        outline_elements = heapq.nsmallest(
+            _OUTLINE_LIMIT,
+            (e for e in doc.elements if e.element_type in ("heading", "title")),
+            key=lambda item: item.order_index,
+        )
+        outline_items = [
+            {
+                "element_id": e.element_id,
+                "level": _level(e),
+                "title": e.text.strip(),
+                "order_index": e.order_index,
+                "parent_section_element_id": (
+                    element_contexts[e.element_id].parent_section_element_id
+                    if e.element_id in element_contexts else None
+                ),
+            }
+            for e in outline_elements
+        ]
+        table_items = [
+            _table_summary(a, table_contexts.get(a.table_id))
+            for a in table_assets[:_TABLE_LIMIT]
+        ]
         return {
             "view": view,
             "versioning": versioning,
@@ -162,15 +373,7 @@ class ParseResultReadService:
                 "source_storage_object_id": link.source_storage_object_id,
                 "source_content_revision": link.source_content_revision,
             },
-            "outline": [
-                {
-                    "element_id": e.element_id,
-                    "level": _level(e),
-                    "title": e.text.strip(),
-                }
-                for e in doc.elements
-                if e.element_type in ("heading", "title")
-            ],
+            "outline": outline_items[:_OUTLINE_LIMIT],
             # 对抗评审 HIGH-2：elements 与 segments 同样限界（count/items），
             # 防大文档无界响应。
             "elements": {
@@ -180,7 +383,7 @@ class ParseResultReadService:
                         "page_header", "page_footer", "page_number",
                     )
                 ),
-                "items": [
+                "items": list(itertools.islice((
                     {
                         "element_id": e.element_id,
                         "element_type": e.element_type,
@@ -193,31 +396,13 @@ class ParseResultReadService:
                     if e.element_type not in (
                         "page_header", "page_footer", "page_number",
                     )
-                ][:500],
+                ), 500)),
             },
-            "tables": [
-                _table_summary(a)
-                for a in doc.structured_assets.values()
-                if isinstance(a, TableAsset)
-            ],
+            "tables": table_items,
             "segments": {
                 "count": len(segments),
                 "items": [
-                    {
-                        "segment_index": s.segment_index,
-                        "block_type": s.block_type,
-                        # v2 语义轴：章节角色（定义/枚举/例子/结论/约束/导航）
-                        # 与表格视图/语义类型——前端展示与下游挖掘的过滤轴。
-                        "semantic_role": s.semantic_role,
-                        "token_count": s.token_count,
-                        "table_kind": s.metadata.get("table_kind"),
-                        "view": s.metadata.get("view"),
-                        "heading_chain": [
-                            {"level": lv, "title": t} for lv, t in s.heading_chain
-                        ],
-                        "text": s.raw_text[:_PREVIEW_CHARS],
-                        "element_ids": list(s.element_ids),
-                    }
+                    _segment_summary(s, element_contexts)
                     for s in segments[:200]
                 ],
             },
@@ -225,6 +410,10 @@ class ParseResultReadService:
                 "warnings": list(doc.diagnostics.warnings)[:50],
                 "containers": len(doc.containers),
                 "relations": len(doc.relations),
+                "outline_total": outline_total,
+                "tables_total": table_total,
+                "outline_truncated": outline_total > _OUTLINE_LIMIT,
+                "tables_truncated": table_total > _TABLE_LIMIT,
             },
         }
 
@@ -285,7 +474,10 @@ def _level(element: Any) -> int:
 _PREVIEW_ROW_LIMIT = 50
 
 
-def _table_summary(asset: TableAsset) -> dict[str, Any]:
+def _table_summary(
+    asset: TableAsset,
+    context: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
     # 2026-09-01 用户反馈修复：①preview 曾取 range(min(rows, 5)) 且不过滤
     # is_header——首行表头与前端列 label 重复渲染、23 行表只见 5 行；
     # ②"rows" 曾是含表头的总行数，与切片行片数/结构化查询行数不一致。
@@ -301,17 +493,23 @@ def _table_summary(asset: TableAsset) -> dict[str, Any]:
     data_row_indexes = [
         r for r in range(asset.rows) if r not in header_rows
     ]
+    preview_rows = data_row_indexes[:_PREVIEW_ROW_LIMIT]
+    resolved = context or {}
     return {
         "table_id": asset.table_id,
         "rows": len(data_row_indexes),
         "columns": asset.columns,
         "header": header,
+        "source_element_id": resolved.get("source_element_id"),
+        "parent_section_element_id": resolved.get("parent_section_element_id"),
+        "caption": resolved.get("caption"),
+        "preview_truncated": len(preview_rows) < len(data_row_indexes),
         "preview": [
             [c.text for c in sorted(
                 (c for c in asset.cells if c.row_index == r),
                 key=lambda c: c.column_index,
             )]
-            for r in data_row_indexes[:_PREVIEW_ROW_LIMIT]
+            for r in preview_rows
         ],
     }
 

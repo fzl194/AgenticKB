@@ -133,6 +133,10 @@ export interface ParseResultOutlineNode {
   element_id: string
   level: number
   title: string
+  /** 标题元素在 Parse IR 中的稳定阅读顺序；滚动升级期间旧响应可能缺失。 */
+  order_index?: number | null
+  /** 同一快照内由 Parse IR 层级确定的父章节元素；null 表示文档根。 */
+  parent_section_element_id?: string | null
 }
 
 export interface ParseResultElement {
@@ -150,6 +154,10 @@ export interface ParseResultTable {
   columns: number
   header: string[]
   preview: string[][]
+  source_element_id?: string | null
+  parent_section_element_id?: string | null
+  caption?: string | null
+  preview_truncated?: boolean | null
 }
 
 export interface ParseResultSegment {
@@ -158,6 +166,12 @@ export interface ParseResultSegment {
   heading_chain: { level: number; title: string }[]
   text: string
   element_ids: string[]
+  /** A0 structure workspace: deterministic ownership/provenance projected by mining. */
+  section_element_id?: string | null
+  source_order_start?: number | null
+  source_order_end?: number | null
+  table_ref?: string | null
+  table_caption?: string | null
   /** 语义角色（segment-compiler v2 起标注；旧快照可能为空） */
   semantic_role?: string | null
   /** token 计数（字符近似，CJK 1 字 ≈ 1 token） */
@@ -205,5 +219,13 @@ export interface ParseResult {
   elements: { count: number; items: ParseResultElement[] }
   tables: ParseResultTable[]
   segments: { count: number; items: ParseResultSegment[] }
-  diagnostics: { warnings: string[]; containers: number; relations: number }
+  diagnostics: {
+    warnings: string[]
+    containers: number
+    relations: number
+    outline_total?: number
+    tables_total?: number
+    outline_truncated?: boolean
+    tables_truncated?: boolean
+  }
 }

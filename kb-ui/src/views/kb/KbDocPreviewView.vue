@@ -362,8 +362,8 @@ const activeTab = ref<'preview' | 'structured' | 'units'>('preview')
 const parseView = ref<'current_serving' | 'latest_revision'>('current_serving')
 let parseGeneration = 0
 
-// 结构化数据各卡片独立收缩（默认全开）。
-const openCards = ref<string[]>(['snapshot', 'structure-graph', 'outline', 'segments', 'elements', 'tables'])
+// 结构图承担主要浏览入口；原始大纲、切片、元素和表格清单按需展开。
+const openCards = ref<string[]>(['snapshot', 'structure-graph'])
 
 // M5 结构化数据（新链知识快照）：尽力加载，404 = 尚未走新链更新知识
 const parseResult = ref<ParseResult | null>(null)

@@ -10,6 +10,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { computed, defineComponent, h, inject, provide, type ComputedRef } from 'vue'
 
 const miningStore = vi.hoisted(() => ({
   currentRun: null as Record<string, unknown> | null,
@@ -38,9 +39,27 @@ vi.mock('@/api/mining', () => ({ useMiningApi: () => miningApi }))
 
 import KbRunDetailView from '@/views/kb/KbRunDetailView.vue'
 
+const tableRowsKey = Symbol('tableRows')
+const ElTableStub = defineComponent({
+  props: { data: { type: Array, default: () => [] } },
+  setup(props, { slots }) {
+    provide(tableRowsKey, computed(() => props.data))
+    return () => h('div', slots.default?.())
+  },
+})
+const ElTableColumnStub = defineComponent({
+  setup(_props, { slots }) {
+    const rows = inject<ComputedRef<unknown[]>>(tableRowsKey)
+    return () => h('div', slots.default?.({ row: rows?.value[0] ?? {} }))
+  },
+})
+
 async function mountView() {
   const wrapper = mount(KbRunDetailView, {
     props: { kbId: 'kb-1', runId: 'run-1' },
+    global: {
+      stubs: { ElTable: ElTableStub, ElTableColumn: ElTableColumnStub },
+    },
   })
   await flushPromises()
   return wrapper
@@ -142,5 +161,40 @@ describe('A0-6 Run 详情阶段展示', () => {
     })
     const wrapper = await mountView()
     expect(wrapper.findComponent({ name: 'MiningWorkflowTrace' }).exists()).toBe(true)
+  })
+
+  it('部分成功显示真实入库、失败和跳过计数', async () => {
+    miningStore.currentRun = run({
+      committed_count: 2,
+      failed_count: 1,
+      skipped_count: 3,
+      metadata_json: {
+        partial_success: true,
+        committed_count: 2,
+        failed_count: 1,
+        skipped_count: 3,
+      },
+    })
+
+    const wrapper = await mountView()
+
+    const banner = wrapper.get('[data-testid="run-partial-banner"]')
+    expect(banner.text()).toContain('成功入库：2')
+    expect(banner.text()).toContain('失败待重试：1')
+    expect(banner.text()).toContain('跳过未变化：3')
+  })
+
+  it('文档失败原因读取 API 的 error_message 字段', async () => {
+    miningStore.documents = [{
+      id: 'rd-failed', document_name: 'bad.md', status: 'failed',
+      action: 'UPDATE', error_message: 'embedding_incomplete: dense 2/3',
+    }]
+    miningStore.documentsTotal = 1
+
+    const wrapper = await mountView()
+
+    expect(wrapper.text()).toContain('embedding_incomplete: dense 2/3')
+    expect(wrapper.text()).toContain('更新')
+    expect(wrapper.text()).not.toContain('UPDATE')
   })
 })

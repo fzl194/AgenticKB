@@ -59,6 +59,8 @@ export interface MiningRun {
   updated_count: number
   build_id?: string
   error_summary?: string | null
+  /** 36号 §九：finalize 写入的 run metadata（部分成功统计 + 拒绝摘要）。 */
+  metadata_json?: Record<string, unknown> | null
   config?: Record<string, unknown>
   execution_engine?: 'legacy' | 'workflow'
   workflow_id?: string | null
@@ -101,7 +103,7 @@ export interface MiningRunDocument {
   document_name: string
   document_key?: string
   status: 'pending' | 'processing' | 'committed' | 'failed' | 'skipped'
-  action: 'new' | 'updated' | 'unchanged'
+  action: 'NEW' | 'UPDATE' | 'SKIP' | 'REMOVE' | 'new' | 'updated' | 'unchanged'
   error_message?: string
   error_summary?: string
   current_stage?: string | null

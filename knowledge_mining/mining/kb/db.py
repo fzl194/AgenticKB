@@ -69,16 +69,19 @@ def derive_readiness_level(
 
 # ── 文档状态派生 SQL 片段（alias d = asset_documents）────────────────────────
 # CASE 在 SELECT；LATERAL 在 FROM。优先级：
-#   published > failed > mined(committed) > mining(pending/processing) > withdrawn(removed) > uploaded
-# 「mined」档专门给 KB 挖掘用：KB 走 publish=False（只 build 不进域级 active release），
-# 文档在 mining_run_documents 到达 committed 后，若没有这一档会被 ELSE 兜底回 'uploaded'，
-# 与「没挖过」无法区分——这正是「挖掘后状态没打通」的根因。
+#   published > update_failed > failed > mining > mined > withdrawn(removed) > uploaded
+# 36号 §九：「已入库（mined）」= 存在于该 KB 最新 validated Build 且
+# selection_status='active'——不再以最近一次 run_document committed 为准
+# （staging 完成不叫已入库）。「update_failed」= 已入库但最近一次更新失败
+# （Build 仍是旧版本，检索不受影响，等待重试）。
 # 折进列表/详情查询，避免对每个文档单独查（N+1，远程库下 2-3s 卡顿的根因）。
 _STATUS_CASE_SQL = """CASE
     WHEN COALESCE(pub.published, FALSE) THEN 'published'
+    WHEN rs.rd_status = 'failed' AND COALESCE(kbmv.in_active_build, FALSE)
+        THEN 'update_failed'
     WHEN rs.rd_status = 'failed' THEN 'failed'
-    WHEN rs.rd_status = 'committed' THEN 'mined'
     WHEN rs.rd_status IN ('pending', 'processing') THEN 'mining'
+    WHEN COALESCE(kbmv.in_active_build, FALSE) THEN 'mined'
     WHEN COALESCE(rm.removed, FALSE) THEN 'withdrawn'
     ELSE 'uploaded'
 END"""
@@ -88,9 +91,11 @@ END"""
 # （publish=False，永不产 release）下这两档恒为 0 —— 为一对恒零的桶付全域文档的
 # 扫描代价不值得。域里确实有 active release 时才切回完整版（见 stats_document_status）。
 _STATUS_CASE_NO_RELEASE_SQL = """CASE
+    WHEN rs.rd_status = 'failed' AND COALESCE(kbmv.in_active_build, FALSE)
+        THEN 'update_failed'
     WHEN rs.rd_status = 'failed' THEN 'failed'
-    WHEN rs.rd_status = 'committed' THEN 'mined'
     WHEN rs.rd_status IN ('pending', 'processing') THEN 'mining'
+    WHEN COALESCE(kbmv.in_active_build, FALSE) THEN 'mined'
     ELSE 'uploaded'
 END"""
 
@@ -102,17 +107,34 @@ END"""
 #   mr.kb_id IS NOT DISTINCT FROM d.kb_id  ——「NULL = NULL」要成立：legacy 文档
 #       （kb_id 为 NULL）该由 legacy 域级 run 决定状态，普通 = 比较会把它判成 NULL 而漏掉
 #   mr.domain = d.domain                   —— 同一文件在两个域各挖一次时再隔一层
+# rd_action 一并带出：'SKIP' 时前端显示「已入库（未变化）」（增量判定 carry）。
 _RUN_DOC_JOIN_SQL = """
 LEFT JOIN LATERAL (
-    SELECT r.status AS rd_status
+    SELECT r.status AS rd_status, r.action AS rd_action
     FROM mining_run_documents r
     JOIN mining_runs mr ON mr.id = r.run_id
     WHERE r.document_key = d.document_key
       AND mr.domain = d.domain
       AND mr.kb_id IS NOT DISTINCT FROM d.kb_id
-    ORDER BY r.finished_at DESC NULLS LAST, r.started_at DESC NULLS LAST, r.id DESC
+    ORDER BY mr.started_at DESC NULLS LAST,
+             r.started_at DESC NULLS LAST, r.id DESC
     LIMIT 1
 ) rs ON TRUE"""
+
+# 36号 §九：KB Build 成员 lateral。「已入库」的事实源是 Build membership：
+# 该 KB 最新 validated/published Build 的 active 行。legacy 文档（kb_id NULL）
+# 无 KB Build → 子查询为 NULL → 恒 FALSE（继续走 published 等旧档位）。
+_KB_BUILD_JOIN_SQL = """
+LEFT JOIN LATERAL (
+    SELECT bs.selection_status = 'active' AS in_active_build
+    FROM asset_build_document_snapshots bs
+    JOIN asset_builds b ON b.id = bs.build_id
+    WHERE bs.document_id = d.id
+      AND b.kb_id = d.kb_id
+      AND b.status IN ('validated', 'published')
+    ORDER BY b.created_at DESC, b.id DESC
+    LIMIT 1
+) kbmv ON TRUE"""
 
 # published / withdrawn 两档要查 active release，是这段里最贵的部分（每文档两次
 # release⋈snapshot 的 EXISTS）。单独拆出来，好让只关心「挖没挖成」的调用方（概览页聚合）
@@ -135,8 +157,10 @@ LEFT JOIN LATERAL (
     ) AS removed
 ) rm ON TRUE"""
 
-# 完整派生（六态）= 归属收敛的 run 关联 + release 关联。列表/详情用它。
-_STATUS_JOIN_SQL = _RUN_DOC_JOIN_SQL + _RELEASE_JOIN_SQL
+# 完整派生 = 归属收敛的 run 关联 + KB Build 成员关联 + release 关联。列表/详情用它。
+_STATUS_JOIN_SQL = (
+    _RUN_DOC_JOIN_SQL + _KB_BUILD_JOIN_SQL + _RELEASE_JOIN_SQL
+)
 
 #: 对外检索单元类型（A0-5 公开九词；与 Java EvidenceTypeVocabulary.PUBLIC_TYPES
 #: 同一套词表——两侧修改必须同步，契约测试各自钉住九词全集）。
@@ -348,36 +372,42 @@ class KbDB:
     async def get_kb_readiness(self, kb_id: str) -> dict[str, Any]:
         """批次4 readiness 四档的纯查询派生（无 DDL）。
 
-        口径：KB 内活跃（未软删）文档的**最新快照**——与检索侧 per-document
-        最新快照语义一致。embedding_fallback 取该 KB 最新 build 的冻结签名。
+        口径：KB 内每篇文档跨 validated/published Build 的最新 selection，
+        再保留 active 成员——与 serving 的 current-snapshot 语义一致。失败
+        更新产生的较新 link/staging 不得污染仍在服务的旧版本统计。
         档位：empty → parsed → segmented → lexical_ready → vector_ready。
         """
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """WITH latest AS (
-                       SELECT DISTINCT ON (l.document_id)
-                              l.document_id, l.document_snapshot_id
-                       FROM asset_document_snapshot_links l
-                       JOIN asset_documents d ON d.id = l.document_id
-                       WHERE d.kb_id = %(kb)s AND d.deleted_at IS NULL
-                       ORDER BY l.document_id, l.linked_at DESC
+                       SELECT DISTINCT ON (bs.document_id)
+                              bs.document_id, bs.document_snapshot_id,
+                              bs.selection_status, b.summary_json
+                       FROM asset_build_document_snapshots bs
+                       JOIN asset_builds b ON b.id = bs.build_id
+                       JOIN asset_documents d ON d.id = bs.document_id
+                       WHERE b.kb_id = %(kb)s
+                         AND d.kb_id = %(kb)s
+                         AND d.deleted_at IS NULL
+                         AND b.status IN ('validated', 'published')
+                       ORDER BY bs.document_id, b.created_at DESC, b.id DESC
+                   ), current AS (
+                       SELECT * FROM latest WHERE selection_status = 'active'
                    )
                    SELECT
-                     (SELECT COUNT(*) FROM latest) AS documents,
+                     (SELECT COUNT(*) FROM current) AS documents,
                      (SELECT COUNT(*) FROM asset_raw_segments s
-                       JOIN latest ON s.document_snapshot_id = latest.document_snapshot_id) AS segments,
+                       JOIN current ON s.document_snapshot_id = current.document_snapshot_id) AS segments,
                      -- 2026-09-01 用户反馈：旧链表恒 0——v2 算子链只写
                      -- asset_retrieval_units_v2 / _embeddings_v2（按 snapshot_id 关联）。
                      (SELECT COUNT(*) FROM asset_retrieval_units_v2 u
-                       JOIN latest ON u.snapshot_id = latest.document_snapshot_id) AS retrieval_units,
+                       JOIN current ON u.snapshot_id = current.document_snapshot_id) AS retrieval_units,
                      (SELECT COUNT(*) FROM asset_retrieval_embeddings_v2 e
-                       JOIN latest ON e.snapshot_id = latest.document_snapshot_id) AS embeddings,
-                     (SELECT COALESCE(
-                               (b.summary_json ->> 'embedding_fallback')::boolean,
-                               false)
-                        FROM asset_builds b
-                        WHERE b.kb_id = %(kb)s
-                        ORDER BY b.created_at DESC LIMIT 1) AS embedding_fallback""",
+                       JOIN current ON e.snapshot_id = current.document_snapshot_id) AS embeddings,
+                     (SELECT COALESCE(BOOL_OR(COALESCE(
+                               (summary_json ->> 'embedding_fallback')::boolean,
+                               false)), false)
+                        FROM current) AS embedding_fallback""",
                 {"kb": kb_id},
             )
             row = dict(await cur.fetchone())
@@ -593,19 +623,26 @@ class KbDB:
     # validated/published build 的快照。不能对 asset_* 表直接 COUNT —— 每次重挖都会
     # 产生一份新快照，累计计数会把「挖了 3 遍的 10 篇文档」显示成 30 篇的知识量。
 
-    _STATUS_KEYS = ("uploaded", "mining", "mined", "published", "withdrawn", "failed")
+    _STATUS_KEYS = (
+        "uploaded", "mining", "mined", "published", "withdrawn", "failed",
+        "update_failed",
+    )
 
     # 每文档一行的「当前快照」。DISTINCT ON 取 build 最新的那条；selection_status
     # 'removed'（撤回）不算当前知识。与 get_document_knowledge 的单文档口径一致。
     _CURRENT_SNAPSHOT_CTE = """
-WITH cur AS (
-    SELECT DISTINCT ON (bs.document_id) bs.document_snapshot_id
+WITH latest AS (
+    SELECT DISTINCT ON (bs.document_id)
+           bs.document_snapshot_id, bs.selection_status
     FROM asset_build_document_snapshots bs
     JOIN asset_builds b ON b.id = bs.build_id
     WHERE b.kb_id = ANY(%(kb)s)
-      AND bs.selection_status = 'active'
       AND b.status IN ('validated', 'published')
-    ORDER BY bs.document_id, b.created_at DESC
+    ORDER BY bs.document_id, b.created_at DESC, b.id DESC
+), cur AS (
+    SELECT document_snapshot_id
+    FROM latest
+    WHERE selection_status = 'active'
 )"""
 
     async def stats_document_status(
@@ -620,7 +657,12 @@ WITH cur AS (
         if not kb_ids:
             return counts
         case_sql = _STATUS_CASE_SQL if with_release else _STATUS_CASE_NO_RELEASE_SQL
-        join_sql = _STATUS_JOIN_SQL if with_release else _RUN_DOC_JOIN_SQL
+        # 36号 §九：两套派生都引用 kbmv（Build membership），NO_RELEASE 分支
+        # 也要挂 KB Build 关联。
+        join_sql = (
+            _STATUS_JOIN_SQL if with_release
+            else _RUN_DOC_JOIN_SQL + _KB_BUILD_JOIN_SQL
+        )
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 f"""SELECT {case_sql} AS status, COUNT(*) AS c
@@ -1256,6 +1298,7 @@ WITH cur AS (
                            d.document_type, d.storage_path, d.directory_path, d.owner_id,
                            d.created_at, d.file_size, d.modified_at,
                            d.storage_object_id, d.source_raw_hash, d.content_revision,
+                           rs.rd_action,
                            {_STATUS_CASE_SQL} AS status
                     FROM asset_documents d
                     {_STATUS_JOIN_SQL}

@@ -54,6 +54,17 @@
         {{ miningStore.error }}
       </div>
 
+      <!-- 36号 §九：部分成功横幅——成功文档已入库，失败文档等待重试 -->
+      <div v-if="partialStats" class="run-detail__partial-banner" data-testid="run-partial-banner">
+        <div class="partial-banner__title">任务部分完成</div>
+        <div class="partial-banner__stats">
+          <span>成功入库：{{ partialStats.committed }}</span>
+          <span v-if="partialStats.failed">失败待重试：{{ partialStats.failed }}</span>
+          <span v-if="partialStats.skipped">跳过未变化：{{ partialStats.skipped }}</span>
+        </div>
+        <div class="partial-banner__hint">失败的文档下次点击「挖掘」会自动重试，不影响已入库内容</div>
+      </div>
+
       <!-- 人审暂停横幅（B7）-->
       <div v-if="miningStore.currentRun.status === 'awaiting_review'" class="run-detail__review-banner">
         <div class="review-banner__main">
@@ -193,7 +204,7 @@
           </el-table-column>
           <el-table-column label="操作" width="100">
             <template #default="{ row }">
-              <span class="action-badge" :class="`action-badge--${row.action}`">{{ actionLabel(row.action) }}</span>
+              <span class="action-badge" :class="`action-badge--${String(row.action).toLowerCase()}`">{{ actionLabel(row.action) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="耗时" width="100">
@@ -203,7 +214,7 @@
           </el-table-column>
           <el-table-column label="错误" min-width="200">
             <template #default="{ row }">
-              <span class="text-error" v-if="row.error_summary">{{ row.error_summary }}</span>
+              <span class="text-error" v-if="row.error_message">{{ row.error_message }}</span>
               <span v-else class="text-muted">-</span>
             </template>
           </el-table-column>
@@ -256,6 +267,19 @@ let resumeTimer: ReturnType<typeof setTimeout> | null = null
 
 // ── Formatters ──
 
+/** 36号 §九：部分成功统计（finalize 写入 metadata 的 partial_success 元数据）。 */
+const partialStats = computed<{ committed: number; failed: number; skipped: number } | null>(() => {
+  const run = miningStore.currentRun
+  if (!run || run.status !== 'completed') return null
+  const meta = run.metadata_json || {}
+  if (meta.partial_success !== true) return null
+  return {
+    committed: Number(meta.committed_count ?? run.committed_count ?? 0),
+    failed: Number(meta.failed_count ?? run.failed_count ?? 0),
+    skipped: Number(meta.skipped_count ?? run.skipped_count ?? 0),
+  }
+})
+
 function docStatusLabel(status: string) {
   const map: Record<string, string> = {
     committed: '完成', processing: '处理中', failed: '失败', pending: '等待', skipped: '跳过',
@@ -264,7 +288,10 @@ function docStatusLabel(status: string) {
 }
 
 function actionLabel(action: string) {
-  const map: Record<string, string> = { new: '新增', updated: '更新', unchanged: '无变化' }
+  const map: Record<string, string> = {
+    NEW: '新增', UPDATE: '更新', SKIP: '无变化', REMOVE: '移除',
+    new: '新增', updated: '更新', unchanged: '无变化',
+  }
   return map[action] || action
 }
 
@@ -564,6 +591,30 @@ watch(() => miningStore.documentsPage, () => {
   border-radius: var(--kb-radius-sm);
   font-size: 13px;
   border-left: 3px solid var(--kb-danger);
+}
+
+/* 36号 §九：部分成功横幅——绿底（有产出）带警示边（有失败） */
+.run-detail__partial-banner {
+  background: var(--kb-success-soft, #ecfdf5);
+  border: 1px solid var(--kb-success-medium, #6ee7b7);
+  border-left: 3px solid var(--kb-warning, #f59e0b);
+  border-radius: var(--kb-radius-sm);
+  padding: 12px 18px;
+  font-size: 13px;
+}
+.partial-banner__title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.partial-banner__stats {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.partial-banner__hint {
+  margin-top: 4px;
+  color: var(--kb-text-muted, #64748b);
+  font-size: 12px;
 }
 
 /* 人审暂停横幅 */

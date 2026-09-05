@@ -113,10 +113,13 @@ export function barChartHeight(count: number): string {
  * 「待挖掘」用中性灰是刻意的：它是"尚未发生"，不该和三个真状态抢注意力。
  */
 export const DOC_STATUS_META: { key: KbDocStatusKey; label: string; color: string }[] = [
-  { key: 'mined', label: '已挖掘', color: '#10b981' },
-  { key: 'mining', label: '挖掘中', color: '#f59e0b' },
+  { key: 'mined', label: '已入库', color: '#10b981' },
+  { key: 'mining', label: '处理中', color: '#f59e0b' },
   { key: 'uploaded', label: '待挖掘', color: '#64748b' },
   { key: 'failed', label: '失败', color: '#ef4444' },
+  // 36号 §九：已入库但最近一次更新失败（检索仍用上一版本）——橙红系与
+  // failed 区分：旧版本仍可检索，严重度低于彻底失败。
+  { key: 'update_failed', label: '更新失败', color: '#f97316' },
   { key: 'published', label: '已发布', color: '#0891b2' },
   { key: 'withdrawn', label: '已撤回', color: '#8b5cf6' },
 ]

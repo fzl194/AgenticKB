@@ -142,7 +142,7 @@
         <div class="fm__col fm__col--size">{{ humanSize(file.file_size) }}</div>
         <div class="fm__col fm__col--status">
           <el-tag v-if="file.status" :type="docStatusTagType(file.status)" size="small" effect="light">
-            {{ docStatusLabel(file.status) }}
+            {{ docStatusLabel(file.status, file.rd_action === 'SKIP') }}
           </el-tag>
           <span v-else class="fm__col--muted">—</span>
         </div>

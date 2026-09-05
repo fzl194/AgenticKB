@@ -18,6 +18,7 @@ function stats(over: Partial<KbStats> = {}): KbStats {
     trend_days: 30,
     document_status: {
       uploaded: 5, mining: 1, mined: 10, published: 0, withdrawn: 0, failed: 2,
+      update_failed: 0,
     },
     assets: {
       snapshots: 10, segments: 300, retrieval_units: 420,
@@ -51,13 +52,14 @@ describe('documentStatusSlices', () => {
 
     expect(names).not.toContain('已发布')
     expect(names).not.toContain('已撤回')
-    expect(names).toEqual(['已挖掘', '挖掘中', '待挖掘', '失败'])
+    // 36号 §九：mined=已入库（Build membership）；update_failed 新档
+    expect(names).toEqual(['已入库', '处理中', '待挖掘', '失败', '更新失败'])
   })
 
-  it('有 active release 时六档齐全', () => {
+  it('有 active release 时七档齐全', () => {
     const names = documentStatusSlices(stats({ has_active_release: true })).map(s => s.name)
 
-    expect(names).toHaveLength(6)
+    expect(names).toHaveLength(7)
     expect(names).toContain('已发布')
     expect(names).toContain('已撤回')
   })
@@ -66,6 +68,7 @@ describe('documentStatusSlices', () => {
     const slices = documentStatusSlices(stats({
       document_status: {
         uploaded: 0, mining: 0, mined: 4, published: 0, withdrawn: 0, failed: 0,
+        update_failed: 0,
       },
     }))
 
@@ -79,7 +82,7 @@ describe('documentStatusSlices', () => {
       documentStatusSlices(stats()).map(s => [s.name, s.color]),
     )
 
-    expect(byName['已挖掘']).toBe('#10b981')
+    expect(byName['已入库']).toBe('#10b981')
     expect(byName['失败']).toBe('#ef4444')
   })
 })

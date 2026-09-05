@@ -33,6 +33,27 @@ export interface ParadigmSearchResult {
   [k: string]: unknown
 }
 
+/**
+ * 36号 §九：检索错误中文化。axios 错误按响应体/状态映射为用户可行动的
+ * 中文文案；未识别的错误原样上抛（不吞错）。404 只在响应体确实是
+ * kb_not_found 语义时才映射——paradigm 路由自身的 404（范式不存在）
+ * 不得误报成「未完成挖掘」。
+ */
+export function localizeSearchError(err: unknown): unknown {
+  const e = err as { response?: { status?: number; data?: { message?: string; error?: string } }; message?: string }
+  const status = e?.response?.status
+  const bodyMsg = e?.response?.data?.message || e?.response?.data?.error || ''
+  const isKbNotFound = status === 404
+    && /knowledge bases were not found|kb_not_found|no_active_kb_build|no mined content/i.test(String(bodyMsg))
+  if (isKbNotFound) {
+    return new Error('所选知识库暂不可检索：可能尚未完成挖掘，或全部文档挖掘失败（未生成可检索版本）。请先完成一次成功的挖掘。')
+  }
+  if (status === 401 || status === 403) {
+    return new Error('没有访问所选知识库的权限，请确认知识库可见性或联系管理员。')
+  }
+  return err
+}
+
 export function useServingApi() {
   const client = createProxyClient('serving')
 
@@ -70,6 +91,10 @@ export function useServingApi() {
     /**
      * 按范式执行检索（批次6：检索唯一入口）。kbIds 只对图内 scope 留空的范式生效
      * ——写死范围的专属范式优先按图执行。身份由 proxyClient 注入的 X-KB-User 决定。
+     *
+     * 36号 §九：检索失败的用户可见文案在此中文化——「one or more knowledge bases
+     * were not found」只在全库尚无任何可检索 Build（或不可见）时出现，用户需要
+     * 的是可行动的中文原因，不是英文内部话术。
      */
     async runParadigmSearch(
       paradigmId: string,
@@ -82,8 +107,12 @@ export function useServingApi() {
         debug: options?.debug ?? false,
       }
       if (options?.kbIds?.length) payload.kbIds = options.kbIds
-      const { data } = await client.post(`/api/v1/paradigm/${paradigmId}/search`, payload)
-      return data
+      try {
+        const { data } = await client.post(`/api/v1/paradigm/${paradigmId}/search`, payload)
+        return data
+      } catch (err: unknown) {
+        throw localizeSearchError(err)
+      }
     },
 
     async search(query: string, options?: SearchOptions): Promise<SearchResult> {
@@ -97,8 +126,12 @@ export function useServingApi() {
       const kbIds = options?.kbIds?.map(id => id?.trim()).filter((id): id is string => !!id)
       if (kbIds && kbIds.length > 0) payload.kbIds = kbIds
 
-      const { data } = await client.post('/api/v1/search', payload)
-      return data.data ?? data
+      try {
+        const { data } = await client.post('/api/v1/search', payload)
+        return data.data ?? data
+      } catch (err: unknown) {
+        throw localizeSearchError(err)
+      }
     },
 
     /**

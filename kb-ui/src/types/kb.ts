@@ -13,11 +13,15 @@ export type KbStatus = 'active' | 'deleted'
 export type KbMemberRole = 'viewer' | 'editor'
 /** 当前用户在该 KB 的有效访问级别（列表页展示用）。admin = site admin 全通。 */
 export type KbMyRole = 'owner' | 'editor' | 'viewer' | 'admin'
-/** 文档派生状态（后端 derive_document_status 实时计算，不存列）。 */
+/** 文档派生状态（后端 derive_document_status 实时计算，不存列）。
+ * 36号 §九：mined=存在于该 KB 最新 validated Build 且 active（Build membership，
+ * 不再以最近一次 run_document committed 为准）；update_failed=已入库但最近一次
+ * 更新失败（检索仍用上一版本，等待重试）。 */
 export type KbDocStatus =
   | 'uploaded'
   | 'mining'
   | 'mined'
+  | 'update_failed'
   | 'published'
   | 'withdrawn'
   | 'failed'
@@ -111,6 +115,8 @@ export interface KbDocument {
   file_size?: number | null
   modified_at?: string | null
   status?: KbDocStatus
+  /** 36号 §九：最近一次 run_document 的 action——'SKIP' 时「已入库（未变化）」。 */
+  rd_action?: string | null
 }
 
 export interface KbCreateBody {
@@ -289,11 +295,12 @@ export interface KbOverview {
 
 // ── 概览页统计（GET /api/kb/stats）────────────────────────────────────────────
 
-/** 文档六态。与后端 _STATUS_CASE_SQL 的 CASE 分支一一对应。 */
+/** 文档七态。与后端 _STATUS_CASE_SQL 的 CASE 分支一一对应。 */
 export type KbDocStatusKey =
   | 'uploaded'
   | 'mining'
   | 'mined'
+  | 'update_failed'
   | 'published'
   | 'withdrawn'
   | 'failed'

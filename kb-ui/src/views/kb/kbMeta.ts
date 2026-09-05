@@ -23,16 +23,19 @@ export function roleTagType(r: KbMyRole | KbMemberRole): 'primary' | 'success' |
 }
 
 // ── 文档派生状态 ──
-export function docStatusLabel(s: KbDocStatus): string {
+// 36号 §九：mined 的文案是「已入库」（进入 KB Build 且可检索）；
+// unchanged（最近一次增量判定 SKIP，rd_action='SKIP'）显示「未变化」。
+export function docStatusLabel(s: KbDocStatus, unchanged = false): string {
+  if (s === 'mined') return unchanged ? '已入库（未变化）' : '已入库'
   return {
-    uploaded: '已上传',
-    mining: '挖掘中',
-    mined: '已挖掘',
+    uploaded: '未挖掘',
+    mining: '处理中',
+    update_failed: '更新失败，仍用上一版本',
     published: '已发布',
     withdrawn: '已撤回',
-    failed: '失败',
+    failed: '挖掘失败，等待重试',
     unknown: '未知',
-  }[s]
+  }[s] ?? '未知'
 }
 
 export function docStatusTagType(
@@ -43,6 +46,7 @@ export function docStatusTagType(
     case 'mined': return 'success'
     case 'mining': return 'warning'
     case 'failed': return 'danger'
+    case 'update_failed': return 'warning'
     case 'uploaded':
     case 'withdrawn':
     case 'unknown':

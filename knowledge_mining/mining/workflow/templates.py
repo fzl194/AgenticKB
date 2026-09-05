@@ -110,8 +110,3 @@ _BUILTIN_TEMPLATES = {
 
 def builtin_templates() -> dict[str, WorkflowGraph]:
     return dict(_BUILTIN_TEMPLATES)
-
-
-def builtin_templates_v2() -> dict[str, WorkflowGraph]:
-    """Compatibility import name for the only supported template generation."""
-    return builtin_templates()

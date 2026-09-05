@@ -11,14 +11,6 @@ from .graph import EdgeDef, WorkflowGraph
 _GLOBAL_CHAIN_TYPES = {"asset_persist", "mining_finalize"}
 
 
-def required_protected_types(enabled_types: set[str]) -> tuple[str, ...]:
-    """研究算子（entity/ontology/graph_write）一律不注入，恒返回空。
-
-    保留函数签名以兼容既有调用方；M6 随新预置体系一并清理调用点。
-    """
-    return ()
-
-
 @dataclass(frozen=True)
 class WorkflowNormalizer:
     catalog: Mapping[str, MiningOperatorDef]

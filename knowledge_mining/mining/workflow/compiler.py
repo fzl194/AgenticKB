@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from .core import ExecutionZone, MiningOperatorDef, SlotType
 from .execution_plan import ExecutionPlan, PlannedNode
 from .graph import EdgeDef, WorkflowGraph
-from .normalizer import WorkflowNormalizer, required_protected_types
+from .normalizer import WorkflowNormalizer
 from .operators.options import OPTIONS_BY_OPERATOR
 
 

@@ -50,11 +50,10 @@ def _auto_discover() -> None:
     from knowledge_mining.mining.stages import enrich as _enrich_mod
     from knowledge_mining.mining.stages import relations as _rel_mod
     from knowledge_mining.mining.stages import retrieval_units as _ru_mod
-    from knowledge_mining.mining.stages import eval as _eval_mod
     from knowledge_mining.mining.stages import publishing as _pub_mod
 
     # Register discovered classes
-    for _mod in [_parse_mod, _seg_mod, _enrich_mod, _rel_mod, _ru_mod, _eval_mod, _pub_mod]:
+    for _mod in [_parse_mod, _seg_mod, _enrich_mod, _rel_mod, _ru_mod, _pub_mod]:
         for _attr_name in dir(_mod):
             _cls = getattr(_mod, _attr_name)
             if isinstance(_cls, type) and hasattr(_cls, "stage_name") and hasattr(_cls, "stage_version"):

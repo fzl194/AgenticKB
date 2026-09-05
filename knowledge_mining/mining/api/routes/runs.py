@@ -897,58 +897,6 @@ async def get_run_document_units(
     }
 
 
-async def get_run_document_relations(
-    run_id: str, doc_id: str, request: Request,
-    domain: str = Query(..., min_length=1),
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-) -> dict:
-    """Get segment relations for a single document in run context."""
-    pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
-    await _require_run_domain(pool, run_id, domain)
-
-    async with pool.connection() as conn:
-        doc_cur = await conn.execute(
-            "SELECT document_snapshot_id FROM mining_run_documents "
-            "WHERE id = %s AND run_id = %s",
-            [doc_id, run_id],
-        )
-        doc = await doc_cur.fetchone()
-        if not doc:
-            raise HTTPException(404, f"Document {doc_id} not found in run {run_id}")
-
-        snapshot_id = doc["document_snapshot_id"]
-        if not snapshot_id:
-            return {"run_id": run_id, "document_id": doc_id, "snapshot_id": None, "total": 0, "limit": limit, "offset": offset, "items": []}
-
-        count_cur = await conn.execute(
-            "SELECT COUNT(*) as c FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
-            [snapshot_id],
-        )
-        total = (await count_cur.fetchone())["c"]
-
-        # Join with segments to get preview text
-        cur = await conn.execute(
-            "SELECT r.id, r.document_snapshot_id, r.source_segment_id, "
-            "r.target_segment_id, r.relation_type, r.weight, "
-            "r.confidence, r.distance, "
-            "s1.raw_text AS source_text, s2.raw_text AS target_text "
-            "FROM asset_raw_segment_relations r "
-            "LEFT JOIN asset_raw_segments s1 ON s1.id = r.source_segment_id "
-            "LEFT JOIN asset_raw_segments s2 ON s2.id = r.target_segment_id "
-            "WHERE r.document_snapshot_id = %s "
-            "ORDER BY r.confidence DESC NULLS LAST LIMIT %s OFFSET %s",
-            [snapshot_id, limit, offset],
-        )
-        rows = await cur.fetchall()
-
-    return {
-        "run_id": run_id, "document_id": doc_id, "snapshot_id": snapshot_id,
-        "total": total, "limit": limit, "offset": offset,
-        "items": [dict(r) for r in rows],
-    }
-
-
 @router.get("/{run_id}/artifacts", dependencies=[Depends(require_run_read)])
 async def get_run_artifacts(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
     """Get run-level artifact aggregation."""

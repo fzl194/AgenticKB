@@ -70,9 +70,3 @@ def test_research_operators_isolated_in_research_module() -> None:
     from knowledge_mining.mining.workflow.operators import research
 
     assert set(research.RESEARCH_OPERATOR_TYPES) == RESEARCH_OPERATOR_TYPES
-
-
-def test_legacy_paradigm_seeding_removed() -> None:
-    import knowledge_mining.mining.workflow.paradigms as paradigms
-
-    assert not hasattr(paradigms, "ORDINARY_WORKFLOW_PARADIGMS")

@@ -116,11 +116,12 @@ def test_row_cells_are_exact_facts_not_reparsed_text():
         key=lambda s: s.metadata["row_index"],
     )
     # caption 前缀 + 值含 ；/= 均不影响精确事实
+    # （36号根因 6：三元组携带真实列号）
     assert rows[0].metadata["row_cells"] == [
-        ["参数", "A-101"], ["参数#2", "温度；上限=85"], ["功耗W", "30"],
+        ["参数", "A-101", 0], ["参数#2", "温度；上限=85", 1], ["功耗W", "30", 2],
     ]
     assert rows[1].metadata["row_cells"] == [
-        ["参数", "A-102"], ["参数#2", "正常"], ["功耗W", "45"],
+        ["参数", "A-102", 0], ["参数#2", "正常", 1], ["功耗W", "45", 2],
     ]
     # 展示文本保留 caption 前缀（自描述，供 FTS）
     assert rows[0].raw_text.startswith("[表 3-1 告警对照] ")
@@ -173,7 +174,7 @@ def test_raw_projection_roundtrip_preserves_table_facts():
     assert payload["source_block_type"] == "table_row"
     assert payload["table_ref"] == "t9-table"
     assert payload["row_cells"] == [
-        ["参数", "A-101"], ["参数#2", "温度；上限=85"], ["功耗W", "30"],
+        ["参数", "A-101", 0], ["参数#2", "温度；上限=85", 1], ["功耗W", "30", 2],
     ]
 
 

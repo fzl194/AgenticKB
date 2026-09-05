@@ -493,12 +493,17 @@ def _emit_table(
             prefix = f"[{caption}] " if caption else ""
             # 29号 R02：精确 cell 事实随行传播（列名=值 对）——下游结构面
             # 不再从展示字符串反解析（值含 ；/= 或 caption 前缀时会丢列）。
+            # 36号根因 6：表头外列（横幅表头/表头短于网格）必须携带真实
+            # 列号三元组 [name, value, column_index]——此前列号在兜底名
+            # col{N} 处丢失，结构投影按名反查全部塌缩为 -1，同行 ≥2 个
+            # 即撞 asset_table_cells_staging 主键，表单类文档整篇崩溃。
             row_cells = [
                 [
                     header_texts[c.column_index]
                     if c.column_index < len(header_texts)
                     else f"col{c.column_index}",
                     c.text,
+                    c.column_index,
                 ]
                 for c in sorted(cells, key=lambda c: c.column_index)
             ]
@@ -597,17 +602,29 @@ def _dedup_headers(headers: list[str]) -> list[str]:
 
 
 def _header_of(asset: TableAsset) -> tuple[list[str], set[int]]:
-    """首表头行的文本数组 + 全部表头行号集合."""
+    """首表头行按物理列号展开的文本数组 + 全部表头行号集合.
+
+    表单/合并单元格会让首表头行稀疏；若把 0/2 列压成长度 2 的数组，
+    后续按真实 ``column_index`` 取名会把第 1 列错标成第 2 列表头。
+    未覆盖列使用稳定的 ``colN`` 名称，既保留列号也让结构化查询可见。
+    """
     header_rows = {c.row_index for c in asset.cells if c.is_header}
     texts: list[str] = []
     if header_rows:
         first = min(header_rows)
-        texts = [
-            c.text for c in sorted(
-                (c for c in asset.cells if c.row_index == first),
-                key=lambda c: c.column_index,
-            )
-        ]
+        cells = sorted(
+            (c for c in asset.cells if c.row_index == first),
+            key=lambda c: c.column_index,
+        )
+        width = max(
+            int(asset.columns or 0),
+            max((int(c.column_index) + 1 for c in cells), default=0),
+        )
+        texts = [f"col{i}" for i in range(width)]
+        for cell in cells:
+            index = int(cell.column_index)
+            if index >= 0:
+                texts[index] = cell.text.strip() or f"col{index}"
     return texts, header_rows
 
 

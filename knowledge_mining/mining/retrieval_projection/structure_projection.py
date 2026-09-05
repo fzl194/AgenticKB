@@ -21,6 +21,9 @@ class StructureProjection:
     edges: tuple[dict[str, Any], ...] = ()
     table_assets: tuple[dict[str, Any], ...] = ()
     table_cells: tuple[dict[str, Any], ...] = ()
+    #: 36号根因 6：同 (table_ref, row, column_index) 重复 cell 防御性
+    #: 丢弃计数（保留首个）——形状异常的表不得炸掉整篇文档的 asset_persist。
+    dropped_duplicate_cells: int = 0
 
 
 def _section_ref(document_ref: str, path: Sequence[tuple[int, str]]) -> str:
@@ -127,21 +130,40 @@ def project_structure(
             col_idx_of = {name: i for i, name in enumerate(header)}
             # 29号 R02：优先消费编译器传播的精确 cell 事实（row_cells）；
             # 自描述文本解析仅作 legacy 行兜底。
+            # 36号根因 6：三元组 [name, value, column_index] 携带真实列号
+            # （表头外列不再塌缩 -1）；29号二元组（已落库行）按列名反查
+            # 兜底，保持读取端兼容。
             raw_pairs = metadata.get("row_cells")
             if raw_pairs:
-                pairs = [
-                    (str(pair[0]), str(pair[1]))
-                    for pair in raw_pairs
-                    if isinstance(pair, (list, tuple)) and len(pair) == 2
-                ]
+                pairs = []
+                for pair in raw_pairs:
+                    if not isinstance(pair, (list, tuple)) or len(pair) not in (2, 3):
+                        continue
+                    name, value = str(pair[0]), str(pair[1])
+                    idx = None
+                    if len(pair) == 3:
+                        # 恶意/异常形状的第三元素不得炸整篇 persist
+                        # （36号审查 LOW-6：与防御去重同一防线）。
+                        try:
+                            idx = int(pair[2])
+                        except (TypeError, ValueError):
+                            idx = None
+                    pairs.append((name, value, idx))
             else:
-                pairs = _row_cells(segment.raw_text, header)
-            for name, value in pairs:
+                pairs = [
+                    (name, value, None)
+                    for name, value in _row_cells(segment.raw_text, header)
+                ]
+            for name, value, true_index in pairs:
                 if not value.strip():
                     continue
+                if true_index is not None and true_index >= 0:
+                    column_index = true_index
+                else:
+                    column_index = col_idx_of.get(name, -1)
                 cells.append({
                     "table_ref": table_ref, "row": row_index,
-                    "column_index": col_idx_of.get(name, -1),
+                    "column_index": column_index,
                     "column": name, "value": value.strip(),
                     "is_header": False,
                 })
@@ -150,11 +172,26 @@ def project_structure(
     for asset in table_assets:
         asset["row_count"] = len(data_rows_by_table.get(asset["table_ref"], ()))
 
+    # 36号根因 6：防御性去重——staging 主键 (snapshot_id, table_ref,
+    # row_index, column_index) 上重复（legacy 兜底 -1、异常形状）保留
+    # 首个并计数，一张表的形状问题不得炸掉整篇文档入库。
+    unique_cells: list[dict[str, Any]] = []
+    seen_cell_keys: set[tuple[str, int, int]] = set()
+    dropped = 0
+    for cell in cells:
+        key = (cell["table_ref"], cell["row"], cell["column_index"])
+        if key in seen_cell_keys:
+            dropped += 1
+            continue
+        seen_cell_keys.add(key)
+        unique_cells.append(cell)
+
     return StructureProjection(
         nodes=tuple(nodes),
         edges=tuple(edges),
         table_assets=tuple(table_assets),
-        table_cells=tuple(cells),
+        table_cells=tuple(unique_cells),
+        dropped_duplicate_cells=dropped,
     )
 
 

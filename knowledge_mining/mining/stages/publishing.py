@@ -33,6 +33,8 @@ def classify_documents(
     domain: str,
     channel: str,
     detect_remove: bool = True,
+    kb_id: str | None = None,
+    present_document_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Classify each document action by comparing with previous active build.
 
@@ -51,19 +53,39 @@ def classify_documents(
         detect_remove: When False, skip REMOVE detection. Use for incremental
             batch mining where each run only processes a subset of documents.
             Parent build snapshots are carried forward by assemble_build instead.
+        kb_id: 36号 §七——非空时比较父本是「该 KB 最新 validated Build」而非
+            域级 active release。KB 挖掘 publish=False，KB Build 不进域级
+            release；用域级 parent 会把同域其它 KB 的文档误当 prev、且本 KB
+            的 carry-forward 永远失效。
     """
-    prev_build = asset_db.get_active_build(domain=domain, channel=channel)
+    if kb_id:
+        prev_build = asset_db.get_latest_validated_kb_build(kb_id)
+    else:
+        prev_build = asset_db.get_active_build(domain=domain, channel=channel)
     prev_snapshots: dict[str, str] = {}  # document_id -> snapshot_id
 
     if prev_build:
-        for ps in asset_db.get_build_snapshots(prev_build["id"]):
+        current_loader = (
+            getattr(asset_db, "get_current_kb_build_snapshots", None)
+            if kb_id else None
+        )
+        previous_rows = (
+            current_loader(kb_id)
+            if current_loader is not None
+            else asset_db.get_build_snapshots(prev_build["id"])
+        )
+        for ps in previous_rows:
             if ps["selection_status"] == "active":
                 prev_snapshots[ps["document_id"]] = ps["document_snapshot_id"]
 
     # Detect REMOVE: documents in prev build but not in current run
     # Skip when running incremental batches (each run = partial corpus)
     if detect_remove:
-        current_doc_ids = {d["document_id"] for d in snapshot_decisions}
+        current_doc_ids = (
+            set(present_document_ids)
+            if present_document_ids is not None
+            else {d["document_id"] for d in snapshot_decisions}
+        )
         for doc_id, snap_id in prev_snapshots.items():
             if doc_id not in current_doc_ids:
                 snapshot_decisions.append({
@@ -124,6 +146,7 @@ def assemble_build(
     capabilities: list[str] | None = None,
     embedding_fallback: bool = False,
     readiness_summary: dict[str, Any] | None = None,
+    allow_empty: bool = False,
 ) -> str:
     """Assemble a new build from snapshot decisions with merge semantics.
 
@@ -134,6 +157,7 @@ def assemble_build(
     Build mode is determined automatically:
     - "full" when no previous active build exists for this domain
     - "incremental" when merging with previous active build for this domain
+      (kb_id 非空时，parent 是该 KB 最新 validated Build——36号 §七)
 
     Returns build_id.
     """
@@ -144,12 +168,21 @@ def assemble_build(
         ):
             raise ValueError("domain_mismatch")
 
-        prev_build = asset_db.get_active_build(domain=domain, channel=channel)
+        if kb_id:
+            prev_build = asset_db.get_latest_validated_kb_build(kb_id)
+        else:
+            prev_build = asset_db.get_active_build(domain=domain, channel=channel)
         has_prev = prev_build is not None
         build_mode = determine_build_mode(has_prev)
         parent_build_id = prev_build["id"] if has_prev else None
+        current_loader = (
+            getattr(asset_db, "get_current_kb_build_snapshots", None)
+            if kb_id else None
+        )
         parent_snapshots = (
-            asset_db.get_build_snapshots(parent_build_id)
+            current_loader(kb_id)
+            if current_loader is not None
+            else asset_db.get_build_snapshots(parent_build_id)
             if parent_build_id is not None
             else []
         )
@@ -164,12 +197,22 @@ def assemble_build(
         for d in snapshot_decisions:
             action = d.get("action", "NEW")
             action_counts[action] = action_counts.get(action, 0) + 1
+        decided_doc_ids = {d["document_id"] for d in snapshot_decisions}
+        has_active_selection = any(
+            d.get("selection_status") == "active" for d in snapshot_decisions
+        ) or any(
+            parent.get("selection_status") == "active"
+            and parent.get("document_id") not in decided_doc_ids
+            for parent in parent_snapshots
+        )
 
         summary: dict[str, Any] = {
             "snapshot_count": len([d for d in snapshot_decisions if d.get("selection_status") == "active"]),
             "removed_count": len([d for d in snapshot_decisions if d.get("selection_status") == "removed"]),
             "action_counts": action_counts,
         }
+        if allow_empty and not has_active_selection:
+            summary["operation"] = "withdrawal"
         # 批次4：把范式能力签名冻进 build——validate 据此按能力校验（只读 build 行，
         # 不再回查 run）。legacy 调用方不传 capabilities → 不冻结 → validate 降级旧检查。
         if capabilities is not None:
@@ -204,7 +247,6 @@ def assemble_build(
 
         # Incremental merge: carry forward parent selections not in the run
         # exactly as published, including removed and legacy-NULL provenance.
-        decided_doc_ids = {d["document_id"] for d in snapshot_decisions}
         for parent in parent_snapshots:
             if parent["document_id"] not in decided_doc_ids:
                 asset_db.upsert_build_document_snapshot(
@@ -255,7 +297,7 @@ def assemble_build(
             )
 
         # Validate and mark as validated in the same transaction as assembly.
-        validate_build(asset_db, build_id)
+        validate_build(asset_db, build_id, allow_empty=allow_empty)
         asset_db.update_build_status(build_id, "validated")
     return build_id
 

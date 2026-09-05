@@ -14,6 +14,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -928,6 +929,36 @@ class AssetCoreDB(_DB):
                     out[str(row["snapshot_id"])] = facts
         return out
 
+    def fetch_snapshot_readiness_staging(
+        self, snapshot_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Return only currently promotable staging readiness facts.
+
+        Unlike :meth:`fetch_snapshot_readiness`, this deliberately does not
+        fall back to final.  Final readiness proves an older activation; it is
+        not evidence that a resumed Run still owns staging rows which can be
+        promoted safely.
+        """
+        if not snapshot_ids:
+            return {}
+        rows = self._fetchall(
+            "SELECT snapshot_id, readiness_json "
+            "FROM asset_snapshot_readiness_staging "
+            "WHERE snapshot_id = ANY(%s)",
+            (snapshot_ids,),
+        )
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            facts = row.get("readiness_json")
+            if isinstance(facts, str):
+                try:
+                    facts = json.loads(facts)
+                except (json.JSONDecodeError, TypeError):
+                    facts = None
+            if isinstance(facts, dict):
+                out[str(row["snapshot_id"])] = facts
+        return out
+
     def promote_snapshot_assets(self, snapshot_ids: list[str]) -> int:
         """29号 R03（Wave 2）：staging → final 原子晋升（派生资产唯一入通道）.
 
@@ -1075,6 +1106,106 @@ class AssetCoreDB(_DB):
                LIMIT 1""",
             (domain, domain, channel),
         )
+
+    def get_latest_validated_kb_build(self, kb_id: str) -> dict[str, Any] | None:
+        """36号 §七：KB-scoped 最新 validated/published Build（增量 parent 专用）.
+
+        KB 挖掘 publish=False，KB Build 永不进入域级 active release——
+        get_active_build 对 KB 场景永远拿不到 parent（carry-forward 失效、
+        同域其它 KB 的 release 会被误当 parent）。此处只按 kb_id 过滤，
+        ``created_at DESC, id DESC`` 稳定排序，同域不同 KB 互不可见。
+        """
+        return self._fetchone(
+            """SELECT * FROM asset_builds
+                WHERE kb_id = %s
+                  AND status IN ('validated', 'published')
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1""",
+            (kb_id,),
+        )
+
+    def get_current_kb_build_snapshots(self, kb_id: str) -> list[dict[str, Any]]:
+        """Return each document's latest KB Build selection across history.
+
+        Older v1.0.1 selective Builds were not guaranteed to carry every
+        document forward.  Serving therefore resolves the latest selection per
+        document across all validated Builds; mining must use the same view.
+        Removed rows are retained so a later Build cannot resurrect an older
+        active selection.
+        """
+        return self._fetchall(
+            """SELECT * FROM (
+                   SELECT DISTINCT ON (bs.document_id)
+                          bs.*, b.created_at AS build_created_at,
+                          b.finished_at AS build_finished_at
+                   FROM asset_build_document_snapshots AS bs
+                   JOIN asset_builds AS b ON b.id = bs.build_id
+                   JOIN asset_documents AS d ON d.id = bs.document_id
+                   WHERE b.kb_id = %s
+                     AND d.kb_id = %s
+                     AND b.status IN ('validated', 'published')
+                   ORDER BY bs.document_id, b.created_at DESC, b.id DESC
+               ) AS latest""",
+            (kb_id, kb_id),
+        )
+
+    def get_validated_build_for_run(
+        self, run_id: str,
+    ) -> dict[str, Any] | None:
+        """Return an already committed Build for one Run's finalize replay.
+
+        This is the idempotency checkpoint for the crash window between the
+        asset transaction committing and runtime document statuses being
+        reconciled.  A replay must not promote the now-empty staging tables.
+        """
+        return self._fetchone(
+            """SELECT * FROM asset_builds
+                WHERE mining_run_id = %s
+                  AND status IN ('validated', 'published')
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1""",
+            (run_id,),
+        )
+
+    def get_current_kb_document_ids(self, kb_id: str) -> set[str]:
+        """Return the current non-deleted membership of one KB in one query."""
+        rows = self._fetchall(
+            """SELECT id FROM asset_documents
+                WHERE kb_id = %s AND deleted_at IS NULL""",
+            (kb_id,),
+        )
+        return {str(row["id"]) for row in rows}
+
+    def fetch_kb_snapshot_facts(
+        self, document_snapshots: Mapping[str, str],
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """36号 §五：KB 增量判定的文档/快照事实（集合查询）.
+
+        Snapshot 可被多个文档身份共享，事实必须按 ``(document_id,
+        snapshot_id)`` 分区；仅按 snapshot 取一条 link 会串用另一文档的
+        source object/revision。
+        """
+        if not document_snapshots:
+            return {}
+        document_ids = list(document_snapshots)
+        snapshot_ids = [document_snapshots[doc_id] for doc_id in document_ids]
+        rows = self._fetchall(
+            """SELECT DISTINCT ON (l.document_id, s.id)
+                      s.id AS snapshot_id, s.workflow_version_id,
+                      s.workflow_graph_hash, l.document_id,
+                      l.source_storage_object_id, l.source_content_revision
+                 FROM asset_document_snapshots AS s
+                 JOIN asset_document_snapshot_links AS l
+                   ON l.document_snapshot_id = s.id
+                WHERE l.document_id = ANY(%s)
+                  AND s.id = ANY(%s)
+                ORDER BY l.document_id, s.id, l.linked_at DESC, l.id DESC""",
+            (document_ids, snapshot_ids),
+        )
+        return {
+            (str(row["document_id"]), str(row["snapshot_id"])): dict(row)
+            for row in rows
+        }
 
     def get_active_document_ids_by_batch(
         self,
@@ -1479,6 +1610,8 @@ class MiningRuntimeDB(_DB):
         metadata_json: dict | None = None,
         action: str | None = None,
         metadata_patch: dict | None = None,
+        clear_error_message: bool = False,
+        clear_finished_at: bool = False,
     ) -> None:
         parts: list[str] = []
         params: list[Any] = []
@@ -1497,9 +1630,13 @@ class MiningRuntimeDB(_DB):
         if error_message is not None:
             parts.append("error_message = %s")
             params.append(error_message)
+        elif clear_error_message:
+            parts.append("error_message = NULL")
         if finished_at is not None:
             parts.append("finished_at = %s")
             params.append(finished_at)
+        elif clear_finished_at:
+            parts.append("finished_at = NULL")
         if metadata_json is not None:
             parts.append("metadata_json = %s")
             params.append(_json_dumps(metadata_json))

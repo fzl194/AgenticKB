@@ -71,7 +71,10 @@ class LLMServiceEmbeddingGenerator:
             return [item.get("embedding", []) for item in results]
         except Exception as e:
             logger.warning("LLM service embedding call failed: %s", e)
-            return []
+            # 保留原始异常类型与消息给 document handler / Run 诊断。返回 []
+            # 会把认证、限流、超时全部伪装成“供应商返回 0 条”，并可能让
+            # 下游误读旧 staging 向量。
+            raise
 
     def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
         if not texts:
@@ -82,10 +85,9 @@ class LLMServiceEmbeddingGenerator:
             batch = texts[i : i + batch_size]
             batch_result = self.embed(batch)
             if len(batch_result) != len(batch):
-                logger.warning(
-                    "LLM service embedding batch mismatch: expected %d, got %d",
-                    len(batch), len(batch_result),
+                raise RuntimeError(
+                    "LLM service embedding batch mismatch: "
+                    f"expected {len(batch)}, got {len(batch_result)}"
                 )
-                return []
             all_embeddings.extend(batch_result)
         return all_embeddings

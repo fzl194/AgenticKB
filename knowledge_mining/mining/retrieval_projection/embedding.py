@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from threading import Lock, RLock
 from typing import Any, Mapping
 
 from knowledge_mining.mining.contracts.retrieval_projection import (
@@ -54,6 +55,9 @@ class EmbeddingFacade:
         self._representations = representation_store
         self._embeddings = embedding_store
         self._generator = generator
+        self._locks_guard = Lock()
+        self._snapshot_locks: dict[tuple[str, str], RLock] = {}
+        self._completed_snapshots: set[tuple[str, str]] = set()
 
     def embed_for_snapshot(
         self, *, snapshot_id: str | None, params: Mapping[str, Any]
@@ -63,6 +67,49 @@ class EmbeddingFacade:
         if not snapshot_id:
             return SimpleNamespace(records=[], skipped=0)
         policy: EmbeddingPolicy = policy_from_params(params)
+        key = (snapshot_id, policy.version)
+        with self._locks_guard:
+            lock = self._snapshot_locks.setdefault(key, RLock())
+        with lock:
+            if key in self._completed_snapshots:
+                from .async_bridge import run_sync
+
+                records = tuple(run_sync(
+                    self._embeddings.list_for_snapshot(snapshot_id)
+                ))
+                return SimpleNamespace(
+                    records=records, vectors=(), skipped=0, written=0,
+                    policy_version=policy.version, reused=True,
+                )
+            outcome = self._embed_for_snapshot_once(
+                snapshot_id=snapshot_id, params=params,
+            )
+            self._completed_snapshots.add(key)
+            return outcome
+
+    def _embed_for_snapshot_once(
+        self, *, snapshot_id: str, params: Mapping[str, Any]
+    ) -> Any:
+        from types import SimpleNamespace
+
+        policy: EmbeddingPolicy = policy_from_params(params)
+
+        # 36号：每次 embedding 尝试先清本快照的 staging 向量。若上游随后
+        # 超时/认证失败/短返，asset_persist 只能看到空 staging，绝不能复用
+        # 上一次失败 Run 留下的旧向量并把文档误判为 dense-ready。PG store
+        # 的 replace_for_snapshot 只操作 *_staging，不影响当前 serving final。
+        from .async_bridge import run_sync
+
+        replace = getattr(self._embeddings, "replace_for_snapshot", None)
+        if replace is not None:
+            run_sync(replace(
+                snapshot_id,
+                (),
+                policy.version,
+                document_key=f"snapshot:{snapshot_id}",
+                vectors=(),
+            ))
+
         capabilities = frozenset(
             getattr(self._generator, "capabilities", None)
             or ("skip", "isolated", "structural")
@@ -72,8 +119,6 @@ class EmbeddingFacade:
             "provider": "unknown", "model": "unknown",
             "version": "unknown", "dimension": 0,
         }
-
-        from .async_bridge import run_sync
 
         representations: tuple[RetrievalRepresentation, ...] = run_sync(
             self._representations.list_for_snapshot(snapshot_id)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 from dataclasses import dataclass
+from threading import Lock, RLock
 from typing import Any, Callable
 
 from knowledge_mining.mining.contracts.parse_plan import (
@@ -310,9 +311,44 @@ class RetrieProjectFacade:
     def __init__(self, segment_store: Any, representation_store: Any) -> None:
         self._segments = segment_store
         self._representations = representation_store
+        self._locks_guard = Lock()
+        self._snapshot_locks: dict[tuple[str, bool], RLock] = {}
+        self._completed_snapshots: set[tuple[str, bool]] = set()
 
     def project_for_snapshot(
         self, *, snapshot_id: str | None, document_ref: str, params: dict,
+    ) -> Any:
+        from types import SimpleNamespace
+
+        if not snapshot_id:
+            return SimpleNamespace(representations=(), representation_count=0)
+        key = (snapshot_id, bool(params.get("includeSections", False)))
+        with self._locks_guard:
+            lock = self._snapshot_locks.setdefault(key, RLock())
+        with lock:
+            if key in self._completed_snapshots:
+                from knowledge_mining.mining.contracts.retrieval_projection import (
+                    PROJECTOR_VERSION,
+                )
+
+                representations = tuple(_run_sync(
+                    self._representations.list_for_snapshot(snapshot_id)
+                ))
+                return SimpleNamespace(
+                    representations=representations,
+                    representation_count=len(representations),
+                    projector_fingerprint=PROJECTOR_VERSION,
+                    reused=True,
+                )
+            outcome = self._project_for_snapshot_once(
+                snapshot_id=snapshot_id, document_ref=document_ref,
+                params=params,
+            )
+            self._completed_snapshots.add(key)
+            return outcome
+
+    def _project_for_snapshot_once(
+        self, *, snapshot_id: str, document_ref: str, params: dict,
     ) -> Any:
         from knowledge_mining.mining.contracts.retrieval_projection import (
             PROJECTOR_VERSION,
@@ -321,10 +357,6 @@ class RetrieProjectFacade:
             project_representations,
         )
 
-        if not snapshot_id:
-            from types import SimpleNamespace
-
-            return SimpleNamespace(representations=(), representation_count=0)
         segments = _run_sync(self._segments.list_for_snapshot(snapshot_id))
         representations = project_representations(
             segments,

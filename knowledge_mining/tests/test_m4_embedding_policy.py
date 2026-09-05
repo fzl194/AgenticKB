@@ -329,3 +329,118 @@ def test_embed_rejects_short_or_empty_vectors(tmp_path) -> None:
             representation_store=store, embedding_store=SimpleNamespace(),
             generator=with_empty,
         ).embed_for_snapshot(snapshot_id="s1", params={})
+
+
+def test_embedding_failure_clears_stale_staging_and_preserves_cause() -> None:
+    """36号：失败重试不能让 asset_persist 读到上一次残留向量。"""
+    import asyncio
+
+    from knowledge_mining.mining.retrieval_projection.embedding import (
+        EmbeddingFacade,
+        EmbeddingRecord,
+    )
+    from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+        MemoryEmbeddingStore,
+        MemoryRepresentationStore,
+    )
+
+    representation_store = MemoryRepresentationStore()
+    embedding_store = MemoryEmbeddingStore()
+    stale = EmbeddingRecord(
+        embedding_id="stale", representation_id="d:s:prose:0",
+        strategy="structural", strategy_input="old", input_hash="old",
+        policy_version="old", provider="old", model="old",
+        model_version="old", dimension=8, context_group_hash="old",
+    )
+
+    async def seed() -> None:
+        await representation_store.replace_for_snapshot(
+            "s1", (_rep("prose"),), "proj-v1", document_key="d",
+        )
+        await embedding_store.replace_for_snapshot(
+            "s1", (stale,), "old", document_key="d",
+        )
+
+    asyncio.new_event_loop().run_until_complete(seed())
+
+    class _FailingGenerator(_FakeEmbeddingGenerator):
+        def embed_batch(self, texts):
+            raise RuntimeError("401 invalid embedding credential")
+
+    with pytest.raises(RuntimeError, match="401 invalid embedding credential"):
+        EmbeddingFacade(
+            representation_store=representation_store,
+            embedding_store=embedding_store,
+            generator=_FailingGenerator(),
+        ).embed_for_snapshot(snapshot_id="s1", params={})
+
+    remaining = asyncio.new_event_loop().run_until_complete(
+        embedding_store.list_for_snapshot("s1")
+    )
+    assert remaining == ()
+
+
+def test_shared_snapshot_is_embedded_once_per_facade_run() -> None:
+    """同一 Run 中重复内容共享 snapshot，后续文档不得清掉首个成功结果。"""
+    import asyncio
+
+    from knowledge_mining.mining.retrieval_projection.embedding import EmbeddingFacade
+    from knowledge_mining.mining.retrieval_projection.repositories_memory import (
+        MemoryEmbeddingStore,
+        MemoryRepresentationStore,
+    )
+
+    representation_store = MemoryRepresentationStore()
+    embedding_store = MemoryEmbeddingStore()
+    asyncio.new_event_loop().run_until_complete(
+        representation_store.replace_for_snapshot(
+            "shared", (_rep("prose"),), "proj-v1", document_key="d",
+        )
+    )
+
+    class _CountingGenerator(_FakeEmbeddingGenerator):
+        def __init__(self):
+            self.calls = 0
+
+        def embed_batch(self, texts):
+            self.calls += 1
+            return super().embed_batch(texts)
+
+    generator = _CountingGenerator()
+    facade = EmbeddingFacade(
+        representation_store=representation_store,
+        embedding_store=embedding_store,
+        generator=generator,
+    )
+
+    first = facade.embed_for_snapshot(snapshot_id="shared", params={})
+    second = facade.embed_for_snapshot(snapshot_id="shared", params={})
+
+    assert generator.calls == 1
+    assert len(first.records) == len(second.records) == 1
+
+
+def test_llm_embedding_client_does_not_turn_transport_error_into_empty_list(
+    monkeypatch,
+) -> None:
+    import httpx
+
+    from knowledge_mining.mining.infra.embedding import (
+        LLMServiceEmbeddingGenerator,
+    )
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            raise httpx.TimeoutException("embedding upstream timed out")
+
+    monkeypatch.setattr(httpx, "Client", lambda **_kwargs: _Client())
+
+    generator = LLMServiceEmbeddingGenerator(base_url="http://llm.invalid")
+    with pytest.raises(httpx.TimeoutException, match="upstream timed out"):
+        generator.embed(["正文"])

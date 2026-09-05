@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from threading import Lock, RLock
 from typing import Any, Mapping
 
 from knowledge_mining.mining.infra.text_utils import tokenize_for_search
@@ -38,6 +39,7 @@ class PersistOutcome:
     schema_version: str
     tokenizer_version: str
     counts: Mapping[str, int]
+    dropped_duplicate_cells: int = 0
 
 
 class MemoryAssetWriter:
@@ -68,14 +70,31 @@ class AssetPersistService:
         self._representations = representation_store
         self._embeddings = embedding_store
         self._writer = writer
+        self._locks_guard = Lock()
+        self._snapshot_locks: dict[str, RLock] = {}
+        self._completed_outcomes: dict[str, PersistOutcome] = {}
 
     def persist_for_snapshot(
         self, *, snapshot_id: str | None, document_ref: str
     ) -> PersistOutcome:
-        from .async_bridge import run_sync
-
         if not snapshot_id:
             raise ValueError("persist_for_snapshot requires a snapshot_id")
+        with self._locks_guard:
+            lock = self._snapshot_locks.setdefault(snapshot_id, RLock())
+        with lock:
+            cached = self._completed_outcomes.get(snapshot_id)
+            if cached is not None:
+                return cached
+            outcome = self._persist_for_snapshot_once(
+                snapshot_id=snapshot_id, document_ref=document_ref,
+            )
+            self._completed_outcomes[snapshot_id] = outcome
+            return outcome
+
+    def _persist_for_snapshot_once(
+        self, *, snapshot_id: str, document_ref: str,
+    ) -> PersistOutcome:
+        from .async_bridge import run_sync
 
         segments = run_sync(self._segments.list_for_snapshot(snapshot_id))
         representations = run_sync(
@@ -173,6 +192,9 @@ class AssetPersistService:
             "representation_count": len(representations),
             "embedding_count": len(embedding_records),
             "structure_node_count": len(structure.nodes),
+            "projection_diagnostics": {
+                "dropped_duplicate_cells": structure.dropped_duplicate_cells,
+            },
             "tokenizer_version": TOKENIZER_VERSION,
             # 27号审查修复 B：readiness 随三面原子落库（PgAssetWriter 写
             # asset_snapshot_readiness；finalize 发布门禁与 inspect 消费）。
@@ -191,6 +213,7 @@ class AssetPersistService:
                 "representations": len(representations),
                 "embeddings": len(embedding_records),
             },
+            dropped_duplicate_cells=structure.dropped_duplicate_cells,
         )
 
 

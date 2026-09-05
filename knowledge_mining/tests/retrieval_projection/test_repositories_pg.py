@@ -653,7 +653,10 @@ def test_embedding_facade_passes_vectors_to_store():
     )
     outcome = facade.embed_for_snapshot(snapshot_id="snap-1", params={})
     assert outcome.written == 1
-    assert store.calls[0]["vectors"] == ([0.1, 0.2, 0.3],)
+    # 36号：先清该快照旧 staging，成功后再写本次真实向量。
+    assert store.calls[0]["records"] == ()
+    assert store.calls[0]["vectors"] == ()
+    assert store.calls[-1]["vectors"] == ([0.1, 0.2, 0.3],)
 
 
 # ---------------------------------------------------------------------------

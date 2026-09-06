@@ -152,15 +152,19 @@ def test_service_only_body_validation_applies_after_internal_auth(monkeypatch: p
     "path",
     [
         "/api/knowledge/stats",
-        "/api/builds",
         "/api/ontology/versions",
         "/api/mining-workflows",
-        "/api/knowledge/documents/document-1/download",
-        "/api/config",
         "/api/system/status",
+        "/api/runs",
+        "/api/ops/usage",
     ],
 )
 def test_real_app_rejects_anonymous_legacy_routes(path: str) -> None:
+    """中间件 gating 语义：非豁免路径匿名一律 401（与路由是否存在无关）。
+
+    注意：本测试不证明路由存在——已退役路径的匿名 401 是恒真断言（中间件先于路由），
+    退役证明由下方 test_retired_routes_absent_from_app_surface 负责。
+    """
     from knowledge_mining.mining.api.app import create_app
 
     client = TestClient(create_app())
@@ -168,6 +172,37 @@ def test_real_app_rejects_anonymous_legacy_routes(path: str) -> None:
         assert client.get(path).status_code == 401
     finally:
         client.close()
+
+
+def test_retired_routes_absent_from_app_surface() -> None:
+    """瘦身批次3/4 退役面：路由必须从 app 路由表中真实消失（而非仅被 401 遮蔽）。"""
+    from knowledge_mining.mining.api.app import create_app
+
+    app = create_app()
+    paths = {getattr(route, "path", "") for route in app.routes}
+
+    retired_prefixes = (
+        "/api/builds", "/api/releases", "/api/config",
+    )
+    for prefix in retired_prefixes:
+        assert not any(p.startswith(prefix) for p in paths), f"退役前缀仍挂载: {prefix}"
+
+    retired_exact = {
+        "/api/knowledge/documents",
+        "/api/knowledge/batches",
+        "/api/knowledge/segments",
+        "/api/knowledge/units",
+        "/api/knowledge/documents/{document_id}",
+        "/api/knowledge/documents/{document_id}/download",
+        "/api/knowledge/documents/{document_id}/segments",
+        "/api/knowledge/documents/{document_id}/units",
+        "/api/kb/mcp-tools/get-document",
+    }
+    mounted = paths & retired_exact
+    assert not mounted, f"退役路由仍在路由表: {sorted(mounted)}"
+
+    # 保留面健全性：stats 仍在
+    assert "/api/knowledge/stats" in paths
 
 
 def test_real_app_cors_allows_only_configured_local_origin() -> None:

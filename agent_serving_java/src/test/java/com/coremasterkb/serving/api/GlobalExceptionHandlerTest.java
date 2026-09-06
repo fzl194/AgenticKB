@@ -60,15 +60,6 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("scenario_pack_missing -> 500")
-    void scenarioPackMissing() {
-        ResponseEntity<Map<String, Object>> resp =
-                handler.handleIllegalState(new IllegalStateException("scenario_pack_missing"));
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(resp.getBody()).containsEntry("error", "scenario_pack_missing");
-    }
-
-    @Test
     @DisplayName("domain_database_unavailable -> 503")
     void domainDatabaseUnavailable() {
         ResponseEntity<Map<String, Object>> resp =

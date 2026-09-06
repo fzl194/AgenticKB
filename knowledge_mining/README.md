@@ -83,24 +83,16 @@ knowledge_mining/mining/
 └── jobs/run.py                   # 编排入口
 ```
 
-### 2.2 Stage Registry（热插拔版本选择）
+### 2.2 Stage 层（legacy 直连导入）
 
-每个 stage 通过 `stage_name` + `stage_version` 注册：
+> 代码瘦身批次3：旧 Stage Registry（`register_stage`/`get_stage`/`list_stages` +
+> auto-discover）已移除——全仓无调用方，`/api/config/stages` 也不读取它。
+> legacy stage 模块仍被 `jobs/run.py` 的 legacy 分支直接 import（恢复历史 Run 用）。
 
-```python
-from knowledge_mining.mining.stages import get_stage, list_stages
+### 2.2a Workflow 算子（正式链）
 
-# 查看所有已注册的 stage
-list_stages()
-# {'parse': {'1': ParserStage}, 'segment': {'1': DefaultSegmenter},
-#  'enrich': {'1': RuleBasedEnricher, '2': LlmEnricher}, ...}
-
-# 获取最新版本的 enrich stage
-enrich_cls = get_stage('enrich')       # → LlmEnricher (v2)
-
-# 获取特定版本
-rule_enricher = get_stage('enrich', '1')  # → RuleBasedEnricher (v1)
-```
+新链挖掘走 workflow：9 个正式算子目录见 `workflow/catalog`，模板/预置见
+`workflow/templates.py` 与 `workflow/presets`。
 
 ### 2.3 Protocol 合并
 
@@ -297,7 +289,9 @@ python -m pytest knowledge_mining/tests/ -v
 
 ### Phase B: 质量门成为 Release Gate
 
-- [ ] run_data_quality_eval() 接入 build/release 主链
+> 代码瘦身批次3：`stages/eval.py`（含 `run_data_quality_eval`）已删——零生产调用，
+> 快照 readiness 门禁已由 `retrieval_projection/readiness.py` + finalize 门禁承担。
+
 - [ ] 定义 hard gate vs warning 清单
 - [ ] 增加 golden regression 集
 - [ ] LLM provenance、navigation pollution、question/title 规则纳入 gate
@@ -317,7 +311,6 @@ python -m pytest knowledge_mining/tests/ -v
 
 ## 14. 相关文档
 
-- [架构演示](architecture.html)
 - [Asset Core Schema](../databases/asset_core/schemas/001_asset_core.sqlite.sql)
 - [Codex 工业级数据质量审查](../docs/analysis/2026-04-28-v11-knowledge-mining-industrial-data-quality-codex-review.md)
 - [Codex 三层架构审查](../docs/analysis/2026-04-29-v11-knowledge-mining-3layer-architecture-codex-review.md)

@@ -22,7 +22,6 @@ _SERVICE_ONLY_ROUTES = frozenset({
     # 批次7：MCP 工具族数据端点（internal-only，路由内自验 X-Internal-Auth）
     ("POST", "/api/kb/mcp-tools/list-kbs"),
     ("POST", "/api/kb/mcp-tools/list-documents"),
-    ("POST", "/api/kb/mcp-tools/get-document"),
     ("POST", "/api/kb/mcp-tools/upload"),
     ("POST", "/api/kb/admin/reload-auth-config"),
 })

@@ -7,12 +7,9 @@ import com.coremasterkb.serving.domainpack.DomainRoutingDataSource;
 import com.coremasterkb.serving.infrastructure.EmbeddingClient;
 import com.coremasterkb.serving.infrastructure.LlmClient;
 import com.coremasterkb.serving.infrastructure.MainControlClient;
-import com.coremasterkb.serving.mapper.AssetRetrievalEmbeddingMapper;
 import com.coremasterkb.serving.mapper.AssetRetrievalUnitMapper;
 import com.coremasterkb.serving.rerank.LlmServiceReranker;
-import com.coremasterkb.serving.retrieval.DenseVectorRetriever;
 import com.coremasterkb.serving.retrieval.EntityExactRetriever;
-import com.coremasterkb.serving.retrieval.FtsRetriever;
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -240,16 +237,6 @@ public class ServingBeans {
     // -------------------------------------------------------------------------
     // Retrieval layer
     // -------------------------------------------------------------------------
-
-    @Bean
-    public FtsRetriever ftsRetriever(AssetRetrievalUnitMapper retrievalUnitMapper) {
-        return new FtsRetriever(retrievalUnitMapper);
-    }
-
-    @Bean
-    public DenseVectorRetriever denseVectorRetriever(AssetRetrievalEmbeddingMapper embeddingMapper) {
-        return new DenseVectorRetriever(embeddingMapper);
-    }
 
     @Bean
     public EntityExactRetriever entityExactRetriever(AssetRetrievalUnitMapper retrievalUnitMapper) {

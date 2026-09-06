@@ -26,7 +26,6 @@ public class AssetRepository {
     private final AssetRawSegmentMapper rawSegmentMapper;
     private final AssetRawSegmentRelationMapper relationMapper;
     private final AssetDocumentMapper documentMapper;
-    private final AssetRetrievalEmbeddingMapper embeddingMapper;
     private final AssetRetrievalUnitMapper unitMapper;
 
     public AssetRepository(
@@ -35,14 +34,12 @@ public class AssetRepository {
             AssetRawSegmentMapper rawSegmentMapper,
             AssetRawSegmentRelationMapper relationMapper,
             AssetDocumentMapper documentMapper,
-            AssetRetrievalEmbeddingMapper embeddingMapper,
             AssetRetrievalUnitMapper unitMapper) {
         this.releaseMapper       = releaseMapper;
         this.buildSnapshotMapper = buildSnapshotMapper;
         this.rawSegmentMapper    = rawSegmentMapper;
         this.relationMapper      = relationMapper;
         this.documentMapper      = documentMapper;
-        this.embeddingMapper     = embeddingMapper;
         this.unitMapper          = unitMapper;
     }
 
@@ -241,18 +238,6 @@ public class AssetRepository {
             return Collections.emptyList();
         }
         return relationMapper.selectRelationsForSegments(segmentIds, relationTypes, snapshotIds);
-    }
-
-    // -------------------------------------------------------------------------
-    // Document source queries
-    // -------------------------------------------------------------------------
-
-    public List<DocumentSourceRow> getDocumentSources(
-            List<String> documentIds, List<String> snapshotIds) {
-        if (documentIds == null || documentIds.isEmpty()) {
-            return Collections.emptyList();
-        }
-        return documentMapper.selectDocumentSources(documentIds, snapshotIds);
     }
 
     // -------------------------------------------------------------------------

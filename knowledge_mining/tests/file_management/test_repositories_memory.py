@@ -1,9 +1,9 @@
 """Unit tests for the in-memory fake repositories (M1.2).
 
 These verify the fakes in isolation: basic CRUD round-trips, optimistic
-concurrency on quota + document revision, the dedup probe, and the expired-
-session listing. The service tests exercise the fakes end-to-end; this file
-pins down the fake semantics the service relies on.
+concurrency on quota + document revision, and the dedup probe. The service
+tests exercise the fakes end-to-end; this file pins down the fake semantics
+the services rely on.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from knowledge_mining.mining.contracts.file_management import (
     FileAuditEvent,
     QuotaExceeded,
     StorageObjectRecord,
-    UploadSessionRecord,
 )
 from knowledge_mining.mining.contracts.state_machines import IllegalTransition
 from knowledge_mining.mining.file_management.repositories_memory import (
@@ -23,7 +22,6 @@ from knowledge_mining.mining.file_management.repositories_memory import (
     MemoryFileAuditRepository,
     MemoryQuotaRepository,
     MemoryStorageObjectRepository,
-    MemoryUploadSessionRepository,
 )
 
 
@@ -84,75 +82,6 @@ async def test_storage_object_mark_verified():
     await repo.register(_obj(id_="o1"))
     await repo.mark_verified("o1", "2026-01-01T00:00:00Z")
     assert (await repo.get("o1")).last_verified_at == "2026-01-01T00:00:00Z"
-
-
-# ---------------------------------------------------------------------------
-# UploadSessionRepository
-# ---------------------------------------------------------------------------
-
-
-def _session(id_: str = "s1", idem: str = "ik") -> UploadSessionRecord:
-    return UploadSessionRecord(
-        id=id_, kb_id="kb1", folder_id=None, actor="u1",
-        original_filename="f.txt", expected_size=10, expected_mime="text/plain",
-        staging_bucket="stg", staging_object_key="stg/k", idempotency_key=idem,
-        expires_at="2099-01-01T00:00:00+00:00", state="INITIATED",
-    )
-
-
-@pytest.mark.asyncio
-async def test_session_create_and_get():
-    repo = MemoryUploadSessionRepository()
-    rec = await repo.create(_session())
-    assert rec.id == "s1"
-    assert await repo.get("s1") == rec
-
-
-@pytest.mark.asyncio
-async def test_session_find_by_idempotency():
-    repo = MemoryUploadSessionRepository()
-    await repo.create(_session(id_="s1", idem="ik1"))
-    found = await repo.find_by_idempotency("kb1", "u1", "ik1")
-    assert found is not None and found.id == "s1"
-    assert await repo.find_by_idempotency("kb1", "u1", "other") is None
-    # Scoped by kb + actor.
-    assert await repo.find_by_idempotency("kb2", "u1", "ik1") is None
-    assert await repo.find_by_idempotency("kb1", "u2", "ik1") is None
-
-
-@pytest.mark.asyncio
-async def test_session_create_idempotent_on_duplicate_idem_key():
-    repo = MemoryUploadSessionRepository()
-    first = await repo.create(_session(id_="s1", idem="ik1"))
-    second = await repo.create(_session(id_="s2", idem="ik1"))
-    assert second.id == first.id  # returns existing, ignores new id
-
-
-@pytest.mark.asyncio
-async def test_session_update_refreshes_updated_at_and_fields():
-    repo = MemoryUploadSessionRepository()
-    await repo.create(_session(id_="s1"))
-    rec = await repo.get("s1")
-    updated = await repo.update(rec.with_updates(state="UPLOADING"))
-    assert updated.state == "UPLOADING"
-    assert updated.updated_at >= rec.updated_at
-
-
-@pytest.mark.asyncio
-async def test_session_list_expired_excludes_terminal_and_future():
-    repo = MemoryUploadSessionRepository()
-    await repo.create(_session(id_="past", idem="ik1").with_updates(
-        expires_at="2000-01-01T00:00:00+00:00",
-    ))
-    await repo.create(_session(id_="future", idem="ik2").with_updates(
-        expires_at="2099-01-01T00:00:00+00:00",
-    ))
-    await repo.create(_session(id_="past_committed", idem="ik3").with_updates(
-        expires_at="2000-01-01T00:00:00+00:00", state="COMMITTED",
-    ))
-    expired = await repo.list_expired("2026-01-01T00:00:00+00:00")
-    ids = {s.id for s in expired}
-    assert ids == {"past"}
 
 
 # ---------------------------------------------------------------------------

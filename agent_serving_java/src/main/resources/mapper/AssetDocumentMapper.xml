@@ -3,39 +3,6 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.coremasterkb.serving.mapper.AssetDocumentMapper">
 
-    <resultMap id="docSourceResult"
-               type="com.coremasterkb.serving.mapper.result.DocumentSourceRow">
-        <result column="id"            property="id"/>
-        <result column="document_key"  property="documentKey"/>
-        <result column="relative_path" property="relativePath"/>
-        <result column="title"         property="title"/>
-        <result column="scope_json"    property="scopeJson"/>
-        <result column="kb_id"         property="kbId"/>
-    </resultMap>
-
-    <select id="selectDocumentSources" resultMap="docSourceResult">
-        SELECT d.id,
-               d.document_key,
-               d.kb_id,
-               dsl.relative_path,
-               ds.title,
-               ds.scope_json
-        FROM asset_documents d
-        LEFT JOIN asset_document_snapshot_links dsl ON d.id = dsl.document_id
-        LEFT JOIN asset_document_snapshots ds       ON dsl.document_snapshot_id = ds.id
-        WHERE d.id IN
-        <foreach collection="documentIds" item="id" open="(" separator="," close=")">
-            #{id}
-        </foreach>
-        AND d.deleted_at IS NULL
-        <if test="snapshotIds != null and snapshotIds.size() > 0">
-        AND dsl.document_snapshot_id IN
-        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
-            #{sid}
-        </foreach>
-        </if>
-    </select>
-
     <resultMap id="docFileResult"
                type="com.coremasterkb.serving.mapper.result.DocumentFileRow">
         <result column="id"            property="id"/>

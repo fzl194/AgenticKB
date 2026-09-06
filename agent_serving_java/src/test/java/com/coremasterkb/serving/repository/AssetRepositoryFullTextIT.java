@@ -1,10 +1,8 @@
 package com.coremasterkb.serving.repository;
 
 import com.coremasterkb.serving.AgentServingApplication;
-import com.coremasterkb.serving.mapper.AssetDocumentMapper;
 import com.coremasterkb.serving.mapper.param.SegmentWindow;
 import com.coremasterkb.serving.mapper.result.DocumentFileRow;
-import com.coremasterkb.serving.mapper.result.DocumentSourceRow;
 import com.coremasterkb.serving.mapper.result.FtsResultRow;
 import com.coremasterkb.serving.mapper.result.SegmentFullRow;
 import org.junit.jupiter.api.AfterEach;
@@ -51,9 +49,6 @@ class AssetRepositoryFullTextIT {
 
     @Autowired
     private AssetRepository assetRepository;
-
-    @Autowired
-    private AssetDocumentMapper documentMapper;
 
     private JdbcTemplate jdbc;
     private String token;
@@ -240,25 +235,6 @@ class AssetRepositoryFullTextIT {
                 assetRepository.resolveFileLocations(List.of(docLegacy), List.of(snapShared));
 
         assertThat(rows).isEmpty();
-    }
-
-    // -------------------------------------------------------------------------
-    // source refs (the kbId column added for provenance)
-    // -------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("document sources carry kbId so an answer can name the knowledge base it came from")
-    void documentSourcesCarryKbId() {
-        List<DocumentSourceRow> rows =
-                documentMapper.selectDocumentSources(List.of(docA, docLegacy),
-                        List.of(snapShared, snapLegacy));
-
-        assertThat(rows).isNotEmpty();
-        assertThat(rows).filteredOn(r -> docA.equals(r.getId()))
-                .allSatisfy(r -> assertThat(r.getKbId()).isEqualTo(kbA));
-        // Legacy documents belong to no KB — null, not a placeholder.
-        assertThat(rows).filteredOn(r -> docLegacy.equals(r.getId()))
-                .allSatisfy(r -> assertThat(r.getKbId()).isNull());
     }
 
     // -------------------------------------------------------------------------

@@ -8,21 +8,13 @@ import java.util.List;
 public interface AssetRetrievalUnitMapper {
 
     /**
-     * Fetch heavy columns (text, source_refs_json, target_ref_json) for specific IDs.
-     * Used for hydration after fusion + rerank to avoid transferring large text
-     * during the retrieval phase.
-     */
-    List<FtsResultRow> fetchDetailsByIds(@Param("ids") List<String> ids);
-
-    /**
-     * Same as {@link #fetchDetailsByIds} but confined to a snapshot scope, and returning the
-     * columns the full-text drill-down needs (title / unit_type / document_snapshot_id).
+     * Fetch heavy columns (text, source_refs_json, target_ref_json) for specific IDs,
+     * confined to a snapshot scope, returning the columns the full-text drill-down
+     * needs (title / unit_type / document_snapshot_id).
      *
-     * <p>{@link #fetchDetailsByIds} has no scope filter at all: it is called during hydration,
-     * where the ids already came out of a scope-filtered retrieval. Exposing that method on an
-     * endpoint would let any caller read any unit in any knowledge base by naming its id, so the
-     * drill-down uses this one instead. The unfiltered method is left alone rather than tightened
-     * — changing its signature would ripple through the retrieval path for no benefit.</p>
+     * <p>Scope filter is unconditional: an unscoped variant would let any caller read
+     * any unit in any knowledge base by naming its id. The legacy unscoped variant
+     * (fetchDetailsByIds) was removed with the old retriever assembly (瘦身批次3).</p>
      */
     List<FtsResultRow> fetchDetailsByIdsInScope(
             @Param("ids") List<String> ids,

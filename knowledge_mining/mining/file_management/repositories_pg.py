@@ -16,8 +16,6 @@ Column mapping (008 DDL + M1.2 incremental ``staging_bucket`` /
 - ``asset_storage_objects``: id/provider/bucket/object_key/object_version_id/
   sha256/size/mime/etag/artifact_class/encryption/state/retention_until/
   created_at/last_verified_at
-- ``asset_upload_sessions``: + staging_bucket/committed_storage_object_id/
-  committed_document_id (added M1.2)
 - ``asset_documents``: storage_object_id/source_raw_hash/content_revision/
   content_updated_at/deleted_at/restored_at (added 008)
 - ``asset_file_audit_events``: id/kb_id/document_id/storage_object_id/
@@ -46,7 +44,6 @@ from knowledge_mining.mining.contracts.file_management import (
     QuotaExceeded,
     QuotaRecord,
     StorageObjectRecord,
-    UploadSessionRecord,
     dataclass_replace,
 )
 
@@ -77,28 +74,6 @@ def _storage_object_from_row(r: dict[str, Any]) -> StorageObjectRecord:
         retention_until=r.get("retention_until"),
         created_at=_iso(r.get("created_at")),
         last_verified_at=_iso(r.get("last_verified_at")),
-    )
-
-
-def _upload_session_from_row(r: dict[str, Any]) -> UploadSessionRecord:
-    return UploadSessionRecord(
-        id=r["id"],
-        kb_id=r["kb_id"],
-        folder_id=r.get("folder_id"),
-        actor=r["actor"],
-        original_filename=r["original_filename"],
-        expected_size=r.get("expected_size"),
-        expected_mime=r.get("expected_mime"),
-        staging_bucket=r.get("staging_bucket"),
-        staging_object_key=r["staging_object_key"],
-        idempotency_key=r["idempotency_key"],
-        expires_at=_iso(r.get("expires_at")),
-        state=r["state"],
-        error_message=r.get("error_message"),
-        committed_storage_object_id=r.get("committed_storage_object_id"),
-        committed_document_id=r.get("committed_document_id"),
-        created_at=_iso(r.get("created_at")),
-        updated_at=_iso(r.get("updated_at")),
     )
 
 
@@ -226,107 +201,6 @@ class PgStorageObjectRepository:
                    SET last_verified_at = %s WHERE id = %s""",
                 [at, storage_object_id],
             )
-
-
-# ---------------------------------------------------------------------------
-# UploadSessionRepository (PG)
-# ---------------------------------------------------------------------------
-
-
-class PgUploadSessionRepository:
-    """PG ``UploadSessionRepository`` over ``asset_upload_sessions``."""
-
-    def __init__(self, pool: Any) -> None:
-        self._pool = pool
-
-    async def create(self, record: UploadSessionRecord) -> UploadSessionRecord:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """INSERT INTO asset_upload_sessions
-                       (id, kb_id, folder_id, actor, original_filename,
-                        expected_size, expected_mime, staging_bucket, staging_object_key,
-                        idempotency_key, expires_at, state, error_message,
-                        committed_storage_object_id, committed_document_id,
-                        created_at, updated_at)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (kb_id, actor, idempotency_key) DO NOTHING
-                   RETURNING *""",
-                (
-                    record.id, record.kb_id, record.folder_id, record.actor,
-                    record.original_filename, record.expected_size, record.expected_mime,
-                    record.staging_bucket, record.staging_object_key,
-                    record.idempotency_key, record.expires_at, record.state,
-                    record.error_message, record.committed_storage_object_id,
-                    record.committed_document_id,
-                    record.created_at or _utcnow(), record.updated_at or _utcnow(),
-                ),
-            )
-            row = await cur.fetchone()
-            if row is None:
-                # Idempotent create conflict; fetch the existing by idem key.
-                return await self.find_by_idempotency(
-                    record.kb_id, record.actor, record.idempotency_key
-                )  # type: ignore[return-value]
-            return _upload_session_from_row(dict(row))
-
-    async def get(self, session_id: str) -> UploadSessionRecord | None:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                "SELECT * FROM asset_upload_sessions WHERE id = %s",
-                [session_id],
-            )
-            row = await cur.fetchone()
-            return _upload_session_from_row(dict(row)) if row else None
-
-    async def find_by_idempotency(
-        self,
-        kb_id: str,
-        actor: str,
-        idempotency_key: str,
-    ) -> UploadSessionRecord | None:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """SELECT * FROM asset_upload_sessions
-                   WHERE kb_id = %s AND actor = %s AND idempotency_key = %s""",
-                [kb_id, actor, idempotency_key],
-            )
-            row = await cur.fetchone()
-            return _upload_session_from_row(dict(row)) if row else None
-
-    async def update(self, session: UploadSessionRecord) -> UploadSessionRecord:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """UPDATE asset_upload_sessions SET
-                       state = %s,
-                       error_message = %s,
-                       committed_storage_object_id = %s,
-                       committed_document_id = %s,
-                       updated_at = %s
-                   WHERE id = %s
-                   RETURNING *""",
-                (
-                    session.state, session.error_message,
-                    session.committed_storage_object_id,
-                    session.committed_document_id,
-                    _utcnow(), session.id,
-                ),
-            )
-            row = await cur.fetchone()
-            if row is None:
-                raise KeyError(f"upload session not found: {session.id}")
-            return _upload_session_from_row(dict(row))
-
-    async def list_expired(self, now: str) -> list[UploadSessionRecord]:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """SELECT * FROM asset_upload_sessions
-                   WHERE expires_at <= %s
-                     AND state NOT IN ('COMMITTED','ABORTED','EXPIRED','REJECTED')
-                   ORDER BY expires_at""",
-                [now],
-            )
-            rows = await cur.fetchall()
-            return [_upload_session_from_row(dict(r)) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +569,6 @@ __all__ = [
     "PgFileAuditRepository",
     "PgQuotaRepository",
     "PgStorageObjectRepository",
-    "PgUploadSessionRepository",
 ]
 
 

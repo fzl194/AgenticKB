@@ -312,23 +312,6 @@ def test_asset_persist_handler_succeeds_with_bundle():
     assert out.diagnostics["readiness"]["search_ready"] is True
 
 
-def test_schema_ddl_contains_v2_tables_and_tsvector():
-    from knowledge_mining.mining.retrieval_projection.schema import (
-        ASSET_SCHEMA_V2_STATEMENTS,
-        TOKENIZER_VERSION,
-    )
-
-    joined = "\n".join(ASSET_SCHEMA_V2_STATEMENTS)
-    for table in (
-        "asset_raw_segments", "asset_structure_nodes", "asset_structure_edges",
-        "asset_structured_assets", "asset_table_cells",
-        "asset_retrieval_units_v2", "asset_retrieval_embeddings_v2",
-    ):
-        assert table in joined, table
-    assert "tsvector" in joined
-    assert TOKENIZER_VERSION
-
-
 def test_persist_faces_carry_readiness_and_tokenizer():
     """27号审查修复 B：readiness/tokenizer_version 进 faces——PgAssetWriter
     据此原子写 asset_snapshot_readiness，finalize 门禁与 inspect 消费。"""

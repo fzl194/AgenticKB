@@ -1,8 +1,8 @@
 """In-memory fake repositories for the File Management layer (M1.2).
 
-Implements the five Protocols in ``contracts/file_management.py`` backed by
-plain ``dict`` stores. Used by the service test suite (and local dev) so the
-full upload-session flow runs without PostgreSQL (ADR-0003 D-006, D-022).
+Implements the Protocols in ``contracts/file_management.py`` backed by
+plain ``dict`` stores. Used by test suites (and local dev) so the
+full flow runs without PostgreSQL (ADR-0003 D-006, D-022).
 
 Concurrency model:
 - Optimistic-concurrency fields (``QuotaRecord.version``,
@@ -10,7 +10,6 @@ Concurrency model:
   in-memory value; on mismatch the same errors the PG implementation raises
   are raised here.
 - ``find_by_location`` is the dedup probe for storage objects.
-- ``list_expired`` filters non-terminal sessions whose ``expires_at`` <= now.
 
 All methods are ``async`` to match the Protocol signatures (the PG impl is
 genuinely async via psycopg).
@@ -28,16 +27,11 @@ from knowledge_mining.mining.contracts.file_management import (
     QuotaExceeded,
     QuotaRecord,
     StorageObjectRecord,
-    UploadSessionRecord,
 )
 from knowledge_mining.mining.contracts.storage.enums import VALID_ARTIFACT_CLASSES
 from knowledge_mining.mining.contracts.state_machines import (
-    TERMINAL_STATES,
     assert_transition,
 )
-
-# Upload session terminal states (SRS §9.0A) — used by list_expired.
-_UPLOAD_SESSION_TERMINAL = TERMINAL_STATES["upload_session"]
 
 
 def _utcnow() -> str:
@@ -105,49 +99,6 @@ class MemoryStorageObjectRepository:
         self._by_id[storage_object_id] = StorageObjectRecord(
             **{**rec.__dict__, "last_verified_at": at}
         )
-
-
-class MemoryUploadSessionRepository:
-    """In-memory ``UploadSessionRepository``."""
-
-    def __init__(self) -> None:
-        self._by_id: dict[str, UploadSessionRecord] = {}
-        self._by_idem: dict[tuple[str, str, str], str] = {}
-
-    async def create(self, record: UploadSessionRecord) -> UploadSessionRecord:
-        idem_key = (record.kb_id, record.actor, record.idempotency_key)
-        if idem_key in self._by_idem:
-            # Idempotent create: return the existing session unchanged.
-            return self._by_id[self._by_idem[idem_key]]
-        self._by_id[record.id] = record
-        self._by_idem[idem_key] = record.id
-        return record
-
-    async def get(self, session_id: str) -> UploadSessionRecord | None:
-        return self._by_id.get(session_id)
-
-    async def find_by_idempotency(
-        self,
-        kb_id: str,
-        actor: str,
-        idempotency_key: str,
-    ) -> UploadSessionRecord | None:
-        rid = self._by_idem.get((kb_id, actor, idempotency_key))
-        return self._by_id[rid] if rid else None
-
-    async def update(self, session: UploadSessionRecord) -> UploadSessionRecord:
-        if session.id not in self._by_id:
-            raise KeyError(f"upload session not found: {session.id}")
-        updated = session.with_updates(updated_at=_utcnow())
-        self._by_id[session.id] = updated
-        return updated
-
-    async def list_expired(self, now: str) -> list[UploadSessionRecord]:
-        return [
-            s
-            for s in self._by_id.values()
-            if s.state not in _UPLOAD_SESSION_TERMINAL and s.expires_at <= now
-        ]
 
 
 class MemoryDocumentCurrentContentRepository:
@@ -483,5 +434,4 @@ __all__ = [
     "MemoryFileAuditRepository",
     "MemoryQuotaRepository",
     "MemoryStorageObjectRepository",
-    "MemoryUploadSessionRepository",
 ]

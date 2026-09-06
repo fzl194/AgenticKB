@@ -193,8 +193,8 @@ def list_documents(username: str, kb_id: str, limit: int = 50, offset: int = 0) 
     })
 
 
-# 注：批次8 R8 起 get_document 切 serving document_ref 通道（见上方 get_document），
-# mining 的 /api/kb/mcp-tools/get-document 不再被 MCP 调用（端点保留，本批不动 mining）。
+# 注：批次8 R8 起 get_document 切 serving document_ref 通道（见上方 get_document）。
+# mining 的旧 /api/kb/mcp-tools/get-document 端点已随代码瘦身批次3 删除。
 
 
 def upload_document(username: str, kb_id: str, filename: str, content_b64: str) -> dict:

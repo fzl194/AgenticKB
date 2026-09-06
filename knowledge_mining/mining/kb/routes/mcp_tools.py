@@ -99,32 +99,6 @@ async def list_documents(
     ]}
 
 
-@router.post("/get-document", dependencies=[Depends(_require_internal_body)])
-async def get_document(
-    body: dict[str, Any], kbdb: KbDB = Depends(get_kb_db),
-) -> dict[str, Any]:
-    """单文档的结构化知识（切片/检索单元，走既有读路径：限量+软删过滤）。"""
-    user_id = await _user_id(kbdb, str(body.get("username") or ""))
-    kb_id = str(body.get("kb_id") or "")
-    await _visible_kb(kbdb, user_id, kb_id)
-    knowledge = await kbdb.get_document_knowledge(kb_id, str(body.get("document_id") or ""))
-    if not knowledge:
-        raise HTTPException(404, "document not found (or never mined)")
-    # 瘦身：MCP 场景只需要切片文本与检索单元标题
-    segments = [
-        {"index": s.get("segment_index"), "block_type": s.get("block_type"),
-         "text": s.get("raw_text"), "section": s.get("section_title")}
-        for s in (knowledge.get("segments") or [])
-    ]
-    return {
-        "document_id": knowledge.get("document_id"),
-        "kb_id": kb_id,
-        "truncated": bool(knowledge.get("truncated")),
-        "total_segments": knowledge.get("total_segments"),
-        "segments": segments,
-    }
-
-
 @router.post("/upload", dependencies=[Depends(_require_internal_body)])
 async def upload(
     body: dict[str, Any],

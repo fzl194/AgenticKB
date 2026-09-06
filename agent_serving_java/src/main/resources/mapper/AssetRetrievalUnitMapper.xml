@@ -20,14 +20,6 @@
         <result column="fts_score"            property="ftsScore"/>
     </resultMap>
 
-    <resultMap id="detailsMap"
-               type="com.coremasterkb.serving.mapper.result.FtsResultRow">
-        <result column="id"                   property="id"/>
-        <result column="text"                 property="text"/>
-        <result column="source_refs_json"     property="sourceRefsJson"/>
-        <result column="target_ref_json"      property="targetRefJson"/>
-    </resultMap>
-
     <resultMap id="unitFullMap"
                type="com.coremasterkb.serving.mapper.result.FtsResultRow">
         <result column="id"                   property="id"/>
@@ -346,21 +338,5 @@
         LIMIT #{limit}
     </select>
 
-    <!--
-        Hydration query: fetch heavy columns (text, source_refs_json, target_ref_json)
-        only for the top-K survivors after fusion + rerank.
-        Called once per search request with a small number of IDs (typically 10-30).
-    -->
-    <select id="fetchDetailsByIds" resultMap="detailsMap">
-        SELECT ru.id,
-               ru.text,
-               ru.source_refs_json,
-               ru.target_ref_json
-        FROM asset_retrieval_units ru
-        WHERE ru.id IN
-        <foreach collection="ids" item="id" open="(" separator="," close=")">
-            #{id}
-        </foreach>
-    </select>
 
 </mapper>

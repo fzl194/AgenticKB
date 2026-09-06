@@ -1,7 +1,6 @@
 package com.coremasterkb.serving.observability;
 
 import com.coremasterkb.serving.domain.EvidenceResponse;
-import com.coremasterkb.serving.domain.SearchRequest;
 import com.coremasterkb.serving.entity.ServingQueryLog;
 import com.coremasterkb.serving.mapper.ServingQueryLogMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,10 +27,6 @@ class QueryLogServiceTest {
         service = new QueryLogService(logMapper);
     }
 
-    private SearchRequest req(String query, String domain, String channel) {
-        return new SearchRequest(query, Map.of(), List.of(), false, domain, channel, "evidence");
-    }
-
     private EvidenceResponse.EvidenceItem item(String ref, String type, String fileName) {
         return new EvidenceResponse.EvidenceItem(ref, type, "content", new EvidenceResponse.EvidenceSource(
                 "kb", fileName, null, "doc_x", null, null), false, null);
@@ -43,7 +38,7 @@ class QueryLogServiceTest {
         @Test
         @DisplayName("uses explicit channel when provided")
         void usesExplicitChannel() {
-            service.record("id1", req("q", "domain1", "beta"), null, 100);
+            service.record("id1", "q", "domain1", "beta", null, 100, Map.of());
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
             assertThat(captor.getValue().getChannel()).isEqualTo("beta");
@@ -52,7 +47,7 @@ class QueryLogServiceTest {
         @Test
         @DisplayName("falls back to 'prod' when channel is blank")
         void fallsBackToProd() {
-            service.record("id2", req("q", "cloud_core_network", null), null, 100);
+            service.record("id2", "q", "cloud_core_network", null, null, 100, Map.of());
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
             assertThat(captor.getValue().getChannel()).isEqualTo("prod");
@@ -61,7 +56,7 @@ class QueryLogServiceTest {
         @Test
         @DisplayName("domain is stored separately from channel")
         void domainStoredSeparately() {
-            service.record("id3", req("q", "cloud_core_network", null), null, 100);
+            service.record("id3", "q", "cloud_core_network", null, null, 100, Map.of());
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
             assertThat(captor.getValue().getDomain()).isEqualTo("cloud_core_network");
@@ -79,7 +74,7 @@ class QueryLogServiceTest {
                     List.of(item("ev_a", "prose", "a.md"), item("ev_b", "table_row", "b.xlsx")),
                     true);
 
-            service.record("id4", req("q", "d", "prod"), response, 50);
+            service.record("id4", "q", "d", "prod", response, 50, Map.of());
 
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
@@ -99,7 +94,7 @@ class QueryLogServiceTest {
             var response = new EvidenceResponse("q",
                     List.of(item("ev_a", "prose", "a.md"), item("ev_b", "prose", "a.md")), false);
 
-            service.record("id5", req("q", "d", "prod"), response, 20);
+            service.record("id5", "q", "d", "prod", response, 20, Map.of());
 
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
@@ -114,7 +109,7 @@ class QueryLogServiceTest {
         @Test
         @DisplayName("null response sets hasResult=false and skips result fields")
         void nullResponse() {
-            service.record("id6", req("q", "d", "prod"), null, 10);
+            service.record("id6", "q", "d", "prod", null, 10, Map.of());
 
             var captor = ArgumentCaptor.forClass(ServingQueryLog.class);
             verify(logMapper).insert(captor.capture());
@@ -132,7 +127,7 @@ class QueryLogServiceTest {
         void mapperFailureSwallowed() {
             doThrow(new RuntimeException("db down")).when(logMapper).insert(any());
             // should not throw
-            service.record("id7", req("q", "d", "prod"), null, 10);
+            service.record("id7", "q", "d", "prod", null, 10, Map.of());
         }
     }
 }

@@ -85,7 +85,7 @@ class ModelRerankOperatorTest {
     @Test
     @DisplayName("only Top-N candidates are sent to the reranker")
     void topNSlice() {
-        when(reranker.rerank(any(), any())).thenAnswer(inv -> inv.getArgument(0));
+        when(reranker.rerank(any(), any())).thenAnswer(inv -> inv.getArgument(1));
 
         op.execute(inputs(rrfOrder(80)), new Params(new com.fasterxml.jackson.databind.ObjectMapper()
                 .createObjectNode().put("topN", 50)), ctx);
@@ -93,7 +93,7 @@ class ModelRerankOperatorTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<RetrievalCandidate>> captor =
                 ArgumentCaptor.forClass(List.class);
-        verify(reranker).rerank(captor.capture(), any());
+        verify(reranker).rerank(any(), captor.capture());
         assertThat(captor.getValue()).hasSize(50);
     }
 
@@ -103,7 +103,7 @@ class ModelRerankOperatorTest {
         List<RetrievalCandidate> rrfOrder = rrfOrder(5);
         // reranker 反转前 3 个（Top-N=3）
         when(reranker.rerank(any(), any())).thenAnswer(inv -> {
-            List<RetrievalCandidate> ws = inv.getArgument(0);
+            List<RetrievalCandidate> ws = inv.getArgument(1);
             return List.of(ws.get(2), ws.get(1), ws.get(0));
         });
         var params = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
@@ -120,7 +120,7 @@ class ModelRerankOperatorTest {
     @Test
     @DisplayName("topK limits the final output count")
     void topKTruncates() {
-        when(reranker.rerank(any(), any())).thenAnswer(inv -> inv.getArgument(0));
+        when(reranker.rerank(any(), any())).thenAnswer(inv -> inv.getArgument(1));
         var params = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode()
                 .put("topK", 3);
 

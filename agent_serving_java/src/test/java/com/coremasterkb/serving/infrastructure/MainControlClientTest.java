@@ -52,30 +52,21 @@ class MainControlClientTest {
         db.put("pool_min", 2);
         db.put("pool_max", 10);
 
-        Map<String, Object> ccnServing = Map.of(
-                "route_policy", Map.of("command_usage", Map.of(
-                        "entity_exact", Map.of("weight", 1.6, "top_k", 20))),
-                "query_understanding", Map.of("network_elements", List.of("SMF", "UPF")),
-                "extractor_rules", List.of(Map.of("pattern", "\\bSMF\\b", "entity_type", "network_element")));
-
         Map<String, Object> ccn = new HashMap<>();
         ccn.put("enabled", true);
         ccn.put("default_channel", "prod");
         ccn.put("database", db);
-        ccn.put("serving", ccnServing);
 
         // generic has no inline database block — Python emits an explicit null
         Map<String, Object> generic = new HashMap<>();
         generic.put("enabled", true);
         generic.put("default_channel", "prod");
         generic.put("database", null);
-        generic.put("serving", Map.of());
 
         Map<String, Object> disabled = new HashMap<>();
         disabled.put("enabled", false);
         disabled.put("default_channel", "staging");
         disabled.put("database", null);
-        disabled.put("serving", Map.of());
 
         return Map.of("domains", Map.of(
                 "cloud_core_network", ccn,
@@ -125,16 +116,6 @@ class MainControlClientTest {
         }
 
         @Test
-        @DisplayName("the scenario pack's serving block is passed through verbatim")
-        void passesServingBlockThrough() {
-            stubBody(servingConfigBody());
-            var snapshot = new MainControlClient(restTemplate, "http://localhost:8910").fetchServingConfig();
-
-            var serving = snapshot.domains().get("cloud_core_network").serving();
-            assertThat(serving).containsKeys("route_policy", "query_understanding", "extractor_rules");
-        }
-
-        @Test
         @DisplayName("enabled=false and default_channel are honoured")
         void parsesEnabledAndChannel() {
             stubBody(servingConfigBody());
@@ -146,13 +127,12 @@ class MainControlClientTest {
         }
 
         @Test
-        @DisplayName("a domain with no serving key still yields an empty (non-null) block")
-        void missingServingKeyYieldsEmptyMap() {
+        @DisplayName("a domain with a minimal block gets database/channel defaults")
+        void minimalDomainYieldsDefaults() {
             stubBody(Map.of("domains", Map.of("d1", Map.of("enabled", true))));
             var snapshot = new MainControlClient(restTemplate, "http://localhost:8910").fetchServingConfig();
 
             var d1 = snapshot.domains().get("d1");
-            assertThat(d1.serving()).isEmpty();
             assertThat(d1.database()).isNull();
             assertThat(d1.defaultChannel()).isEqualTo("prod");
         }

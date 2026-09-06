@@ -1,7 +1,6 @@
 package com.coremasterkb.serving.observability;
 
 import com.coremasterkb.serving.domain.EvidenceResponse;
-import com.coremasterkb.serving.domain.SearchRequest;
 import com.coremasterkb.serving.operator.api.ParadigmExecutionService.RunArgs;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,9 +54,9 @@ class QueryLogAspectParadigmTest {
         assertFalse((Boolean) meta.get("has_more"));
 
         assertSame(response, capturedResponse(), "the EvidenceResponse must be unwrapped from the shaped map");
-        SearchRequest req = capturedRequest();
-        assertEquals("SMF 配置", req.query());
-        assertEquals("odn", req.domain());
+        String[] queryAndDomain = capturedQueryAndDomain();
+        assertEquals("SMF 配置", queryAndDomain[0]);
+        assertEquals("odn", queryAndDomain[1]);
     }
 
     @Test
@@ -113,16 +112,16 @@ class QueryLogAspectParadigmTest {
     }
 
     /**
-     * A blank query makes {@code SearchRequest}'s compact constructor throw. That must stay a 400
-     * from the execution service, never become a 500 raised out of the logging advice.
+     * 瘦身批次5：SearchRequest 退役后日志管道收裸标量，空查询也会照常落行（历史行为是
+     * DTO 构造器拒绝空查询→跳过记录）。无论哪种形态，日志都不应把请求打成异常。
      */
     @Test
-    @DisplayName("a query the log cannot represent does not break the request")
+    @DisplayName("a blank query still logs and does not break the request")
     void blankQueryDoesNotEscapeAsAnError() throws Throwable {
         ProceedingJoinPoint pjp = jp(args("", "odn", "pd-abc", 1), Map.of());
 
         assertDoesNotThrow(() -> aspect.logParadigmSearch(pjp));
-        verify(queryLogService, never()).record(anyString(), any(), any(), anyLong(), any());
+        verify(queryLogService).record(anyString(), eq(""), eq("odn"), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -156,19 +155,23 @@ class QueryLogAspectParadigmTest {
     @SuppressWarnings("unchecked")
     private Map<String, Object> capturedMetadata() {
         ArgumentCaptor<Map<String, Object>> cap = ArgumentCaptor.forClass(Map.class);
-        verify(queryLogService).record(anyString(), any(), any(), anyLong(), cap.capture());
+        verify(queryLogService).record(anyString(), anyString(), anyString(), anyString(),
+                any(), anyLong(), cap.capture());
         return cap.getValue();
     }
 
     private EvidenceResponse capturedResponse() {
         ArgumentCaptor<EvidenceResponse> cap = ArgumentCaptor.forClass(EvidenceResponse.class);
-        verify(queryLogService).record(anyString(), any(), cap.capture(), anyLong(), any());
+        verify(queryLogService).record(anyString(), anyString(), anyString(), anyString(),
+                cap.capture(), anyLong(), any());
         return cap.getValue();
     }
 
-    private SearchRequest capturedRequest() {
-        ArgumentCaptor<SearchRequest> cap = ArgumentCaptor.forClass(SearchRequest.class);
-        verify(queryLogService).record(anyString(), cap.capture(), any(), anyLong(), any());
-        return cap.getValue();
+    private String[] capturedQueryAndDomain() {
+        ArgumentCaptor<String> queryCap = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> domainCap = ArgumentCaptor.forClass(String.class);
+        verify(queryLogService).record(anyString(), queryCap.capture(), domainCap.capture(),
+                anyString(), any(), anyLong(), any());
+        return new String[]{queryCap.getValue(), domainCap.getValue()};
     }
 }

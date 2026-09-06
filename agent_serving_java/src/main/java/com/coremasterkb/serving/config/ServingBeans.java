@@ -1,7 +1,6 @@
 package com.coremasterkb.serving.config;
 
 import com.coremasterkb.serving.domainpack.DatabaseConfig;
-import com.coremasterkb.serving.domainpack.DomainPackReader;
 import com.coremasterkb.serving.domainpack.DomainPoolManager;
 import com.coremasterkb.serving.domainpack.DomainRoutingDataSource;
 import com.coremasterkb.serving.infrastructure.EmbeddingClient;
@@ -36,8 +35,8 @@ import java.util.concurrent.Executors;
  * Explicit wiring for plain-Java components that are not annotated with
  * {@code @Component}/{@code @Service}/{@code @Repository}.
  *
- * <p>Components already picked up by component scanning (DomainPackReader,
- * QueryLogService, QueryLogAspect, AssetRepository) are NOT declared here.</p>
+ * <p>Components already picked up by component scanning (QueryLogService,
+ * QueryLogAspect, AssetRepository) are NOT declared here.</p>
  */
 @Configuration
 @EnableConfigurationProperties(ServingProperties.class)
@@ -214,19 +213,9 @@ public class ServingBeans {
 
     @Bean
     public LlmClient llmClient(RestTemplate restTemplate, ServingProperties properties) {
-        LlmClient client = new LlmClient(restTemplate, properties.llm().baseUrl());
-        if (client.isAvailable()) {
-            // Background thread: wait for llm_service to be ready, then register templates.
-            // llm_service may not have started yet (supervisor launches all services concurrently),
-            // so we retry with backoff instead of failing silently.
-            String baseUrl = properties.llm().baseUrl();
-            Thread.ofVirtual().name("template-register").start(() -> {
-                client.ensureTemplatesWithRetry(baseUrl);
-            });
-        } else {
-            log.warn("LLM base-url is blank — template registration skipped");
-        }
-        return client;
+        // 瘦身批次5：模板注册线程已删——serving 只消费 embed/rerank 两个直连端点，
+        // 模板执行通道（execute/ensureTemplates）零调用者。
+        return new LlmClient(restTemplate, properties.llm().baseUrl());
     }
 
     @Bean

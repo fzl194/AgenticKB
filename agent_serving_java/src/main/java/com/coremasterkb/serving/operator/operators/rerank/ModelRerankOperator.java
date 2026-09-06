@@ -1,7 +1,5 @@
 package com.coremasterkb.serving.operator.operators.rerank;
 
-import com.coremasterkb.serving.domain.EvidenceNeed;
-import com.coremasterkb.serving.domain.QueryUnderstanding;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
 import com.coremasterkb.serving.operator.core.*;
 import com.coremasterkb.serving.rerank.LlmServiceReranker;
@@ -99,9 +97,6 @@ public class ModelRerankOperator implements Operator {
         if (llmServiceReranker == null) {
             return null;
         }
-        QueryUnderstanding qu = new QueryUnderstanding(
-                query, "general", List.of(), List.of(), Map.of(), List.of(),
-                new EvidenceNeed(List.of(), List.of(), false, false), List.of(), "operator", "medium");
-        return llmServiceReranker.rerank(workingSet, qu);
+        return llmServiceReranker.rerank(query, workingSet);
     }
 }

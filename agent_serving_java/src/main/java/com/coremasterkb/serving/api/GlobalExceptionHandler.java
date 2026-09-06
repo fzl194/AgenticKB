@@ -167,9 +167,9 @@ public class GlobalExceptionHandler {
     /**
      * A request body that could not be turned into its DTO.
      *
-     * <p>Exists because request records validate in their compact constructors (e.g. {@code
-     * SearchRequest} rejects a blank query; the fulltext request records that used to live here
-     * were removed with the fulltext chain — 瘦身批次4). Those throw <em>during deserialization</em>,
+     * <p>Exists because request records validate in their compact constructors (the fulltext and
+     * search request records that used to live here were removed with those chains — 瘦身批次4/5).
+     * Those throw <em>during deserialization</em>,
      * so Jackson wraps them and Spring re-wraps that
      * as {@link HttpMessageNotReadableException}. Without this the carefully mapped 400 codes above
      * were unreachable from the wire and every one of them surfaced as a 500 — the handler was

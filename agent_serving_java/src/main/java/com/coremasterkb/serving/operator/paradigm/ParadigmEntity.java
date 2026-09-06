@@ -3,9 +3,8 @@ package com.coremasterkb.serving.operator.paradigm;
 /**
  * Row of {@code operator_paradigm}: a paradigm's mutable metadata + editable draft graph.
  *
- * <p>The binding fields ({@code boundDomain}/{@code isDefault}/{@code boundAt}) are mutable
- * metadata, deliberately outside {@code operator_paradigm_version} — re-binding creates no new
- * version and never changes what a {@code (paradigmId, version)} call replays.</p>
+ * <p>瘦身批次5：域绑定字段（boundDomain/isDefault/boundAt）已删——批次6 起范式跨域通用，
+ * 代码不再读写绑定；002 DDL 停止加载（存量库的列无害残留，待批次6 DB 审计一并 DROP）。</p>
  */
 public class ParadigmEntity {
 
@@ -17,12 +16,6 @@ public class ParadigmEntity {
     private String status;
     private String createdAt;
     private String updatedAt;
-
-    /** Domain this paradigm serves; null = unbound (still callable by id, excluded from matching). */
-    private String boundDomain;
-    /** Whether this is the domain's auto-matched paradigm. At most one live per domain (partial uq index). */
-    private boolean isDefault;
-    private String boundAt;
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -47,15 +40,4 @@ public class ParadigmEntity {
 
     public String getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(String updatedAt) { this.updatedAt = updatedAt; }
-
-    // Explicit get/setIsDefault (not the isDefault() boolean convention) so the MyBatis
-    // property name "isDefault" resolves unambiguously to setIsDefault.
-    public String getBoundDomain() { return boundDomain; }
-    public void setBoundDomain(String boundDomain) { this.boundDomain = boundDomain; }
-
-    public boolean getIsDefault() { return isDefault; }
-    public void setIsDefault(boolean isDefault) { this.isDefault = isDefault; }
-
-    public String getBoundAt() { return boundAt; }
-    public void setBoundAt(String boundAt) { this.boundAt = boundAt; }
 }

@@ -144,8 +144,8 @@ public class ParadigmService {
     /**
     // ---- 阶段 A：三层解析（library > official）与官方默认 seeding ----------------------
     // 批次6：域绑定退役（用户拍板"范式跨域通用"）——domain 层从解析链移除，
-    // selectDefaultByDomain/applyBinding 随之删除；002 DDL 的 bound_domain/is_default
-    // 列保留不动（存量零负担，代码不再读写）。
+    // selectDefaultByDomain/applyBinding 随之删除；瘦身批次5 进一步删掉 Entity 字段、
+    // XML 列映射与 002 DDL（存量库的 bound_domain/is_default 列待批次6 DB 审计 DROP）。
 
     /** 解析结果：{@code source} ∈ library|official；库级降级时附来源层。 */
     public record Resolution(ParadigmEntity paradigm, String source, String degradedFrom) {}

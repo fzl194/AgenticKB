@@ -32,8 +32,7 @@ public class ParadigmSchemaInitializer {
 
     /** Ordered, explicitly named. Append here when adding a migration — see the class Javadoc. */
     private static final List<String> SCHEMA_SCRIPTS = List.of(
-            "db/operator/001_operator_paradigm.sql",
-            "db/operator/002_paradigm_domain_binding.sql");
+            "db/operator/001_operator_paradigm.sql");
 
     private final DataSource defaultDataSource;
 

@@ -122,10 +122,8 @@ public class MainControlClient {
             boolean enabled = !Boolean.FALSE.equals(dc.get("enabled"));
             String channel = dc.get("default_channel") instanceof String s ? s : "prod";
             DatabaseConfig database = parseDatabase(dc.get("database"));
-            Map<String, Object> serving = dc.get("serving") instanceof Map<?, ?> sm
-                    ? (Map<String, Object>) sm : Map.of();
 
-            parsed.put(domainId, new DomainConfig(domainId, enabled, channel, database, serving));
+            parsed.put(domainId, new DomainConfig(domainId, enabled, channel, database));
         }
         return new ServingConfigSnapshot(parsed);
     }

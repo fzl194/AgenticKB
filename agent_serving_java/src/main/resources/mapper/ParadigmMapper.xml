@@ -12,15 +12,11 @@
         <result column="status"           property="status"/>
         <result column="created_at"       property="createdAt"/>
         <result column="updated_at"       property="updatedAt"/>
-        <result column="bound_domain"     property="boundDomain"/>
-        <result column="is_default"       property="isDefault"/>
-        <result column="bound_at"         property="boundAt"/>
     </resultMap>
 
     <sql id="cols">
         id, name, description, draft_graph_json, current_version, status,
-        created_at::text AS created_at, updated_at::text AS updated_at,
-        bound_domain, is_default, bound_at::text AS bound_at
+        created_at::text AS created_at, updated_at::text AS updated_at
     </sql>
 
     <insert id="insert">

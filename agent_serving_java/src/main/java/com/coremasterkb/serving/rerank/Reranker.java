@@ -1,6 +1,5 @@
 package com.coremasterkb.serving.rerank;
 
-import com.coremasterkb.serving.domain.QueryUnderstanding;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
 
 import java.util.List;
@@ -10,15 +9,19 @@ import java.util.List;
  *
  * <p>Implementations may return {@code null} to signal failure,
  * allowing the pipeline to fall back to the next strategy.
+ *
+ * <p>瘦身批次5：签名从 {@code rerank(candidates, QueryUnderstanding)} 收敛为
+ * {@code rerank(query, candidates)}——历史实现只取 understanding 的 originalQuery
+ * 一个字段，调用方为凑参数手工伪造整个对象。</p>
  */
 public interface Reranker {
 
     /**
-     * Rerank candidates using the given query understanding.
+     * Rerank candidates for the given query.
      *
-     * @param candidates   input candidates (may be in any order)
-     * @param understanding query understanding for context
+     * @param query      the user query
+     * @param candidates input candidates (may be in any order)
      * @return reranked candidates, or {@code null} if this reranker cannot produce a result
      */
-    List<RetrievalCandidate> rerank(List<RetrievalCandidate> candidates, QueryUnderstanding understanding);
+    List<RetrievalCandidate> rerank(String query, List<RetrievalCandidate> candidates);
 }

@@ -1,6 +1,5 @@
 package com.coremasterkb.serving.rerank;
 
-import com.coremasterkb.serving.domain.QueryUnderstanding;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
 import com.coremasterkb.serving.infrastructure.LlmClient;
 import org.slf4j.Logger;
@@ -36,12 +35,11 @@ public class LlmServiceReranker implements Reranker {
     }
 
     @Override
-    public List<RetrievalCandidate> rerank(List<RetrievalCandidate> candidates, QueryUnderstanding understanding) {
+    public List<RetrievalCandidate> rerank(String query, List<RetrievalCandidate> candidates) {
         if (candidates == null || candidates.isEmpty()) {
             return null;
         }
 
-        String query = resolveQuery(understanding);
         if (query == null || query.isBlank()) {
             return null;
         }
@@ -173,14 +171,6 @@ public class LlmServiceReranker implements Reranker {
             return (title != null && !title.isEmpty()) ? title + ": " + text : text;
         }
         return (title != null && !title.isEmpty()) ? title : "";
-    }
-
-    private String resolveQuery(QueryUnderstanding understanding) {
-        if (understanding != null && understanding.originalQuery() != null
-                && !understanding.originalQuery().isBlank()) {
-            return understanding.originalQuery();
-        }
-        return null;
     }
 
     private static String stringFromMetadata(RetrievalCandidate c, String key) {

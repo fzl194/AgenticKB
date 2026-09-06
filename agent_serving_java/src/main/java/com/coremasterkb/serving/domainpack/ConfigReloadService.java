@@ -29,18 +29,15 @@ public class ConfigReloadService {
 
     private final MainControlClient mainControlClient;
     private final DomainRegistry domainRegistry;
-    private final DomainPackReader domainPackReader;
     private final DomainPoolManager domainPoolManager;
     private final ServingProperties properties;
 
     public ConfigReloadService(MainControlClient mainControlClient,
                                DomainRegistry domainRegistry,
-                               DomainPackReader domainPackReader,
                                DomainPoolManager domainPoolManager,
                                ServingProperties properties) {
         this.mainControlClient = mainControlClient;
         this.domainRegistry = domainRegistry;
-        this.domainPackReader = domainPackReader;
         this.domainPoolManager = domainPoolManager;
         this.properties = properties;
     }
@@ -56,8 +53,8 @@ public class ConfigReloadService {
     }
 
     /**
-     * Fetch the snapshot (main_control first, local files as fallback) and apply it to all
-     * three config holders. Order matters: registry first (pool manager reads it), then packs,
+     * Fetch the snapshot (main_control first, local files as fallback) and apply it to the
+     * registry and pool manager. Order matters: registry first (pool manager reads it),
      * then invalidate stale pools.
      *
      * @return the number of domains applied
@@ -74,7 +71,6 @@ public class ConfigReloadService {
             source = "local_files";
         }
         domainRegistry.apply(snapshot);
-        domainPackReader.apply(snapshot);
         domainPoolManager.invalidate();
         log.info("Config reload complete from {}: {} domain(s)", source, snapshot.domains().size());
         return snapshot.domains().size();
@@ -109,9 +105,8 @@ public class ConfigReloadService {
                 String packRef = cfg.get("scenario_pack") instanceof String p ? p : domainId;
 
                 DatabaseConfig database = parseDatabase(cfg.get("database"));
-                Map<String, Object> serving = loadServingBlock(packRef);
 
-                domains.put(domainId, new DomainConfig(domainId, enabled, channel, database, serving));
+                domains.put(domainId, new DomainConfig(domainId, enabled, channel, database));
             }
         } catch (Exception e) {
             log.warn("Local-file fallback failed to parse registry '{}': {}", registryPath, e.getMessage());
@@ -135,20 +130,6 @@ public class ConfigReloadService {
                 str(db.get("gssencmode")),
                 intOrNull(db.get("pool_min")),
                 intOrNull(db.get("pool_max")));
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> loadServingBlock(String packRef) {
-        Path yamlPath = Paths.get(properties.scenarioPacksDir()).resolve(packRef).resolve("domain.yaml");
-        if (!Files.exists(yamlPath)) return Map.of();
-        try (InputStream is = Files.newInputStream(yamlPath)) {
-            Map<String, Object> data = new Yaml().load(is);
-            Object serving = data != null ? data.get("serving") : null;
-            return serving instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();
-        } catch (Exception e) {
-            log.warn("Failed to read scenario pack '{}': {}", yamlPath, e.getMessage());
-            return Map.of();
-        }
     }
 
     private static String str(Object o) {

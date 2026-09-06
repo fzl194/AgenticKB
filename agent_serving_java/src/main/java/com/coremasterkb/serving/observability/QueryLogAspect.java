@@ -1,7 +1,6 @@
 package com.coremasterkb.serving.observability;
 
 import com.coremasterkb.serving.domain.EvidenceResponse;
-import com.coremasterkb.serving.domain.SearchRequest;
 import com.coremasterkb.serving.operator.api.ParadigmExecutionService.RunArgs;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -11,7 +10,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -76,10 +74,6 @@ public class QueryLogAspect {
 
     private void recordParadigm(String queryId, RunArgs runArgs, Object result, long durationMs) {
         try {
-            SearchRequest request = new SearchRequest(
-                    runArgs.query(), Map.of(), List.of(), runArgs.debug(),
-                    runArgs.domain(), runArgs.channel(), "evidence", List.of());
-
             Map<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("engine", "paradigm");
             if (runArgs.paradigmId() != null) metadata.put("paradigm_id", runArgs.paradigmId());
@@ -90,11 +84,10 @@ public class QueryLogAspect {
                 metadata.put("has_more", response.hasMore());
             }
 
-            queryLogService.record(queryId, request, response, durationMs, metadata);
+            queryLogService.record(queryId, runArgs.query(), runArgs.domain(), runArgs.channel(),
+                    response, durationMs, metadata);
         } catch (Exception e) {
-            // SearchRequest's compact constructor rejects a blank query, and a paradigm run can be
-            // rejected for exactly that reason before anything else happens. Logging must not
-            // convert that 400 into a 500.
+            // Logging must never convert a business failure into a 500.
             log.warn("Failed to record paradigm query log [{}]: {}", queryId, e.getMessage());
         }
     }

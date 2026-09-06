@@ -4,7 +4,6 @@ import com.coremasterkb.serving.domain.ActiveScope;
 import com.coremasterkb.serving.entity.AssetBuildDocumentSnapshot;
 import com.coremasterkb.serving.entity.AssetPublishRelease;
 import com.coremasterkb.serving.mapper.*;
-import com.coremasterkb.serving.mapper.param.SegmentWindow;
 import com.coremasterkb.serving.mapper.result.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,22 +24,16 @@ public class AssetRepository {
     private final AssetBuildDocumentSnapshotMapper buildSnapshotMapper;
     private final AssetRawSegmentMapper rawSegmentMapper;
     private final AssetRawSegmentRelationMapper relationMapper;
-    private final AssetDocumentMapper documentMapper;
-    private final AssetRetrievalUnitMapper unitMapper;
 
     public AssetRepository(
             AssetPublishReleaseMapper releaseMapper,
             AssetBuildDocumentSnapshotMapper buildSnapshotMapper,
             AssetRawSegmentMapper rawSegmentMapper,
-            AssetRawSegmentRelationMapper relationMapper,
-            AssetDocumentMapper documentMapper,
-            AssetRetrievalUnitMapper unitMapper) {
+            AssetRawSegmentRelationMapper relationMapper) {
         this.releaseMapper       = releaseMapper;
         this.buildSnapshotMapper = buildSnapshotMapper;
         this.rawSegmentMapper    = rawSegmentMapper;
         this.relationMapper      = relationMapper;
-        this.documentMapper      = documentMapper;
-        this.unitMapper          = unitMapper;
     }
 
     // -------------------------------------------------------------------------
@@ -164,72 +157,7 @@ public class AssetRepository {
     }
 
     // -------------------------------------------------------------------------
-    // Segment resolution
-    // -------------------------------------------------------------------------
-
-    public List<SegmentWithMetaRow> resolveSegmentsByIds(
-            List<String> segmentIds, List<String> snapshotIds) {
-        if (segmentIds == null || segmentIds.isEmpty()) {
-            return Collections.emptyList();
-        }
-        return rawSegmentMapper.selectWithMeta(segmentIds, snapshotIds);
-    }
-
-    // -------------------------------------------------------------------------
-    // Full-text drill-down
-    //
-    // Every method here takes ids supplied by the caller rather than ids produced by a
-    // scope-filtered retrieval, so each one requires a non-empty scope and says so loudly.
-    // requireScope() exists because the alternative failure mode is silent: an empty IN-list
-    // would either match nothing or, in mappers that guard the filter with <if>, match
-    // everything.
-    // -------------------------------------------------------------------------
-
-    /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */
-    public List<SegmentFullRow> resolveSegmentsFull(List<String> segmentIds, List<String> snapshotIds) {
-        requireScope(snapshotIds);
-        if (segmentIds == null || segmentIds.isEmpty()) {
-            return Collections.emptyList();
-        }
-        return rawSegmentMapper.selectFullByIds(segmentIds, snapshotIds);
-    }
-
-    /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */
-    public List<SegmentFullRow> resolveSegmentWindows(
-            List<SegmentWindow> windows, List<String> snapshotIds) {
-        requireScope(snapshotIds);
-        if (windows == null || windows.isEmpty()) {
-            return Collections.emptyList();
-        }
-        return rawSegmentMapper.selectWindows(windows, snapshotIds);
-    }
-
-    /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */
-    public List<FtsResultRow> resolveUnitsFull(List<String> unitIds, List<String> snapshotIds) {
-        requireScope(snapshotIds);
-        if (unitIds == null || unitIds.isEmpty()) {
-            return Collections.emptyList();
-        }
-        return unitMapper.fetchDetailsByIdsInScope(unitIds, snapshotIds);
-    }
-
-    /** @throws IllegalArgumentException("empty_scope") if the scope resolved to zero snapshots */
-    public List<DocumentFileRow> resolveFileLocations(List<String> documentIds, List<String> snapshotIds) {
-        requireScope(snapshotIds);
-        if (documentIds == null || documentIds.isEmpty()) {
-            return Collections.emptyList();
-        }
-        return documentMapper.selectFileLocations(documentIds, snapshotIds);
-    }
-
-    private static void requireScope(List<String> snapshotIds) {
-        if (snapshotIds == null || snapshotIds.isEmpty()) {
-            throw new IllegalArgumentException("empty_scope");
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Relation queries
+    // Relation queries（实体/关系研究线——按用户要求保留）
     // -------------------------------------------------------------------------
 
     public List<RelationRow> getRelationsForSegments(

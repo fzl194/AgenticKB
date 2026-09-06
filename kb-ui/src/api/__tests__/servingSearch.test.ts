@@ -2,72 +2,11 @@ import axios from 'axios'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { useServingApi } from '@/api/serving'
 import { createProxyClient } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
 
-type Captured = { url: string; body: Record<string, unknown> }
-
-/** Stub axios.create so we can read what the client would actually POST. */
-function stubPost(): { calls: Captured[] } {
-  const calls: Captured[] = []
-  vi.spyOn(axios, 'create').mockReturnValue({
-    interceptors: { request: { use: vi.fn() } },
-    get: vi.fn(),
-    post: vi.fn(async (url: string, body: Record<string, unknown>) => {
-      calls.push({ url, body })
-      return { data: { items: [] } }
-    }),
-  } as never)
-  return { calls }
-}
-
-describe('serving search payload', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-  })
-
-  it('omits kbIds entirely when nothing is selected', async () => {
-    const { calls } = stubPost()
-
-    await useServingApi().search('SMF 配置', { domain: 'cloud_core_network', debug: false })
-
-    expect(calls).toHaveLength(1)
-    // Domain-wide requests must stay byte-identical to the pre-kbIds behaviour.
-    expect(calls[0].body).toEqual({
-      query: 'SMF 配置', domain: 'cloud_core_network', debug: false,
-    })
-    expect(calls[0].body).not.toHaveProperty('kbIds')
-  })
-
-  it('omits kbIds when the selection is empty or blank-only', async () => {
-    const { calls } = stubPost()
-    const api = useServingApi()
-
-    await api.search('q', { kbIds: [] })
-    await api.search('q', { kbIds: ['', '   '] })
-
-    expect(calls[0].body).not.toHaveProperty('kbIds')
-    expect(calls[1].body).not.toHaveProperty('kbIds')
-  })
-
-  it('sends trimmed kbIds when knowledge bases are selected', async () => {
-    const { calls } = stubPost()
-
-    await useServingApi().search('q', { kbIds: [' kb1 ', 'kb2'] })
-
-    expect(calls[0].body.kbIds).toEqual(['kb1', 'kb2'])
-  })
-
-  it('defaults debug to true, as before', async () => {
-    const { calls } = stubPost()
-
-    await useServingApi().search('q')
-
-    expect(calls[0].body.debug).toBe(true)
-  })
-})
-
+// 瘦身批次4：旧 /api/v1/search wrapper（useServingApi.search）已随固定检索链退役，
+// 其 payload 测试一并删除；本文件保留 proxyClient 拦截器行为测试。
 describe('proxy request interceptors', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

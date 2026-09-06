@@ -5,66 +5,26 @@ import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 
+/**
+ * 旧 asset_retrieval_units 检索面（瘦身后仅剩研究辅助）。
+ *
+ * <p>瘦身批次4：正式 FTS/hydrate 已由范式链的 AssetRetrievalUnitV2Mapper +
+ * EvidenceSourceV2Mapper 承担；fetchDetailsByIdsInScope 与 Trigram/Like/WithScope
+ * 变体随 fulltext/raw HTTP 链退役。保留下列两个方法：</p>
+ * <ul>
+ *   <li>{@link #searchByFts} —— 实体研究 IT（AssetRawSegmentMapperIT 等）取作用域内
+ *       unit 的辅助查询；</li>
+ *   <li>{@link #searchByEntityExact} —— 实体精确检索（实体/本体研究线）。</li>
+ * </ul>
+ */
 public interface AssetRetrievalUnitMapper {
 
     /**
-     * Fetch heavy columns (text, source_refs_json, target_ref_json) for specific IDs,
-     * confined to a snapshot scope, returning the columns the full-text drill-down
-     * needs (title / unit_type / document_snapshot_id).
-     *
-     * <p>Scope filter is unconditional: an unscoped variant would let any caller read
-     * any unit in any knowledge base by naming its id. The legacy unscoped variant
-     * (fetchDetailsByIds) was removed with the old retriever assembly (瘦身批次3).</p>
+     * tsvector full-text search ("token1 OR token2") with 'simple' dictionary.
      */
-    List<FtsResultRow> fetchDetailsByIdsInScope(
-            @Param("ids") List<String> ids,
-            @Param("snapshotIds") List<String> snapshotIds);
-
-    // ----- Level 1: tsvector full-text search -----
-
     List<FtsResultRow> searchByFts(
             @Param("ftsQuery") String ftsQuery,
             @Param("snapshotIds") List<String> snapshotIds,
-            @Param("limit") int limit);
-
-    /** tsvector search with scope filter (facets_json JSONB containment). */
-    List<FtsResultRow> searchByFtsWithScope(
-            @Param("ftsQuery") String ftsQuery,
-            @Param("snapshotIds") List<String> snapshotIds,
-            @Param("scopeJsonParams") List<String> scopeJsonParams,
-            @Param("sectionPrefixes") List<String> sectionPrefixes,
-            @Param("limit") int limit);
-
-    // ----- Level 2: pg_trgm trigram similarity -----
-
-    /** Trigram similarity fallback without scope. */
-    List<FtsResultRow> searchByTrigram(
-            @Param("queryText") String queryText,
-            @Param("snapshotIds") List<String> snapshotIds,
-            @Param("limit") int limit);
-
-    /** Trigram similarity with scope filter. */
-    List<FtsResultRow> searchByTrigramWithScope(
-            @Param("queryText") String queryText,
-            @Param("snapshotIds") List<String> snapshotIds,
-            @Param("scopeJsonParams") List<String> scopeJsonParams,
-            @Param("sectionPrefixes") List<String> sectionPrefixes,
-            @Param("limit") int limit);
-
-    // ----- Level 3: LIKE fallback -----
-
-    /** LIKE fallback without scope. */
-    List<FtsResultRow> searchByLike(
-            @Param("likeTerms") List<String> likeTerms,
-            @Param("snapshotIds") List<String> snapshotIds,
-            @Param("limit") int limit);
-
-    /** LIKE fallback with scope filter. */
-    List<FtsResultRow> searchByLikeWithScope(
-            @Param("likeTerms") List<String> likeTerms,
-            @Param("snapshotIds") List<String> snapshotIds,
-            @Param("scopeJsonParams") List<String> scopeJsonParams,
-            @Param("sectionPrefixes") List<String> sectionPrefixes,
             @Param("limit") int limit);
 
     // ----- Entity exact -----

@@ -1,17 +1,13 @@
 """Dependency injection for Mining API."""
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any
 
 from fastapi import Query, Request
 
 from knowledge_mining.mining.api.domain_scope import require_domain
-from knowledge_mining.mining.document_lifecycle import DocumentLifecycleService
 from knowledge_mining.mining.infra.db import AssetCoreDB, MiningRuntimeDB
-from knowledge_mining.mining.infra.domain_pack import resolve_domain
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
-from knowledge_mining.mining.infra.upload_config import UploadConfig
 
 
 def get_pool(request: Request) -> Any:
@@ -45,26 +41,6 @@ def get_domain_asset_db(request: Request, domain: str | None) -> AssetCoreDB:
     """Create an AssetCoreDB backed by the validated domain's sync pool."""
     return AssetCoreDB(
         request.app.state.domain_pools.sync_pool(require_domain(domain or ""))
-    )
-
-
-@lru_cache(maxsize=1)
-def _upload_config() -> UploadConfig:
-    return UploadConfig()
-
-
-def get_document_lifecycle_service(
-    request: Request,
-    domain: str = Query(...),
-) -> DocumentLifecycleService:
-    """Bind lifecycle operations to the requested domain and registry channel."""
-    domain = require_domain(domain)
-    entry = resolve_domain(domain)
-    channel = str(entry.get("default_channel") or "prod").strip() or "prod"
-    return DocumentLifecycleService(
-        get_domain_asset_db(request, domain),
-        upload_root=_upload_config().upload_root_path,
-        channel=channel,
     )
 
 

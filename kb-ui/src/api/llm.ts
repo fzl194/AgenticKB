@@ -43,38 +43,6 @@ export function useLlmApi() {
       return (obj.data ?? obj) as LlmTaskDetail
     },
 
-    async getTaskRequest(taskId: string): Promise<Record<string, unknown> | null> {
-      try {
-        const { data } = await client.get(`/api/v1/tasks/${taskId}/request`)
-        const resp = data as Record<string, unknown>
-        return (resp.data ?? resp) as Record<string, unknown>
-      } catch { return null }
-    },
-
-    async getTaskResult(taskId: string): Promise<Record<string, unknown> | null> {
-      try {
-        const { data } = await client.get(`/api/v1/tasks/${taskId}/result`)
-        const resp = data as Record<string, unknown>
-        return (resp.data ?? resp) as Record<string, unknown>
-      } catch { return null }
-    },
-
-    async getTaskAttempts(taskId: string): Promise<Record<string, unknown>[]> {
-      try {
-        const { data } = await client.get(`/api/v1/tasks/${taskId}/attempts`)
-        const resp = data as Record<string, unknown>
-        return extractItems<Record<string, unknown>>(resp.data ?? resp)
-      } catch { return [] }
-    },
-
-    async getTaskEvents(taskId: string): Promise<Record<string, unknown>[]> {
-      try {
-        const { data } = await client.get(`/api/v1/tasks/${taskId}/events`)
-        const resp = data as Record<string, unknown>
-        return extractItems<Record<string, unknown>>(resp.data ?? resp)
-      } catch { return [] }
-    },
-
     async cancelTask(taskId: string): Promise<void> {
       await client.post(`/api/v1/tasks/${taskId}/cancel`)
     },

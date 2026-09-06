@@ -30,24 +30,4 @@ class AssetRetrievalUnitMapperIT extends AbstractPgIntegrationTest {
         List<FtsResultRow> results = unitMapper.searchByFts("xyzzy123nonexistent", activeScope.snapshotIds(), 10);
         assertThat(results.size()).isLessThanOrEqualTo(2);
     }
-
-    @Test
-    @DisplayName("searchByTrigram with actual data term returns results")
-    void searchByTrigramReturnsResults() {
-        List<FtsResultRow> results;
-        try {
-            results = unitMapper.searchByTrigram("Document", activeScope.snapshotIds(), 10);
-        } catch (org.springframework.dao.DataAccessException e) {
-            assumeTrue(false, "pg_trgm not available: " + e.getMostSpecificCause().getMessage());
-            return;
-        }
-        assumeTrue(!results.isEmpty(), "no trigram data for 'Document' in test DB — skipping");
-    }
-
-    @Test
-    @DisplayName("searchByLike with actual data term returns results")
-    void searchByLikeReturnsResults() {
-        List<FtsResultRow> results = unitMapper.searchByLike(List.of("%Test%"), activeScope.snapshotIds(), 10);
-        assumeTrue(!results.isEmpty(), "no LIKE data for '%Test%' in test DB — skipping");
-    }
 }

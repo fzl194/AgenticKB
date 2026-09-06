@@ -1,7 +1,7 @@
 import { createProxyClient } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
 import type {
-  McpCatalog, OperatorDef, ParadigmGraph, ParadigmView, ParadigmVersionView, RunResult,
+  OperatorDef, ParadigmGraph, ParadigmView, ParadigmVersionView, RunResult,
 } from '@/types/operator'
 
 /**
@@ -22,20 +22,6 @@ export function useOperatorApi() {
     async getCatalog(): Promise<OperatorDef[]> {
       const { data } = await client.get('/api/v1/operator/catalog')
       return data.operators ?? []
-    },
-
-    /**
-     * Which published paradigms agents can actually use, and why the rest cannot.
-     *
-     * The `hidden` half only comes back because `createProxyClient('serving')` injects
-     * `X-KB-User` on every serving request — serving withholds it from anonymous callers since it
-     * names knowledge bases.
-     */
-    async getMcpCatalog(domain?: string): Promise<McpCatalog> {
-      const { data } = await client.get('/api/v1/paradigm/mcp-catalog', {
-        params: domain ? { domain } : undefined,
-      })
-      return { paradigms: data.paradigms ?? [], hidden: data.hidden ?? [] }
     },
 
     // ---- paradigm CRUD ----
@@ -95,16 +81,6 @@ export function useOperatorApi() {
     },
 
     // ---- validation / execution ----
-    async validateDraft(id: string): Promise<RunResult> {
-      const { data } = await client.post(`/api/v1/paradigm/${id}/validate`, {})
-      return data
-    },
-
-    async dryRun(id: string, query: string, opts?: { debug?: boolean }): Promise<RunResult> {
-      const { data } = await client.post(`/api/v1/paradigm/${id}/dryrun`, runBody(query, opts))
-      return data
-    },
-
     async search(id: string, query: string, opts?: { version?: number; debug?: boolean }): Promise<RunResult> {
       const v = opts?.version != null ? `?version=${opts.version}` : ''
       const { data } = await client.post(`/api/v1/paradigm/${id}/search${v}`, runBody(query, opts))

@@ -23,13 +23,8 @@ from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.api.routes.health import router as health_router
 from knowledge_mining.mining.api.routes.runs import router as runs_router
 from knowledge_mining.mining.api.routes.knowledge import router as knowledge_router
-from knowledge_mining.mining.api.routes.config import router as config_router
-from knowledge_mining.mining.api.routes.builds import router as builds_router
 from knowledge_mining.mining.api.routes.workflows import router as workflows_router
 from knowledge_mining.mining.api.routes.ops import router as ops_router
-from knowledge_mining.mining.api.routes.document_lifecycle import (
-    router as document_lifecycle_router,
-)
 from knowledge_mining.mining.kb.routes.kbs import router as kb_router
 from knowledge_mining.mining.kb.routes.documents import router as kb_documents_router
 from knowledge_mining.mining.kb.routes.mining import router as kb_mining_router
@@ -231,9 +226,6 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(runs_router)
     app.include_router(knowledge_router)
-    app.include_router(config_router)
-    app.include_router(builds_router)
-    app.include_router(document_lifecycle_router)
     # /api/ops/* —— 运维使用分析（admin-only）。独立 prefix，不与 /api/kb 的动态段相争。
     app.include_router(ops_router)
     # kb_auth_router / kb_overview_router 必须在 kb_router 之前注册：它们的静态路由

@@ -1,19 +1,8 @@
-import type { HealthStatus, SearchResult } from '@/types'
+import type { HealthStatus } from '@/types'
 import type { EvidenceItem, EvidenceResponse } from '@/types/operator'
 import { createProxyClient } from '@/api/proxyClient'
 
 export type { EvidenceItem, EvidenceResponse }
-
-export interface SearchOptions {
-  domain?: string
-  debug?: boolean
-  /**
-   * 把检索范围收窄到这些知识库。留空 = 检索该域当前生效的 release（原行为）。
-   * 身份由 proxyClient 注入的 X-KB-User 头决定：其中任何一个不可见，后端整单返回
-   * 404 kb_not_found，而不是静默少给结果。
-   */
-  kbIds?: string[]
-}
 
 export interface ParadigmResolveResult {
   domain: string
@@ -112,53 +101,6 @@ export function useServingApi() {
         return data
       } catch (err: unknown) {
         throw localizeSearchError(err)
-      }
-    },
-
-    async search(query: string, options?: SearchOptions): Promise<SearchResult> {
-      const payload: Record<string, unknown> = {
-        query,
-        domain: options?.domain,
-        debug: options?.debug ?? true,
-      }
-      // 只在真的选了知识库时才带 kbIds：后端把空数组和缺省一视同仁，但省掉这个键能让
-      // 「全域检索」的请求体与改动前逐字一致，便于比对回归。
-      const kbIds = options?.kbIds?.map(id => id?.trim()).filter((id): id is string => !!id)
-      if (kbIds && kbIds.length > 0) payload.kbIds = kbIds
-
-      try {
-        const { data } = await client.post('/api/v1/search', payload)
-        return data.data ?? data
-      } catch (err: unknown) {
-        throw localizeSearchError(err)
-      }
-    },
-
-    /**
-     * 下载文档原件。
-     *
-     * 走 axios 而不是给 `<a href>` 拼一个 URL：身份是 proxyClient 在请求拦截器里注入的
-     * X-KB-User 头，浏览器直接发起的导航根本不经过拦截器，会以匿名身份到达后端 —— 私有
-     * 知识库的文档就会莫名其妙 404。
-     */
-    async downloadRawFile(
-      documentId: string,
-      options?: SearchOptions,
-    ): Promise<{ blob: Blob; disposition: string | null }> {
-      const params: Record<string, unknown> = { domain: options?.domain }
-      const kbIds = options?.kbIds?.map(id => id?.trim()).filter((id): id is string => !!id)
-      if (kbIds && kbIds.length > 0) params.kbIds = kbIds
-
-      const response = await client.get(`/api/v1/documents/${documentId}/raw`, {
-        params,
-        // indexes:null → kbIds=a&kbIds=b。axios 默认发 kbIds[]=a，Spring 的
-        // @RequestParam List<String> 不认这种形状，会当成没传，静默退回全域范围。
-        paramsSerializer: { indexes: null },
-        responseType: 'blob',
-      })
-      return {
-        blob: response.data,
-        disposition: response.headers['content-disposition'] ?? null,
       }
     },
   }

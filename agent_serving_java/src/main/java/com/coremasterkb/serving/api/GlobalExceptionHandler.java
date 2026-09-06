@@ -59,41 +59,11 @@ public class GlobalExceptionHandler {
                     .body(Map.of("error", "no_active_kb_build",
                             "message", "The selected knowledge bases have no mined content"));
         }
-        // ---- full-text drill-down ----
+        // ScopeResolver（检索链共用）：paradigmId 与 kbIds 只能二选一。
         if ("conflicting_scope_source".equals(ex.getMessage())) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "conflicting_scope_source",
                             "message", "Supply either paradigmId or kbIds, not both"));
-        }
-        if ("too_many_refs".equals(ex.getMessage())) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "too_many_refs",
-                            "message", "Too many refs in one request (max "
-                                    + com.coremasterkb.serving.application.FullTextService.MAX_REFS + ")"));
-        }
-        if ("refs_required".equals(ex.getMessage())) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "refs_required", "message", "At least one ref is required"));
-        }
-        if ("unknown_ref_type".equals(ex.getMessage())) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "unknown_ref_type",
-                            "message", "Ref type must be 'retrieval_unit' or 'raw_segment'"));
-        }
-        if ("unknown_granularity".equals(ex.getMessage())) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "unknown_granularity",
-                            "message", "Granularity must be 'segment' or 'window'"));
-        }
-        if ("window_radius_out_of_range".equals(ex.getMessage())) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "window_radius_out_of_range",
-                            "message", "windowRadius must be between 1 and "
-                                    + com.coremasterkb.serving.domain.FullTextRequest.MAX_WINDOW_RADIUS));
-        }
-        if ("ref_id_required".equals(ex.getMessage())) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "ref_id_required", "message", "Each ref needs a non-blank id"));
         }
         // ---- 27号审查修复：scope hard filter 契约（显式拒绝优于静默忽略） ----
         if (ex.getMessage() != null && ex.getMessage().startsWith("unsupported_scope_filter:")) {
@@ -197,10 +167,10 @@ public class GlobalExceptionHandler {
     /**
      * A request body that could not be turned into its DTO.
      *
-     * <p>Exists because request records validate in their compact constructors — {@code
-     * SearchRequest} rejects a blank query, {@code FullTextRequest} rejects an unknown granularity
-     * or an out-of-range radius, {@code FullTextRequest.Ref} rejects an unknown ref type. All of
-     * those throw <em>during deserialization</em>, so Jackson wraps them and Spring re-wraps that
+     * <p>Exists because request records validate in their compact constructors (e.g. {@code
+     * SearchRequest} rejects a blank query; the fulltext request records that used to live here
+     * were removed with the fulltext chain — 瘦身批次4). Those throw <em>during deserialization</em>,
+     * so Jackson wraps them and Spring re-wraps that
      * as {@link HttpMessageNotReadableException}. Without this the carefully mapped 400 codes above
      * were unreachable from the wire and every one of them surfaced as a 500 — the handler was
      * only ever exercised by tests that threw from a mocked service, which skips deserialization

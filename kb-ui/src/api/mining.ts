@@ -96,14 +96,6 @@ export function useMiningApi() {
       return data
     },
 
-    async getRunArtifacts(runId: string): Promise<{
-      run_id: string; document_count: number
-      segment_count: number; unit_count: number; relation_count: number
-    }> {
-      const { data } = await client.get(`/api/runs/${runId}/artifacts`)
-      return data
-    },
-
     // Raw source content (V5 document viewer)
     async getRunDocumentRawContent(runId: string, docId: string): Promise<{ content: string; format: string }> {
       const { data, headers } = await client.get(`/api/runs/${runId}/documents/${docId}/raw-content`, {
@@ -128,7 +120,7 @@ export function useMiningApi() {
 }
 
 
-/** M5 结构化数据视图（/api/knowledge/documents/{id}/parse-result）. */
+/** M5 结构化数据视图（/api/kb/{kbId}/documents/{docId}/parse-result）. */
 export interface ParseResultOutlineNode {
   element_id: string
   level: number

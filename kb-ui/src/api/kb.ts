@@ -163,8 +163,8 @@ export function useKbApi() {
 
     // ── 文档 ──
     /**
-     * 上传单文件。zip 由后端自动解压（走同端点，后端按扩展名分支），
-     * 解压结果用 uploadZip 拿数组；此方法假定非 zip，返回单个文档。
+     * 上传单文件。zip/归档走 uploadArchive（后端自动解压返回数组）；
+     * 此方法假定非归档扩展名，返回单个文档。
      */
     async uploadDocument(
       kbId: string,
@@ -177,17 +177,6 @@ export function useKbApi() {
       if (opts?.documentType) form.append('document_type', opts.documentType)
       const { data } = await client.post(`/api/kb/${kbId}/documents`, form)
       return extractOne<KbDocument>(data)
-    },
-
-    /** 上传 zip（后端解压），返回解压出的文档数组。 */
-    async uploadZip(kbId: string, file: File): Promise<KbDocument[]> {
-      const form = new FormData()
-      form.append('file', file)
-      const response = await client.post(`/api/kb/${kbId}/documents`, form)
-      const envelope = response.data as { documents?: KbDocument[] }
-      if (Array.isArray(envelope.documents)) return envelope.documents
-      // 后端若按单文件处理（非归档扩展名），兜底成单元素数组
-      return [extractOne<KbDocument>(response.data)]
     },
 
     /** 归档上传（zip/hdx/chm）：小包同步返回文档列表；大包返回任务 ID（HTTP 202）。 */

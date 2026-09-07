@@ -28,6 +28,9 @@
                     SELECT 1 FROM kb_members m
                     WHERE m.kb_id = kb.id AND m.user_id = u.id
                 )
+                  <!-- 1.0.2 修复：站点管理员全通（与 mining kb/db.list_visible_kb_ids 的
+                       admin 分支对齐）——软删/跨域仍被上面的 status/domain 条件挡住。 -->
+                OR u.site_role = 'admin'
               )
     </select>
 

@@ -54,8 +54,22 @@ describe('DOC_STATUS_META / documentStatusSlices', () => {
   })
 })
 
-describe('localizeSearchError（36号 §九 检索行为）', () => {
-  it('kb_not_found 404 → 中文可行动提示', () => {
+describe('localizeSearchError（1.0.2 修复：三分型）', () => {
+  it('kb_not_found 404 → 权限/不存在提示（不再误报「未完成挖掘」）', () => {
+    const err = {
+      response: {
+        status: 404,
+        data: { error: 'kb_not_found', message: 'One or more knowledge bases were not found' },
+      },
+    }
+    const out = localizeSearchError(err) as Error
+    expect(out).toBeInstanceOf(Error)
+    expect(out.message).toContain('无读取权限')
+    expect(out.message).not.toContain('尚未完成挖掘')
+    expect(out.message).not.toContain('knowledge bases')
+  })
+
+  it('kb_not_found 仅凭 message 文本也能分型（老网关/无 error 字段）', () => {
     const err = {
       response: {
         status: 404,
@@ -63,20 +77,10 @@ describe('localizeSearchError（36号 §九 检索行为）', () => {
       },
     }
     const out = localizeSearchError(err) as Error
-    expect(out).toBeInstanceOf(Error)
-    expect(out.message).toContain('尚未完成挖掘')
-    expect(out.message).not.toContain('knowledge bases')
+    expect(out.message).toContain('无读取权限')
   })
 
-  it('paradigm 自身的 404（非 kb_not_found）不误报为未挖掘', () => {
-    const err = {
-      response: { status: 404, data: { message: 'paradigm not found' } },
-    }
-    // 原样上抛（不吞错、不误导）
-    expect(localizeSearchError(err)).toBe(err)
-  })
-
-  it('no_active_kb_build 404 → 中文可行动提示', () => {
+  it('no_active_kb_build 404 → 未完成挖掘提示（与无权限分开）', () => {
     const err = {
       response: {
         status: 404,
@@ -88,6 +92,15 @@ describe('localizeSearchError（36号 §九 检索行为）', () => {
     }
     const out = localizeSearchError(err) as Error
     expect(out.message).toContain('尚未完成挖掘')
+    expect(out.message).not.toContain('无读取权限')
+  })
+
+  it('paradigm 自身的 404（非 kb_not_found）不误报为未挖掘', () => {
+    const err = {
+      response: { status: 404, data: { message: 'paradigm not found' } },
+    }
+    // 原样上抛（不吞错、不误导）
+    expect(localizeSearchError(err)).toBe(err)
   })
 
   it('403 → 权限提示', () => {

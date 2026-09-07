@@ -23,19 +23,25 @@ export interface ParadigmSearchResult {
 }
 
 /**
- * 36号 §九：检索错误中文化。axios 错误按响应体/状态映射为用户可行动的
- * 中文文案；未识别的错误原样上抛（不吞错）。404 只在响应体确实是
- * kb_not_found 语义时才映射——paradigm 路由自身的 404（范式不存在）
- * 不得误报成「未完成挖掘」。
+ * 1.0.2 修复：检索错误三分型。kb_not_found（无权限或不存在，服务端防探测同码）
+ * 与 no_active_kb_build（库在但无可检索 Build）必须给用户不同指引——前者让用户
+ * 找库主/管理员加权限，后者让用户先完成挖掘。未识别的错误原样上抛（不吞错）；
+ * paradigm 路由自身的 404（范式不存在）不误报。
  */
 export function localizeSearchError(err: unknown): unknown {
   const e = err as { response?: { status?: number; data?: { message?: string; error?: string } }; message?: string }
   const status = e?.response?.status
   const bodyMsg = e?.response?.data?.message || e?.response?.data?.error || ''
-  const isKbNotFound = status === 404
-    && /knowledge bases were not found|kb_not_found|no_active_kb_build|no mined content/i.test(String(bodyMsg))
-  if (isKbNotFound) {
-    return new Error('所选知识库暂不可检索：可能尚未完成挖掘，或全部文档挖掘失败（未生成可检索版本）。请先完成一次成功的挖掘。')
+  const text = String(bodyMsg)
+  if (status === 404) {
+    const isNoActiveBuild = /no_active_kb_build|no mined content/i.test(text)
+    if (isNoActiveBuild) {
+      return new Error('所选知识库暂无可检索内容：尚未完成挖掘，或全部文档挖掘失败。请先完成一次成功的挖掘（部分文档成功即可检索）。')
+    }
+    const isKbNotFound = /kb_not_found|knowledge bases were not found/i.test(text)
+    if (isKbNotFound) {
+      return new Error('无法访问所选知识库：库不存在，或当前账号无读取权限（需库主/成员/public/站点管理员）。')
+    }
   }
   if (status === 401 || status === 403) {
     return new Error('没有访问所选知识库的权限，请确认知识库可见性或联系管理员。')

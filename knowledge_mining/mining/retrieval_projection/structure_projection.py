@@ -68,6 +68,7 @@ def project_structure(
     segments: Iterable[CompiledSegment],
     *,
     document_ref: str,
+    table_facts: Any = None,
 ) -> StructureProjection:
     materialized = tuple(segments)
     # A0-2：document 节点 ref 与 retrieval 的 document target_ref 同身份
@@ -133,6 +134,10 @@ def project_structure(
                 "columns": header,
                 "row_count": 0,
                 "readiness": "ready" if header else "insufficient",
+                # A3：sheet 维度（多 sheet 工作簿的表格身份一维）
+                "sheet_name": (
+                    table_facts.sheet_of(table_ref) if table_facts else None
+                ),
             })
             nodes.append({
                 "node_type": "table", "ref": f"{document_ref}#table:{table_ref}",
@@ -177,11 +182,22 @@ def project_structure(
                     column_index = true_index
                 else:
                     column_index = col_idx_of.get(name, -1)
+                # A3：cell 类型化事实（IR 已有，此前在投影层被丢弃）
+                fact = (
+                    table_facts.cell(table_ref, row_index, column_index)
+                    if table_facts else None
+                )
                 cells.append({
                     "table_ref": table_ref, "row": row_index,
                     "column_index": column_index,
                     "column": name, "value": value.strip(),
                     "is_header": False,
+                    "value_type": fact.value_type if fact else None,
+                    "normalized_value": fact.normalized_value if fact else None,
+                    "formula": fact.formula if fact else None,
+                    "row_span": fact.row_span if fact else None,
+                    "column_span": fact.column_span if fact else None,
+                    "source_span_id": fact.source_span_id if fact else None,
                 })
             data_rows_by_table.setdefault(table_ref, set()).add(row_index)
 

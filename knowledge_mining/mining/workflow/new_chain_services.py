@@ -596,6 +596,9 @@ def build_new_chain_services(
             representation_store=representation_store,
             embedding_store=embedding_store,
             writer=asset_writer,
+            # A3（39 号 §3.1）：入库时从 IR 物化 cell 类型化事实 + sheet 名
+            #（共享 IR 加载通道；快照缺 IR 按降级跳过，不阻断三面入库）。
+            ir_loader=_build_ir_loader(snapshots, storage_objects, object_store),
         ),
         # 29号 M3 生产接线：llm_generator（/execute 客户端）存在时构造两
         # 实验算子门面。alias_store 复用主表示 store 是安全的——28轮已实现
@@ -612,6 +615,28 @@ def build_new_chain_services(
         ),
         source_locator_service=locator_service,
     )
+
+
+def _build_ir_loader(snapshots: Any, storage_objects: Any, object_store: Any):
+    """A3：persist 的 IR 加载闭包（None 值/异常由调用侧降级处理）."""
+
+    async def _load(snapshot_id: Any) -> Any:
+        from knowledge_mining.mining.snapshot_store.ir_access import (
+            SnapshotIRUnavailable,
+            load_parsed_document,
+        )
+
+        try:
+            return await load_parsed_document(
+                snapshots=snapshots,
+                storage_objects=storage_objects,
+                object_store=object_store,
+                snapshot_id=str(snapshot_id),
+            )
+        except SnapshotIRUnavailable:
+            return None
+
+    return _load
 
 
 def _build_pg_locator_store(repository_pool: Any) -> Any:

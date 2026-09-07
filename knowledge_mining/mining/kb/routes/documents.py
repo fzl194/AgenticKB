@@ -101,6 +101,10 @@ async def document_parse_result(
         raise HTTPException(409, "Current parsed artifact is unavailable") from None
     if result is None:
         raise HTTPException(404, "Current document revision has no structured result")
+    # A3：doc_key 即投影 document_ref（网页 tables tab 构造内部表格查询 ref 用）
+    snapshot_block = result.get("snapshot")
+    if isinstance(snapshot_block, dict):
+        snapshot_block.setdefault("document_ref", document.get("document_key"))
     return result
 
 

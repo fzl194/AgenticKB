@@ -1,0 +1,19 @@
+# A4 评测题集——smoke（框架自证，非真实业务题）
+#
+# 本文件由 run_eval.py 的内置 fixture 真值驱动（harness.build_md_fixture /
+# build_xlsx_fixture），用途是**跑通评测框架**并给出可复跑的指标管道。
+# 真实业务题集见 questions_business_TEMPLATE.yaml（业务输入缺口）。
+
+version: 1
+kind: smoke
+suites:
+  - category: source_accuracy
+    description: 检索命中 → 章节/定位解析（fixture：1.1 组网要求）
+  - category: scope
+    description: 第二章 descendants 搜索零越界（must-not: 环网/组网）
+  - category: table_golden
+    description: 告警表 count/sum/avg/min/max + 复合过滤（fixture 真值）
+  - category: permission
+    description: private 库 × admin/stranger/anonymous 期望矩阵
+  - category: quality
+    description: KB 质量报告面可计算

@@ -369,6 +369,120 @@ class KbDB:
             row = await cur.fetchone()
             return dict(row)  # type: ignore[arg-type]
 
+    async def get_kb_quality(self, kb_id: str) -> dict[str, Any]:
+        """A4 质量报告（34 号 P1-1；39 号 §4.1）：结构与表格完整度 + 定位覆盖.
+
+        口径与 get_kb_readiness 同（current 语义：每文档跨 validated/published
+        Build 的最新 active selection）。纯查询派生，无 DDL、无写路径。
+        """
+        current_cte = """
+                       SELECT DISTINCT ON (bs.document_id)
+                              bs.document_id, bs.document_snapshot_id,
+                              bs.selection_status
+                       FROM asset_build_document_snapshots bs
+                       JOIN asset_builds b ON b.id = bs.build_id
+                       JOIN asset_documents d ON d.id = bs.document_id
+                       WHERE b.kb_id = %(kb)s
+                         AND d.kb_id = %(kb)s
+                         AND d.deleted_at IS NULL
+                         AND b.status IN ('validated', 'published')
+                       ORDER BY bs.document_id, b.created_at DESC, b.id DESC
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "WITH latest AS (" + current_cte + "), "
+                "current AS (SELECT * FROM latest WHERE selection_status = 'active'), "
+                "snaps AS (SELECT document_snapshot_id AS sid FROM current) "
+                "SELECT "
+                "(SELECT COUNT(*) FROM asset_structure_nodes n "
+                " JOIN snaps ON n.snapshot_id = snaps.sid "
+                " WHERE n.node_type = 'section') AS sections_total, "
+                "(SELECT COUNT(*) FROM asset_structure_nodes n "
+                " JOIN snaps ON n.snapshot_id = snaps.sid "
+                " WHERE n.node_type = 'section' AND n.ordinal IS NOT NULL"
+                ") AS sections_with_ordinal, "
+                "(SELECT COUNT(*) FROM asset_structure_nodes n "
+                " JOIN snaps ON n.snapshot_id = snaps.sid "
+                " WHERE n.node_type = 'section' AND n.element_id IS NOT NULL"
+                ") AS sections_bridged, "
+                "(SELECT COUNT(*) FROM asset_retrieval_units_v2 u "
+                " JOIN snaps ON u.snapshot_id = snaps.sid) AS units_total, "
+                "(SELECT COUNT(*) FROM asset_retrieval_units_v2 u "
+                " JOIN snaps ON u.snapshot_id = snaps.sid "
+                " WHERE u.section_ref IS NOT NULL) AS units_with_section, "
+                "(SELECT COUNT(*) FROM asset_structured_assets a "
+                " JOIN snaps ON a.snapshot_id = snaps.sid "
+                " WHERE a.asset_type = 'table') AS tables_total, "
+                "(SELECT COUNT(*) FROM asset_structured_assets a "
+                " JOIN snaps ON a.snapshot_id = snaps.sid "
+                " WHERE a.asset_type = 'table' AND a.readiness = 'ready'"
+                ") AS tables_query_ready, "
+                "(SELECT COUNT(*) FROM asset_table_cells c "
+                " JOIN snaps ON c.snapshot_id = snaps.sid) AS cells_total, "
+                "(SELECT COUNT(*) FROM asset_table_cells c "
+                " JOIN snaps ON c.snapshot_id = snaps.sid "
+                " WHERE c.value_type IS NOT NULL) AS cells_typed, "
+                "(SELECT COUNT(*) FROM asset_source_locators l "
+                " JOIN snaps ON l.snapshot_id = snaps.sid "
+                " WHERE l.locator_kind IN ('page','line_range','sheet_cell')"
+                ") AS locator_denominator, "
+                "(SELECT COUNT(*) FROM asset_source_locators l "
+                " JOIN snaps ON l.snapshot_id = snaps.sid "
+                " WHERE (l.locator_kind = 'page' AND l.page IS NOT NULL) "
+                "    OR (l.locator_kind = 'line_range' AND l.line_start IS NOT NULL "
+                "        AND l.line_end IS NOT NULL) "
+                "    OR (l.locator_kind = 'sheet_cell' AND l.cell IS NOT NULL)"
+                ") AS locator_resolved, "
+                "(SELECT COUNT(*) FROM asset_source_locators l "
+                " JOIN snaps ON l.snapshot_id = snaps.sid "
+                " WHERE l.locator_kind IN ('native','section_only','unavailable')"
+                ") AS locator_degraded, "
+                "(SELECT COUNT(*) FROM current) AS documents",
+                {"kb": kb_id},
+            )
+            row = dict(await cur.fetchone())
+            cur = await conn.execute(
+                "WITH latest AS (" + current_cte + "), "
+                "current AS (SELECT * FROM latest WHERE selection_status = 'active') "
+                "SELECT a.table_ref, a.readiness, a.row_count, a.sheet_name "
+                "FROM asset_structured_assets a "
+                "JOIN current ON a.snapshot_id = current.document_snapshot_id "
+                "WHERE a.asset_type = 'table' AND a.readiness <> 'ready' "
+                "ORDER BY a.table_ref",
+                {"kb": kb_id},
+            )
+            unqueryable = [dict(r) for r in await cur.fetchall()]
+        return {
+            "documents": int(row["documents"] or 0),
+            "structure": {
+                "sections_total": int(row["sections_total"] or 0),
+                "sections_with_ordinal": int(row["sections_with_ordinal"] or 0),
+                "sections_bridged": int(row["sections_bridged"] or 0),
+                "units_total": int(row["units_total"] or 0),
+                "units_with_section": int(row["units_with_section"] or 0),
+            },
+            "tables": {
+                "tables_total": int(row["tables_total"] or 0),
+                "tables_query_ready": int(row["tables_query_ready"] or 0),
+                "cells_total": int(row["cells_total"] or 0),
+                "cells_typed": int(row["cells_typed"] or 0),
+                "unqueryable": [
+                    {
+                        "table_ref": r["table_ref"],
+                        "reason": r["readiness"],
+                        "row_count": r["row_count"],
+                        "sheet_name": r["sheet_name"],
+                    }
+                    for r in unqueryable
+                ],
+            },
+            "locator": {
+                "denominator": int(row["locator_denominator"] or 0),
+                "resolved": int(row["locator_resolved"] or 0),
+                "degraded": int(row["locator_degraded"] or 0),
+            },
+        }
+
     async def get_kb_readiness(self, kb_id: str) -> dict[str, Any]:
         """批次4 readiness 四档的纯查询派生（无 DDL）。
 

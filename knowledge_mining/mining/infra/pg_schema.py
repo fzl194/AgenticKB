@@ -79,6 +79,15 @@ _RETRIEVAL_ASSETS_V2_DDL = (
     / "schemas"
     / "013_retrieval_assets_v2_staging.sql"
 )
+# A1 来源记录面（37/38 号）：证据精确定位双表 + 可解析率审计视图。启动
+# 迁移，紧跟 013（locator 晋升清单挂在 PROMOTE_TABLE_COLUMNS 上）。
+_SOURCE_LOCATORS_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "asset_core"
+    / "schemas"
+    / "014_a1_source_locators.sql"
+)
 # 阶段 A（批次5）：用户级 MCP 接入（一人一钥 + 开放库清单）与库级默认检索范式。
 _MCP_ACCESS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "008_mcp_access.sql"
 _KB_DEFAULT_PARADIGM_DDL = (
@@ -183,6 +192,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _SEMANTIC_ROLE_V2_DDL,
         # Retrieval v2/final+staging：启动迁移，严禁业务 repository 热路径 DDL。
         _RETRIEVAL_ASSETS_V2_DDL,
+        # A1 来源记录面：依赖 013 的 units 表语义（仅审计视图口径，无 FK）。
+        _SOURCE_LOCATORS_DDL,
         # 阶段 A（批次5）：MCP 用户接入（依赖 kb_users/knowledge_bases，链尾安全）。
         _MCP_ACCESS_DDL,
         _KB_DEFAULT_PARADIGM_DDL,

@@ -1,5 +1,5 @@
 import type { HealthStatus } from '@/types'
-import type { EvidenceItem, EvidenceResponse } from '@/types/operator'
+import type { EvidenceItem, EvidenceLocator, EvidenceResponse } from '@/types/operator'
 import { createProxyClient } from '@/api/proxyClient'
 
 export type { EvidenceItem, EvidenceResponse }
@@ -43,6 +43,19 @@ export function localizeSearchError(err: unknown): unknown {
   return err
 }
 
+/** A1（37/38 号）：ev_ ref 的服务端导航解析结果（/api/v1/evidence/{ref}/source）。 */
+export interface EvidenceSourceNavigation {
+  document_id: string
+  kb_id?: string | null
+  file_name?: string | null
+  relative_path?: string | null
+  section_element_id?: string | null
+  section_path?: string | null
+  table_ref?: string | null
+  row_index?: number | null
+  locator?: EvidenceLocator | null
+}
+
 export function useServingApi() {
   const client = createProxyClient('serving')
 
@@ -63,6 +76,20 @@ export function useServingApi() {
       if (kbId) params.kbId = kbId
       if (mode) params.mode = mode
       const { data } = await client.get(`/api/v1/evidence/${ref}`, { params })
+      return data
+    },
+
+    /**
+     * A1 来源导航解析（37 号 P0-6）：ev_ ref -> 服务端在当前权限下解析的跳转锚
+     * （document_id / 大纲锚 / 表格锚 / locator）。前端据此路由到文档页对应位置，
+     * 不持有、不拼接任何内部编号。
+     */
+    async getEvidenceSource(
+      ref: string, domain: string, kbId?: string,
+    ): Promise<EvidenceSourceNavigation> {
+      const params: Record<string, unknown> = { domain }
+      if (kbId) params.kbId = kbId
+      const { data } = await client.get(`/api/v1/evidence/${ref}/source`, { params })
       return data
     },
 

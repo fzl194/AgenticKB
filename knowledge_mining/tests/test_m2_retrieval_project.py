@@ -236,15 +236,32 @@ class _FakeCompileService:
 class _FakeProjectService:
     """retrieval_project 门面替身：纯投影 + 暂存写入."""
 
-    def __init__(self, representations) -> None:
+    def __init__(self, representations, *, reused: bool = False) -> None:
         self._reps = representations
+        self._reused = reused
 
     def project_for_snapshot(self, *, snapshot_id, document_ref, params):
         return SimpleNamespace(
             representations=self._reps,
             representation_count=len(self._reps),
             projector_fingerprint="proj-v1",
+            reused=self._reused,
         )
+
+
+class _FakeLocatorService:
+    """A1 handler 物化分支桩：ok / 异常 / 调用计数."""
+
+    def __init__(self, status: str = "ok", exc: Exception | None = None) -> None:
+        self._status = status
+        self._exc = exc
+        self.calls: list[str | None] = []
+
+    def materialize_for_snapshot(self, *, snapshot_id):
+        self.calls.append(snapshot_id)
+        if self._exc is not None:
+            raise self._exc
+        return SimpleNamespace(status=self._status, record_count=2)
 
 
 def _compiled_bundle():
@@ -405,3 +422,112 @@ def test_compiler_vocabulary_maps_into_type_matrix() -> None:
     assert "figure_caption" in by_type
     fig = next(r for r in reps if r.representation_type == "figure_caption")
     assert "风扇结构图" in fig.structural_context
+
+
+# ---------------------------------------------------------------------------
+# A1 来源定位（37/38 号）：handler 物化分支——成功注入 fact / 异常 degraded / 复用跳过
+# ---------------------------------------------------------------------------
+
+
+def _project_with_locator(locator_service, *, reused: bool = False):
+    from knowledge_mining.mining.retrieval_projection.projector import (
+        project_representations,
+    )
+    from knowledge_mining.mining.workflow.handlers.document import (
+        retrieval_unit_project_handler,
+    )
+
+    reps = project_representations(
+        _segments(), document_ref="manual.md", snapshot_ref="snap_1",
+    )
+    result = retrieval_unit_project_handler(
+        _state(_compiled_bundle()), {"includeSections": True},
+        _runtime(
+            retrieval_project_service=_FakeProjectService(reps, reused=reused),
+            source_locator_service=locator_service,
+        ),
+    )
+    return result, locator_service
+
+
+def test_retrieval_unit_project_materializes_source_locators_on_success() -> None:
+    result, spy = _project_with_locator(_FakeLocatorService(status="ok"))
+
+    assert result.status.value == "success"
+    assert "source_locators" in result.outputs.context.capability_facts
+    assert spy.calls == ["snap_1"]
+
+
+def test_retrieval_unit_project_locator_failure_degrades_without_blocking() -> None:
+    result, spy = _project_with_locator(
+        _FakeLocatorService(exc=RuntimeError("IR object missing")))
+
+    # 硬约束（38 号 §2.4）：物化失败 degraded 不阻断基础资产
+    assert result.status.value == "success"
+    assert "retrieval_units" in result.outputs.context.capability_facts
+    assert "source_locators" not in result.outputs.context.capability_facts
+    assert spy.calls == ["snap_1"]
+
+
+def test_retrieval_unit_project_skips_materialization_on_reused_snapshot() -> None:
+    result, spy = _project_with_locator(_FakeLocatorService(), reused=True)
+
+    # 共享快照第二文档复用路径：staging 已有行，不重物化
+    assert result.status.value == "success"
+    assert "source_locators" not in result.outputs.context.capability_facts
+    assert spy.calls == []
+
+
+def test_retrieval_unit_project_without_locator_service_still_succeeds() -> None:
+    from knowledge_mining.mining.retrieval_projection.projector import (
+        project_representations,
+    )
+    from knowledge_mining.mining.workflow.handlers.document import (
+        retrieval_unit_project_handler,
+    )
+
+    reps = project_representations(
+        _segments(), document_ref="manual.md", snapshot_ref="snap_1",
+    )
+    result = retrieval_unit_project_handler(
+        _state(_compiled_bundle()), {"includeSections": True},
+        _runtime(retrieval_project_service=_FakeProjectService(reps)),
+    )
+
+    assert result.status.value == "success"
+    assert "source_locators" not in result.outputs.context.capability_facts
+
+
+def test_workflow_job_services_carries_source_locator_service(monkeypatch) -> None:
+    """A1 E2E 实测教训（回归钉）：_WorkflowJobServices 是 handler 看到的
+    runtime.services——_ensure_object_input_services 必须逐字段搬运
+    source_locator_service，漏搬即生产静默降级（单测 SimpleNamespace 假
+    runtime 测不出）。"""
+    from types import SimpleNamespace
+
+    from knowledge_mining.mining.jobs.run import _WorkflowJobServices
+
+    marker = SimpleNamespace(materialize_for_snapshot=lambda **_: None)
+    fake = SimpleNamespace(
+        document_parse_service=object(), segment_compile_service=object(),
+        retrieval_project_service=object(), embedding_service=None,
+        asset_persist_service=object(), query_expansion_service=None,
+        hierarchical_summary_service=None, source_locator_service=marker,
+    )
+    from knowledge_mining.mining.jobs import run as run_module
+
+    monkeypatch.setattr(
+        run_module, "_build_workflow_object_input_services",
+        lambda **_: fake,
+    )
+
+    job = object.__new__(_WorkflowJobServices)  # 跳过重 __init__
+    job.asset_db = SimpleNamespace(pool=object())
+    job.pipeline_config = SimpleNamespace(embedding_generator=None)
+    job.llm_base_url = None
+    job.profile = None
+    job._object_input_services_ready = False
+
+    job._ensure_object_input_services()
+
+    assert job.source_locator_service is marker

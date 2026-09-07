@@ -226,7 +226,8 @@ public class AssembleOperator implements Operator {
                 src != null ? src.relativePath() : null,
                 e.documentRef() != null ? refCodec.encodeDocument(e.snapshotId(), e.documentRef()) : null,
                 src != null ? src.section() : null,
-                src != null ? src.page() : null);
+                src != null ? src.page() : null,
+                src != null ? src.locator() : null);
         String structureRef = e.navigable() && !e.structureRefs().isEmpty()
                 ? refCodec.encodeStructure(e.snapshotId(), e.structureRefs().get(0)) : null;
         return new EvidenceResponse.EvidenceItem(ref, e.evidenceType(), content, source,

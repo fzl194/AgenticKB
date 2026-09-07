@@ -175,10 +175,14 @@
               <!-- 文档大纲 -->
               <el-collapse-item v-if="parseResult.outline.length" name="outline" title="文档大纲">
                 <el-tree
+                  ref="outlineTreeRef"
                   :data="outlineTree"
                   :props="{ label: 'title', children: 'children' }"
+                  node-key="element_id"
+                  highlight-current
                   default-expand-all
                   class="doc-preview__outline"
+                  data-testid="doc-outline-tree"
                 />
               </el-collapse-item>
 
@@ -243,8 +247,17 @@
                 name="tables"
                 :title="`表格（${parseResult.tables.length}）`"
               >
-                <div v-for="t in parseResult.tables" :key="t.table_id" class="doc-preview__table-block">
-                  <div class="doc-preview__table-caption">{{ t.rows }} 行 × {{ t.columns }} 列</div>
+                <div
+                  v-for="t in parseResult.tables"
+                  :key="t.table_id"
+                  class="doc-preview__table-block"
+                  :class="{ 'doc-preview__table-block--hit': t.table_id === highlightedTableId }"
+                  :data-testid="`doc-table-${t.table_id}`"
+                >
+                  <div class="doc-preview__table-caption">
+                    <el-tag v-if="t.sheet_name" size="small" effect="plain">{{ t.sheet_name }}</el-tag>
+                    {{ t.rows }} 行 × {{ t.columns }} 列
+                  </div>
                   <el-table :data="tableRows(t)" size="small" border class="kb-table">
                     <el-table-column
                       v-for="(_, ci) in tableRows(t)[0] || []"
@@ -316,8 +329,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Document, Download, Picture, Tickets, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
@@ -336,6 +349,7 @@ const TEXT_RENDER_LIMIT = 200_000
 
 const props = defineProps<{ kbId: string; docId: string }>()
 const router = useRouter()
+const route = useRoute()
 const kbApi = useKbApi()
 
 const doc = ref<KbDocument | null>(null)
@@ -372,11 +386,11 @@ const parseError = ref('')
 const parseRetryable = ref(false)
 
 const outlineTree = computed(() => {
-  type Node = { title: string; children: Node[] }
+  type Node = { element_id: string; title: string; children: Node[] }
   const roots: Node[] = []
   const stack: Node[] = []
   for (const node of parseResult.value?.outline ?? []) {
-    const item: Node = { title: node.title, children: [] }
+    const item: Node = { element_id: node.element_id, title: node.title, children: [] }
     while (stack.length >= node.level) stack.pop()
     if (stack.length) stack[stack.length - 1].children.push(item)
     else roots.push(item)
@@ -387,6 +401,44 @@ const outlineTree = computed(() => {
 
 function tableRows(t: { preview: string[][] }): string[][] {
   return t.preview.map(row => row.map(cell => cell ?? ''))
+}
+
+// A1 来源导航锚（37 号 P0-6）：route.query 的 anchor=大纲元素锚、table=表格锚。
+// 检索面板经服务端解析端点取得这些锚后路由过来——本页只负责定位呈现。
+const outlineTreeRef = ref<{ setCurrentKey?: (key: string | number) => void } | null>(null)
+const highlightedTableId = ref('')
+
+function applyNavigationAnchors() {
+  const q = route.query as Record<string, string | string[] | undefined>
+  const anchor = typeof q.anchor === 'string' ? q.anchor : ''
+  const table = typeof q.table === 'string' ? q.table : ''
+  if (!anchor && !table) return
+  activeTab.value = 'structured'
+  const cards = new Set(openCards.value)
+  if (anchor) cards.add('outline')
+  if (table) cards.add('tables')
+  openCards.value = [...cards]
+  if (table) {
+    highlightedTableId.value = table
+    void nextTick(() => {
+      const escaped = typeof CSS !== 'undefined' && CSS.escape
+        ? CSS.escape(table) : table
+      document
+        .querySelector(`[data-testid="doc-table-${escaped}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }
+  if (anchor) {
+    void nextTick(() => {
+      // jsdom / 树未渲染时 setCurrentKey 可缺席——定位是渐进增强，不抛错
+      const tree = outlineTreeRef.value as
+        { setCurrentKey?: (key: string) => void } | null
+      tree?.setCurrentKey?.(anchor)
+      document
+        .querySelector('[data-testid="doc-outline-tree"]')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }
 }
 
 async function loadParseResult() {
@@ -401,7 +453,11 @@ async function loadParseResult() {
     const result = parseView.value === 'latest_revision'
       ? await kbApi.getDocumentParseResult(props.kbId, props.docId, 'latest_revision')
       : await kbApi.getDocumentParseResult(props.kbId, props.docId)
-    if (generation === parseGeneration) parseResult.value = result
+    if (generation === parseGeneration) {
+      parseResult.value = result
+      // A1（37 号 P0-6）：搜索面板跳转带锚——结构化视图 + 大纲/表格定位
+      applyNavigationAnchors()
+    }
   } catch (e) {
     if (generation !== parseGeneration) return
     // 对抗评审 HIGH-1：按 HTTP 状态码分支（文案正则永远匹配不到后端
@@ -741,6 +797,12 @@ onUnmounted(cleanup)
 .doc-preview__table-block {
   margin-bottom: 12px;
 }
+.doc-preview__table-block--hit {
+  outline: 2px solid var(--el-color-primary);
+  border-radius: 6px;
+  padding: 4px;
+}
+
 .doc-preview__table-caption {
   font-size: 12px;
   color: var(--el-text-color-secondary);

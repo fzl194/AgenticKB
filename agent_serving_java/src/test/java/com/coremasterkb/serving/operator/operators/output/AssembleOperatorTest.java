@@ -58,7 +58,7 @@ class AssembleOperatorTest {
                 "exact", structureRefs, navigable, false,
                 (text == null ? 0 : (text.length() + 3) / 4),
                 new HydratedEvidence.SourceProjection("kb1", "file.md", "docs/file.md",
-                        documentOf(targetRef), null, null),
+                        documentOf(targetRef), null, null, null),
                 provenance == null ? Map.of() : provenance);
     }
 
@@ -73,6 +73,48 @@ class AssembleOperatorTest {
         SlotValues out = op.execute(in, Params.empty(), ctx);
         assertThat(out.get("evidenceResponse")).isInstanceOf(EvidenceResponse.class);
         return (EvidenceResponse) out.get("evidenceResponse");
+    }
+
+    @Nested
+    @DisplayName("A1 locator projection (37/38 号)")
+    class LocatorProjection {
+
+        private HydratedEvidence withLocator(HydratedEvidence e,
+                                              com.coremasterkb.serving.domain.EvidenceLocator loc) {
+            return e.withSourceLocator(loc);
+        }
+
+        @Test
+        @DisplayName("source.locator 原样投影进公开协议")
+        void projectsLocatorIntoProtocol() {
+            HydratedEvidence e = evidence("snap-1", "doc:/a#seg:1", "segment",
+                    "doc:/a#seg:1", "prose", "doc:/a#section:总则", 1, null, null,
+                    "命中段落", null, List.of("doc:/a#section:总则"), true);
+            e = withLocator(e, new com.coremasterkb.serving.domain.EvidenceLocator(
+                    "page", 7, null, null, null, null, null, null, null));
+
+            EvidenceResponse out = run(List.of(e), ctx);
+
+            assertThat(out.evidence()).hasSize(1);
+            var source = out.evidence().get(0).source();
+            assertThat(source.locator()).isNotNull();
+            assertThat(source.locator().kind()).isEqualTo("page");
+            assertThat(source.locator().page()).isEqualTo(7);
+            assertThat(source.page()).isEqualTo(7);
+        }
+
+        @Test
+        @DisplayName("无 locator 的证据省略 locator 字段（协议只增不改）")
+        void omitsLocatorWhenAbsent() {
+            HydratedEvidence e = evidence("snap-1", "doc:/a#seg:1", "segment",
+                    "doc:/a#seg:1", "prose", "doc:/a#section:总则", 1, null, null,
+                    "命中段落", null, List.of(), false);
+
+            EvidenceResponse out = run(List.of(e), ctx);
+
+            assertThat(out.evidence()).hasSize(1);
+            assertThat(out.evidence().get(0).source().locator()).isNull();
+        }
     }
 
     @Nested

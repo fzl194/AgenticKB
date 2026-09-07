@@ -147,6 +147,19 @@ export interface RunTraceStep {
   summary: string
 }
 
+/** A1（37/38 号）：证据精确定位。kind 前三者为已声明可精确定位；native 携带人读 description。 */
+export interface EvidenceLocator {
+  kind: 'page' | 'line_range' | 'sheet_cell' | 'native' | string
+  page?: number
+  line_start?: number
+  line_end?: number
+  sheet?: string
+  cell?: string
+  table_ref?: string
+  row_index?: number
+  description?: string
+}
+
 /** 批次8（25 号 §5.3）：EvidenceResponse 单条公开证据。 */
 export interface EvidenceItem {
   ref?: string
@@ -159,6 +172,8 @@ export interface EvidenceItem {
     document_ref?: string
     section?: string
     page?: number
+    /** A1：证据精确定位（可得才有）；null = 仅有 L1 章节定位。 */
+    locator?: EvidenceLocator | null
   }
   truncated?: boolean
   structure_ref?: string

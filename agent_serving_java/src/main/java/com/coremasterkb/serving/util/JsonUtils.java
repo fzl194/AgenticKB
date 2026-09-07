@@ -3,78 +3,19 @@ package com.coremasterkb.serving.util;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.List;
 import java.util.Map;
 
 /**
- * JSON utility methods translated from schemas/json_utils.py.
+ * JSON 解析工具（A1 37 号 D2：随 fulltext 链退役删除了解析旧格式
+ * {@code raw_segment_ids} 的 parseSourceRefs/parseTargetRef——挖掘侧现写
+ * {@code {element_id, evidence_span_ids}}，旧解析器零调用方且格式漂移）。
  */
 public final class JsonUtils {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private JsonUtils() {}
-
-    /**
-     * parseSourceRefs -- format: {"raw_segment_ids": ["id1", "id2", ...]}
-     */
-    public static List<String> parseSourceRefs(String sourceRefsJson) {
-        if (sourceRefsJson == null || sourceRefsJson.isBlank()) {
-            return Collections.emptyList();
-        }
-        try {
-            Map<String, Object> data = MAPPER.readValue(sourceRefsJson, new TypeReference<>() {});
-            Object ids = data.get("raw_segment_ids");
-            if (ids instanceof List<?> list) {
-                List<String> result = new ArrayList<>();
-                for (Object v : list) {
-                    if (v instanceof String s) {
-                        result.add(s);
-                    }
-                }
-                return result;
-            }
-            return Collections.emptyList();
-        } catch (Exception e) {
-            return Collections.emptyList();
-        }
-    }
-
-    /**
-     * parseTargetRef -- format: {"raw_segment_id": "id"} or {"raw_segment_ids": ["id1", ...]}
-     */
-    public static List<String> parseTargetRef(String targetRefJson) {
-        if (targetRefJson == null || targetRefJson.isBlank()) {
-            return Collections.emptyList();
-        }
-        try {
-            Map<String, Object> data = MAPPER.readValue(targetRefJson, new TypeReference<>() {});
-            if (data.containsKey("raw_segment_id")) {
-                Object v = data.get("raw_segment_id");
-                if (v instanceof String s) {
-                    return List.of(s);
-                }
-                return Collections.emptyList();
-            }
-            if (data.containsKey("raw_segment_ids")) {
-                Object ids = data.get("raw_segment_ids");
-                if (ids instanceof List<?> list) {
-                    List<String> result = new ArrayList<>();
-                    for (Object v : list) {
-                        if (v instanceof String s) {
-                            result.add(s);
-                        }
-                    }
-                    return result;
-                }
-            }
-            return Collections.emptyList();
-        } catch (Exception e) {
-            return Collections.emptyList();
-        }
-    }
 
     /**
      * safeJsonParse -- parse raw string to Map; return empty map on failure or if already a Map.

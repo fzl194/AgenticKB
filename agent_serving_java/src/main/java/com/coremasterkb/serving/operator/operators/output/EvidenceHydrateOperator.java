@@ -1,10 +1,12 @@
 package com.coremasterkb.serving.operator.operators.output;
 
 import com.coremasterkb.serving.domain.ActiveScope;
+import com.coremasterkb.serving.domain.EvidenceLocator;
 import com.coremasterkb.serving.domain.HydratedEvidence;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
 import com.coremasterkb.serving.mapper.result.EvidenceDocumentRow;
 import com.coremasterkb.serving.mapper.result.SegmentTextRow;
+import com.coremasterkb.serving.mapper.result.SourceLocatorRow;
 import com.coremasterkb.serving.mapper.result.StructureNodeRow;
 import com.coremasterkb.serving.mapper.result.TableAssetRow;
 import com.coremasterkb.serving.mapper.result.TableCellRow;
@@ -179,6 +181,18 @@ public class EvidenceHydrateOperator implements Operator {
         for (EvidenceDocumentRow d : mapper.selectDocumentSources(snapshots)) {
             docSources.putIfAbsent(d.getSnapshotId(), d);
         }
+        // A1 来源记录（37/38 号）：canonical 单元的 representation_id == canonical_evidence_id，
+        // 与 Phase A 的 canonicals 同键一次批查；只在此处（Top-N 水合）读，召回热路径不感知。
+        Map<String, SourceLocatorRow> locators = new LinkedHashMap<>();
+        for (SourceLocatorRow l : mapper.selectSourceLocators(snapshots, canonicals)) {
+            locators.putIfAbsent(rowKey(l.getSnapshotId(), l.getRepresentationId()), l);
+            // H-1：summary_alias 的 canonical = target_ref（挖掘 summary.py 契约）——
+            // 按 locator 行冗余的 target_ref 双键落图（putIfAbsent 保证 representation
+            // 命中优先，不被 target_ref 兜底覆盖）。
+            if (l.getTargetRef() != null && !l.getTargetRef().isEmpty()) {
+                locators.putIfAbsent(rowKey(l.getSnapshotId(), l.getTargetRef()), l);
+            }
+        }
         Map<String, Long> docTokens = new LinkedHashMap<>();
         for (var t : mapper.selectDocumentTokenTotals(snapshots)) {
             docTokens.put(t.snapshotId(), t.totalTokens() == null ? 0L : t.totalTokens());
@@ -294,7 +308,8 @@ public class EvidenceHydrateOperator implements Operator {
                     continue;
                 }
                 modeCounts.merge(e.expansionMode(), 1, Integer::sum);
-                out.add(e);
+                out.add(e.withSourceLocator(locatorOf(
+                        locators.get(rowKey(w.snapshotId(), w.canonicalId())))));
             } catch (Exception ex) {
                 // §6.8-8：证据读取失败按候选留痕跳过；不中断其余候选
                 log.warn("[evidence_hydrate] candidate skipped canonical={} reason={}",
@@ -618,7 +633,7 @@ public class EvidenceHydrateOperator implements Operator {
                 doc != null ? doc.getDocumentName() : null,
                 doc != null ? doc.getRelativePath() : null,
                 w.parsed().documentRef(),
-                section, null);
+                section, null, null);
         String content = joinFragments(fragments);
         return new HydratedEvidence(
                 w.snapshotId(), w.canonicalId(), w.candidate().targetType(),
@@ -635,6 +650,15 @@ public class EvidenceHydrateOperator implements Operator {
         }
         p.putAll(extra);
         return p;
+    }
+
+    /**
+     * A1：来源记录行 → 公开 locator（过滤与构造的单一实现见
+     * {@link SourceLocatorRow#toEvidenceLocator()}；section_only/unavailable 不出
+     * locator 对象——"位置不可得"由缺省表达，34 号 P0-8 态由消费端按缺省呈现）。
+     */
+    private EvidenceLocator locatorOf(SourceLocatorRow row) {
+        return row == null ? null : row.toEvidenceLocator();
     }
 
     /** 窗口片段：命中行 kind=exact，邻行 kind=window，按 ordinal 有序。 */

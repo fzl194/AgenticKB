@@ -85,7 +85,40 @@
           <p class="kb-search__item-text" :class="{ 'is-clamp': !expanded[ev.ref ?? ''] && ev.content && ev.content.length > 400 }">
             {{ expanded[ev.ref ?? ''] ? (fullContent[ev.ref ?? ''] ?? ev.content) : ev.content }}
           </p>
-          <div v-if="sourceLabelOf(ev)" class="kb-search__item-src">来源：{{ sourceLabelOf(ev) }}</div>
+          <!-- A1（37 号 P0-6）：来源成为结构入口——文件名开原件、章节进大纲锚、
+               位置徽标展示 locator；跳转目标全部由服务端解析端点给出。 -->
+          <div v-if="sourceLabelOf(ev) || locatorLabelOf(ev)" class="kb-search__item-src">
+            <template v-if="sourceLabelOf(ev)">
+              来源：
+              <!-- 跳转仅支持 ev_ 前缀（doc_/st_ 直接证据走 Agent 结构工具，无解析端点） -->
+              <el-button
+                v-if="ev.ref?.startsWith('ev_')"
+                text type="primary" size="small" class="kb-search__src-link"
+                :loading="navigating === ev.ref"
+                title="打开原文（原始预览）"
+                @click="goToSource(ev, 'document')"
+              >{{ ev.source?.file_name || '文档' }}</el-button>
+              <span v-else>{{ ev.source?.file_name || '文档' }}</span>
+              <el-button
+                v-if="ev.ref?.startsWith('ev_') && ev.source?.section"
+                text type="primary" size="small" class="kb-search__src-link"
+                :loading="navigating === ev.ref"
+                title="在大纲中定位该章节"
+                @click="goToSource(ev, 'section')"
+              >{{ ev.source.section }}</el-button>
+              <span v-else-if="ev.source?.section">{{ ev.source.section }}</span>
+              <span v-if="ev.source?.knowledge_base">（{{ ev.source.knowledge_base }}）</span>
+            </template>
+            <span v-if="locatorLabelOf(ev)" class="kb-search__loc" :data-testid="`loc-${ev.ref}`">
+              {{ locatorLabelOf(ev) }}
+            </span>
+            <el-button
+              v-if="ev.ref?.startsWith('ev_') && ev.source?.locator?.table_ref"
+              text type="primary" size="small" class="kb-search__src-link"
+              :loading="navigating === ev.ref"
+              @click="goToSource(ev, 'table')"
+            >查看表格</el-button>
+          </div>
         </div>
       </div>
     </template>
@@ -103,6 +136,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { useOperatorApi } from '@/api/operator'
@@ -124,6 +158,7 @@ const kbApi = useKbApi()
 const operatorApi = useOperatorApi()
 const servingApi = useServingApi()
 const domainStore = useDomainStore()
+const router = useRouter()
 
 const paradigms = ref<ParadigmView[]>([])
 const selectedParadigmId = ref<string | null>(null)
@@ -294,6 +329,63 @@ function sourceLabelOf(ev: EvidenceItem): string {
   return base || (src.knowledge_base ?? '')
 }
 
+/**
+ * A1 位置徽标（34 号 P0-4）：页码 1 基；行号 0 基 end-exclusive 转人读
+ * 「第 a–b 行」；sheet_cell 显示 Sheet!A1；native 显示挖掘侧 description。
+ */
+function locatorLabelOf(ev: EvidenceItem): string {
+  const loc = ev.source?.locator
+  if (!loc) return ''
+  if (loc.kind === 'page') return `第 ${loc.page} 页`
+  if (loc.kind === 'line_range' && loc.line_start != null) {
+    const first = loc.line_start + 1
+    const last = loc.line_end != null ? loc.line_end : first
+    return last > first ? `第 ${first}–${last} 行` : `第 ${first} 行`
+  }
+  if (loc.kind === 'sheet_cell') {
+    if (loc.sheet && loc.cell) return `${loc.sheet}!${loc.cell}`
+    return loc.cell ?? ''
+  }
+  return loc.description ?? ''
+}
+
+/**
+ * A1 结构入口跳转（34 号 P0-6）：ev_ ref 先经服务端解析端点拿到导航锚
+ * （document_id/大纲锚/表格锚），前端只路由不拼内部编号。
+ * - document：打开原文（文档页默认原始预览 tab）
+ * - section：文档页结构化视图 + 大纲锚高亮
+ * - table：文档页结构化视图 + 表格锚（含所在章节锚）
+ */
+const navigating = ref('')
+async function goToSource(ev: EvidenceItem, mode: 'document' | 'section' | 'table') {
+  const ref = ev.ref ?? ''
+  if (!ref.startsWith('ev_')) {
+    ElMessage.warning('该证据没有可定位的来源引用')
+    return
+  }
+  navigating.value = ref
+  try {
+    const nav = await servingApi.getEvidenceSource(
+      ref, domainStore.currentDomain ?? '', props.kb.id)
+    const query: Record<string, string> = {}
+    if (mode === 'section' && nav.section_element_id) query.anchor = nav.section_element_id
+    if (mode === 'table') {
+      if (nav.table_ref) query.table = nav.table_ref
+      if (nav.row_index != null) query.row = String(nav.row_index)
+      if (nav.section_element_id) query.anchor = nav.section_element_id
+    }
+    await router.push({
+      name: 'kb-doc-preview',
+      params: { kbId: props.kb.id, docId: nav.document_id },
+      query,
+    })
+  } catch (e) {
+    ElMessage.error(await apiErrorDetail(e))
+  } finally {
+    navigating.value = ''
+  }
+}
+
 watch(() => props.kb.id, () => {
   // 切库必须清上一库的检索结果与管线横幅——只重载范式配置的话，
   // B 库页面会显示 A 库挖出的证据（2026-08-31 前端审查 M9）。
@@ -414,6 +506,25 @@ onMounted(reload)
   margin-top: 6px;
   font-size: 12px;
   color: var(--kb-text-tertiary);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.kb-search__src-link {
+  padding: 0 2px;
+  height: auto;
+  font-size: 12px;
+}
+
+.kb-search__loc {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  background: var(--el-fill-color);
+  color: var(--kb-text-secondary);
 }
 
 .kb-search__muted {

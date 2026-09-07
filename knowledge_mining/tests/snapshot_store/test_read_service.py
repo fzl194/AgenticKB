@@ -387,3 +387,35 @@ async def test_read_service_missing_document_returns_none(tmp_path) -> None:
     assert await read.get_parse_result(
         domain="default", document_id="nobody",
     ) is None
+
+
+async def test_table_summary_carries_sheet_name_from_ir_containers() -> None:
+    """A1（37 号 D7）：Excel 表格 sheet 名从 IR 容器树直读进 tables 视图."""
+    from knowledge_mining.mining.contracts.parse_ir.types import Container
+
+    base = _hierarchy_doc()
+    doc = ParsedDocument(
+        schema_version=base.schema_version,
+        source_identity=base.source_identity,
+        containers=(
+            Container("wb", "workbook", 0),
+            Container("sh-1", "sheet", 0, name="告警表",
+                      parent_container_id="wb"),
+            Container("page-0", "page", 0, page_number=1),
+        ),
+        elements=base.elements,
+        structured_assets={
+            "t-sheet": TableAsset(
+                table_id="t-sheet", page_span_ids=("sh-1",),
+                rows=1, columns=1, cells=(TableCell(0, 0, text="值"),),
+            ),
+            "t-page": TableAsset(
+                table_id="t-page", page_span_ids=("page-0",),
+                rows=1, columns=1, cells=(TableCell(0, 0, text="值"),),
+            ),
+        },
+    )
+    result = await _read_custom(doc, ())
+    by_id = {t["table_id"]: t for t in result["tables"]}
+    assert by_id["t-sheet"]["sheet_name"] == "告警表"
+    assert by_id["t-page"]["sheet_name"] is None

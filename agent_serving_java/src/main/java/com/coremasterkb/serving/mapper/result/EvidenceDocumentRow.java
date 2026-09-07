@@ -10,6 +10,7 @@ package com.coremasterkb.serving.mapper.result;
 public class EvidenceDocumentRow {
 
     private String snapshotId;
+    private String documentId;
     private String documentKey;
     private String documentName;
     private String kbId;
@@ -18,6 +19,10 @@ public class EvidenceDocumentRow {
 
     public String getSnapshotId() { return snapshotId; }
     public void setSnapshotId(String snapshotId) { this.snapshotId = snapshotId; }
+
+    /** A1（37/38 号）：mining 文档 id——网页导航解析端点按 kb 消歧后回传。 */
+    public String getDocumentId() { return documentId; }
+    public void setDocumentId(String documentId) { this.documentId = documentId; }
 
     public String getDocumentKey() { return documentKey; }
     public void setDocumentKey(String documentKey) { this.documentKey = documentKey; }

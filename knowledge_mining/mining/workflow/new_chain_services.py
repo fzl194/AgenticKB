@@ -392,6 +392,9 @@ class NewChainServices:
     # degraded，不阻断基础资产——与 24号 §5.5/§5.6 失败语义一致）。
     query_expansion_service: Any = None
     hierarchical_summary_service: Any = None
+    # A1 来源记录物化（37/38 号）：None → retrieval_unit_project 跳过物化
+    #（与实验算子一致，不阻断基础资产）。
+    source_locator_service: Any = None
 
 
 def build_new_chain_services(
@@ -412,6 +415,7 @@ def build_new_chain_services(
     pool: Any | None = None,
     sync_pool: Any | None = None,
     llm_generator: Any | None = None,
+    locator_store: Any | None = None,
 ) -> NewChainServices:
     """组合根：默认组装 memory 组件（测试/开发）；传入 PG/MinIO 即生产.
 
@@ -500,6 +504,30 @@ def build_new_chain_services(
 
         object_store = FakeObjectStore(_memory_object_root())
 
+    # A1 来源记录面（38 号 §2.3）：locator store 与 services 组合根同源。
+    from knowledge_mining.mining.source_locator.repositories_memory import (
+        MemoryLocatorStore,
+    )
+    from knowledge_mining.mining.source_locator.service import (
+        SourceLocatorFacade,
+        SourceLocatorService,
+    )
+
+    locator_store = locator_store if locator_store is not None else (
+        _build_pg_locator_store(repository_pool)
+        if repository_pool is not None
+        else MemoryLocatorStore()
+    )
+    locator_service = SourceLocatorFacade(
+        SourceLocatorService(
+            snapshots=snapshots,
+            storage_objects=storage_objects,
+            object_store=object_store,
+            locator_store=locator_store,
+        ),
+        representation_store=representation_store,
+    )
+
     from knowledge_mining.mining.parse_adapters.factory import resolve_pipeline
     from knowledge_mining.mining.parse_operator.service import (
         DocumentParseService,
@@ -582,7 +610,16 @@ def build_new_chain_services(
                 segment_store, representation_store, llm_generator,
             )
         ),
+        source_locator_service=locator_service,
     )
+
+
+def _build_pg_locator_store(repository_pool: Any) -> Any:
+    from knowledge_mining.mining.source_locator.repositories_pg import (
+        PgLocatorStore,
+    )
+
+    return PgLocatorStore(repository_pool)
 
 
 def _build_query_expansion_service(

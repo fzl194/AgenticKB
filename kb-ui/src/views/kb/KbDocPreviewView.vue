@@ -172,7 +172,7 @@
                 />
               </el-collapse-item>
 
-              <!-- 文档大纲 -->
+              <!-- 文档大纲（A2：可选中 + 前后/父子导航 + 范围搜索入口） -->
               <el-collapse-item v-if="parseResult.outline.length" name="outline" title="文档大纲">
                 <el-tree
                   ref="outlineTreeRef"
@@ -183,7 +183,34 @@
                   default-expand-all
                   class="doc-preview__outline"
                   data-testid="doc-outline-tree"
+                  @node-click="onOutlineNodeClick"
                 />
+                <div
+                  v-if="selectedOutline"
+                  class="doc-preview__outline-actions"
+                  data-testid="doc-outline-actions"
+                >
+                  <span class="doc-preview__outline-title">{{ selectedOutline.title }}</span>
+                  <el-button size="small" :disabled="!outlineParent" @click="jumpOutline(outlineParent?.element_id)">父章节</el-button>
+                  <el-button size="small" :disabled="!outlinePrev" @click="jumpOutline(outlinePrev?.element_id)">上一节</el-button>
+                  <el-button size="small" :disabled="!outlineNext" @click="jumpOutline(outlineNext?.element_id)">下一节</el-button>
+                  <el-button v-if="outlineChildren.length" size="small" @click="jumpOutline(outlineChildren[0].element_id)">首个子节</el-button>
+                  <el-button
+                    v-if="selectedOutline.section_ref"
+                    size="small" type="primary" plain
+                    @click="goScopedSearch('exact')"
+                    data-testid="outline-search-exact"
+                  >本节搜索</el-button>
+                  <el-button
+                    v-if="selectedOutline.section_ref"
+                    size="small" type="primary" plain
+                    @click="goScopedSearch('descendants')"
+                    data-testid="outline-search-descendants"
+                  >本节及子节搜索</el-button>
+                  <span v-else class="doc-preview__muted">
+                    此版本章节无范围锚（旧版本快照），重新挖掘后可用
+                  </span>
+                </div>
               </el-collapse-item>
 
               <!-- 切片 -->
@@ -401,6 +428,80 @@ const outlineTree = computed(() => {
 
 function tableRows(t: { preview: string[][] }): string[][] {
   return t.preview.map(row => row.map(cell => cell ?? ''))
+}
+
+// A2 大纲导航（39 号 §2.4）：树内父子/前后由大纲自身结构客户端完成；
+// 范围搜索跳检索面板（章节 ref 由服务端投影，前端不拼内部编号）。
+type OutlineItem = {
+  element_id: string
+  title: string
+  level?: number | null
+  order_index?: number | null
+  parent_section_element_id?: string | null
+  section_ref?: string | null
+}
+const selectedOutlineElementId = ref('')
+
+function onOutlineNodeClick(data: OutlineItem) {
+  selectedOutlineElementId.value = data.element_id
+}
+
+function jumpOutline(elementId: string | undefined) {
+  if (!elementId) return
+  selectedOutlineElementId.value = elementId
+  outlineTreeRef.value?.setCurrentKey?.(elementId)
+}
+
+const selectedOutline = computed<OutlineItem | null>(() =>
+  (parseResult.value?.outline ?? []).find(
+    o => o.element_id === selectedOutlineElementId.value) ?? null)
+
+const outlineParent = computed<OutlineItem | null>(() =>
+  selectedOutline.value?.parent_section_element_id
+    ? ((parseResult.value?.outline ?? []).find(
+        o => o.element_id === selectedOutline.value?.parent_section_element_id) ?? null)
+    : null)
+
+const outlineSiblings = computed<OutlineItem[]>(() => {
+  const parent = selectedOutline.value?.parent_section_element_id ?? null
+  return (parseResult.value?.outline ?? [])
+    .filter(o => (o.parent_section_element_id ?? null) === parent)
+    .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+})
+
+const outlinePrev = computed<OutlineItem | null>(() => {
+  const idx = outlineSiblings.value.findIndex(
+    o => o.element_id === selectedOutline.value?.element_id)
+  return idx > 0 ? outlineSiblings.value[idx - 1] : null
+})
+
+const outlineNext = computed<OutlineItem | null>(() => {
+  const idx = outlineSiblings.value.findIndex(
+    o => o.element_id === selectedOutline.value?.element_id)
+  return idx >= 0 && idx < outlineSiblings.value.length - 1
+    ? outlineSiblings.value[idx + 1] : null
+})
+
+const outlineChildren = computed<OutlineItem[]>(() =>
+  selectedOutline.value
+    ? (parseResult.value?.outline ?? [])
+        .filter(o => o.parent_section_element_id === selectedOutline.value?.element_id)
+        .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+    : [])
+
+function goScopedSearch(mode: 'exact' | 'descendants') {
+  const sel = selectedOutline.value
+  if (!sel?.section_ref) return
+  void router.push({
+    name: 'kb-detail',
+    params: { kbId: props.kbId },
+    query: {
+      tab: 'search',
+      scopeRef: sel.section_ref,
+      scopeTitle: sel.title,
+      scopeMode: mode,
+    },
+  })
 }
 
 // A1 来源导航锚（37 号 P0-6）：route.query 的 anchor=大纲元素锚、table=表格锚。

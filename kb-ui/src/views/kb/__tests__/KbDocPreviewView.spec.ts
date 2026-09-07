@@ -10,6 +10,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { computed, defineComponent, type PropType } from 'vue'
 
 const kbApi = vi.hoisted(() => ({
   getDocument: vi.fn(),
@@ -254,5 +255,106 @@ describe('A1 来源导航锚（37 号 P0-6）', () => {
     expect((wrapper.vm as unknown as { activeTab: string }).activeTab).toBe('preview')
     expect((wrapper.vm as unknown as { openCards: string[] }).openCards)
       .not.toContain('outline')
+  })
+})
+
+describe('A2 大纲导航与范围搜索（39 号 §2.4）', () => {
+  const OUTLINE = [
+    { element_id: 'h0', level: 1, title: '第一章 运行', order_index: 0,
+      parent_section_element_id: null, section_ref: 'manual.md#section:0' },
+    { element_id: 'h1', level: 2, title: '1.1 回退流程', order_index: 1,
+      parent_section_element_id: 'h0', section_ref: 'manual.md#section:0/0' },
+    { element_id: 'h2', level: 2, title: '1.2 升级流程', order_index: 2,
+      parent_section_element_id: 'h0', section_ref: 'manual.md#section:0/1' },
+    { element_id: 'h3', level: 1, title: '第二章 附录', order_index: 3,
+      parent_section_element_id: null, section_ref: null },
+  ]
+
+  // el-tree 无全局 stub（setup.ts）——本地桩渲染扁平节点并转发 node-click
+  const ElTreeStub = defineComponent({
+    props: { data: { type: Array as PropType<unknown[]>, default: () => [] } },
+    emits: ['node-click'],
+    setup(props, { emit }) {
+      const flat = computed(() => {
+        const out: unknown[] = []
+        const walk = (nodes: unknown[]) => {
+          for (const n of nodes as { children?: unknown[] }[]) {
+            out.push(n)
+            if (Array.isArray(n.children)) walk(n.children)
+          }
+        }
+        walk(props.data)
+        return out
+      })
+      return { flat, emit }
+    },
+    template: `<div data-testid="doc-outline-tree">
+      <div v-for="n in flat" :key="n.element_id" class="el-tree-node"
+           @click="emit('node-click', n)">
+        <span class="el-tree-node__content">{{ n.title }}</span>
+      </div>
+    </div>`,
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    routeQuery.query = {}
+    kbApi.getDocument.mockResolvedValue(DOC)
+    kbApi.getDocumentKnowledge.mockResolvedValue(knowledge())
+    kbApi.getDocumentParseResult.mockResolvedValue(parseResult({ outline: OUTLINE }))
+    kbApi.getDocumentPreviewUrl.mockRejectedValue(new Error('no'))
+    kbApi.downloadDocument.mockRejectedValue(new Error('no'))
+  })
+
+  async function mountViewWithTree(anchor: string) {
+    // anchor 查询让页面切结构化视图并展开大纲卡片（A1 行为复用）
+    routeQuery.query = { anchor }
+    const wrapper = mount(KbDocPreviewView, {
+      props: { kbId: 'kb-1', docId: 'doc-1' },
+      global: { stubs: { ElTree: ElTreeStub } },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  it('点击大纲节点 → 操作条（父子/前后导航 + 范围搜索入口）', async () => {
+    const wrapper = await mountViewWithTree('h0')
+    const nodes = wrapper.findAll('[data-testid="doc-outline-tree"] .el-tree-node')
+    expect(nodes.length).toBeGreaterThan(0)
+    await nodes[1].trigger('click')
+    await flushPromises()
+    const bar = wrapper.find('[data-testid="doc-outline-actions"]')
+    expect(bar.exists()).toBe(true)
+    expect(bar.text()).toContain('1.1 回退流程')
+    expect(wrapper.find('[data-testid="outline-search-exact"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="outline-search-descendants"]').exists()).toBe(true)
+  })
+
+  it('「本节及子节搜索」→ 跳检索 tab 并携带范围参数', async () => {
+    const wrapper = await mountViewWithTree('h0')
+    const nodes = wrapper.findAll('[data-testid="doc-outline-tree"] .el-tree-node')
+    await nodes[1].trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="outline-search-descendants"]').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'kb-detail',
+      query: expect.objectContaining({
+        tab: 'search',
+        scopeRef: 'manual.md#section:0/0',
+        scopeTitle: '1.1 回退流程',
+        scopeMode: 'descendants',
+      }),
+    }))
+  })
+
+  it('无范围锚的章节（旧快照）显示说明而非搜索按钮', async () => {
+    const wrapper = await mountViewWithTree('h3')
+    const nodes = wrapper.findAll('[data-testid="doc-outline-tree"] .el-tree-node')
+    await nodes[3].trigger('click')
+    await flushPromises()
+    const bar = wrapper.find('[data-testid="doc-outline-actions"]')
+    expect(bar.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="outline-search-exact"]').exists()).toBe(false)
+    expect(bar.text()).toContain('无范围锚')
   })
 })

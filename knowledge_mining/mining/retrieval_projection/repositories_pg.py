@@ -561,3 +561,23 @@ __all__ = [
     "PgEmbeddingStore",
     "PgRepresentationStore",
 ]
+
+
+class PgStructureNodeStore(_PgRepository):
+    """结构节点只读面（A2）：章节锚查询——element_id → section 节点 ref."""
+
+    async def list_section_anchors(self, snapshot_id: str) -> dict[str, str]:
+        """快照内全部带大纲锚的 section 节点（{element_id: ref}）.
+
+        旧快照（015 前投影，element_id NULL）自然不在结果里——前端对
+        无锚章节隐藏范围入口（诚实降级，不做标题文本匹配）。
+        """
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(
+                "SELECT element_id, ref FROM asset_structure_nodes "
+                "WHERE snapshot_id = %s AND node_type = 'section' "
+                "AND element_id IS NOT NULL",
+                [snapshot_id],
+            )
+            rows = await cursor.fetchall()
+        return {str(row["element_id"]): str(row["ref"]) for row in rows}

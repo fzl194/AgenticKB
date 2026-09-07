@@ -129,6 +129,8 @@ export interface ParseResultOutlineNode {
   order_index?: number | null
   /** 同一快照内由 Parse IR 层级确定的父章节元素；null 表示文档根。 */
   parent_section_element_id?: string | null
+  /** A2：章节投影 ref（范围搜索 within 入参；旧快照无锚为 null） */
+  section_ref?: string | null
 }
 
 export interface ParseResultElement {

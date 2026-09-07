@@ -113,7 +113,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
@@ -130,6 +130,7 @@ import type { KbReadiness, KbReadinessLevel, KbSummary } from '@/types/kb'
 
 const props = defineProps<{ kbId: string }>()
 const router = useRouter()
+const route = useRoute()
 const domainStore = useDomainStore()
 const kbApi = useKbApi()
 
@@ -138,6 +139,13 @@ const readiness = ref<KbReadiness | null>(null)
 const loading = ref(false)
 const loadError = ref('')
 const activeTab = ref<'files' | 'search' | 'members' | 'mining' | 'settings'>('files')
+// A2：文档页「本节搜索」跳转带 tab=search + 范围参数（面板自行吸收）
+{
+  const t = (route.query as Record<string, string | undefined>).tab
+  if (t === 'search' || t === 'mining' || t === 'members' || t === 'settings' || t === 'files') {
+    activeTab.value = t
+  }
+}
 const miningPanelRef = ref<InstanceType<typeof KbMiningPanel> | null>(null)
 
 /** 范式状态由父组件持有（单一真相源），修复旧版「按钮读列表快照 → 误报未选范式」的 Bug A。

@@ -94,6 +94,9 @@ async def get_parse_result_service(
         PgDocumentCurrentContentRepository,
         PgStorageObjectRepository,
     )
+    from knowledge_mining.mining.retrieval_projection.repositories_pg import (
+        PgStructureNodeStore,
+    )
     from knowledge_mining.mining.snapshot_store.repositories_pg import (
         PgSnapshotRepository,
     )
@@ -104,6 +107,7 @@ async def get_parse_result_service(
         object_store=make_object_store(ObjectStoreConfig.from_control_plane()),
         segment_store=PgSegmentStore(pool),
         documents=PgDocumentCurrentContentRepository(pool),
+        structure_nodes=PgStructureNodeStore(pool),
     )
     cache[scope] = service
     return service

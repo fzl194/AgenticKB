@@ -49,6 +49,28 @@ export function localizeSearchError(err: unknown): unknown {
   return err
 }
 
+/** A2：结构导航结果（/api/v1/structure/{ref}/navigate）。 */
+export interface StructureNavigateNode {
+  ref: string
+  node_type: string
+  title?: string | null
+  level?: number | null
+  ordinal?: number | null
+  block_type?: string | null
+  relations?: string[]
+}
+
+export interface StructureNavigateResult {
+  structure_ref: string
+  relation: string
+  depth: number
+  limit: number
+  nodes: StructureNavigateNode[]
+  cursor?: string | null
+  has_more: boolean
+  source?: Record<string, unknown>
+}
+
 /** A1（37/38 号）：ev_ ref 的服务端导航解析结果（/api/v1/evidence/{ref}/source）。 */
 export interface EvidenceSourceNavigation {
   document_id: string
@@ -121,7 +143,13 @@ export function useServingApi() {
     async runParadigmSearch(
       paradigmId: string,
       query: string,
-      options?: { domain?: string; kbIds?: string[]; debug?: boolean },
+      options?: {
+        domain?: string
+        kbIds?: string[]
+        debug?: boolean
+        /** A2 章节范围（39 号 §2.2）：within.section_refs + section_scope */
+        within?: { section_refs?: string[]; section_scope?: 'exact' | 'descendants' }
+      },
     ): Promise<ParadigmSearchResult> {
       const payload: Record<string, unknown> = {
         query,
@@ -129,12 +157,33 @@ export function useServingApi() {
         debug: options?.debug ?? false,
       }
       if (options?.kbIds?.length) payload.kbIds = options.kbIds
+      if (options?.within) payload.within = options.within
       try {
         const { data } = await client.post(`/api/v1/paradigm/${paradigmId}/search`, payload)
         return data
       } catch (err: unknown) {
         throw localizeSearchError(err)
       }
+    },
+
+    /**
+     * A2 结构导航（39 号 §2.3）：st_ ref + 白名单关系（parent/children/
+     * previous/next/ancestors/descendants…）。与 MCP get_knowledge 的
+     * navigate 分支同一 service，网页与 Agent 同源。
+     */
+    async navigateStructure(
+      ref: string, relation: string,
+      opts?: { domain?: string; kbId?: string; depth?: number; limit?: number; cursor?: string },
+    ): Promise<StructureNavigateResult> {
+      const params: Record<string, unknown> = {
+        relation, domain: opts?.domain,
+      }
+      if (opts?.kbId) params.kbId = opts.kbId
+      if (opts?.depth != null) params.depth = opts.depth
+      if (opts?.limit != null) params.limit = opts.limit
+      if (opts?.cursor) params.cursor = opts.cursor
+      const { data } = await client.get(`/api/v1/structure/${ref}/navigate`, { params })
+      return data
     },
   }
 }

@@ -239,12 +239,15 @@ class ParseResultReadService:
         object_store: ObjectStorePort,
         segment_store: SegmentStore,
         documents: Any | None = None,
+        structure_nodes: Any | None = None,
     ) -> None:
         self._snapshots = snapshots
         self._storage_objects = storage_objects
         self._store = object_store
         self._segments = segment_store
         self._documents = documents
+        # A2：结构节点锚查询（element_id → section ref；缺省 None = 不增强）
+        self._structure_nodes = structure_nodes
 
     async def get_parse_result(
         self, *, domain: str, document_id: str,
@@ -338,6 +341,14 @@ class ParseResultReadService:
             (e for e in doc.elements if e.element_type in ("heading", "title")),
             key=lambda item: item.order_index,
         )
+        section_anchors: dict[str, str] = {}
+        if self._structure_nodes is not None:
+            try:
+                section_anchors = await self._structure_nodes.list_section_anchors(
+                    snapshot.id
+                )
+            except Exception:  # noqa: BLE001 — 锚增强失败不阻断预览主数据
+                section_anchors = {}
         outline_items = [
             {
                 "element_id": e.element_id,
@@ -348,6 +359,8 @@ class ParseResultReadService:
                     element_contexts[e.element_id].parent_section_element_id
                     if e.element_id in element_contexts else None
                 ),
+                # A2：章节节点的投影 ref（范围搜索的 within 入参；旧快照无锚为 None）
+                "section_ref": section_anchors.get(e.element_id),
             }
             for e in outline_elements
         ]

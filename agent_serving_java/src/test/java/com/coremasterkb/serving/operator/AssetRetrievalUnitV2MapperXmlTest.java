@@ -75,4 +75,23 @@ class AssetRetrievalUnitV2MapperXmlTest {
         String xml = mapperXml();
         assertThat(xml).contains("canonical_evidence_id");
     }
+    @Test
+    @DisplayName("A2: 章节范围以 section_ref 物理列下推，descendants 走 SQL 内递归闭包")
+    void sectionScopeContract() throws Exception {
+        String xml = mapperXml();
+
+        // exact：section_ref IN 主匹配 + 存量 NULL 行 target_ref 回落（同一 predicate）
+        assertThat(xml).contains("section_ref IN");
+        assertThat(xml).contains("section_ref IS NULL AND target_ref IN");
+        // descendants：SQL 内递归闭包（不做应用层 IN-list），FTS/dense 共用
+        assertThat(xml).contains("WITH RECURSIVE sec(ref)");
+        assertThat(xml).contains("JOIN sec s ON n.parent_ref = s.ref");
+        // 闭包限定同快照集（结构节点与召回单元同 snapshot 语义）
+        assertThat(xml).contains("n.snapshot_id IN");
+        // 守卫查询：每 root 闭包计数
+        assertThat(xml).contains("SELECT root, count(*) AS total FROM sec GROUP BY root");
+        // 参数化：种子 ref 无 ${} 插值
+        assertThat(xml).doesNotContain("${tr}");
+        assertThat(xml).doesNotContain("${sid}");
+    }
 }

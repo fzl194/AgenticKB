@@ -154,6 +154,7 @@ class AssetPersistService:
                     "target_type": rep.target_type,
                     "target_ref": rep.target_ref,
                     "canonical_evidence_id": rep.canonical_evidence_id,
+                    "section_ref": rep.section_ref,
                     "container_ref": rep.container_ref,
                     "parent_ref": rep.parent_ref,
                     "context_group_id": rep.context_group_id,

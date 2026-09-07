@@ -19,6 +19,10 @@ from knowledge_mining.mining.contracts.retrieval_projection import (
     RetrievalRepresentation,
 )
 from knowledge_mining.mining.contracts.segment_compiler import CompiledSegment
+from knowledge_mining.mining.retrieval_projection.section_identity import (
+    SectionIdentityIndex,
+    build_section_identities,
+)
 
 # block_type → (representation_type, content_type)
 # 词表以编译器实际产出为准（compiler.py：paragraph/list_item/code/quote/
@@ -112,6 +116,7 @@ def _representation_for(
     *,
     document_ref: str,
     snapshot_ref: str,
+    section_index: SectionIdentityIndex,
 ) -> RetrievalRepresentation | None:
     mapped = _BLOCK_TYPE_MATRIX.get(segment.block_type)
     if mapped is None:
@@ -179,6 +184,7 @@ def _representation_for(
         target_ref=target_ref,
         canonical_evidence_id=representation_id,
         source_refs=_source_refs(segment),
+        section_ref=section_index.ref_of(segment.heading_chain),
         container_ref=container_ref,
         context_group_id=(
             segment.heading_chain[-1][1] if segment.heading_chain else document_ref
@@ -202,22 +208,29 @@ def _section_representations(
     *,
     document_ref: str,
     snapshot_ref: str,
+    section_index: SectionIdentityIndex,
     max_direct_tokens: int = MAX_SECTION_DIRECT_TOKENS,
 ) -> tuple[RetrievalRepresentation, ...]:
-    """真实章节标题 + 有界直接内容投影（不生成 LLM 摘要）."""
-    by_path: dict[tuple[tuple[int, str], ...], list[CompiledSegment]] = {}
+    """真实章节标题 + 有界直接内容投影（不生成 LLM 摘要）.
+
+    A2：按章节**身份**（而非标题路径）分组——同名/重开章节不合并；
+    target_ref 用身份 ref（与 structure 节点逐字一致）。
+    """
+    by_ref: dict[str, list[CompiledSegment]] = {}
     for segment in segments:
         if segment.block_type in {"heading", "navigation"}:
             continue
         if not segment.heading_chain:
             continue
-        by_path.setdefault(tuple(segment.heading_chain), []).append(segment)
+        ref = section_index.ref_of(segment.heading_chain)
+        if ref is not None:
+            by_ref.setdefault(ref, []).append(segment)
 
     reps: list[RetrievalRepresentation] = []
-    for order, (path, children) in enumerate(
-        sorted(by_path.items(), key=lambda item: item[1][0].segment_index)
-    ):
-        title = path[-1][1]
+    for order, identity in enumerate(section_index.identities):
+        children = by_ref.get(identity.ref)
+        if not children:
+            continue
         used = 0
         parts: list[str] = []
         for child in children:
@@ -227,28 +240,28 @@ def _section_representations(
             used += child.token_count or 0
         if not parts:
             continue
-        target_ref = f"{document_ref}#section:{'/'.join(t for _l, t in path)}"
         representation_id = f"{snapshot_ref}:section:{order}"
         reps.append(
             RetrievalRepresentation(
                 representation_id=representation_id,
                 representation_type="section",
                 content_type="section",
-                content_text=f"{title}\n" + "\n".join(parts),
-                structural_context=_breadcrumb(path[:-1]),
+                content_text=f"{identity.title}\n" + "\n".join(parts),
+                structural_context=_breadcrumb(identity.path[:-1]),
                 target_type="section",
-                target_ref=target_ref,
+                target_ref=identity.ref,
                 canonical_evidence_id=representation_id,
+                section_ref=identity.ref,
                 source_refs=(
                     {"segment_index": child.segment_index} for child in children
                 ),
-                context_group_id=title,
+                context_group_id=identity.title,
                 ordinal=order,
                 facets={
                     "document": document_ref,
                     "content_type": "section",
-                    "section_path": _breadcrumb(path),
-                    "section_depth": len(path),
+                    "section_path": _breadcrumb(identity.path),
+                    "section_depth": len(identity.path),
                 },
                 provenance={
                     "projector": PROJECTOR_NAME,
@@ -269,6 +282,11 @@ def project_representations(
 ) -> tuple[RetrievalRepresentation, ...]:
     """从编译切片确定性投影类型化搜索表示（纯函数）."""
     materialized = tuple(segments)
+    # A2：章节身份一次推导——prose/table_row 的 section_ref、section 表示
+    # 的 target_ref、structure 节点 ref 三方逐字一致（范围搜索前提）。
+    section_index = build_section_identities(
+        materialized, document_ref=document_ref
+    )
     reps: list[RetrievalRepresentation] = [
         # 文档级表示始终生成（§5.4 矩阵默认 FTS/dense/returnable 全开）
         _document_representation(
@@ -277,7 +295,8 @@ def project_representations(
     ]
     for segment in materialized:
         rep = _representation_for(
-            segment, document_ref=document_ref, snapshot_ref=snapshot_ref
+            segment, document_ref=document_ref, snapshot_ref=snapshot_ref,
+            section_index=section_index,
         )
         if rep is not None:
             reps.append(rep)
@@ -287,6 +306,7 @@ def project_representations(
                 materialized,
                 document_ref=document_ref,
                 snapshot_ref=snapshot_ref,
+                section_index=section_index,
             )
         )
     return tuple(reps)

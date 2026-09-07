@@ -49,10 +49,55 @@
             </foreach>
         </if>
         <if test="targetRefs != null and targetRefs.size() > 0">
-            AND target_ref IN
-            <foreach collection="targetRefs" item="tr" open="(" separator="," close=")">
-                #{tr}
-            </foreach>
+            <!-- A2 章节范围（39 号 §2.2）：section_ref 物理列为主键匹配（覆盖章节内
+                 全部正文/表格/列表表示）；存量 NULL 行回落 target_ref 精确匹配（37 号
+                 D4 旧语义，section_backfill 回填后自然消失）。 -->
+            <choose>
+                <when test="sectionScopeDescendants">
+                    AND (
+                        section_ref IN (SELECT ref FROM sec)
+                        OR (section_ref IS NULL AND target_ref IN (SELECT ref FROM sec))
+                    )
+                </when>
+                <otherwise>
+                    AND (
+                        section_ref IN
+                        <foreach collection="targetRefs" item="tr" open="(" separator="," close=")">
+                            #{tr}
+                        </foreach>
+                        OR (section_ref IS NULL AND target_ref IN
+                        <foreach collection="targetRefs" item="tr" open="(" separator="," close=")">
+                            #{tr}
+                        </foreach>
+                        )
+                    )
+                </otherwise>
+            </choose>
+        </if>
+    </sql>
+
+    <!--
+      A2 descendants 模式的章节闭包（SQL 内递归 CTE，不做应用层 IN-list）：
+      asset_structure_nodes.parent_ref 沿同快照集展开；UNION 去重天然防环。
+      由 searchFtsV2 顶层 / searchDenseV2 内层子查询按需前置（同为语句级 CTE）。
+    -->
+    <sql id="sectionClosureCte">
+        <if test="targetRefs != null and targetRefs.size() > 0 and sectionScopeDescendants">
+            WITH RECURSIVE sec(ref) AS (
+                SELECT v.ref FROM (VALUES
+                <foreach collection="targetRefs" item="tr" separator=",">
+                    (#{tr}::text)
+                </foreach>
+                ) v(ref)
+                UNION
+                SELECT n.ref
+                FROM asset_structure_nodes n
+                JOIN sec s ON n.parent_ref = s.ref
+                WHERE n.snapshot_id IN
+                <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+                    #{sid}
+                </foreach>
+            )
         </if>
     </sql>
 
@@ -63,6 +108,7 @@
     </sql>
 
     <select id="searchFtsV2" resultMap="unitV2RowMap">
+        <include refid="sectionClosureCte"/>
         SELECT
         <include refid="unitColumns"/>,
         ts_rank(search_vector, plainto_tsquery('simple', #{lexicalQuery})) AS channel_score
@@ -81,6 +127,7 @@
     <!-- dense 通道：embeddings_v2 ⋈ units_v2，dense_eligible + 维度一致；同表示多向量取最佳。 -->
     <select id="searchDenseV2" resultMap="unitV2RowMap">
         SELECT t.* FROM (
+            <include refid="sectionClosureCte"/>
             SELECT DISTINCT ON (e.representation_id)
                    u.representation_id, u.snapshot_id, u.representation_type, u.content_type,
                    u.content_text, u.structural_context, u.target_type, u.target_ref,
@@ -99,6 +146,30 @@
         ) t
         ORDER BY t.channel_score DESC, t.canonical_evidence_id ASC, t.representation_id ASC
         LIMIT #{limit}
+    </select>
+
+    <!--
+      A2 descendants 守卫（33 号 G3 限制）：每 root 闭包计数（含 root）。
+      roots ≤64 在 Java 侧（列表长度）；每 root 后代 ≤512 由本查询计数判定，
+      超限 section_scope_too_broad ——不退化为宽搜索。
+    -->
+    <select id="countSectionClosure" resultType="map">
+        WITH RECURSIVE sec(root, ref) AS (
+            SELECT v.ref, v.ref FROM (VALUES
+            <foreach collection="targetRefs" item="tr" separator=",">
+                (#{tr}::text)
+            </foreach>
+            ) v(ref)
+            UNION
+            SELECT sec.root, n.ref
+            FROM asset_structure_nodes n
+            JOIN sec ON n.parent_ref = sec.ref
+            WHERE n.snapshot_id IN
+            <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+                #{sid}
+            </foreach>
+        )
+        SELECT root, count(*) AS total FROM sec GROUP BY root
     </select>
 
     <select id="selectDistinctDimensions" resultType="int">

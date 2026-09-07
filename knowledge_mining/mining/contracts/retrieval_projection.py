@@ -55,6 +55,9 @@ class RetrievalRepresentation:
     canonical_evidence_id: str
     structural_context: str = ""
     source_refs: tuple[Mapping[str, Any], ...] = ()
+    #: A2：所属 section 节点 ref（章节范围搜索的物理下推键；document 级
+    #: 与无章节归属为 None；alias 继承源单元值——别名命中回源不得漏范围）。
+    section_ref: str | None = None
     parent_ref: str | None = None
     container_ref: str | None = None
     context_group_id: str | None = None

@@ -520,9 +520,11 @@ def test_asset_writer_maps_structure_and_table_faces():
     assert asset[1] is not None
     assert json.loads(asset[1][4]) == ["告警码", "功耗"]  # columns_json
     assert asset[1][7] == "asset-v2-1"  # schema_version 来自 faces
+    assert asset[1][8] is None  # sheet_name（A3，无 IR 事实时 NULL）
 
     cell = find_statement(pool, "INSERT INTO asset_table_cells")
-    assert cell[1] == ["snap-1", "tbl-1", 0, 0, "告警码", "A-101", False]
+    assert cell[1] == ["snap-1", "tbl-1", 0, 0, "告警码", "A-101", False,
+                       None, None, None, None, None, None]  # A3 类型化事实列
 
 
 def test_asset_writer_backfills_embedding_metadata_without_clobbering():

@@ -80,6 +80,7 @@ def _alias_representation(
         target_type=base.target_type,
         target_ref=base.target_ref,
         canonical_evidence_id=base.canonical_evidence_id,
+        section_ref=base.section_ref,
         source_refs=({"representation_id": base.representation_id},),
         lexical_eligible=True,
         dense_eligible=True,

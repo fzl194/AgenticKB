@@ -177,4 +177,26 @@ class ParadigmRequestsFiltersTest {
         assertThat(args.expansion()).isEqualTo("exact");
         assertThat((Map<String, Object>) args.filters()).containsKey("section_refs");
     }
+
+    @Test
+    @DisplayName("A2: section_scope 只接受 exact|descendants，字符串枚举而非数组")
+    void sectionScopeValidation() throws Exception {
+        // 合法值原样透传
+        var args = ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"within\": {\"section_refs\": [\"st_ab\"], "
+                + "\"section_scope\": \"descendants\"}}"), null);
+        assertThat(args.filters().get("section_scope")).isEqualTo("descendants");
+
+        // 枚举外值 → typed 400
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"within\": {\"section_scope\": \"both\"}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:section_scope");
+
+        // 数组形状（其余 filter 键的形状）也拒绝
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"within\": {\"section_scope\": [\"exact\"]}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:section_scope");
+    }
 }

@@ -16,8 +16,11 @@ import java.util.Map;
  *       {@code {"document":"<ref>"}}，facets.document 是标量，多值用 OR 语义由 SQL foreach 承担）；</li>
  *   <li>{@code evidence_types} → {@code representation_type IN (...)}（§5.3 类型枚举）；</li>
  *   <li>{@code asset_types} → {@code content_type IN (...)}（源内容类型，facets.content_type 同源）；</li>
- *   <li>{@code section_refs} → {@code target_ref IN (...)}（§6.2 within 声明；精确 target 匹配，
- *       include_descendants 的结构展开属 R5 hydrate，不在召回 SQL 里猜）。</li>
+ *   <li>{@code section_refs} → {@code section_ref IN (...)}（A2：单元章节归属物理列，
+ *       覆盖章节内全部正文/表格/列表表示；{@code section_ref IS NULL} 的存量行回落
+ *       {@code target_ref IN}（37 号 D4 的旧语义，回填后自然消失）；
+ *       {@code section_scope=descendants} 时两侧均改为章节闭包（SQL 内递归 CTE，
+ *       FTS/dense 共用同一 predicate——越界率=0 的结构性保证）。</li>
  * </ul>
  *
  * <p>{@code relative_path_prefix/date_range} 等当前 v2 表无可下推列的键原样保留在 hardFilters
@@ -29,19 +32,22 @@ public final class ScopeFilterPushdown {
     private final List<String> representationTypes;
     private final List<String> contentTypes;
     private final List<String> targetRefs;
+    private final boolean sectionScopeDescendants;
 
     private ScopeFilterPushdown(
             List<String> documentJsonParams, List<String> representationTypes,
-            List<String> contentTypes, List<String> targetRefs) {
+            List<String> contentTypes, List<String> targetRefs,
+            boolean sectionScopeDescendants) {
         this.documentJsonParams = documentJsonParams;
         this.representationTypes = representationTypes;
         this.contentTypes = contentTypes;
         this.targetRefs = targetRefs;
+        this.sectionScopeDescendants = sectionScopeDescendants;
     }
 
     /** No-filter scope（宽检索）：所有约束为空。 */
     public static ScopeFilterPushdown none() {
-        return new ScopeFilterPushdown(List.of(), List.of(), List.of(), List.of());
+        return new ScopeFilterPushdown(List.of(), List.of(), List.of(), List.of(), false);
     }
 
     /** 从 ActiveScope 的 hardFilters 构造（null scope / 空 filters → none）。 */
@@ -57,7 +63,8 @@ public final class ScopeFilterPushdown {
                 documentJsonParams(hardFilters.get("document_refs")),
                 stringValues(hardFilters.get("evidence_types")),
                 stringValues(hardFilters.get("asset_types")),
-                stringValues(hardFilters.get("section_refs")));
+                stringValues(hardFilters.get("section_refs")),
+                "descendants".equals(hardFilters.get("section_scope")));
     }
 
     /** facets_json @> 参数化 JSONB containment 串列表（{"document":"<ref>"}）。 */
@@ -69,8 +76,11 @@ public final class ScopeFilterPushdown {
     /** content_type IN (...) 值列表（asset_types）。 */
     public List<String> contentTypes() { return contentTypes; }
 
-    /** target_ref IN (...) 值列表（section_refs）。 */
+    /** section_refs 值列表（section_ref / target_ref / 闭包种子的同一入参）。 */
     public List<String> targetRefs() { return targetRefs; }
+
+    /** A2：section_scope=descendants（闭包展开；false = exact 或未传）。 */
+    public boolean sectionScopeDescendants() { return sectionScopeDescendants; }
 
     public boolean isEmpty() {
         return documentJsonParams.isEmpty() && representationTypes.isEmpty()

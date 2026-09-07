@@ -44,9 +44,17 @@ public record ActiveScope(
      * 27号审查修复：召回链当前真正可下推的 hard filter 键白名单（单一真相源——
      * 请求边界（ParadigmRequests）与 scope_resolve 共用）。未列键显式 400，
      * 不静默忽略。
+     *
+     * <p>A2（39 号 §2.2）新增 {@code section_scope}（字符串，{@code exact|descendants}，
+     * 缺省 exact）：section_refs 的范围语义——descendants 在召回前展开章节闭包并
+     * 与 FTS/dense 共用同一 predicate 下推（越界率=0 的结构性保证）。</p>
      */
     public static final Set<String> SUPPORTED_FILTER_KEYS = Set.of(
-            "document_refs", "section_refs", "evidence_types", "asset_types");
+            "document_refs", "section_refs", "section_scope",
+            "evidence_types", "asset_types");
+
+    /** section_scope 合法值（exact=本节精确；descendants=本节及全部子节）。 */
+    public static final Set<String> SECTION_SCOPE_MODES = Set.of("exact", "descendants");
 
     public ActiveScope {
         if (snapshotIds == null) snapshotIds = List.of();

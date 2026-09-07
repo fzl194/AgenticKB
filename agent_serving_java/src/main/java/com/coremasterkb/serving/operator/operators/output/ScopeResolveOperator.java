@@ -50,15 +50,29 @@ public class ScopeResolveOperator implements Operator {
             "title":"知识库范围",\
             "description":"推荐留空 = 检索时按用户开放库/请求指定的库组合自动注入（通用范式）；写死 = 专属范式，只检索这些知识库并忽略检索请求传入的库"}}}""";
 
+    /** A2（33 号 G3）：descendants 闭包守卫上限。 */
+    private static final int MAX_SCOPE_ROOTS = 64;
+    private static final int MAX_DESCENDANTS_PER_ROOT = 512;
+
     private final AssetRepository assetRepository;
     private final KbAccessService kbAccessService;
     private final StructureRefService refService;
+    private final com.coremasterkb.serving.operator.mapper.AssetRetrievalUnitV2Mapper unitMapper;
 
     public ScopeResolveOperator(AssetRepository assetRepository, KbAccessService kbAccessService,
                                 StructureRefService refService) {
+        this(assetRepository, kbAccessService, refService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ScopeResolveOperator(
+            AssetRepository assetRepository, KbAccessService kbAccessService,
+            StructureRefService refService,
+            com.coremasterkb.serving.operator.mapper.AssetRetrievalUnitV2Mapper unitMapper) {
         this.assetRepository = assetRepository;
         this.kbAccessService = kbAccessService;
         this.refService = refService;
+        this.unitMapper = unitMapper;
     }
 
     @Override
@@ -108,6 +122,10 @@ public class ScopeResolveOperator implements Operator {
                     requestFilters, ctx.domain(), kbIds, ctx.username());
             scope = scope.withHardFilters(decoded);
             ctx.putAttribute("hardFilterKeys", List.copyOf(decoded.keySet()));
+            // A2（39 号 §2.2）：descendants 闭包的有界守卫（33 号 G3 限制）——
+            // roots ≤64、每 root 后代 ≤512，超限 section_scope_too_broad，
+            // 绝不退化为宽搜索（越界率=0 优先于有结果）。
+            guardSectionScope(decoded, scope.snapshotIds());
         }
 
         ctx.putAttribute("releaseId", scope.releaseId());
@@ -171,5 +189,35 @@ public class ScopeResolveOperator implements Operator {
             }
         }
         filters.put(key, decoded);
+    }
+
+    /**
+     * A2 descendants 闭包守卫（33 号 G3：roots ≤64、每 root 后代 ≤512）。
+     * 只在 section_scope=descendants 且 section_refs 非空时执行一次计数查询；
+     * 超限抛 {@code section_scope_too_broad}（400），绝不静默放宽为宽搜索。
+     */
+    private void guardSectionScope(Map<String, Object> decoded, List<String> snapshotIds) {
+        if (!"descendants".equals(decoded.get("section_scope")) || unitMapper == null) {
+            return;
+        }
+        Object refsValue = decoded.get("section_refs");
+        if (!(refsValue instanceof List<?> refs) || refs.isEmpty()) {
+            return;
+        }
+        if (refs.size() > MAX_SCOPE_ROOTS) {
+            throw new IllegalArgumentException(
+                    "section_scope_too_broad: 范围章节超过 " + MAX_SCOPE_ROOTS + " 个，请缩小范围");
+        }
+        List<Map<String, Object>> counts = unitMapper.countSectionClosure(
+                snapshotIds, refs.stream().map(String::valueOf).toList());
+        for (Map<String, Object> row : counts) {
+            long total = ((Number) row.get("total")).longValue();
+            if (total - 1 > MAX_DESCENDANTS_PER_ROOT) {
+                throw new IllegalArgumentException(
+                        "section_scope_too_broad: 章节 " + row.get("root")
+                                + " 的子树超过 " + MAX_DESCENDANTS_PER_ROOT
+                                + " 个节点，请缩小范围");
+            }
+        }
     }
 }

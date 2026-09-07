@@ -88,6 +88,7 @@ public class FtsOperator implements Operator {
                 pushdown.representationTypes(),
                 pushdown.contentTypes(),
                 pushdown.targetRefs(),
+                pushdown.sectionScopeDescendants(),
                 recall);
 
         List<RetrievalCandidate> candidates = ChannelAggregator.aggregate(rows, CHANNEL_ID, topK);

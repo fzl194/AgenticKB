@@ -352,7 +352,10 @@ class ParseResultReadService:
             for e in outline_elements
         ]
         table_items = [
-            _table_summary(a, table_contexts.get(a.table_id))
+            _table_summary(
+                a, table_contexts.get(a.table_id),
+                sheet_name=_sheet_name_of(doc, a),
+            )
             for a in table_assets[:_TABLE_LIMIT]
         ]
         return {
@@ -474,9 +477,25 @@ def _level(element: Any) -> int:
 _PREVIEW_ROW_LIMIT = 50
 
 
+def _sheet_name_of(doc: ParsedDocument, asset: TableAsset) -> str | None:
+    """A1（37 号 D7）：Excel 表格的 sheet 名——IR 容器树直读，投影面冗余.
+
+    仅 sheet 容器有 name（page/slide 容器无 sheet 语义，返回 None）。
+    """
+    for container_id in asset.page_span_ids:
+        container = next(
+            (c for c in doc.containers if c.container_id == container_id), None
+        )
+        if container is not None and container.container_type == "sheet":
+            return container.name
+    return None
+
+
 def _table_summary(
     asset: TableAsset,
     context: dict[str, str | None] | None = None,
+    *,
+    sheet_name: str | None = None,
 ) -> dict[str, Any]:
     # 2026-09-01 用户反馈修复：①preview 曾取 range(min(rows, 5)) 且不过滤
     # is_header——首行表头与前端列 label 重复渲染、23 行表只见 5 行；
@@ -500,6 +519,7 @@ def _table_summary(
         "rows": len(data_row_indexes),
         "columns": asset.columns,
         "header": header,
+        "sheet_name": sheet_name,
         "source_element_id": resolved.get("source_element_id"),
         "parent_section_element_id": resolved.get("parent_section_element_id"),
         "caption": resolved.get("caption"),

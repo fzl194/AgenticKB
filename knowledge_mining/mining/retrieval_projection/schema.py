@@ -60,6 +60,15 @@ PROMOTE_TABLE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("snapshot_id", "document_ref", "readiness_json", "schema_version",
          "tokenizer_version"),
     ),
+    # A1 来源记录面（38 号 §2.1）：随 Build 组装事务统一晋升（挖掘主链）。
+    # 受控重放走 PgLocatorStore.promote_locators 专用通道，不经此清单。
+    (
+        "asset_source_locators",
+        ("snapshot_id", "representation_id", "target_ref", "document_ref",
+         "source_format", "locator_kind", "section_path", "section_element_id",
+         "page", "line_start", "line_end", "sheet", "cell", "table_ref",
+         "row_index", "native_ref_json", "description", "locator_version"),
+    ),
 )
 
 __all__ = [

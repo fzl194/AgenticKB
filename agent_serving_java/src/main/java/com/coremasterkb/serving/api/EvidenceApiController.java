@@ -37,6 +37,27 @@ public class EvidenceApiController {
         this.evidenceToolService = evidenceToolService;
     }
 
+    /**
+     * A1 来源导航解析（37 号 P0-6）：ev_ ref → 服务端在当前权限下解析的跳转锚
+     * （document_id/大纲锚/表格锚/locator）。前端据此路由到文档页，不拼内部编号。
+     */
+    @GetMapping("/{ref}/source")
+    public ResponseEntity<?> evidenceSource(
+            @PathVariable String ref,
+            @RequestParam String domain,
+            @RequestParam(required = false) String kbId,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+        try {
+            List<String> kbIds = kbId == null || kbId.isBlank() ? null : List.of(kbId);
+            return ResponseEntity.ok(
+                    evidenceToolService.getSource(ref, domain, kbIds, kbUser));
+        } catch (StructureToolException e) {
+            log.warn("[evidence-api] source ref={} code={}", ref, e.code());
+            return ResponseEntity.status(e.status())
+                    .body(Map.of("error", e.code(), "message", String.valueOf(e.getMessage())));
+        }
+    }
+
     /** ev_ ref → 完整/更大粒度原文（mode 缺省 auto=预算内就大）。 */
     @GetMapping("/{ref}")
     public ResponseEntity<?> evidence(

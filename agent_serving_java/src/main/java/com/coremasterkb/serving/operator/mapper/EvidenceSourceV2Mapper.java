@@ -2,6 +2,7 @@ package com.coremasterkb.serving.operator.mapper;
 
 import com.coremasterkb.serving.mapper.result.EvidenceDocumentRow;
 import com.coremasterkb.serving.mapper.result.SegmentTextRow;
+import com.coremasterkb.serving.mapper.result.SourceLocatorRow;
 import com.coremasterkb.serving.mapper.result.StructureNodeRow;
 import com.coremasterkb.serving.mapper.result.TableAssetRow;
 import com.coremasterkb.serving.mapper.result.TableCellRow;
@@ -83,4 +84,14 @@ public interface EvidenceSourceV2Mapper {
 
     /** snapshot → 文档/库投影（file_name/relative_path/kb 名称，source projection 用）。 */
     List<EvidenceDocumentRow> selectDocumentSources(@Param("snapshotIds") List<String> snapshotIds);
+
+    /**
+     * A1 来源记录批量（37/38 号）：按 (snapshot, canonical representation) 点查——
+     * canonical 单元的 representation_id == canonical_evidence_id，因此与
+     * {@link #selectCanonicalRepresentations} 的 canonicalIds 同键。只在
+     * hydrate/assemble 阶段读，召回热路径不读。
+     */
+    List<SourceLocatorRow> selectSourceLocators(
+            @Param("snapshotIds") List<String> snapshotIds,
+            @Param("representationIds") List<String> representationIds);
 }

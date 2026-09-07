@@ -29,7 +29,7 @@ class QueryLogServiceTest {
 
     private EvidenceResponse.EvidenceItem item(String ref, String type, String fileName) {
         return new EvidenceResponse.EvidenceItem(ref, type, "content", new EvidenceResponse.EvidenceSource(
-                "kb", fileName, null, "doc_x", null, null), false, null);
+                "kb", fileName, null, "doc_x", null, null, null), false, null);
     }
 
     @Nested

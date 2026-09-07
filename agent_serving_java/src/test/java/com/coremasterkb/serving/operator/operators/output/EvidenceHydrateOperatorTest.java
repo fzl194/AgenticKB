@@ -5,6 +5,7 @@ import com.coremasterkb.serving.domain.HydratedEvidence;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
 import com.coremasterkb.serving.mapper.result.EvidenceDocumentRow;
 import com.coremasterkb.serving.mapper.result.SegmentTextRow;
+import com.coremasterkb.serving.mapper.result.SourceLocatorRow;
 import com.coremasterkb.serving.mapper.result.StructureNodeRow;
 import com.coremasterkb.serving.mapper.result.TableAssetRow;
 import com.coremasterkb.serving.mapper.result.TableCellRow;
@@ -128,6 +129,103 @@ class EvidenceHydrateOperatorTest {
     @SuppressWarnings("unchecked")
     private static List<HydratedEvidence> result(SlotValues out) {
         return (List<HydratedEvidence>) out.get("hydratedEvidence");
+    }
+
+    // ------------------------------------------------------------ A1 来源定位（37/38 号）
+
+    @Nested
+    @DisplayName("A1 source locator attach")
+    class SourceLocatorAttach {
+
+        private static final String SECTION = "doc:/spec#section:设备规格";
+        private static final String CANONICAL = "doc:/spec#seg:5";
+
+        private SourceLocatorRow locatorRow(String canonical, String kind,
+                                            Integer page, Integer lineStart,
+                                            Integer lineEnd, String sheet, String cell) {
+            SourceLocatorRow row = new SourceLocatorRow();
+            row.setSnapshotId(SNAP);
+            row.setRepresentationId(canonical);
+            row.setTargetRef(canonical);
+            row.setDocumentRef("doc:/spec");
+            row.setSourceFormat("pdf");
+            row.setLocatorKind(kind);
+            row.setSectionPath("第二章/设备规格");
+            row.setSectionElementId("h-2");
+            row.setPage(page);
+            row.setLineStart(lineStart);
+            row.setLineEnd(lineEnd);
+            row.setSheet(sheet);
+            row.setCell(cell);
+            return row;
+        }
+
+        private void stubSegment() {
+            when(mapper.selectCanonicalRepresentations(anyList(), anyList())).thenReturn(List.of(
+                    rep(CANONICAL, "prose", "命中的原文段落", "",
+                            "{\"section_path\":\"第二章/设备规格\",\"document\":\"doc:/spec\"}", null)));
+            when(mapper.selectStructureNodes(anyList(), anyList())).thenReturn(List.of(
+                    node(CANONICAL, SECTION, 5, "paragraph")));
+        }
+
+        @Test
+        @DisplayName("page locator 附着 source 且回填旧 page 槽位")
+        void attachesPageLocator() {
+            stubSegment();
+            when(mapper.selectSourceLocators(anyList(), anyList())).thenReturn(List.of(
+                    locatorRow(CANONICAL, "page", 7, null, null, null, null)));
+
+            List<HydratedEvidence> out = result(run(candidate(
+                    SNAP, CANONICAL, "segment", CANONICAL, "prose")));
+
+            assertThat(out).hasSize(1);
+            assertThat(out.get(0).source().locator()).isNotNull();
+            assertThat(out.get(0).source().locator().kind()).isEqualTo("page");
+            assertThat(out.get(0).source().locator().page()).isEqualTo(7);
+            // 旧 page 槽位由 locator 回填（协议向后兼容字段）
+            assertThat(out.get(0).source().page()).isEqualTo(7);
+        }
+
+        @Test
+        @DisplayName("line_range locator 附着行号区间")
+        void attachesLineRangeLocator() {
+            stubSegment();
+            when(mapper.selectSourceLocators(anyList(), anyList())).thenReturn(List.of(
+                    locatorRow(CANONICAL, "line_range", null, 12, 30, null, null)));
+
+            List<HydratedEvidence> out = result(run(candidate(
+                    SNAP, CANONICAL, "segment", CANONICAL, "prose")));
+
+            assertThat(out.get(0).source().locator().kind()).isEqualTo("line_range");
+            assertThat(out.get(0).source().locator().lineStart()).isEqualTo(12);
+            assertThat(out.get(0).source().locator().lineEnd()).isEqualTo(30);
+        }
+
+        @Test
+        @DisplayName("section_only 不出 locator 对象（L1 缺省表达）")
+        void suppressesSectionOnly() {
+            stubSegment();
+            when(mapper.selectSourceLocators(anyList(), anyList())).thenReturn(List.of(
+                    locatorRow(CANONICAL, "section_only", null, null, null, null, null)));
+
+            List<HydratedEvidence> out = result(run(candidate(
+                    SNAP, CANONICAL, "segment", CANONICAL, "prose")));
+
+            assertThat(out.get(0).source().locator()).isNull();
+        }
+
+        @Test
+        @DisplayName("无 locator 行（旧快照/未物化）保持原样不报错")
+        void toleratesMissingLocatorRows() {
+            stubSegment();
+            when(mapper.selectSourceLocators(anyList(), anyList())).thenReturn(List.of());
+
+            List<HydratedEvidence> out = result(run(candidate(
+                    SNAP, CANONICAL, "segment", CANONICAL, "prose")));
+
+            assertThat(out.get(0).source().locator()).isNull();
+            assertThat(out.get(0).source().page()).isNull();
+        }
     }
 
     // ---------------------------------------------------------------- typed expansion matrix

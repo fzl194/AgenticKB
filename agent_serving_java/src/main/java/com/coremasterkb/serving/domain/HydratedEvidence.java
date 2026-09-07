@@ -67,6 +67,25 @@ public record HydratedEvidence(
     }
 
     /**
+     * A1（37/38 号）：批量水合后按 (snapshot, canonical) 附加来源定位。
+     * locator 可为 null（挖掘侧未物化/旧快照）——此时保持原样，page 不变。
+     */
+    public HydratedEvidence withSourceLocator(EvidenceLocator locator) {
+        if (locator == null) {
+            return this;
+        }
+        SourceProjection s = source();
+        Integer page = s.page() != null ? s.page() : locator.page();
+        return new HydratedEvidence(snapshotId, canonicalEvidenceId, targetType, targetRef,
+                evidenceType, documentRef, parentRef, ordinal, windowFrom, windowTo,
+                orderedFragments, expansionMode, structureRefs, navigable, derived,
+                tokenEstimate,
+                new SourceProjection(s.knowledgeBase(), s.fileName(), s.relativePath(),
+                        s.documentRef(), s.section(), page, locator),
+                provenance);
+    }
+
+    /**
      * 有序内容片段。kind ∈ exact|window|section|document|caption|header|row；
      * sectionPath/page/structureRef 可得则填（内部定位信息，assemble 择要投影）。
      */
@@ -78,13 +97,14 @@ public record HydratedEvidence(
             String structureRef
     ) {}
 
-    /** source projection：kb/file/path/document/section/page（可得则填）。 */
+    /** source projection：kb/file/path/document/section/page/locator（可得则填）。 */
     public record SourceProjection(
             String knowledgeBase,
             String fileName,
             String relativePath,
             String documentRef,
             String section,
-            Integer page
+            Integer page,
+            EvidenceLocator locator
     ) {}
 }

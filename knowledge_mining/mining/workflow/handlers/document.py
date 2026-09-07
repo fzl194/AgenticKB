@@ -342,9 +342,36 @@ def retrieval_unit_project_handler(
     if not representations:
         return OperatorResult(state, frozenset(), OperatorStatus.SKIPPED)
 
+    # A1 来源记录物化（38 号 §2.4）：IR 位置实值 → locator staging，晋升随
+    # Build 组装事务。失败/缺服务 → degraded（不阻断基础资产，不予权限面）；
+    # 复用路径（reused=True，共享快照第二文档）staging 已有行，不重物化。
+    locator_facts: frozenset[str] = frozenset()
+    if not getattr(projected, "reused", False):
+        locator_service = getattr(
+            runtime.services, "source_locator_service", None
+        )
+        if locator_service is not None:
+            try:
+                outcome = locator_service.materialize_for_snapshot(
+                    snapshot_id=bundle.snapshot_ref,
+                )
+                if getattr(outcome, "status", "") == "ok":
+                    locator_facts = frozenset({"source_locators"})
+            except Exception as exc:  # noqa: BLE001 — degraded：定位缺位可查，主链继续
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "source locator materialization degraded for snapshot %s: %s",
+                    bundle.snapshot_ref, exc,
+                )
+
     updated = bundle.with_updates(
         representations_count=len(representations),
-        capability_facts=bundle.capability_facts | frozenset({"retrieval_units"}),
+        capability_facts=(
+            bundle.capability_facts
+            | frozenset({"retrieval_units"})
+            | locator_facts
+        ),
     )
     return _success(state, updated, "retrieval_units")
 

@@ -215,6 +215,7 @@
 
     <resultMap id="evidenceDocumentMap" type="com.coremasterkb.serving.mapper.result.EvidenceDocumentRow">
         <result column="snapshot_id"    property="snapshotId"/>
+        <result column="document_id"    property="documentId"/>
         <result column="document_key"   property="documentKey"/>
         <result column="document_name"  property="documentName"/>
         <result column="kb_id"          property="kbId"/>
@@ -225,6 +226,7 @@
     <!-- snapshot 主键回查文档/库投影：document_key 非全局唯一，跨库同名路径只能靠 snapshot 消歧 -->
     <select id="selectDocumentSources" resultMap="evidenceDocumentMap">
         SELECT l.document_snapshot_id AS snapshot_id,
+               d.id AS document_id,
                d.document_key,
                d.document_name,
                d.kb_id,
@@ -236,6 +238,37 @@
         WHERE l.document_snapshot_id IN
         <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
             #{sid}
+        </foreach>
+    </select>
+
+    <!-- A1 来源记录（37/38 号）：hydrate/assemble 阶段批量点查；召回热路径禁止读 -->
+    <select id="selectSourceLocators"
+            resultType="com.coremasterkb.serving.mapper.result.SourceLocatorRow">
+        SELECT snapshot_id        AS snapshotId,
+               representation_id  AS representationId,
+               target_ref         AS targetRef,
+               document_ref       AS documentRef,
+               source_format      AS sourceFormat,
+               locator_kind       AS locatorKind,
+               section_path       AS sectionPath,
+               section_element_id AS sectionElementId,
+               page,
+               line_start         AS lineStart,
+               line_end           AS lineEnd,
+               sheet,
+               cell,
+               table_ref          AS tableRef,
+               row_index          AS rowIndex,
+               native_ref_json::text AS nativeRefJson,
+               description
+        FROM asset_source_locators
+        WHERE snapshot_id IN
+        <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
+            #{sid}
+        </foreach>
+          AND representation_id IN
+        <foreach collection="representationIds" item="rid" open="(" separator="," close=")">
+            #{rid}
         </foreach>
     </select>
 

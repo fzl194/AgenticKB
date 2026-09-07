@@ -43,7 +43,11 @@ public record EvidenceResponse(
 
     /**
      * 来源投影。{@code document_ref} 为 opaque（doc_ 前缀）；{@code relative_path}/
-     * {@code section}/{@code page} 可得才返回。
+     * {@code section}/{@code page}/{@code locator} 可得才返回。
+     *
+     * <p>A1（37/38 号）：{@code locator} 为证据精确定位（页码/行范围/Sheet+Cell 或
+     * native 位置说明）——网页与 Agent 同源；null = 该证据仅有 L1 章节（位置不可得
+     * 不伪造）。</p>
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record EvidenceSource(
@@ -52,6 +56,7 @@ public record EvidenceResponse(
             @JsonProperty("relative_path") String relativePath,
             @JsonProperty("document_ref") String documentRef,
             String section,
-            Integer page
+            Integer page,
+            EvidenceLocator locator
     ) {}
 }

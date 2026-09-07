@@ -19,9 +19,13 @@ const kbApi = vi.hoisted(() => ({
   downloadDocument: vi.fn(),
 }))
 const routerPush = vi.hoisted(() => vi.fn())
+const routeQuery = vi.hoisted(() => ({ query: {} as Record<string, unknown> }))
 
 vi.mock('@/api/kb', () => ({ useKbApi: () => kbApi }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: routerPush }),
+  useRoute: () => ({ query: routeQuery.query }),
+}))
 vi.mock('@/api/proxyClient', () => ({
   apiErrorDetail: async () => '网络错误',
 }))
@@ -92,6 +96,7 @@ async function mountView() {
 describe('A0-1/A0-5/A0-6 文档结构化页', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    routeQuery.query = {}
     kbApi.getDocument.mockResolvedValue(DOC)
     kbApi.getDocumentKnowledge.mockResolvedValue(knowledge([
       { representation_id: 'r1', unit_type: 'prose', text: '正文', structural_context: '第一章' },
@@ -195,5 +200,59 @@ describe('A0-1/A0-5/A0-6 文档结构化页', () => {
     expect(wrapper.find('el-collapse-item[title="文档结构图"]').exists()).toBe(true)
     expect(graph.text()).toContain('manual.md')
     expect(graph.text()).toContain('1')
+  })
+})
+
+
+describe('A1 来源导航锚（37 号 P0-6）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    routeQuery.query = {}
+    kbApi.getDocument.mockResolvedValue(DOC)
+    kbApi.getDocumentKnowledge.mockResolvedValue(knowledge())
+    kbApi.getDocumentParseResult.mockResolvedValue(parseResult({
+      outline: [
+        { element_id: 'h-1', level: 1, title: '第一章' },
+        { element_id: 'h-2', level: 2, title: '1.1 告警表' },
+      ],
+      tables: [{
+        table_id: 't1', rows: 2, columns: 2, header: ['告警码', '原因'],
+        sheet_name: '告警表', preview: [['A101', '风扇停转'], ['A102', '电源失效']],
+      }],
+    }))
+    kbApi.getDocumentPreviewUrl.mockRejectedValue(new Error('no'))
+    kbApi.downloadDocument.mockRejectedValue(new Error('no'))
+  })
+
+  it('anchor 查询 → 切到结构化视图并展开大纲', async () => {
+    routeQuery.query = { anchor: 'h-2' }
+    const wrapper = await mountView()
+    expect((wrapper.vm as unknown as { activeTab: string }).activeTab).toBe('structured')
+    expect((wrapper.vm as unknown as { openCards: string[] }).openCards).toContain('outline')
+  })
+
+  it('table 查询 → 展开表格卡片、命中表高亮且滚动定位', async () => {
+    routeQuery.query = { table: 't1', row: '3', anchor: 'h-2' }
+    const wrapper = await mountView()
+    const vm = wrapper.vm as unknown as {
+      openCards: string[]; highlightedTableId: string
+    }
+    expect(vm.openCards).toContain('tables')
+    expect(vm.highlightedTableId).toBe('t1')
+    expect(wrapper.find('[data-testid="doc-table-t1"]').exists()).toBe(true)
+  })
+
+  it('sheet 名进入表格标题行（37 号 D7）', async () => {
+    routeQuery.query = { table: 't1' }
+    const wrapper = await mountView()
+    const block = wrapper.find('[data-testid="doc-table-t1"]')
+    expect(block.text()).toContain('告警表')
+  })
+
+  it('无锚查询 → 保持默认原始预览 tab，不动卡片', async () => {
+    const wrapper = await mountView()
+    expect((wrapper.vm as unknown as { activeTab: string }).activeTab).toBe('preview')
+    expect((wrapper.vm as unknown as { openCards: string[] }).openCards)
+      .not.toContain('outline')
   })
 })

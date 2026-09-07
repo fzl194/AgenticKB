@@ -145,6 +145,8 @@ export interface ParseResultTable {
   rows: number
   columns: number
   header: string[]
+  /** A1（37 号 D7）：Excel 表格所在 sheet 名（IR 容器树直读；非 xlsx 为空）。 */
+  sheet_name?: string | null
   preview: string[][]
   source_element_id?: string | null
   parent_section_element_id?: string | null

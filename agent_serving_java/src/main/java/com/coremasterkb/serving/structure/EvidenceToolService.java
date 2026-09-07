@@ -1,6 +1,7 @@
 package com.coremasterkb.serving.structure;
 
 import com.coremasterkb.serving.domain.ActiveScope;
+import com.coremasterkb.serving.domain.EvidenceLocator;
 import com.coremasterkb.serving.domain.EvidenceResponse;
 import com.coremasterkb.serving.domain.HydratedEvidence;
 import com.coremasterkb.serving.domain.RetrievalCandidate;
@@ -8,6 +9,7 @@ import com.coremasterkb.serving.evidence.EvidenceRefCodec;
 import com.coremasterkb.serving.evidence.EvidenceRefResolver;
 import com.coremasterkb.serving.mapper.result.EvidenceDocumentRow;
 import com.coremasterkb.serving.mapper.result.SegmentTextRow;
+import com.coremasterkb.serving.mapper.result.SourceLocatorRow;
 import com.coremasterkb.serving.mapper.result.UnitV2Row;
 import com.coremasterkb.serving.operator.core.ExecContext;
 import com.coremasterkb.serving.operator.core.Params;
@@ -132,6 +134,66 @@ public class EvidenceToolService {
         return new Params(node);
     }
 
+    // ------------------------------------------------------------------ get_source（A1）
+
+    /**
+     * A1 来源导航解析（37 号 P0-6 / 38 号 §3.3）：ev_ ref →（授权快照集内）网页跳转锚。
+     *
+     * <p>返回 mining document_id（经 snapshot_links 回查、按 kbIds 消歧共享快照）、
+     * 大纲锚 section_element_id 与表格锚——前端据此路由到文档页对应位置，不持有、
+     * 不拼接任何内部编号。越权/不存在同响应（refService.resolve 契约）。</p>
+     */
+    public record SourceNavigation(
+            String document_id,
+            String kb_id,
+            String file_name,
+            String relative_path,
+            String section_element_id,
+            String section_path,
+            String table_ref,
+            Integer row_index,
+            EvidenceLocator locator) {}
+
+    public SourceNavigation getSource(String evidenceRef, String domain, List<String> kbIds,
+                                      String username) {
+        EvidenceRefResolver.ResolvedRef resolved =
+                refService.resolve(evidenceRef, domain, kbIds, username);
+        if (resolved.kind() != EvidenceRefResolver.RefKind.EVIDENCE) {
+            throw StructureToolException.invalidRef("get_source 期望 ev_ 前缀证据 ref");
+        }
+        String snapshotId = resolved.snapshotId();
+        String canonical = resolved.internalRef();
+
+        SourceLocatorRow row = sourceMapper
+                .selectSourceLocators(List.of(snapshotId), List.of(canonical))
+                .stream().findFirst().orElse(null);
+
+        // 共享快照可挂多文档：按请求 kb 消歧，未指定 kb 取首行（与 source projection 同语义）
+        EvidenceDocumentRow doc = sourceMapper.selectDocumentSources(List.of(snapshotId))
+                .stream()
+                .filter(d -> kbIds == null || kbIds.isEmpty() || kbIds.contains(d.getKbId()))
+                .findFirst().orElse(null);
+        if (doc == null) {
+            throw StructureToolException.invalidRef("证据所属文档不可见（快照无可见链接）");
+        }
+
+        EvidenceLocator locator = null;
+        String kind = row != null ? row.getLocatorKind() : null;
+        if (kind != null && !"section_only".equals(kind) && !"unavailable".equals(kind)) {
+            locator = new EvidenceLocator(kind, row.getPage(), row.getLineStart(),
+                    row.getLineEnd(), row.getSheet(), row.getCell(), row.getTableRef(),
+                    row.getRowIndex(), row.getDescription());
+        }
+        return new SourceNavigation(
+                doc.getDocumentId(), doc.getKbId(), doc.getDocumentName(),
+                doc.getRelativePath(),
+                row != null ? row.getSectionElementId() : null,
+                row != null ? row.getSectionPath() : null,
+                row != null ? row.getTableRef() : null,
+                row != null ? row.getRowIndex() : null,
+                locator);
+    }
+
     /** 与 AssembleOperator 相同的公开投影（ref/type/content/source/truncated/structure_ref）。 */
     private EvidenceResponse.EvidenceItem toItem(String snapshotId, String canonical,
                                                  HydratedEvidence e) {
@@ -142,7 +204,8 @@ public class EvidenceToolService {
                 src != null ? src.relativePath() : null,
                 e.documentRef() != null ? codec.encodeDocument(snapshotId, e.documentRef()) : null,
                 src != null ? src.section() : null,
-                src != null ? src.page() : null);
+                src != null ? src.page() : null,
+                src != null ? src.locator() : null);
         boolean truncated = e.provenance().get("truncated") instanceof Boolean b && b;
         String structureRef = e.navigable() && !e.structureRefs().isEmpty()
                 ? codec.encodeStructure(snapshotId, e.structureRefs().get(0)) : null;

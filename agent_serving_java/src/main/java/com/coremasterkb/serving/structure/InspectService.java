@@ -72,7 +72,11 @@ public class InspectService {
             List<AssetSummary> assets) {}
 
     public InspectResult inspect(String ref, String domain, List<String> kbIds, String username) {
-        EvidenceRefResolver.ResolvedRef resolved = refService.resolve(ref, domain, kbIds, username);
+        boolean opaqueRef = ref != null && (ref.startsWith("st_") || ref.startsWith("doc_")
+                || ref.startsWith("ev_"));
+        EvidenceRefResolver.ResolvedRef resolved = opaqueRef
+                ? refService.resolve(ref, domain, kbIds, username)
+                : refService.resolveInternal(ref, domain, kbIds, username);
         String snapshotId = resolved.snapshotId();
 
         return switch (resolved.kind()) {

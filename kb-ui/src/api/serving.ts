@@ -84,6 +84,35 @@ export interface EvidenceSourceNavigation {
   locator?: EvidenceLocator | null
 }
 
+/** A3：结构化查询结果（/api/v1/structure/{ref}/query）。 */
+export interface TableFieldSchema {
+  name: string
+  value_type: 'number' | 'text' | 'date' | string
+  sortable: boolean
+  can_aggregate: boolean
+  operations: string[]
+}
+
+export interface TableQueryResult {
+  asset_ref: string
+  table_name: string
+  columns: TableFieldSchema[]
+  rows: Array<Record<string, unknown> & { _row?: number }>
+  cursor?: string | null
+  has_more: boolean
+  aggregate?: { op: string; field?: string | null; value?: unknown; row_count?: number } | null
+}
+
+/** A3：查询 DSL（与 MCP get_knowledge(ref, query=…) 同一形状）。 */
+export interface TableQuerySpec {
+  select?: string[]
+  where?: Array<{ field: string; op: string; value?: unknown }>
+  order_by?: Array<{ field: string; direction: 'asc' | 'desc' }>
+  limit?: number
+  cursor?: string
+  aggregate?: { op: string; field?: string }
+}
+
 export function useServingApi() {
   const client = createProxyClient('serving')
 
@@ -164,6 +193,23 @@ export function useServingApi() {
       } catch (err: unknown) {
         throw localizeSearchError(err)
       }
+    },
+
+    /**
+     * A3 结构化查询（39 号 §3.3）：表格资产 ref（st_ 或内部 "{doc}#table:{t}"）
+     * + schema-bound DSL。与 MCP get_knowledge 的 query 分支同一 service——
+     * 网页与 Agent 对同一查询同结果。
+     */
+    async queryStructure(
+      ref: string, query: TableQuerySpec,
+      opts?: { domain?: string; kbId?: string },
+    ): Promise<TableQueryResult> {
+      const { data } = await client.post(`/api/v1/structure/${ref}/query`, {
+        query,
+        domain: opts?.domain,
+        ...(opts?.kbId ? { kbId: opts.kbId } : {}),
+      })
+      return data
     },
 
     /**

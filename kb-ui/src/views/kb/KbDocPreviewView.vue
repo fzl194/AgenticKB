@@ -284,8 +284,17 @@
                   <div class="doc-preview__table-caption">
                     <el-tag v-if="t.sheet_name" size="small" effect="plain">{{ t.sheet_name }}</el-tag>
                     {{ t.rows }} 行 × {{ t.columns }} 列
+                    <el-button
+                      size="small" type="primary" plain
+                      :data-testid="`table-query-toggle-${t.table_id}`"
+                      @click="toggleQueryPanel(t.table_id)"
+                    >精确查询</el-button>
                   </div>
-                  <el-table :data="tableRows(t)" size="small" border class="kb-table">
+                  <el-table
+                    :data="tableRows(t)" size="small" border class="kb-table"
+                    :row-class-name="({ rowIndex }: { rowIndex: number }) =>
+                      tableQueryRowClass(t.table_id, rowIndex)"
+                  >
                     <el-table-column
                       v-for="(_, ci) in tableRows(t)[0] || []"
                       :key="ci"
@@ -296,8 +305,16 @@
                       </template>
                     </el-table-column>
                   </el-table>
+                  <TbTableQueryPanel
+                    v-if="queryPanelTableId === t.table_id && tableAssetRef(t)"
+                    :asset-ref="tableAssetRef(t)!"
+                    :kb-id="kbId"
+                    :domain="domain"
+                    :default-columns="t.header"
+                    @row-click="onQueryRowHit"
+                  />
                   <p v-if="t.rows > t.preview.length" class="doc-preview__muted">
-                    仅预览前 {{ t.preview.length }} 行（共 {{ t.rows }} 行数据行）——完整表格查询目前可通过 Agent 的 get_knowledge 表格查询能力使用。
+                    仅预览前 {{ t.preview.length }} 行（共 {{ t.rows }} 行数据行）——用「精确查询」筛选/排序/统计全表数据。
                   </p>
                 </div>
               </el-collapse-item>
@@ -360,11 +377,13 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Document, Download, Picture, Tickets, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { useDomainStore } from '@/stores/domain'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useKbApi } from '@/api/kb'
 import type { ParseResult } from '@/api/mining'
 import DocumentStructureGraph from '@/components/kb/DocumentStructureGraph.vue'
+import TbTableQueryPanel from '@/components/kb/TbTableQueryPanel.vue'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
@@ -375,6 +394,8 @@ const PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 const TEXT_RENDER_LIMIT = 200_000
 
 const props = defineProps<{ kbId: string; docId: string }>()
+const domainStore = useDomainStore()
+const domain = computed(() => domainStore.currentDomain ?? 'default')
 const router = useRouter()
 const route = useRoute()
 const kbApi = useKbApi()
@@ -508,6 +529,30 @@ function goScopedSearch(mode: 'exact' | 'descendants') {
 // 检索面板经服务端解析端点取得这些锚后路由过来——本页只负责定位呈现。
 const outlineTreeRef = ref<{ setCurrentKey?: (key: string | number) => void } | null>(null)
 const highlightedTableId = ref('')
+
+// A3 表格精确查询（39 号 §3.3）：内部 ref = doc_key#table:{table_id}，
+// 服务端在当前权限下解析（与 MCP 同一 StructuredQueryService）。
+const queryPanelTableId = ref('')
+const queryHitRow = ref<number | undefined>()
+function toggleQueryPanel(tableId: string) {
+  queryPanelTableId.value = queryPanelTableId.value === tableId ? '' : tableId
+  queryHitRow.value = undefined
+}
+function tableAssetRef(t: { table_id: string }): string | null {
+  const docRef = parseResult.value?.snapshot?.document_ref
+  return docRef ? `${docRef}#table:${t.table_id}` : null
+}
+function tableQueryRowClass(tableId: string, rowIndex: number): string {
+  // 预览不含表头行；查询 _row 是网格行号（单表头为主型，多表头时不高亮——诚实降级）
+  return tableId === queryPanelTableId.value && rowIndex + 1 === queryHitRow.value
+    ? 'doc-preview__row-hit'
+    : ''
+}
+
+function onQueryRowHit(row: number | undefined) {
+  queryHitRow.value = row
+  ElMessage.info(row != null ? `命中数据行 ${row}（预览区高亮，超出预览范围请看查询结果）` : '')
+}
 
 function applyNavigationAnchors() {
   const q = route.query as Record<string, string | string[] | undefined>
@@ -923,4 +968,5 @@ onUnmounted(cleanup)
 .doc-preview__tab-tag {
   margin-left: 6px;
 }
+.doc-preview__row-hit { background: var(--el-color-warning-light-8) !important; }
 </style>

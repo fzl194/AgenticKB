@@ -187,7 +187,7 @@ class StructuredQueryServiceTest {
     @DisplayName("数值列聚合：avg 参数化下推 + row_count 附带")
     void numericAggregate() {
         when(toolMapper.aggregateStructuredRows(eq(SNAP), eq("tbl:3"), anyList(),
-                eq("avg"), eq("最大功耗")))
+                eq("avg"), eq("最大功耗"), anyBoolean()))
                 .thenReturn(new StructureToolMapper.AggregateRow(82.75));
         when(toolMapper.countStructuredRows(eq(SNAP), eq("tbl:3"), anyList())).thenReturn(2L);
 
@@ -313,5 +313,104 @@ class StructuredQueryServiceTest {
 
     private static StructureToolMapper.StructuredRow row(int idx, String cellsJson) {
         return new StructureToolMapper.StructuredRow(idx, cellsJson);
+    }
+    private static TableCellRow cell(String col, String value, String type, String normalized) {
+        TableCellRow c = cell(col, value);
+        c.setValueType(type);
+        c.setNormalizedValue(normalized);
+        return c;
+    }
+
+    // ---- A3：声明类型权威 + date 支持 ----------------------------------------
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("A3: IR 声明类型权威——文本值也按声明 number 定型")
+    void declaredTypeWinsOverScan() {
+        when(toolMapper.selectCellsForTyping(eq(SNAP), eq("tbl:3"), anyInt()))
+                .thenReturn(java.util.List.of(
+                        header("型号"), header("最大功耗"),
+                        cell("最大功耗", "六十五", "number", "65"),
+                        cell("最大功耗", "一百", "number", "100")));
+        var schema = service.schemaOf(SNAP, asset("ready"));
+        var power = schema.columns().stream()
+                .filter(f -> f.name().equals("最大功耗")).findFirst().orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(power.value_type()).isEqualTo("number");
+        org.assertj.core.api.Assertions.assertThat(power.can_aggregate()).isTrue();
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("A3: 声明 date 列——序数过滤/排序可用，值须 ISO")
+    void dateColumnFiltering() {
+        when(toolMapper.selectCellsForTyping(eq(SNAP), eq("tbl:3"), anyInt()))
+                .thenReturn(java.util.List.of(
+                        header("型号"), header("投产日期"),
+                        cell("投产日期", "2026/01/05", "date", "2026-01-05"),
+                        cell("投产日期", "2026/09/07", "date", "2026-09-07")));
+        var schema = service.schemaOf(SNAP, asset("ready"));
+        var date = schema.columns().stream()
+                .filter(f -> f.name().equals("投产日期")).findFirst().orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(date.value_type()).isEqualTo("date");
+        // 序数比较在能力清单里；contains 不在
+        org.assertj.core.api.Assertions.assertThat(date.operations()).contains("gte", "lt");
+        org.assertj.core.api.Assertions.assertThat(date.operations()).doesNotContain("contains", "sum", "avg");
+
+        // 合法 ISO → 走文本序比较（cells_norm 基准）
+        when(toolMapper.selectStructuredRows(eq(SNAP), eq("tbl:3"), anyList(), any(), any(),
+                org.mockito.ArgumentMatchers.anyBoolean(), anyInt(), anyInt()))
+                .thenReturn(java.util.List.of());
+        service.query(ST_REF, spec(
+                "{\"where\": [{\"field\": \"投产日期\", \"op\": \"gte\", \"value\": \"2026-06-01\"}]}"),
+                "odn", List.of("kb-1"), "alice");
+        org.mockito.Mockito.verify(toolMapper).selectStructuredRows(
+                eq(SNAP), eq("tbl:3"), anyList(), any(), any(),
+                org.mockito.ArgumentMatchers.anyBoolean(), anyInt(), anyInt());
+
+        // 非 ISO → type_mismatch（可修正错误，不静默文本包含）
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.query(ST_REF, spec(
+                "{\"where\": [{\"field\": \"投产日期\", \"op\": \"gte\", \"value\": \"2026年6月\"}]}"),
+                "odn", List.of("kb-1"), "alice"))
+                .isInstanceOf(StructureToolException.class)
+                .hasMessageContaining("YYYY-MM-DD");
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("A3: date 列 min/max 可聚合（文本序），sum/avg 拒绝")
+    void dateAggregates() {
+        when(toolMapper.selectCellsForTyping(eq(SNAP), eq("tbl:3"), anyInt()))
+                .thenReturn(java.util.List.of(
+                        header("型号"), header("投产日期"),
+                        cell("投产日期", "2026/01/05", "date", "2026-01-05"),
+                        cell("投产日期", "2026/09/07", "date", "2026-09-07")));
+        when(toolMapper.aggregateStructuredRows(eq(SNAP), eq("tbl:3"), anyList(),
+                eq("min"), eq("投产日期"), org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(new StructureToolMapper.AggregateRow("2026-01-05"));
+        when(toolMapper.countStructuredRows(eq(SNAP), eq("tbl:3"), anyList()))
+                .thenReturn(2L);
+        var out = service.query(ST_REF, spec(
+                "{\"aggregate\": {\"op\": \"min\", \"field\": \"投产日期\"}}"),
+                "odn", List.of("kb-1"), "alice");
+        org.assertj.core.api.Assertions.assertThat(out.aggregate().value())
+                .isEqualTo("2026-01-05");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.query(ST_REF, spec(
+                "{\"aggregate\": {\"op\": \"sum\", \"field\": \"投产日期\"}}"),
+                "odn", List.of("kb-1"), "alice"))
+                .isInstanceOf(StructureToolException.class)
+                .hasMessageContaining("日期列");
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("A3: 混合声明列回退值扫描（不猜类型）")
+    void mixedDeclaredDegradesToScan() {
+        when(toolMapper.selectCellsForTyping(eq(SNAP), eq("tbl:3"), anyInt()))
+                .thenReturn(java.util.List.of(
+                        header("型号"), header("最大功耗"),
+                        cell("最大功耗", "65", "number", null),
+                        cell("最大功耗", "100.5", null, null)));
+        var schema = service.schemaOf(SNAP, asset("ready"));
+        var power = schema.columns().stream()
+                .filter(f -> f.name().equals("最大功耗")).findFirst().orElseThrow();
+        // 声明混合（number + 未声明）→ 回退扫描：全数值 → number
+        org.assertj.core.api.Assertions.assertThat(power.value_type()).isEqualTo("number");
     }
 }

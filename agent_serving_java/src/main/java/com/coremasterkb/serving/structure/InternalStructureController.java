@@ -214,41 +214,7 @@ public class InternalStructureController {
     // ------------------------------------------------------------------ body parsing
 
     private static QuerySpec parseSpec(JsonNode q) {
-        if (q == null || q.isNull()) {
-            return new QuerySpec(null, null, null, null, null, null);
-        }
-        // 29号 2.9：query 下只认白名单键——未知键（如误用 filter/orderBy）
-        // 显式 400，不再静默当成空条件返回全表（调用方以为过滤生效）。
-        java.util.Set<String> fieldNames = new java.util.HashSet<>();
-        q.fieldNames().forEachRemaining(fieldNames::add);
-        fieldNames.removeAll(java.util.Set.of(
-                "select", "where", "order_by", "limit", "cursor", "aggregate"));
-        if (!fieldNames.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "unsupported_query_key:" + String.join(",", fieldNames));
-        }
-        List<String> select = stringList(q, "select");
-        List<WhereClause> where = new ArrayList<>();
-        JsonNode whereNode = q.get("where");
-        if (whereNode != null && whereNode.isArray()) {
-            for (JsonNode w : whereNode) {
-                where.add(new WhereClause(text(w, "field"), text(w, "op"), w.get("value")));
-            }
-        }
-        List<OrderClause> orderBy = new ArrayList<>();
-        JsonNode orderNode = q.get("order_by");
-        if (orderNode != null && orderNode.isArray()) {
-            for (JsonNode o : orderNode) {
-                orderBy.add(new OrderClause(text(o, "field"), text(o, "direction")));
-            }
-        }
-        Aggregate aggregate = null;
-        JsonNode agg = q.get("aggregate");
-        if (agg != null && agg.isObject() && agg.hasNonNull("op")) {
-            aggregate = new Aggregate(text(agg, "op"), text(agg, "field"));
-        }
-        return new QuerySpec(select, where, orderBy, intOrNull(q.get("limit")),
-                text(q, "cursor"), aggregate);
+        return StructureQueryDsl.parseSpec(q);
     }
 
     private static String requiredRef(JsonNode body) {

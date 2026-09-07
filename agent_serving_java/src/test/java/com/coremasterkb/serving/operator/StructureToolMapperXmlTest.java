@@ -40,9 +40,9 @@ class StructureToolMapperXmlTest {
     @DisplayName("字段名只作绑定参数：cells->>#{field} / #{orderField} / #{aggField}")
     void fieldNamesAreBoundParameters() throws Exception {
         String xml = mapperXml();
-        assertThat(xml).contains("t.cells ->> #{c.field}");
-        assertThat(xml).contains("t.cells ->> #{orderField}");
-        assertThat(xml).contains("t.cells ->> #{aggField}");
+        assertThat(xml).contains("t.cells_norm ->> #{c.field}");
+        assertThat(xml).contains("t.cells_norm ->> #{orderField}");
+        assertThat(xml).contains("t.cells_norm ->> #{aggField}");
         // 不存在拼接形态
         assertThat(xml).doesNotContain("->> '");
         assertThat(xml).doesNotContain("->> \"");
@@ -80,8 +80,13 @@ class StructureToolMapperXmlTest {
     @DisplayName("数值比较走 ::numeric 转换（先去千分位），文本走字典序")
     void numericVsTextBranches() throws Exception {
         String xml = mapperXml();
-        assertThat(xml).contains("NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric = #{c.value}");
-        assertThat(xml).contains("t.cells ->> #{c.field} = #{c.value}");
+        assertThat(xml).contains(
+                "NULLIF(REPLACE(t.cells_norm ->> #{c.field}, ',', ''), '')::numeric = #{c.value}");
+        assertThat(xml).contains("t.cells_norm ->> #{c.field} = #{c.value}");
+        // A3：date 序数比较走规范值文本序（ISO 字典序=时间序）
+        assertThat(xml).contains("t.cells_norm ->> #{c.field} &gt;= #{c.value}");
+        // 比较基准 = 规范值优先（COALESCE），原始值仅投影输出
+        assertThat(xml).contains("COALESCE(c.normalized_value, c.value)");
     }
 
     @Test

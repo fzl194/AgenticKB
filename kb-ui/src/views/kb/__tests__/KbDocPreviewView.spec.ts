@@ -29,6 +29,13 @@ vi.mock('vue-router', () => ({
 }))
 vi.mock('@/api/proxyClient', () => ({
   apiErrorDetail: async () => '网络错误',
+  installAuthInterceptors: () => undefined,
+}))
+vi.mock('@/stores/domain', () => ({
+  useDomainStore: () => ({ currentDomain: 'default' }),
+}))
+vi.mock('@/api/serving', () => ({
+  useServingApi: () => ({ queryStructure: vi.fn() }),
 }))
 vi.mock('@/components/kb/DocumentStructureGraph.vue', () => ({
   default: {
@@ -187,7 +194,9 @@ describe('A0-1/A0-5/A0-6 文档结构化页', () => {
     const wrapper = await mountView()
     const text = wrapper.text()
     expect(text).not.toContain('query_structured_asset')
-    expect(text).toContain('get_knowledge')
+    // A3（39 号 §3.3）：截断提示指向网页「精确查询」面板（P0-5 产品化），
+    // 不再引导去 Agent 的 get_knowledge
+    expect(text).toContain('精确查询')
   })
 
   it('在结构化数据页直接暴露当前版本的文档结构图', async () => {

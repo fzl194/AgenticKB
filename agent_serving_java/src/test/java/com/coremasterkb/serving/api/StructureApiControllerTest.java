@@ -32,14 +32,17 @@ class StructureApiControllerTest {
 
     private StructureNavigateService navigateService;
     private InspectService inspectService;
+    private com.coremasterkb.serving.structure.StructuredQueryService queryService;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         navigateService = mock(StructureNavigateService.class);
         inspectService = mock(InspectService.class);
+        queryService = mock(com.coremasterkb.serving.structure.StructuredQueryService.class);
         mvc = MockMvcBuilders.standaloneSetup(
-                new StructureApiController(navigateService, inspectService)).build();
+                new StructureApiController(navigateService, inspectService, queryService))
+                .build();
     }
 
     @Test
@@ -101,5 +104,34 @@ class StructureApiControllerTest {
                         .header("X-KB-User", "bob"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.node_type").value("section"));
+    }
+    @Test
+    @DisplayName("A3 query：body.query DSL → 同源 service；typed error 映射 4xx")
+    void queryPassthroughAndErrors() throws Exception {
+        when(queryService.query(
+                eq("st_tbl"), any(), eq("cloud_core_network"), eq(List.of("kb-1")), eq("alice")))
+                .thenReturn(new com.coremasterkb.serving.structure.StructuredQueryService.QueryResult(
+                        "st_tbl", "tbl:alarm", List.of(), List.of(),
+                        null, false, null));
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/v1/structure/st_tbl/query")
+                        .content("{\"query\": {\"where\": [{\"field\": \"告警码\", "
+                                + "\"op\": \"eq\", \"value\": \"A101\"}]}}")
+                        .contentType("application/json")
+                        .param("domain", "cloud_core_network")
+                        .param("kbId", "kb-1")
+                        .header("X-KB-User", "alice"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.table_name").value("tbl:alarm"));
+
+        // DSL 白名单外键 → 400（不静默当空条件）
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/v1/structure/st_tbl/query")
+                        .content("{\"query\": {\"filter\": {}}}")
+                        .contentType("application/json")
+                        .param("domain", "cloud_core_network"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_query"));
     }
 }

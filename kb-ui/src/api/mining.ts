@@ -203,7 +203,9 @@ export interface ParseResult {
     mime_type: string
     quality_status: string
     lifecycle_status: string
-    parser_fingerprint: string | null
+    parser_fingerprint: string
+  /** A3：doc_key（网页构造内部表格查询 ref） */
+  document_ref?: string | null | null
     compiler_fingerprint: string | null
     snapshot_fingerprint: string
     created_by_run_id: string | null

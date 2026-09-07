@@ -2,7 +2,9 @@ package com.coremasterkb.serving.api;
 
 import com.coremasterkb.serving.structure.InspectService;
 import com.coremasterkb.serving.structure.StructureNavigateService;
+import com.coremasterkb.serving.structure.StructureQueryDsl;
 import com.coremasterkb.serving.structure.StructureToolException;
+import com.coremasterkb.serving.structure.StructuredQueryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -34,11 +36,14 @@ public class StructureApiController {
 
     private final StructureNavigateService navigateService;
     private final InspectService inspectService;
+    private final StructuredQueryService queryService;
 
     public StructureApiController(
-            StructureNavigateService navigateService, InspectService inspectService) {
+            StructureNavigateService navigateService, InspectService inspectService,
+            StructuredQueryService queryService) {
         this.navigateService = navigateService;
         this.inspectService = inspectService;
+        this.queryService = queryService;
     }
 
     /**
@@ -74,6 +79,46 @@ public class StructureApiController {
                     ref, relation, e.code());
             return ResponseEntity.status(e.status())
                     .body(Map.of("error", e.code(), "message", String.valueOf(e.getMessage())));
+        }
+    }
+
+    /**
+     * st_ 表格资产 ref + schema-bound DSL（A3 网页精确查询）。
+     * 与 MCP internal {@code /api/internal/structured-query} 同一
+     * {@link StructuredQueryService}（同一校验/类型系统/typed error）——
+     * 网页与 Agent 对同一查询必然同结果。
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/{ref}/query")
+    public ResponseEntity<?> query(
+            @PathVariable String ref,
+            @org.springframework.web.bind.annotation.RequestBody com.fasterxml.jackson.databind.JsonNode body,
+            @RequestParam String domain,
+            @RequestParam(required = false) String kbId,
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+        try {
+            List<String> kbIds = kbId == null || kbId.isBlank() ? null : List.of(kbId);
+            StructuredQueryService.QuerySpec spec =
+                    StructureQueryDsl.parseSpec(body == null ? null : body.get("query"));
+            StructuredQueryService.QueryResult result =
+                    queryService.query(ref, spec, domain, kbIds, kbUser);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("asset_ref", result.asset_ref());
+            out.put("table_name", result.table_name());
+            out.put("columns", result.columns());
+            out.put("rows", result.rows());
+            out.put("cursor", result.cursor());
+            out.put("has_more", result.has_more());
+            out.put("aggregate", result.aggregate());
+            return ResponseEntity.ok(out);
+        } catch (StructureToolException e) {
+            log.warn("[structure-api] query ref={} code={}", ref, e.code());
+            return ResponseEntity.status(e.status())
+                    .body(Map.of("error", e.code(), "message", String.valueOf(e.getMessage())));
+        } catch (IllegalArgumentException e) {
+            // DSL 白名单键（29 号 2.9）：typed 400，不静默当空条件
+            log.warn("[structure-api] query ref={} invalid dsl: {}", ref, e.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "invalid_query", "message", String.valueOf(e.getMessage())));
         }
     }
 

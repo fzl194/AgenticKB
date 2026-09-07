@@ -32,7 +32,11 @@ public interface StructureToolMapper {
     record StructuredRow(Integer rowIndex, String cellsJson) {}
 
     /** 聚合结果：value 数值列（count 恒非空；sum/min/max/avg 无匹配行时可为 null）。 */
-    record AggregateRow(Double value) {}
+    /** 聚合结果：value 数值（count/sum/avg）或 ISO 日期串（date min/max）。 */
+    record AggregateRow(Object value) {
+        public AggregateRow(Double value) { this((Object) value); }
+        public AggregateRow(String value) { this((Object) value); }
+    }
 
     /**
      * structured query 过滤条件（白名单校验后传入）。{@code numeric} 决定 SQL 分支
@@ -152,11 +156,16 @@ public interface StructureToolMapper {
             @Param("snapshotId") String snapshotId, @Param("tableRef") String tableRef,
             @Param("criteria") List<Criterion> criteria);
 
-    /** 聚合：op ∈ count/sum/min/max/avg（aggOp 固定分支；aggField 白名单 + 参数绑定）。 */
+    /**
+     * 聚合：op ∈ count/sum/min/max/avg（aggOp 固定分支；aggField 白名单 + 参数绑定）。
+     * A3：{@code textualAggregate} = date 列的 min/max（ISO 文本字典序，规范值基准）；
+     * 数值聚合恒走 ::numeric 分支。
+     */
     AggregateRow aggregateStructuredRows(
             @Param("snapshotId") String snapshotId, @Param("tableRef") String tableRef,
             @Param("criteria") List<Criterion> criteria,
-            @Param("aggOp") String aggOp, @Param("aggField") String aggField);
+            @Param("aggOp") String aggOp, @Param("aggField") String aggField,
+            @Param("textualAggregate") boolean textualAggregate);
 
     // ---- get_document -------------------------------------------------------------------
 

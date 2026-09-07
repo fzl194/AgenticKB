@@ -25,6 +25,13 @@ class MemoryLocatorStore:
     ) -> tuple[LocatorRecord, ...]:
         return self._final.get(snapshot_id, ())
 
+    async def list_final_representations(self, snapshot_id: str) -> tuple:
+        """重放路径专用（final units 读）——内存件不承载 units，显式失败."""
+        raise NotImplementedError(
+            "MemoryLocatorStore does not serve final representations; "
+            "replay requires PgLocatorStore"
+        )
+
     async def promote_locators(self, snapshot_ids: list[str]) -> int:
         """专用最小晋升：只动 locator 双表，绝不动其他六张派生表."""
         for snapshot_id in snapshot_ids:

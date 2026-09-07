@@ -1528,6 +1528,9 @@ class _WorkflowJobServices:
         self.hierarchical_summary_service = (
             services.hierarchical_summary_service
         )
+        # A1（38 号 §2.4）：来源记录物化门面。注意必须逐字段搬运——本类是
+        # handler 看到的 runtime.services，漏搬即静默降级（E2E 实测教训）。
+        self.source_locator_service = services.source_locator_service
         self._object_input_services_ready = True
 
 

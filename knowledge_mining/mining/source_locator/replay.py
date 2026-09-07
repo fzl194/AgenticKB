@@ -21,7 +21,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-_MINED_PAGE = 200
+_MAX_FAILURES_PRINTED = 20
 
 
 @dataclass
@@ -156,9 +156,12 @@ async def _main(argv: list[str] | None = None) -> int:
     from psycopg_pool import AsyncConnectionPool
 
     cfg = MiningDbConfig()
+    from psycopg.rows import dict_row
+
     stats: ReplayStats
     async with AsyncConnectionPool(
-        cfg.conninfo, min_size=1, max_size=4, open=True
+        cfg.conninfo, min_size=1, max_size=4, open=True,
+        kwargs={"row_factory": dict_row},
     ) as pool:
         stats = await replay(
             pool=pool,
@@ -176,7 +179,7 @@ async def _main(argv: list[str] | None = None) -> int:
         f"records={stats.records} skipped={stats.skipped} "
         f"failed={len(stats.failed)}{' (dry-run)' if args.dry_run else ''}"
     )
-    for target, reason in stats.failed[:_MINED_PAGE // 10]:
+    for target, reason in stats.failed[:_MAX_FAILURES_PRINTED]:
         print(f"  FAILED {target}: {reason}", file=sys.stderr)
     if stats.failed:
         print(f"  … {len(stats.failed)} failures total (first shown)", file=sys.stderr)

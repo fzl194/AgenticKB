@@ -186,6 +186,12 @@ public class EvidenceHydrateOperator implements Operator {
         Map<String, SourceLocatorRow> locators = new LinkedHashMap<>();
         for (SourceLocatorRow l : mapper.selectSourceLocators(snapshots, canonicals)) {
             locators.putIfAbsent(rowKey(l.getSnapshotId(), l.getRepresentationId()), l);
+            // H-1：summary_alias 的 canonical = target_ref（挖掘 summary.py 契约）——
+            // 按 locator 行冗余的 target_ref 双键落图（putIfAbsent 保证 representation
+            // 命中优先，不被 target_ref 兜底覆盖）。
+            if (l.getTargetRef() != null && !l.getTargetRef().isEmpty()) {
+                locators.putIfAbsent(rowKey(l.getSnapshotId(), l.getTargetRef()), l);
+            }
         }
         Map<String, Long> docTokens = new LinkedHashMap<>();
         for (var t : mapper.selectDocumentTokenTotals(snapshots)) {
@@ -647,20 +653,12 @@ public class EvidenceHydrateOperator implements Operator {
     }
 
     /**
-     * A1：来源记录行 → 公开 locator。section_only/unavailable 不出 locator 对象
-     * （协议面"位置不可得"由缺省表达，34 号 P0-8 态由消费端按缺省呈现）。
+     * A1：来源记录行 → 公开 locator（过滤与构造的单一实现见
+     * {@link SourceLocatorRow#toEvidenceLocator()}；section_only/unavailable 不出
+     * locator 对象——"位置不可得"由缺省表达，34 号 P0-8 态由消费端按缺省呈现）。
      */
     private EvidenceLocator locatorOf(SourceLocatorRow row) {
-        if (row == null) {
-            return null;
-        }
-        String kind = row.getLocatorKind();
-        if (kind == null || "section_only".equals(kind) || "unavailable".equals(kind)) {
-            return null;
-        }
-        return new EvidenceLocator(kind, row.getPage(), row.getLineStart(), row.getLineEnd(),
-                row.getSheet(), row.getCell(), row.getTableRef(), row.getRowIndex(),
-                row.getDescription());
+        return row == null ? null : row.toEvidenceLocator();
     }
 
     /** 窗口片段：命中行 kind=exact，邻行 kind=window，按 ordinal 有序。 */

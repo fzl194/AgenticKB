@@ -215,6 +215,34 @@ class EvidenceHydrateOperatorTest {
         }
 
         @Test
+        @DisplayName("summary_alias 链：canonical 为 target_ref 形态时经 target_ref 兜底命中（H-1）")
+        void summaryAliasCanonicalFallsBackToTargetRef() {
+            // 挖掘 summary.py 契约：summary_alias 的 canonical_evidence_id = target_ref。
+            // 融合胜出的 canonical 是 target_ref 形态，与 locator 行主键
+            // （源单元 representation_id）不同——必须经 locator 行冗余的 target_ref 命中。
+            stubSegment();
+            SourceLocatorRow precise = new SourceLocatorRow();
+            precise.setSnapshotId(SNAP);
+            precise.setRepresentationId(SNAP + ":segment:5");  // 源单元 id ≠ canonical
+            precise.setTargetRef(CANONICAL);                    // == summary alias canonical
+            precise.setDocumentRef("doc:/spec");
+            precise.setSourceFormat("md");
+            precise.setLocatorKind("line_range");
+            precise.setLineStart(11);
+            precise.setLineEnd(20);
+            when(mapper.selectSourceLocators(anyList(), anyList()))
+                    .thenReturn(List.of(precise));
+
+            List<HydratedEvidence> out = result(run(candidate(
+                    SNAP, CANONICAL, "segment", CANONICAL, "prose")));
+
+            assertThat(out).hasSize(1);
+            assertThat(out.get(0).source().locator()).isNotNull();
+            assertThat(out.get(0).source().locator().kind()).isEqualTo("line_range");
+            assertThat(out.get(0).source().locator().lineStart()).isEqualTo(11);
+        }
+
+        @Test
         @DisplayName("无 locator 行（旧快照/未物化）保持原样不报错")
         void toleratesMissingLocatorRows() {
             stubSegment();

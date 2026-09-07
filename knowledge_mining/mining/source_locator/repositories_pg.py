@@ -107,9 +107,23 @@ class PgLocatorStore:
         return tuple(_representation_of(dict(row)) for row in rows)
 
     async def promote_locators(self, snapshot_ids: list[str]) -> int:
-        """受控重放专用：staging → final 单快照原子晋升（只动 locator 双表）."""
+        """受控重放专用：staging → final 单快照原子晋升（只动 locator 双表）.
+
+        列清单取 PROMOTE_TABLE_COLUMNS 单一真相源（显式列，禁 SELECT *——
+        staging 是 LIKE 建表，014 后续加列不会同步到既有 staging，SELECT *
+        会因列数错位失败；显式列在此 fail-fast 且信息明确）。
+        """
         if not snapshot_ids:
             return 0
+        from knowledge_mining.mining.retrieval_projection.schema import (
+            PROMOTE_TABLE_COLUMNS,
+        )
+
+        columns = next(
+            cols for table, cols in PROMOTE_TABLE_COLUMNS
+            if table == "asset_source_locators"
+        )
+        col_list = ", ".join(columns)
         async with self._pool.connection() as conn:
             async with conn.transaction():
                 for snapshot_id in snapshot_ids:
@@ -118,8 +132,8 @@ class PgLocatorStore:
                         [snapshot_id],
                     )
                     await conn.execute(
-                        "INSERT INTO asset_source_locators "
-                        "SELECT * FROM asset_source_locators_staging "
+                        f"INSERT INTO asset_source_locators ({col_list}) "
+                        f"SELECT {col_list} FROM asset_source_locators_staging "
                         "WHERE snapshot_id = %s",
                         [snapshot_id],
                     )

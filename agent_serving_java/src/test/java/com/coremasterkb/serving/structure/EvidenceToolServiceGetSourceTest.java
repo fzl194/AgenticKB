@@ -33,12 +33,13 @@ class EvidenceToolServiceGetSourceTest {
     private static final String CANONICAL = "doc:/spec#table_row:t1:3";
 
     private EvidenceSourceV2Mapper sourceMapper;
+    private StructureRefService refService;
     private EvidenceToolService service;
 
     @BeforeEach
     void setUp() {
         EvidenceRefCodec codec = EvidenceRefCodec.forSecret("test-secret");
-        StructureRefService refService = mock(StructureRefService.class);
+        refService = mock(StructureRefService.class);
         StructureToolMapper toolMapper = mock(StructureToolMapper.class);
         sourceMapper = mock(EvidenceSourceV2Mapper.class);
         EvidenceHydrateOperator hydrate = mock(EvidenceHydrateOperator.class);
@@ -147,6 +148,49 @@ class EvidenceToolServiceGetSourceTest {
         assertThat(nav.document_id()).isEqualTo("doc-uuid-1");
         assertThat(nav.section_element_id()).isNull();
         assertThat(nav.locator()).isNull();
+    }
+
+    @Test
+    @DisplayName("非 ev_ ref（doc_/st_）→ invalid_ref")
+    void nonEvidenceRefRejected() {
+        when(refService.resolve(anyString(), anyString(),
+                org.mockito.ArgumentMatchers.<List<String>>any(), anyString()))
+                .thenReturn(new EvidenceRefResolver.ResolvedRef(
+                        SNAP, EvidenceRefResolver.RefKind.DOCUMENT, "doc:/spec"));
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.getSource("doc_x", "generic", null, "alice"))
+                .isInstanceOf(StructureToolException.class)
+                .hasMessageContaining("ev_");
+    }
+
+    @Test
+    @DisplayName("unavailable kind → locator 为空但导航锚仍返回")
+    void unavailableKindSuppressesLocatorButKeepsAnchors() {
+        when(sourceMapper.selectSourceLocators(anyList(), anyList()))
+                .thenReturn(List.of(locatorRow("unavailable")));
+        when(sourceMapper.selectDocumentSources(anyList()))
+                .thenReturn(List.of(docRow("kb-1", "doc-uuid-1")));
+
+        EvidenceToolService.SourceNavigation nav =
+                service.getSource("ev_x", "generic", null, "alice");
+
+        assertThat(nav.locator()).isNull();
+        assertThat(nav.document_id()).isEqualTo("doc-uuid-1");
+        assertThat(nav.section_element_id()).isEqualTo("h-2");
+    }
+
+    @Test
+    @DisplayName("带空白衬垫的 kbId 经规范化后仍能消歧（M-2）")
+    void paddedKbIdNormalizesForDisambiguation() {
+        when(sourceMapper.selectSourceLocators(anyList(), anyList()))
+                .thenReturn(List.of(locatorRow("sheet_cell")));
+        when(sourceMapper.selectDocumentSources(anyList()))
+                .thenReturn(List.of(docRow("kb-1", "doc-uuid-1")));
+
+        EvidenceToolService.SourceNavigation nav =
+                service.getSource("ev_x", "generic", List.of(" kb-1 "), "alice");
+
+        assertThat(nav.document_id()).isEqualTo("doc-uuid-1");
     }
 
     @Test

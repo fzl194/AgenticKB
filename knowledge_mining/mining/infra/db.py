@@ -962,8 +962,8 @@ class AssetCoreDB(_DB):
     def promote_snapshot_assets(self, snapshot_ids: list[str]) -> int:
         """29号 R03（Wave 2）：staging → final 原子晋升（派生资产唯一入通道）.
 
-        必须在调用方事务内执行（mining_finalize 的 Build 组装事务）——七张
-        派生表逐张"清 final → 拷 staging → 清 staging"，任一步失败整体
+        必须在调用方事务内执行（mining_finalize 的 Build 组装事务）——PROMOTE_TABLE_COLUMNS
+        全部派生表（A1 起含 asset_source_locators）逐张"清 final → 拷 staging → 清 staging"，任一步失败整体
         回滚，活动 Build 读到的资产在发布成功前不变。
         """
         if not snapshot_ids:

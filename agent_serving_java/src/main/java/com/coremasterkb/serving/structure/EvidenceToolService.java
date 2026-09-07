@@ -143,6 +143,8 @@ public class EvidenceToolService {
      * 大纲锚 section_element_id 与表格锚——前端据此路由到文档页对应位置，不持有、
      * 不拼接任何内部编号。越权/不存在同响应（refService.resolve 契约）。</p>
      */
+    @com.fasterxml.jackson.annotation.JsonInclude(
+            com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     public record SourceNavigation(
             String document_id,
             String kb_id,
@@ -168,22 +170,17 @@ public class EvidenceToolService {
                 .selectSourceLocators(List.of(snapshotId), List.of(canonical))
                 .stream().findFirst().orElse(null);
 
-        // 共享快照可挂多文档：按请求 kb 消歧，未指定 kb 取首行（与 source projection 同语义）
+        // 共享快照可挂多文档：按请求 kb 消歧，未指定 kb 取首行（与 source projection
+        // 同语义）。kbIds 先按授权链口径规范化（trim）——带空白衬垫的 id 不应误报不可见。
+        List<String> normalized = ActiveScope.normalizeKbIds(kbIds);
         EvidenceDocumentRow doc = sourceMapper.selectDocumentSources(List.of(snapshotId))
                 .stream()
-                .filter(d -> kbIds == null || kbIds.isEmpty() || kbIds.contains(d.getKbId()))
+                .filter(d -> normalized.isEmpty() || normalized.contains(d.getKbId()))
                 .findFirst().orElse(null);
         if (doc == null) {
             throw StructureToolException.invalidRef("证据所属文档不可见（快照无可见链接）");
         }
 
-        EvidenceLocator locator = null;
-        String kind = row != null ? row.getLocatorKind() : null;
-        if (kind != null && !"section_only".equals(kind) && !"unavailable".equals(kind)) {
-            locator = new EvidenceLocator(kind, row.getPage(), row.getLineStart(),
-                    row.getLineEnd(), row.getSheet(), row.getCell(), row.getTableRef(),
-                    row.getRowIndex(), row.getDescription());
-        }
         return new SourceNavigation(
                 doc.getDocumentId(), doc.getKbId(), doc.getDocumentName(),
                 doc.getRelativePath(),
@@ -191,7 +188,7 @@ public class EvidenceToolService {
                 row != null ? row.getSectionPath() : null,
                 row != null ? row.getTableRef() : null,
                 row != null ? row.getRowIndex() : null,
-                locator);
+                row != null ? row.toEvidenceLocator() : null);
     }
 
     /** 与 AssembleOperator 相同的公开投影（ref/type/content/source/truncated/structure_ref）。 */

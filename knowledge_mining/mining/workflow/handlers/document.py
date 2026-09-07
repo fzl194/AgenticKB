@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from knowledge_mining.mining.pipeline import (
     parse_stage,
@@ -358,9 +361,7 @@ def retrieval_unit_project_handler(
                 if getattr(outcome, "status", "") == "ok":
                     locator_facts = frozenset({"source_locators"})
             except Exception as exc:  # noqa: BLE001 — degraded：定位缺位可查，主链继续
-                import logging
-
-                logging.getLogger(__name__).warning(
+                _log.warning(
                     "source locator materialization degraded for snapshot %s: %s",
                     bundle.snapshot_ref, exc,
                 )

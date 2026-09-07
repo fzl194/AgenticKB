@@ -78,4 +78,19 @@ public class SourceLocatorRow {
 
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
+
+    /**
+     * A1 公开协议投影（M-1 单一实现）：section_only/unavailable 返回 null
+     * （位置不可得由缺省表达，不冒充）；其余 kind 映射为 {@link EvidenceLocator}。
+     */
+    public com.coremasterkb.serving.domain.EvidenceLocator toEvidenceLocator() {
+        if (locatorKind == null
+                || "section_only".equals(locatorKind)
+                || "unavailable".equals(locatorKind)) {
+            return null;
+        }
+        return new com.coremasterkb.serving.domain.EvidenceLocator(
+                locatorKind, page, lineStart, lineEnd, sheet, cell,
+                tableRef, rowIndex, description);
+    }
 }

@@ -266,10 +266,20 @@
         <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
             #{sid}
         </foreach>
-          AND representation_id IN
-        <foreach collection="representationIds" item="rid" open="(" separator="," close=")">
-            #{rid}
-        </foreach>
+          AND (
+              representation_id IN
+              <foreach collection="representationIds" item="rid" open="(" separator="," close=")">
+                  #{rid}
+              </foreach>
+              <!-- H-1 兜底：summary_alias 的 canonical_evidence_id = target_ref（挖掘
+                   summary.py 契约），此时 canonical 形态是结构 ref 而非 representation
+                   id——按 locator 行冗余的 target_ref 反查（如命中的是 section 锚，
+                   locator 对象按 kind 规则抑制，但 /source 导航锚仍可得）。 -->
+              OR target_ref IN
+              <foreach collection="representationIds" item="rid" open="(" separator="," close=")">
+                  #{rid}
+              </foreach>
+          )
     </select>
 
 </mapper>

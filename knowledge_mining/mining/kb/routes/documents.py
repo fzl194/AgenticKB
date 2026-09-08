@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel
@@ -261,13 +261,44 @@ async def get_archive_task(
 async def list_documents(
     kb_id: str,
     directory: str | None = None,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     user: dict[str, Any] = Depends(current_user),
     svc: DocumentService = Depends(get_document_service),
 ):
+    """目录内文件（服务端分页：limit ≤500 / offset）。
+
+    2026-09-08 修复：此前 limit 固定 200 且无 offset——大库（万级文件）
+    被静默截断且前端无感知。前端默认 50/页 + count 端点拿总数。
+    """
     try:
-        return await svc.list_documents(kb_id=kb_id, user_id=user["id"], directory=directory)
+        return await svc.list_documents(
+            kb_id=kb_id, user_id=user["id"], directory=directory,
+            limit=limit, offset=offset,
+        )
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
+
+
+@router.get("/count")
+async def count_documents(
+    kb_id: str,
+    directory: str | None = None,
+    user: dict[str, Any] = Depends(current_user),
+    svc: DocumentService = Depends(get_document_service),
+):
+    """文件总数（与 list 同过滤口径）——分页总数。
+
+    注：注册顺序在 /{document_id} 之前——FastAPI 按注册序匹配，
+    字面量 /count 优先于路径参数，不会被当成 document_id。
+    """
+    try:
+        total = await svc.count_documents(
+            kb_id=kb_id, user_id=user["id"], directory=directory,
+        )
+    except (NotFound, Forbidden) as exc:
+        raise _map_error(exc) from None
+    return {"total": total}
 
 
 @router.get("/{document_id}")

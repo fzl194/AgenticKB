@@ -1392,6 +1392,22 @@ WITH latest AS (
             )
             return dict(await cur.fetchone())  # type: ignore[arg-type]
 
+    async def count_documents_in_kb(
+        self, *, kb_id: str, directory: str | None = None,
+    ) -> int:
+        """文件数（与 list_documents_in_kb 同过滤口径）——前端默认分页的总数。"""
+        clause = "d.kb_id = %s AND d.deleted_at IS NULL"
+        params: list[Any] = [kb_id]
+        if directory is not None:
+            clause += " AND d.directory_path = %s"
+            params.append(directory)
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"SELECT COUNT(*) FROM asset_documents d WHERE {clause}", params,
+            )
+            row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
     async def list_documents_in_kb(
         self, *, kb_id: str, directory: str | None = None,
         limit: int = 200, offset: int = 0,

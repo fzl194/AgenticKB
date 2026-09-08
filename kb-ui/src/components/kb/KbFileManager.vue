@@ -38,7 +38,13 @@
 
     <!-- 批量操作栏（多选文件后出现） -->
     <div v-if="selectedCount > 0" class="fm__batch">
-      <span class="fm__batch-count">已选 {{ selectedCount }} 个文件</span>
+      <span class="fm__batch-count" data-testid="fm-batch-count">
+        已选 {{ selectedCount }} 个文件
+        <template v-if="selectedFolderIds.length">
+          （含 {{ selectedFolderNames }} 的全部内容）
+        </template>
+        <template v-else-if="pageFilesSelected">（本页）</template>
+      </span>
       <el-tooltip
         v-if="canWrite"
         content="忽略内容哈希缓存，对选中文档重跑 pipeline（含 LLM 阶段），重生已挖知识"
@@ -46,7 +52,8 @@
       >
         <el-checkbox v-if="canWrite" v-model="forceRedo" size="small">强制重挖</el-checkbox>
       </el-tooltip>
-      <el-button v-if="canWrite" size="small" type="primary" :disabled="!workflowId" @click="batchMine">
+      <el-button v-if="canWrite" size="small" type="primary" :disabled="!workflowId"
+                 data-testid="fm-batch-mine" @click="batchMine">
         <el-icon class="el-icon--left"><Cpu /></el-icon>{{ forceRedo ? '强制重挖选中' : '挖掘选中' }} ({{ selectedCount }})
       </el-button>
       <el-button v-if="canWrite" size="small" type="danger" plain @click="batchDelete">
@@ -60,11 +67,16 @@
     <div class="fm__list" v-loading="loading">
       <div class="fm__row fm__row--head">
         <div class="fm__col fm__col--check">
-          <el-checkbox
+          <el-tooltip
             v-if="files.length"
-            :model-value="allFilesSelected"
-            @change="toggleAllFiles"
-          />
+            content="全选当前页（分页视图下其他页用翻页后勾选）"
+            placement="top"
+          >
+            <el-checkbox
+              :model-value="allPageFilesSelected"
+              @change="toggleAllFiles"
+            />
+          </el-tooltip>
         </div>
         <div class="fm__col fm__col--name">名称</div>
         <div class="fm__col fm__col--type">类型</div>
@@ -95,7 +107,12 @@
         @dragleave="dragOverId = null"
         @drop.stop="onDrop($event, f.id)"
       >
-        <div class="fm__col fm__col--check"></div>
+        <div class="fm__col fm__col--check" @click.stop>
+          <el-checkbox
+            :model-value="selectedFolderIds.includes(f.id)"
+            @change="(v: boolean) => toggleFolderSelect(f, v)"
+          />
+        </div>
         <div class="fm__col fm__col--name" @click.stop>
           <el-icon class="fm__icon fm__icon--folder"><Folder /></el-icon>
           <span
@@ -111,7 +128,7 @@
         <div class="fm__col fm__col--time">{{ formatDate(f.created_at) }}</div>
       </div>
 
-      <!-- files -->
+      <!-- files（当前页：服务端分页——2026-09-08 前一次拉全量且后端静默截断 200） -->
       <div
         v-for="file in files"
         :key="file.id"
@@ -147,6 +164,21 @@
           <span v-else class="fm__col--muted">—</span>
         </div>
         <div class="fm__col fm__col--time">{{ formatDate(file.modified_at || file.created_at) }}</div>
+      </div>
+
+      <div v-if="totalFiles > filePageSize" class="fm__pager">
+        <el-pagination
+          v-model:current-page="filePage"
+          v-model:page-size="filePageSize"
+          :total="totalFiles"
+          :page-sizes="[20, 50, 100, 200]"
+          layout="total, sizes, prev, pager, next, jumper"
+          small
+          background
+          data-testid="fm-pagination"
+          @current-change="loadFiles"
+          @size-change="onPageSizeChange"
+        />
       </div>
 
       <EmptyState
@@ -210,19 +242,95 @@ const hint = ref(true)
 const selectedFileIds = ref<string[]>([])
 const forceRedo = ref(false)
 const selectedCount = computed(() => selectedFileIds.value.length)
-const allFilesSelected = computed(
+
+// 服务端分页（2026-09-08）：默认 50/页；总数走 count 端点
+const filePage = ref(1)
+const filePageSize = ref(50)
+const totalFiles = ref(0)
+function onPageSizeChange() {
+  filePage.value = 1
+  void loadFiles()
+}
+/** files 即服务端返回的当前页切片——表头全选=本页。 */
+const allPageFilesSelected = computed(
   () => files.value.length > 0 && files.value.every((f) => selectedFileIds.value.includes(f.id)),
 )
+const pageFilesSelected = allPageFilesSelected
 function toggleFileSelect(id: string, checked: boolean) {
   selectedFileIds.value = checked
     ? (selectedFileIds.value.includes(id) ? selectedFileIds.value : [...selectedFileIds.value, id])
     : selectedFileIds.value.filter((x) => x !== id)
 }
 function toggleAllFiles(checked: boolean) {
-  selectedFileIds.value = checked ? files.value.map((f) => f.id) : []
+  const pageIds = files.value.map((f) => f.id)
+  selectedFileIds.value = checked
+    ? [...new Set([...selectedFileIds.value, ...pageIds])]
+    : selectedFileIds.value.filter((x) => !pageIds.includes(x))
+}
+
+// 文件夹多选（2026-09-08）：勾选 = 递归选中该文件夹（含子文件夹）全部文件；
+// 记住每文件夹贡献的 id，取消勾选只移除自己的部分（不误伤其他选择）
+const selectedFolderIds = ref<string[]>([])
+const folderContributedIds = ref<Record<string, string[]>>({})
+const selectedFolderNames = computed(() =>
+  selectedFolderIds.value
+    .map((id) => folders.value.find((f) => f.id === id)?.name)
+    .filter(Boolean)
+    .join('、'),
+)
+function descendantPathsOf(folderId: string): string[] {
+  const out: string[] = []
+  const walk = (parent: string) => {
+    for (const f of folders.value) {
+      if (f.parent_id === parent) {
+        out.push(f.path)
+        walk(f.id)
+      }
+    }
+  }
+  const root = folders.value.find((f) => f.id === folderId)
+  if (root) {
+    out.push(root.path)
+    walk(folderId)
+  }
+  return out
+}
+async function collectFileIdsUnder(folderId: string): Promise<string[]> {
+  const ids: string[] = []
+  for (const path of descendantPathsOf(folderId)) {
+    let offset = 0
+    // 与后端分页同窗（500/页）拉 id；文件夹内容通常远小于此
+    for (;;) {
+      const pageDocs = await kbApi.listDocuments(props.kbId, path, 500, offset)
+      ids.push(...pageDocs.map((f) => f.id))
+      if (pageDocs.length < 500) break
+      offset += 500
+    }
+  }
+  return [...new Set(ids)]
+}
+async function toggleFolderSelect(folder: KbFolder, checked: boolean) {
+  if (checked) {
+    const ids = await collectFileIdsUnder(folder.id)
+    folderContributedIds.value[folder.id] = ids
+    selectedFolderIds.value = [...selectedFolderIds.value, folder.id]
+    selectedFileIds.value = [...new Set([...selectedFileIds.value, ...ids])]
+  } else {
+    const contributed = folderContributedIds.value[folder.id] ?? []
+    delete folderContributedIds.value[folder.id]
+    selectedFolderIds.value = selectedFolderIds.value.filter((x) => x !== folder.id)
+    const others = new Set(
+      Object.entries(folderContributedIds.value).flatMap(([, v]) => v),
+    )
+    selectedFileIds.value = selectedFileIds.value.filter(
+      (x) => !contributed.includes(x) || others.has(x),
+    )
+  }
 }
 function clearSelection() {
   selectedFileIds.value = []
+  selectedFolderIds.value = []
+  folderContributedIds.value = {}
 }
 
 const currentFolder = computed(() => folders.value.find((f) => f.id === currentFolderId.value) ?? null)
@@ -242,7 +350,15 @@ const breadcrumb = computed(() => {
 })
 
 async function loadFolders() { folders.value = await kbApi.listFolders(props.kbId) }
-async function loadFiles() { files.value = await kbApi.listDocuments(props.kbId, currentPath.value) }
+async function loadFiles() {
+  const offset = (filePage.value - 1) * filePageSize.value
+  const [pageData, total] = await Promise.all([
+    kbApi.listDocuments(props.kbId, currentPath.value, filePageSize.value, offset),
+    kbApi.countDocuments(props.kbId, currentPath.value),
+  ])
+  files.value = pageData
+  totalFiles.value = total
+}
 async function reload() {
   loading.value = true
   try { await Promise.all([loadFolders(), loadFiles()]) }
@@ -250,8 +366,8 @@ async function reload() {
   finally { loading.value = false }
 }
 
-function navTo(id: string | null) { currentFolderId.value = id }
-function enterFolder(id: string) { currentFolderId.value = id; selId.value = id }
+function navTo(id: string | null) { currentFolderId.value = id; filePage.value = 1 }
+function enterFolder(id: string) { currentFolderId.value = id; selId.value = id; filePage.value = 1 }
 function openPreview(file: KbDocument) {
   selId.value = file.id
   router.push(`/kb/${props.kbId}/doc/${file.id}`)
@@ -427,11 +543,27 @@ async function batchDelete() {
       /* 单个失败继续删其余 */
     }
   }
+  // 文件删完后尝试删选中的文件夹壳（仅空文件夹可删；深路径优先）
+  let foldersDeleted = 0
+  const folderShells = selectedFolderIds.value
+    .map((id) => folders.value.find((f) => f.id === id))
+    .filter((f): f is KbFolder => !!f)
+    .sort((a, b) => b.path.length - a.path.length)
+  for (const f of folderShells) {
+    try {
+      await kbApi.deleteFolder(props.kbId, f.id)
+      foldersDeleted += 1
+    } catch {
+      /* 非空/失败不阻断 */
+    }
+  }
   // 部分或全部失败不得伪装成功（全失败时 success toast 会误导重复操作）
-  if (ok === ids.length) ElMessage.success(`已删除 ${ok}/${ids.length} 个文件`)
-  else ElMessage.warning(`已删除 ${ok}/${ids.length} 个文件，${ids.length - ok} 个失败——请刷新后重试`)
+  const folderNote = folderShells.length
+    ? `，删除 ${foldersDeleted}/${folderShells.length} 个文件夹` : ''
+  if (ok === ids.length) ElMessage.success(`已删除 ${ok}/${ids.length} 个文件${folderNote}`)
+  else ElMessage.warning(`已删除 ${ok}/${ids.length} 个文件${folderNote}，${ids.length - ok} 个失败——请刷新后重试`)
   clearSelection()
-  await loadFiles()
+  await reload()
 }
 
 // ── 拖拽移动 ──
@@ -570,6 +702,7 @@ watch(() => props.active, (now, prev) => {
   font-size: 11.5px; font-weight: 600; color: var(--kb-text-tertiary);
   text-transform: uppercase; letter-spacing: 0.3px; border-bottom: 1px solid var(--kb-border);
 }
+.fm__pager { display: flex; justify-content: flex-end; padding: 8px 0 2px; }
 .fm__row--folder, .fm__row--file { cursor: pointer; }
 .fm__row--folder { background: var(--kb-accent-soft); }
 .fm__row--folder:hover, .fm__row--file:hover { background: var(--kb-bg-sidebar-hover); }

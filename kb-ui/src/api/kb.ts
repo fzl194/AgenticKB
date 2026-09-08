@@ -224,11 +224,28 @@ export function useKbApi() {
       return data
     },
 
-    async listDocuments(kbId: string, directory?: string): Promise<KbDocument[]> {
+    /**
+     * 目录内文件（2026-09-08 起服务端分页：limit ≤500 / offset——此前后端
+     * 固定 limit=200 静默截断，大库文件列表不完整且前端无感知）。
+     */
+    async listDocuments(
+      kbId: string, directory?: string, limit = 200, offset = 0,
+    ): Promise<KbDocument[]> {
       const { data } = await client.get(`/api/kb/${kbId}/documents`, {
-        params: directory !== undefined ? { directory } : undefined,
+        params: {
+          ...(directory !== undefined ? { directory } : {}),
+          limit, offset,
+        },
       })
       return extractItems<KbDocument>(data)
+    },
+
+    /** 文件总数（与 listDocuments 同过滤口径）——分页总数。 */
+    async countDocuments(kbId: string, directory?: string): Promise<number> {
+      const { data } = await client.get(`/api/kb/${kbId}/documents/count`, {
+        params: directory !== undefined ? { directory } : undefined,
+      })
+      return Number(data?.total ?? 0)
     },
 
     async getDocument(kbId: string, docId: string): Promise<KbDocument> {

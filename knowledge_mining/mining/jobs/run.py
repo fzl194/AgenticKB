@@ -2365,17 +2365,39 @@ def _init_llm_generator(
     llm_base_url: str | None,
     *,
     knowledge_domain: str | None = None,
+    mode: str | None = None,
 ) -> Any | None:
-    """29号 M3 接线：llm_service /execute 生成客户端（None = 未配置 →
-    实验算子 FALLBACK degraded，基础资产不受影响）。"""
+    """29号 M3 接线：llm_service 生成客户端（None = 未配置 →
+    实验算子 FALLBACK degraded，基础资产不受影响）。
+
+    mode: 'async'（默认，读 MiningConfig.llm_call_mode）走异步任务通道
+    （worker 并发闸门 + 任务级重试）；'sync' 回退 /execute 同步直连。
+    """
     if not llm_base_url:
         return None
 
+    from knowledge_mining.mining.infra.mining_config import MiningConfig
+    cfg = MiningConfig()
+    if mode is None:
+        mode = cfg.llm_call_mode
+
+    if mode == "sync":
+        from knowledge_mining.mining.retrieval_projection.llm_generation import (
+            LLMServiceGenerationClient,
+        )
+        return LLMServiceGenerationClient(
+            base_url=llm_base_url,
+            knowledge_domain=knowledge_domain,
+        )
+
     from knowledge_mining.mining.retrieval_projection.llm_generation import (
-        LLMServiceGenerationClient,
+        LLMServiceAsyncGenerationClient,
     )
-    return LLMServiceGenerationClient(
+    return LLMServiceAsyncGenerationClient(
         base_url=llm_base_url,
+        poll_interval=cfg.llm_async_poll_interval,
+        wait_timeout=cfg.llm_async_chat_wait_timeout,
+        max_attempts=cfg.llm_async_max_attempts,
         knowledge_domain=knowledge_domain,
     )
 

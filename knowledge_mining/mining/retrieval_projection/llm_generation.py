@@ -1,7 +1,11 @@
-"""M3 生产接线（29号收尾）：llm_service /execute 生成客户端与两算子适配器.
+"""M3 生产接线（29号收尾）：llm_service 生成客户端与两算子适配器.
 
+- ``GenerationClient`` Protocol：同步 /execute 与异步任务通道客户端的
+  共同接口（适配器只依赖它）；
 - ``LLMServiceGenerationClient``：同步调用 llm_service ``/api/v1/execute``
-  （任务留痕/幂等键由 llm_service 任务系统承担）；
+  （llm_call_mode=sync 回退路径；任务留痕/幂等键由 llm_service 任务系统承担）；
+- ``LLMServiceAsyncGenerationClient``：走 ``/api/v1/tasks`` 异步任务通道
+  （llm_call_mode=async，默认）——worker 并发闸门 + 任务级退避重试；
 - ``LLMQuestionGenerator``：适配 ``QueryExpansionFacade`` 的
   ``generate_questions(items)`` 契约（逐项 question+answer_span / SKIP）；
 - ``LLMSummarizer``：适配 ``HierarchicalSummaryFacade`` 的
@@ -16,9 +20,11 @@ import hashlib
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
+
+from knowledge_mining.mining.infra.llm_task_client import LlmTaskClient, LlmTaskError
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +50,24 @@ _SUMMARY_SYSTEM = (
 )
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+@runtime_checkable
+class GenerationClient(Protocol):
+    """同步 /execute 与异步任务通道客户端的共同接口。
+
+    两个适配器（Question/Summary）只依赖本协议；组合根按
+    ``MiningConfig.llm_call_mode`` 注入实现。
+    """
+
+    def execute(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        expected_output_type: str = "text",
+        idempotency_key: str | None = None,
+        pipeline_stage: str = "mining_enrichment",
+    ) -> Any: ...
 
 
 class LLMServiceGenerationClient:
@@ -118,6 +142,84 @@ def _stable_key(prefix: str, text: str) -> str:
     return f"{prefix}:{hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]}"
 
 
+class LLMServiceAsyncGenerationClient:
+    """llm_service 异步任务通道生成客户端（/api/v1/tasks，默认）。
+
+    结果映射与 :class:`LLMServiceGenerationClient` 逐分支对齐（json 正则
+    兜底 / text 空串 raise / 失败 raise 含 task_id），适配器的失败语义
+    （question→LLM_FAILURE 哨兵、summary→上抛 FALLBACK）不变。
+
+    有意差异：同步 /execute 是 max_attempts=1 单发；本客户端默认 3 次退避
+    重试（llm_service TaskManager 8^n 上限 120s）——429 场景要的韧性；
+    ``llm_async_max_attempts: 1`` 可复原单发。
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "http://localhost:8900",
+        poll_interval: float = 1.0,
+        wait_timeout: float = 300.0,
+        max_attempts: int = 3,
+        knowledge_domain: str | None = None,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self._client = LlmTaskClient(
+            base_url=base_url,
+            poll_interval=poll_interval,
+            wait_timeout=wait_timeout,
+            transport=transport,
+        )
+        self._max_attempts = max_attempts
+        self._knowledge_domain = knowledge_domain
+
+    def execute(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        expected_output_type: str = "text",
+        idempotency_key: str | None = None,
+        pipeline_stage: str = "mining_enrichment",
+    ) -> Any:
+        try:
+            task_id = self._client.submit_chat(
+                messages,
+                expected_output_type=expected_output_type,
+                idempotency_key=idempotency_key,
+                pipeline_stage=pipeline_stage,
+                max_attempts=self._max_attempts,
+                knowledge_domain=self._knowledge_domain,
+            )
+        except LlmTaskError as e:
+            raise RuntimeError(f"llm_service task submit failed: {e}") from e
+
+        entries = self._client.wait_for_tasks([task_id])
+        entry = entries.get(task_id) or {"task_id": task_id, "status": "timeout"}
+        status = str(entry.get("status"))
+        if status != "succeeded":
+            err = entry.get("error") or {}
+            raise RuntimeError(
+                f"llm_service task {task_id} ended as {status}: "
+                f"{err.get('error_type')}: {err.get('error_message')}"
+            )
+        payload_result = entry.get("result") or {}
+        if expected_output_type in ("json_object", "json_array"):
+            parsed = payload_result.get("parsed_output")
+            if isinstance(parsed, dict):
+                return parsed
+            # 解析失败但有文本：尽力正则兜底（与同步版一致）
+            text = payload_result.get("text_output")
+            if isinstance(text, str):
+                match = _JSON_OBJECT_RE.search(text)
+                if match:
+                    return json.loads(match.group(0))
+            raise RuntimeError("llm_service task: json parse failed")
+        text = payload_result.get("text_output")
+        if not isinstance(text, str) or not text.strip():
+            raise RuntimeError("llm_service task returned empty output")
+        return text
+
+
 class LLMQuestionGenerator:
     """Doc2Query 适配器：items → 逐项 {question, answer_span} / "SKIP"。
 
@@ -125,7 +227,7 @@ class LLMQuestionGenerator:
     实验范式的成本护栏。
     """
 
-    def __init__(self, client: LLMServiceGenerationClient, *,
+    def __init__(self, client: GenerationClient, *,
                  max_items: int = 64) -> None:
         self._client = client
         self._max_items = max_items
@@ -167,7 +269,7 @@ class LLMQuestionGenerator:
 class LLMSummarizer:
     """层级摘要适配器：summarize(title, texts) → 摘要正文 str。"""
 
-    def __init__(self, client: LLMServiceGenerationClient) -> None:
+    def __init__(self, client: GenerationClient) -> None:
         self._client = client
 
     def summarize(self, title: str, texts: list[str]) -> str:
@@ -190,7 +292,9 @@ class LLMSummarizer:
 
 
 __all__ = [
+    "GenerationClient",
     "LLMQuestionGenerator",
+    "LLMServiceAsyncGenerationClient",
     "LLMServiceGenerationClient",
     "LLMSummarizer",
     "LLM_FAILURE",

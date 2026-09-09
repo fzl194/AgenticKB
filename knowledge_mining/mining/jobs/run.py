@@ -2384,18 +2384,41 @@ def _init_embedding(
     llm_base_url: str | None,
     *,
     knowledge_domain: str | None = None,
+    mode: str | None = None,
 ) -> Any | None:
     """Initialize embedding via llm_service.
 
     Model name and dimensions are managed by llm_service — caller does not pass them.
     Returns None if llm_base_url is not configured.
+
+    mode: 'async'（默认，读 MiningConfig.llm_call_mode）走异步任务通道
+    （排队削峰 + worker 并发闸门 + 任务级重试）；'sync' 回退同步直连。
     """
     if not llm_base_url:
         return None
 
-    from knowledge_mining.mining.infra.embedding import LLMServiceEmbeddingGenerator
-    return LLMServiceEmbeddingGenerator(
+    from knowledge_mining.mining.infra.mining_config import MiningConfig
+    cfg = MiningConfig()
+    if mode is None:
+        mode = cfg.llm_call_mode
+
+    if mode == "sync":
+        from knowledge_mining.mining.infra.embedding import (
+            LLMServiceEmbeddingGenerator,
+        )
+        return LLMServiceEmbeddingGenerator(
+            base_url=llm_base_url,
+            knowledge_domain=knowledge_domain,
+        )
+
+    from knowledge_mining.mining.infra.embedding import (
+        LLMServiceAsyncEmbeddingGenerator,
+    )
+    return LLMServiceAsyncEmbeddingGenerator(
         base_url=llm_base_url,
+        poll_interval=cfg.llm_async_poll_interval,
+        wait_timeout=cfg.llm_async_wait_timeout,
+        max_attempts=cfg.llm_async_max_attempts,
         knowledge_domain=knowledge_domain,
     )
 

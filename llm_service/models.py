@@ -110,6 +110,17 @@ class RerankTaskRequest(BaseModel):
         return value
 
 
+class BatchStatusRequest(BaseModel):
+    """Batch status lookup for polling callers (mining async task channel).
+
+    One request replaces N x GET /tasks/{id}. Cap keeps the IN(...) lists and
+    the inline-result payload bounded; mining chunks larger batches itself.
+    """
+
+    task_ids: list[str] = Field(..., min_length=1, max_length=256)
+    include_results: bool = True
+
+
 class EmbeddingRequest(BaseModel):
     input: list[str] | str = Field(..., max_length=100)
     model: str | None = None

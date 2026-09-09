@@ -722,6 +722,79 @@ class LLMService:
         rows = await self._db.fetchall("SELECT * FROM agent_llm_events WHERE task_id = %s ORDER BY created_at", (task_id,))
         return [_map_event_row(r) for r in rows]
 
+    async def get_tasks_batch(
+        self, task_ids: list[str], *, include_results: bool = True,
+    ) -> dict:
+        """Batch task status for polling callers (mining async embedding/chat).
+
+        One round-trip replaces N x GET /tasks/{id}: succeeded tasks carry their
+        result inline, failed/dead_letter tasks carry the latest failed
+        attempt's error, and unknown ids land in ``not_found`` (request order
+        preserved). Mirrors the per-task logic of ``_build_execute_response``
+        with IN(...) queries instead of per-id lookups.
+        """
+        if not task_ids:
+            raise ValueError("task_ids cannot be empty")
+        unique_ids = list(dict.fromkeys(task_ids))
+        placeholders = ", ".join(["%s"] * len(unique_ids))
+
+        task_rows = await self._db.fetchall(
+            f"SELECT * FROM agent_llm_tasks WHERE id IN ({placeholders})",
+            tuple(unique_ids),
+        )
+        by_id = {row["id"]: row for row in task_rows}
+
+        results_by_id: dict = {}
+        if include_results:
+            result_rows = await self._db.fetchall(
+                f"SELECT * FROM agent_llm_results WHERE task_id IN ({placeholders})",
+                tuple(unique_ids),
+            )
+            results_by_id = {row["task_id"]: row for row in result_rows}
+
+        errors_by_id: dict = {}
+        failed_ids = [
+            row["id"] for row in task_rows if row["status"] in ("dead_letter", "failed")
+        ]
+        if failed_ids:
+            err_placeholders = ", ".join(["%s"] * len(failed_ids))
+            err_rows = await self._db.fetchall(
+                f"SELECT task_id, attempt_no, error_type, error_message "
+                f"FROM agent_llm_attempts "
+                f"WHERE task_id IN ({err_placeholders}) AND status = 'failed'",
+                tuple(failed_ids),
+            )
+            # Latest failed attempt per task — max() in Python so the entry is
+            # correct regardless of the row order the driver hands back.
+            for row in err_rows:
+                current = errors_by_id.get(row["task_id"])
+                if current is None or int(row["attempt_no"]) > int(current["attempt_no"]):
+                    errors_by_id[row["task_id"]] = row
+
+        tasks: list[dict] = []
+        for task_id in unique_ids:  # unique_ids preserves first-seen order
+            row = by_id.get(task_id)
+            if row is None:
+                continue
+            entry = {"task_id": task_id, **_map_task_row(row)}
+            if include_results and row["status"] == "succeeded":
+                result_row = results_by_id.get(task_id)
+                entry["result"] = _map_result_row(result_row) if result_row else None
+            else:
+                entry["result"] = None
+            if row["status"] in ("dead_letter", "failed"):
+                err = errors_by_id.get(task_id)
+                entry["error"] = {
+                    "error_type": err["error_type"] if err else None,
+                    "error_message": err["error_message"] if err else None,
+                }
+            else:
+                entry["error"] = None
+            tasks.append(entry)
+
+        not_found = [task_id for task_id in task_ids if task_id not in by_id]
+        return {"tasks": tasks, "not_found": not_found}
+
 
 # ------------------------------------------------------------------
 # Stable response mapping — shields callers from DB column changes

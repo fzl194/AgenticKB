@@ -3,7 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from llm_service.models import EmbeddingTaskRequest, RerankTaskRequest, TaskSubmitRequest
+from llm_service.models import (
+    BatchStatusRequest,
+    EmbeddingTaskRequest,
+    RerankTaskRequest,
+    TaskSubmitRequest,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -193,3 +198,18 @@ async def batch_cancel_tasks(body: BatchCancelRequest, request: Request):
         )
         cancelled_count = cur.rowcount
     return {"success": True, "data": {"cancelled_count": cancelled_count}}
+
+
+@router.post("/tasks/batch-status")
+async def batch_status_tasks(body: BatchStatusRequest, request: Request):
+    """Batch task status for polling callers — one request replaces N x GET /tasks/{id}.
+
+    Succeeded tasks carry their result inline (include_results=false omits it),
+    failed/dead_letter tasks carry the latest failed attempt's error, and
+    unknown ids land in not_found.
+    """
+    if not body.task_ids:
+        raise HTTPException(status_code=400, detail="task_ids cannot be empty")
+    svc = request.app.state.llm_service
+    data = await svc.get_tasks_batch(body.task_ids, include_results=body.include_results)
+    return {"success": True, "data": data}

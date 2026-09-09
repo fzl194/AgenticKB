@@ -15,7 +15,11 @@ from .pg_config import LlmDbConfig
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_DDL_PATH = _REPO_ROOT / "databases" / "agent_llm_runtime" / "schemas" / "002_agent_llm_runtime_postgresql.sql"
+_DDL_DIR = _REPO_ROOT / "databases" / "agent_llm_runtime" / "schemas"
+# Ordered PostgreSQL DDL files (dictionary sort: 002, 003, ...). The 001 base
+# file is the sqlite variant and is deliberately excluded — PostgreSQL applies
+# the converted full schema in 002 plus incremental migrations after it.
+_DDL_PATHS = sorted(_DDL_DIR.glob("*_postgresql.sql"))
 
 
 def ensure_database(cfg: LlmDbConfig) -> None:
@@ -49,9 +53,10 @@ def ensure_schema(cfg: LlmDbConfig) -> None:
 
     conn = psycopg.connect(cfg.conninfo, autocommit=True)
     try:
-        ddl = _DDL_PATH.read_text(encoding="utf-8")
-        _execute_ddl(conn, ddl)
-        logger.info("Applied DDL: %s", _DDL_PATH.name)
+        for ddl_path in _DDL_PATHS:
+            ddl = ddl_path.read_text(encoding="utf-8")
+            _execute_ddl(conn, ddl)
+            logger.info("Applied DDL: %s", ddl_path.name)
     finally:
         conn.close()
 

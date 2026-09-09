@@ -5,6 +5,13 @@ port: 8901
 llm_service_url: http://localhost:8900
 max_workers: 4
 mining_run_submission_engine: workflow
+# LLM/embedding 调用通道：async = llm_service 异步任务（默认，排队+worker
+# 并发闸门+3 次退避重试）；sync = 回退同步直连（排障用，改后重启 mining）。
+llm_call_mode: async
+llm_async_poll_interval: 1.0
+llm_async_wait_timeout: 900        # embedding 批量等待总超时（秒）
+llm_async_chat_wait_timeout: 300   # 单次 chat 任务等待总超时（秒）
+llm_async_max_attempts: 3          # 异步任务重试次数（embedding API 上限 5）
 excel:
   max_sheets: 200
   max_nonempty_cells: 1000000

@@ -183,6 +183,13 @@ curl -s -X POST "$BASE/api/v1/tasks/<TASK_ID>/retry" | python3 -m json.tool
 curl -s -X POST "$BASE/api/v1/tasks/batch-cancel" \
   -H "Content-Type: application/json" \
   -d '{"task_ids": ["<ID1>", "<ID2>"]}' | python3 -m json.tool
+
+# 6.7 批量状态查询（挖掘异步通道轮询用：一次请求替代 N 次 GET /tasks/{id}；
+#     succeeded 任务内联 result，failed/dead_letter 挂最新失败 attempt 的 error，
+#     未知 id 进 not_found；task_ids 上限 256）
+curl -s -X POST "$BASE/api/v1/tasks/batch-status" \
+  -H "Content-Type: application/json" \
+  -d '{"task_ids": ["<ID1>", "<ID2>"], "include_results": true}' | python3 -m json.tool
 ```
 
 ## 7. 统计与管理

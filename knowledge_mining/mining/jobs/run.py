@@ -2262,15 +2262,18 @@ def _init_llm(
     try:
         import os
 
+        from knowledge_mining.mining.infra.mining_config import MiningConfig
         from knowledge_mining.mining.stages.image_caption import ImageCaptioner
 
         legacy_on = os.environ.get("MINING_ENABLE_IMAGE_CAPTION", "").strip().lower() in (
             "1", "true", "yes",
         )
+        cfg = MiningConfig()
         result["image_captioner"] = ImageCaptioner(
             base_url=llm_base_url,
             knowledge_domain=knowledge_domain,
             enabled=legacy_on,
+            call_mode=cfg.llm_call_mode,
         )
     except (ImportError, Exception):
         pass

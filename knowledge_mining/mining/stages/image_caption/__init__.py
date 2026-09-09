@@ -25,7 +25,12 @@ _DEFAULT_PROMPT = (
 
 
 class ImageCaptioner:
-    """Caption PDF image blocks via llm_service multimodal /execute."""
+    """Caption PDF image blocks via llm_service multimodal.
+
+    call_mode: 'async'（默认）走 /api/v1/tasks 异步任务通道（messages+model
+    直传）；'sync' 回退 /api/v1/execute 同步直连。两种模式失败语义一致：
+    外层兜底 native_caption / placeholder，永不阻断文档。
+    """
 
     def __init__(
         self,
@@ -36,6 +41,8 @@ class ImageCaptioner:
         max_images: int = 20,
         prompt: str = _DEFAULT_PROMPT,
         enabled: bool = True,
+        call_mode: str = "async",
+        async_wait_timeout: float = 180.0,
     ) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
 
@@ -45,6 +52,14 @@ class ImageCaptioner:
         self.max_images = max_images
         self.prompt = prompt
         self.enabled = enabled
+        self._call_mode = "sync" if call_mode == "sync" else "async"
+        self._task_client = None
+        if self._call_mode == "async":
+            from knowledge_mining.mining.infra.llm_task_client import LlmTaskClient
+
+            self._task_client = LlmTaskClient(
+                base_url=base_url, wait_timeout=async_wait_timeout,
+            )
 
     def caption_tree(self, tree: SectionNode) -> SectionNode:
         """Return a new tree with image captions filled where possible."""
@@ -104,14 +119,7 @@ class ImageCaptioner:
                 {"role": "system", "content": "你是技术文档图注助手。"},
                 build_vision_user_message(prompt, image_path=image_path),
             ]
-            resp = self._client.execute(
-                messages=messages,
-                model=self.model,
-                expected_output_type="text",
-                pipeline_stage="segment",
-                knowledge_domain=self._knowledge_domain,
-            )
-            caption = _extract_text(resp)
+            caption = self._request_caption(messages)
             if caption:
                 structure["caption_source"] = "vlm"
                 structure["vlm_caption"] = caption
@@ -138,6 +146,40 @@ class ImageCaptioner:
             line_end=block.line_end,
             structure=structure,
         )
+
+    def _request_caption(self, messages: list[dict[str, Any]]) -> str | None:
+        """按模式发起 VLM 请求，返回图注文本；失败 raise（外层兜底）。"""
+        if self._call_mode == "async":
+            task_id = self._task_client.submit_chat(
+                messages,
+                expected_output_type="text",
+                pipeline_stage="segment",
+                model=self.model,
+                knowledge_domain=self._knowledge_domain,
+            )
+            entries = self._task_client.wait_for_tasks([task_id])
+            entry = entries.get(task_id) or {"task_id": task_id, "status": "timeout"}
+            status = str(entry.get("status"))
+            if status != "succeeded":
+                err = entry.get("error") or {}
+                raise RuntimeError(
+                    f"caption task {task_id} ended as {status}: "
+                    f"{err.get('error_type')}: {err.get('error_message')}"
+                )
+            result = entry.get("result") or {}
+            text = result.get("text_output")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+            return None
+
+        resp = self._client.execute(
+            messages=messages,
+            model=self.model,
+            expected_output_type="text",
+            pipeline_stage="segment",
+            knowledge_domain=self._knowledge_domain,
+        )
+        return _extract_text(resp)
 
 
 def _placeholder(structure: dict[str, Any]) -> str:

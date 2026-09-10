@@ -1,4 +1,4 @@
-"""G2 — kb_folders 一等文件夹 CRUD（含磁盘镜像、权限、跨库隔离）。"""
+"""G2 — kb_folders 一等文件夹 CRUD（逻辑目录、权限、跨库隔离）。"""
 from __future__ import annotations
 
 import pytest
@@ -25,11 +25,11 @@ async def test_create_top_level_and_nested(async_pool, tmp_path):
 
     top = await svc.create_folder(kb_id=kb_id, parent_id=None, name="5G", user_id=owner_id)
     assert top["path"] == "5G" and top["parent_id"] is None
-    assert (tmp_path / kb_id / "5G").is_dir()  # 磁盘镜像
+    assert not (tmp_path / kb_id).exists()  # 逻辑目录不依赖本地磁盘
 
     sub = await svc.create_folder(kb_id=kb_id, parent_id=top["id"], name="AMF", user_id=owner_id)
     assert sub["path"] == "5G/AMF" and sub["parent_id"] == top["id"]
-    assert (tmp_path / kb_id / "5G" / "AMF").is_dir()
+    assert not (tmp_path / kb_id).exists()
 
     folders = await svc.list_folders(kb_id=kb_id, user_id=owner_id)
     assert {f["path"] for f in folders} == {"5G", "5G/AMF"}
@@ -44,7 +44,7 @@ async def test_ensure_folder_path_idempotent(async_pool, tmp_path):
     assert leaf is not None and leaf["path"] == "a/b/c"
     folders = await svc.list_folders(kb_id=kb_id, user_id=owner_id)
     assert {f["path"] for f in folders} == {"a", "a/b", "a/b/c"}
-    assert (tmp_path / kb_id / "a" / "b" / "c").is_dir()
+    assert not (tmp_path / kb_id).exists()
 
     again = await svc.ensure_folder_path(kb_id=kb_id, path="a/b/c", user_id=owner_id)
     assert again["id"] == leaf["id"]
@@ -77,7 +77,7 @@ async def test_delete_empty_folder(async_pool, tmp_path):
     owner_id, kb_id = await _make_kb(db, "kbDel")
     f = await svc.create_folder(kb_id=kb_id, parent_id=None, name="empty", user_id=owner_id)
     d = tmp_path / kb_id / "empty"
-    assert d.is_dir()
+    assert not d.exists()
     await svc.delete_folder(folder_id=f["id"], user_id=owner_id)
     assert not d.exists()
     assert await svc.list_folders(kb_id=kb_id, user_id=owner_id) == []

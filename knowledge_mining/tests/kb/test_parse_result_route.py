@@ -89,6 +89,7 @@ async def _parsed_kb(tmp_path, fmt: str = "md"):
     assert outcome.snapshot_id
     services.segment_compile_service.compile_for_snapshot(
         snapshot_id=outcome.snapshot_id,
+        frozen_input=outcome.frozen_input,
         parse_ir_storage_object_id=outcome.parse_ir_storage_object_id,
         params={"tableView": "rows"},
     )

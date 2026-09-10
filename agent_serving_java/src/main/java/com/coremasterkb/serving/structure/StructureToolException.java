@@ -33,6 +33,7 @@ public class StructureToolException extends RuntimeException {
     public static final String UNSUPPORTED_OPERATION = "unsupported_operation";
     public static final String STRUCTURED_QUERY_UNAVAILABLE = "structured_query_unavailable";
     public static final String RESULT_TOO_LARGE = "result_too_large";
+    public static final String KNOWLEDGE_SERVICE_UNAVAILABLE = "knowledge_service_unavailable";
 
     private final String code;
     private final HttpStatus status;
@@ -59,6 +60,12 @@ public class StructureToolException extends RuntimeException {
     /** 不泄漏真实归属：不存在 / 无权 / 跨用户同响应。 */
     public static StructureToolException outOfScope(String message) {
         return new StructureToolException(OUT_OF_SCOPE, HttpStatus.NOT_FOUND, message, Map.of());
+    }
+
+    public static StructureToolException serviceUnavailable() {
+        return new StructureToolException(KNOWLEDGE_SERVICE_UNAVAILABLE,
+                HttpStatus.SERVICE_UNAVAILABLE, "知识服务暂不可用，请稍后重试。",
+                Map.of("retryable", true));
     }
 
     public static StructureToolException expiredRef(String message) {

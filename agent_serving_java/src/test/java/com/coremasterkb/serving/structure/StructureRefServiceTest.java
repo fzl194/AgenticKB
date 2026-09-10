@@ -197,6 +197,37 @@ class StructureRefServiceTest {
                 .isEqualTo("out_of_scope");
     }
 
+    @Test
+    void activeSnapshotDatabaseFailureIsRetryableNotPermissionDenied() {
+        when(buildSnapshotMapper.selectLatestKbSnapshots(anyString(), anyList()))
+                .thenThrow(new IllegalStateException("private database connection details"));
+        assertThatThrownBy(() -> service.resolve(
+                codec.encodeStructure(SNAP, "doc:/spec"), DOMAIN, List.of(KB), USER))
+                .isInstanceOf(StructureToolException.class)
+                .satisfies(error -> {
+                    var typed = (StructureToolException) error;
+                    assertThat(typed.code()).isEqualTo("knowledge_service_unavailable");
+                    assertThat(typed.status().value()).isEqualTo(503);
+                    assertThat(typed.getMessage()).doesNotContain("private database");
+                });
+    }
+
+    @Test
+    void historicalSnapshotDatabaseFailureIsNotReportedAsMissingRef() {
+        when(toolMapper.selectStructureRefCandidates(anyList(), anyInt())).thenReturn(List.of());
+        when(toolMapper.selectKbSnapshotRefs(anyString(), anyList(), anyInt()))
+                .thenThrow(new IllegalStateException("private database connection details"));
+        assertThatThrownBy(() -> service.resolve(
+                codec.encodeStructure("snap-old", "doc:/spec"), DOMAIN, List.of(KB), USER))
+                .isInstanceOf(StructureToolException.class)
+                .satisfies(error -> {
+                    var typed = (StructureToolException) error;
+                    assertThat(typed.code()).isEqualTo("knowledge_service_unavailable");
+                    assertThat(typed.status().value()).isEqualTo(503);
+                    assertThat(typed.getMessage()).doesNotContain("private database");
+                });
+    }
+
     // ---- helpers ------------------------------------------------------------------------
 
     private static AssetBuildDocumentSnapshot snapshot(String id) {

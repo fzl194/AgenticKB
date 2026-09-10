@@ -36,6 +36,10 @@ class _Db:
     async def can_write(self, *, kb_id, user_id):
         return True
 
+    async def find_document_by_location(self, kb_id, directory_path, document_name, *, include_deleted=False):
+        from knowledge_mining.mining.kb.storage import build_document_key
+        return await self.find_document_by_key(kb_id, build_document_key(directory_path, document_name), include_deleted=include_deleted)
+
     async def find_document_by_key(self, kb_id, document_key, *, include_deleted=False):
         row = self.by_key.get((kb_id, document_key))
         if row is None or (not include_deleted and row.get("deleted_at")):

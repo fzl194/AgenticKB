@@ -110,6 +110,7 @@ def test_kb_workflow_prepares_document_states_from_object_storage_identities(mon
         retrieval_project_service=object(),
         embedding_service=object(),
         asset_persist_service=object(),
+        source_locator_service=object(),
         query_expansion_service=None,
         hierarchical_summary_service=None,
     )

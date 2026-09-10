@@ -11,29 +11,36 @@
         <el-tag v-if="doc?.status" :type="docStatusTagType(doc.status)" size="small" effect="light">
           {{ docStatusLabel(doc.status) }}
         </el-tag>
+        <span v-if="doc?.knowledge_outdated" class="doc-preview__outdated" data-testid="knowledge-outdated">
+          待更新（旧知识可用）
+        </span>
       </div>
       <div class="doc-preview__head-right">
         <el-button size="small" :loading="downloading" @click="download">
-          <el-icon class="el-icon--left"><Download /></el-icon>下载
+          <el-icon class="el-icon--left"><Download /></el-icon>下载最新原文件
         </el-button>
       </div>
     </div>
 
-    <!-- Tabs：未挖掘时仅「原始预览」，已挖掘追加三组知识 -->
+    <!-- 原件读取与当前知识读取保留各自的版本语义。 -->
     <el-tabs v-model="activeTab" class="doc-preview__tabs">
-      <el-tab-pane label="原始预览" name="preview">
+      <el-tab-pane label="最新原文件预览" name="preview">
+        <p class="doc-preview__source-notice" data-testid="latest-source-notice">
+          此处预览和下载的是最新原文件，可能与当前可搜索知识不同。替换文件后需重新挖掘；
+          搜索证据请从搜索结果的来源入口核验对应版本。
+        </p>
         <!-- Body -->
         <div class="doc-preview__body" v-loading="previewLoading">
           <div v-if="error" class="doc-preview__state">
             <el-icon :size="32"><WarningFilled /></el-icon>
             <p>{{ error }}</p>
-            <el-button size="small" @click="download">下载查看</el-button>
+            <el-button size="small" @click="download">下载最新原文件</el-button>
           </div>
 
           <div v-else-if="tooLarge" class="doc-preview__state">
             <el-icon :size="32"><Document /></el-icon>
             <p>文件较大（{{ (blobSize / 1024 / 1024).toFixed(1) }} MB），未在线渲染。</p>
-            <el-button type="primary" size="small" @click="download">下载</el-button>
+            <el-button type="primary" size="small" @click="download">下载最新原文件</el-button>
           </div>
 
           <!-- 预签名直连：浏览器对 MinIO 按 Range 分页按需加载 -->
@@ -73,7 +80,7 @@
             <el-icon :size="32"><Document /></el-icon>
             <p>该类型暂不支持在线预览（.{{ ext || '未知' }}）。</p>
             <p class="doc-preview__sub">支持：md / html / 纯文本代码（txt/json/yaml/csv/xml 等） / 图片（png/jpg/gif/webp/svg）/ PDF</p>
-            <el-button size="small" @click="download">下载查看</el-button>
+            <el-button size="small" @click="download">下载最新原文件</el-button>
           </div>
         </div>
       </el-tab-pane>
@@ -809,6 +816,8 @@ onUnmounted(cleanup)
 </script>
 
 <style scoped>
+.doc-preview__outdated { font-size: 12px; color: var(--el-color-warning); }
+.doc-preview__source-notice { margin: 8px 0 16px; color: var(--kb-text-secondary); font-size: 13px; line-height: 1.6; }
 .doc-preview { display: flex; flex-direction: column; gap: 12px; }
 .doc-preview__header {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

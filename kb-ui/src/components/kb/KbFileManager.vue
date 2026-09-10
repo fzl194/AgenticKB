@@ -162,6 +162,9 @@
             {{ docStatusLabel(file.status, file.rd_action === 'SKIP') }}
           </el-tag>
           <span v-else class="fm__col--muted">—</span>
+          <span v-if="file.knowledge_outdated" class="fm__knowledge-outdated" data-testid="knowledge-outdated">
+            待更新（旧知识可用）
+          </span>
         </div>
         <div class="fm__col fm__col--time">{{ formatDate(file.modified_at || file.created_at) }}</div>
       </div>
@@ -198,11 +201,17 @@
         @click.stop
         @contextmenu.prevent
       >
-        <div v-if="ctx.kind === 'file'" class="fm__ctx-item" @click="ctxDownload">下载</div>
+        <div v-if="ctx.kind === 'file'" class="fm__ctx-item" @click="ctxDownload">下载最新原文件</div>
+        <div v-if="canWrite && ctx.kind === 'file'" class="fm__ctx-item" data-testid="replace-document" @click="ctxReplace">替换当前文件</div>
         <div v-if="canWrite" class="fm__ctx-item" @click="ctxRename">重命名</div>
         <div v-if="canWrite" class="fm__ctx-item fm__ctx-item--danger" @click="ctxDelete">删除</div>
       </div>
     </teleport>
+    <KbReplaceDocumentDialog
+      v-if="replacementDoc && canWrite" :key="`${kbId}:${replacementDoc.id}`"
+      :kb-id="kbId" :document="replacementDoc" :can-write="canWrite"
+      @close="replacementDoc = null" @replaced="onReplaced" @refresh="reload"
+    />
   </div>
 </template>
 
@@ -219,6 +228,7 @@ import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import EmptyState from '@/components/common/EmptyState.vue'
+import KbReplaceDocumentDialog from '@/components/kb/KbReplaceDocumentDialog.vue'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
 import type { Component } from 'vue'
 import type { KbDocument, KbFolder } from '@/types/kb'
@@ -237,6 +247,19 @@ const loading = ref(false)
 const uploading = ref(0)
 const selId = ref<string | null>(null)
 const hint = ref(true)
+const replacementDoc = ref<KbDocument | null>(null)
+
+function ctxReplace() {
+  if (props.canWrite && ctx.value?.kind === 'file') {
+    replacementDoc.value = { ...(ctx.value.item as KbDocument) }
+  }
+  closeCtx()
+}
+
+async function onReplaced() {
+  replacementDoc.value = null
+  await reload()
+}
 
 // ── 多选 + 批量操作（挖掘触发统一到这里，挖掘 Tab 只展示任务流） ──
 const selectedFileIds = ref<string[]>([])
@@ -661,6 +684,8 @@ watch(() => currentFolderId.value, loadFiles)
 // currentFolderId 会拿去请求新库列表，更糟的是「挖掘选中」会把 A 库的
 // document id 发给 B 库的挖掘接口（2026-08-31 前端审查 H1）。
 watch(() => props.kbId, () => {
+  replacementDoc.value = null
+  closeCtx()
   currentFolderId.value = null
   selectedFileIds.value = []
   reload()
@@ -692,7 +717,7 @@ watch(() => props.active, (now, prev) => {
 
 .fm__row {
   display: grid;
-  grid-template-columns: 36px minmax(240px, 1fr) 80px 90px 100px 120px;
+  grid-template-columns: 36px minmax(240px, 1fr) 80px 90px 160px 120px;
   align-items: center; gap: 10px;
   padding: 8px 14px; border-bottom: 1px solid var(--kb-border-light);
   font-size: 13px; color: var(--kb-text-primary); user-select: none;
@@ -710,6 +735,8 @@ watch(() => props.active, (now, prev) => {
 .fm__row--dragover { background: var(--kb-accent-medium) !important; box-shadow: inset 0 0 0 2px var(--kb-accent); }
 
 .fm__col { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm__col--status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.fm__knowledge-outdated { font-size: 11px; line-height: 1.5; color: var(--el-color-warning); }
 .fm__col--name { display: flex; align-items: center; gap: 8px; }
 .fm__col--type, .fm__col--size, .fm__col--time { color: var(--kb-text-secondary); font-size: 12px; }
 .fm__col--muted { color: var(--kb-text-tertiary); }

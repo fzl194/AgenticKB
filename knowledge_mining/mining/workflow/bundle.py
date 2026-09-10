@@ -40,6 +40,7 @@ class MiningDocumentBundle:
     parse_ir_ref: str | None = None
     parser_fingerprint: str | None = None
     quality_status: str | None = None
+    frozen_input: Any = None
     raw_file: Any = None
     profile: Any = None
     action: str | None = None

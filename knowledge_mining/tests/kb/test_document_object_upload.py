@@ -32,6 +32,10 @@ class _KbUploadDb:
     async def can_write(self, *, kb_id: str, user_id: str) -> bool:
         return True
 
+    async def find_document_by_location(self, kb_id, directory_path, document_name, *, include_deleted=False):
+        from knowledge_mining.mining.kb.storage import build_document_key
+        return await self.find_document_by_key(kb_id, build_document_key(directory_path, document_name), include_deleted=include_deleted)
+
     async def find_document_by_key(self, kb_id, document_key, *, include_deleted=False):
         return None
 

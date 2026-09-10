@@ -244,7 +244,8 @@ class SnapshotRecompileService:
         compiled = await self._compiler.compile(
             committed.snapshot.id,
             parse_ir_storage_object_id=old.parse_ir_storage_object_id,
-            document_key=frozen.original_filename or committed.snapshot.id,
+            # Shared snapshot assets must not carry the first document's filename.
+            document_key=committed.snapshot.id,
             policy=policy,
         )
         return committed.snapshot, compiled

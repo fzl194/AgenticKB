@@ -117,6 +117,22 @@ describe('A0-1/A0-5/A0-6 文档结构化页', () => {
     kbApi.downloadDocument.mockRejectedValue(new Error('no'))
   })
 
+  it('区分最新原文件下载与当前可搜索知识，说明替换后需要重新挖掘', async () => {
+    const wrapper = await mountView()
+    expect(wrapper.text()).toContain('下载最新原文件')
+    expect(wrapper.get('[data-testid="latest-source-notice"]').text()).toContain('当前可搜索知识')
+    expect(wrapper.get('[data-testid="latest-source-notice"]').text()).toContain('重新挖掘')
+    wrapper.unmount()
+  })
+
+  it('依据服务端事实持续提示旧知识可用，保留任务状态', async () => {
+    kbApi.getDocument.mockResolvedValue({ ...DOC, status: 'mining', knowledge_outdated: true })
+    const wrapper = await mountView()
+    expect(wrapper.get('[data-testid="knowledge-outdated"]').text()).toBe('待更新（旧知识可用）')
+    expect(wrapper.get('.doc-preview__head-left').text()).toContain('处理中')
+    wrapper.unmount()
+  })
+
   it('A0-1: 默认请求 current_serving（不带 view 查询参数）', async () => {
     await mountView()
     expect(kbApi.getDocumentParseResult).toHaveBeenCalledWith('kb-1', 'doc-1')

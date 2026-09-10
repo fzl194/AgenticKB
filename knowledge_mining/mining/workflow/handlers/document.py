@@ -229,6 +229,7 @@ def document_parse_handler(
         run_document_id=state.run_document_id,
         snapshot_ref=getattr(outcome, "snapshot_id", None),
         parse_ir_ref=getattr(outcome, "parse_ir_storage_object_id", None),
+        frozen_input=getattr(outcome, "frozen_input", None),
         parser_fingerprint=getattr(outcome, "parser_fingerprint", None),
         quality_status=getattr(outcome, "quality_status", None),
         raw_file=raw_file,
@@ -280,6 +281,7 @@ def segment_compile_handler(
             snapshot_id=bundle.snapshot_ref,
             parse_ir_storage_object_id=bundle.parse_ir_ref,
             params=options.model_dump(by_alias=True),
+            **({"frozen_input": bundle.frozen_input} if bundle.frozen_input is not None else {}),
         )
     except Exception as exc:  # noqa: BLE001
         return _on_error(
@@ -291,6 +293,7 @@ def segment_compile_handler(
         return OperatorResult(state, frozenset(), OperatorStatus.SKIPPED)
 
     updated = bundle.with_updates(
+        snapshot_ref=getattr(compiled, "snapshot_id", None) or bundle.snapshot_ref,
         compiled_segment_count=len(segments),
         compiler_fingerprint=getattr(compiled, "compiler_fingerprint", None),
         document_facts=compute_document_facts(segments),

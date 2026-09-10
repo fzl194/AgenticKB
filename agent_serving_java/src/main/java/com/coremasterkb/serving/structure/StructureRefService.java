@@ -131,8 +131,8 @@ public class StructureRefService implements EvidenceRefResolver {
                     .distinct()
                     .toList();
         } catch (Exception e) {
-            log.warn("[structure-ref] active snapshot resolution failed: {}", e.getMessage());
-            throw StructureToolException.outOfScope("ref 不在当前授权范围内");
+            log.warn("[structure-ref] active snapshot resolution failed ({})", e.getClass().getSimpleName());
+            throw StructureToolException.serviceUnavailable();
         }
     }
 
@@ -149,9 +149,8 @@ public class StructureRefService implements EvidenceRefResolver {
                     .distinct()
                     .toList();
         } catch (Exception e) {
-            log.warn("[structure-ref] historical snapshot scan failed (treated as none): {}",
-                    e.getMessage());
-            return List.of();
+            log.warn("[structure-ref] historical snapshot scan failed ({})", e.getClass().getSimpleName());
+            throw StructureToolException.serviceUnavailable();
         }
     }
 

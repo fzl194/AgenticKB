@@ -103,6 +103,10 @@ export interface KbFolder {
 
 export interface KbDocument {
   id: string
+  /** 当前原件修订号；替换时必须提交此值进行并发检查。 */
+  content_revision?: number
+  /** 当前可搜索快照与最新原件内容不同；无当前知识时为 false。 */
+  knowledge_outdated?: boolean
   domain?: string
   kb_id?: string
   document_key?: string

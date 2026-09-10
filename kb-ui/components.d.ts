@@ -63,6 +63,7 @@ declare module 'vue' {
     KbMembersPanel: typeof import('./src/components/kb/KbMembersPanel.vue')['default']
     KbMiningPanel: typeof import('./src/components/kb/KbMiningPanel.vue')['default']
     KbQualityPanel: typeof import('./src/components/kb/KbQualityPanel.vue')['default']
+    KbReplaceDocumentDialog: typeof import('./src/components/kb/KbReplaceDocumentDialog.vue')['default']
     KbSearchPanel: typeof import('./src/components/kb/KbSearchPanel.vue')['default']
     KbSettingsPanel: typeof import('./src/components/kb/KbSettingsPanel.vue')['default']
     LineChart: typeof import('./src/components/charts/LineChart.vue')['default']

@@ -116,14 +116,25 @@ describe('A2 检索面板章节范围', () => {
     })
   })
 
-  it('「改回整篇」清除范围，within 不再携带', async () => {
-    routeQuery = { scopeRef: 'spec.md#section:0', scopeTitle: '概述' }
+  it('「改回整篇」保留文档范围', async () => {
+    routeQuery = { scopeRef: 'spec.md#section:0', scopeTitle: '概述', scopeDocumentRef: 'spec.md' }
     const wrapper = await mountPanel()
     const clear = wrapper.findAll('button').find(b => b.text().includes('改回整篇'))
     expect(clear).toBeTruthy()
     await clear!.trigger('click')
     await search(wrapper)
     const call = servingApi.runParadigmSearch.mock.calls[0]
-    expect(call?.[2]?.within).toBeUndefined()
+    expect(call?.[2]?.within).toEqual({ document_refs: ['spec.md'] })
+    expect(wrapper.text()).toContain('整篇')
+  })
+
+  it('无文档ref时明确清除为整库而不声称整篇', async () => {
+    routeQuery = { scopeRef: 'spec.md#section:0', scopeTitle: '概述' }
+    const wrapper = await mountPanel()
+    expect(wrapper.text()).not.toContain('改回整篇')
+    const clear = wrapper.findAll('button').find(b => b.text().includes('搜索整个知识库'))
+    await clear!.trigger('click')
+    await search(wrapper)
+    expect(servingApi.runParadigmSearch.mock.calls[0]?.[2]?.within).toBeUndefined()
   })
 })

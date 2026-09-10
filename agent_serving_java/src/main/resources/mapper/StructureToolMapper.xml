@@ -238,6 +238,17 @@
         LIMIT #{limit}
     </select>
 
+    <!-- P2-17：previous/next 的兄弟集限定同 node_type（章节导航不混正文段/表格）；
+         ordinal + ref 双键稳定排序（并列值 deterministic）。 -->
+    <select id="selectSiblingsOfType" resultMap="nodeMap">
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM asset_structure_nodes
+        WHERE snapshot_id = #{snapshotId} AND parent_ref = #{parentRef}
+          AND node_type = #{nodeType}
+        ORDER BY ordinal ASC NULLS LAST, ref ASC
+        LIMIT #{limit}
+    </select>
+
     <select id="selectEdges" resultMap="edgeRowMap">
         SELECT snapshot_id, relation, from_ref, to_ref
         FROM asset_structure_edges
@@ -325,20 +336,23 @@
                 <include refid="criterion"/>
             </foreach>
         </where>
-        <if test="orderField != null and orderField != ''">
-            ORDER BY
-            <choose>
-                <when test="numericOrder">
-                    NULLIF(REPLACE(t.cells_norm ->> #{orderField}, ',', ''), '')::numeric
-                </when>
-                <otherwise>t.cells_norm ->> #{orderField}</otherwise>
-            </choose>
-            <choose>
-                <when test="orderDir == 'desc'">DESC</when>
-                <otherwise>ASC</otherwise>
-            </choose>
-            , t.row_index ASC
-        </if>
+        <!-- P2-11：ORDER BY 恒存在（service 默认 row_index ASC）；行号 tie-break
+             保证并列值分页 deterministic（无重复/无遗漏）。 -->
+        ORDER BY
+        <choose>
+            <when test="orderField == null">
+                t.row_index
+            </when>
+            <when test="numericOrder">
+                NULLIF(REPLACE(t.cells_norm ->> #{orderField}, ',', ''), '')::numeric
+            </when>
+            <otherwise>t.cells_norm ->> #{orderField}</otherwise>
+        </choose>
+        <choose>
+            <when test="orderDir == 'desc'">DESC</when>
+            <otherwise>ASC</otherwise>
+        </choose>
+        , t.row_index ASC
         LIMIT #{limit} OFFSET #{offset}
     </select>
 

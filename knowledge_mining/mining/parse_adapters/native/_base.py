@@ -294,6 +294,8 @@ class BaseNativeNormalizer:
                 text=str(c.get("text", "")),
                 row_span=int(c.get("row_span", 1)),
                 column_span=int(c.get("column_span", 1)),
+                normalized_value=c.get("normalized_value"),
+                value_type=c.get("value_type"),
                 formula=c.get("formula"),
                 is_header=bool(c.get("is_header")),
                 source_span_id=_cell_span_id(c, cell_spans),

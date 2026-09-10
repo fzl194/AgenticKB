@@ -184,7 +184,8 @@ def _representation_for(
         target_ref=target_ref,
         canonical_evidence_id=representation_id,
         source_refs=_source_refs(segment),
-        section_ref=section_index.ref_of(segment.heading_chain),
+        # P1-3：阅读序绑定（refs_by_segment），不得回退标题链查最终映射
+        section_ref=section_index.bound_ref(segment.segment_index),
         container_ref=container_ref,
         context_group_id=(
             segment.heading_chain[-1][1] if segment.heading_chain else document_ref
@@ -220,9 +221,7 @@ def _section_representations(
     for segment in segments:
         if segment.block_type in {"heading", "navigation"}:
             continue
-        if not segment.heading_chain:
-            continue
-        ref = section_index.ref_of(segment.heading_chain)
+        ref = section_index.bound_ref(segment.segment_index)
         if ref is not None:
             by_ref.setdefault(ref, []).append(segment)
 

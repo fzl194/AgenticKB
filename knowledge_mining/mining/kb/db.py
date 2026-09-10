@@ -454,6 +454,8 @@ class KbDB:
             unqueryable = [dict(r) for r in await cur.fetchall()]
         return {
             "documents": int(row["documents"] or 0),
+            # completeness-2：口径版本号——消费方（前端/评测）可探测口径变化
+            "coverage_version": "1",
             "structure": {
                 "sections_total": int(row["sections_total"] or 0),
                 "sections_with_ordinal": int(row["sections_with_ordinal"] or 0),
@@ -1406,7 +1408,7 @@ WITH latest AS (
                 f"SELECT COUNT(*) FROM asset_documents d WHERE {clause}", params,
             )
             row = await cur.fetchone()
-        return int(row[0]) if row else 0
+        return int(row["count"]) if row else 0
 
     async def list_documents_in_kb(
         self, *, kb_id: str, directory: str | None = None,

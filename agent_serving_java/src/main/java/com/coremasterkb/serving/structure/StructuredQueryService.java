@@ -142,7 +142,9 @@ public class StructuredQueryService {
 
         // 行模式
         List<String> select = validatedSelect(spec.select(), columnNames);
-        String orderField = null;
+        // P2-11：未指定 order_by 时默认 row_index ASC——cursor(offset) 分页的
+        // 前后页一致前提；无 ORDER BY 的 LIMIT/OSET 结果顺序未定义（可能重复/遗漏）
+        String orderField = null; // null denotes physical row order; any string is a user column.
         String orderDir = "asc";
         boolean numericOrder = false;
         if (spec.order_by() != null && !spec.order_by().isEmpty()) {
@@ -243,7 +245,10 @@ public class StructuredQueryService {
         for (String name : names) {
             Set<String> declaredTypes = declaredByColumn.get(name);
             String type;
-            if (declaredTypes != null && declaredTypes.size() == 1) {
+            // P2-13：扫描截断时不得独断声明类型——前 2000 cells 全声明
+            // number 不代表后半表没有文本（::numeric 会 500）。截断=未见全量，
+            // 保守降级 text（值扫描分支同样受 truncated 抑制）。
+            if (declaredTypes != null && declaredTypes.size() == 1 && !truncated) {
                 type = declaredTypes.iterator().next();
             } else {
                 Boolean numeric = numericByColumn.get(name);
@@ -351,8 +356,19 @@ public class StructuredQueryService {
         }
         if (date && !"is_null".equals(op)) {
             // date 过滤值必须 ISO（YYYY-MM-DD）——可修正错误，不静默退化文本包含
-            java.util.function.Predicate<String> iso = v -> v != null && v.matches(
-                    "^\\d{4}-\\d{2}-\\d{2}$");
+            java.util.function.Predicate<String> iso = v -> {
+                if (v == null) {
+                    return false;
+                }
+                // P2-12：真实日历语义——形状合法但日历非法（2026-99-99、
+                // 2026-02-31）必须 type_mismatch，不得靠文本序静默通过
+                try {
+                    java.time.LocalDate.parse(v);
+                    return true;
+                } catch (java.time.format.DateTimeParseException e) {
+                    return false;
+                }
+            };
             if ("in".equals(op)) {
                 for (JsonNode item : w.value() == null ? java.util.List.<JsonNode>of() : w.value()) {
                     if (item == null || !iso.test(item.asText())) {

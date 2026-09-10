@@ -105,10 +105,18 @@ public interface StructureToolMapper {
             @Param("snapshotId") String snapshotId, @Param("ref") String ref,
             @Param("maxDepth") int maxDepth);
 
-    /** 同父兄弟（previous/next 与 container 判定；有界 1000）。 */
+    /** 同父兄弟（container 判定等；有界 1000）。 */
     List<StructureNodeRow> selectSiblings(
             @Param("snapshotId") String snapshotId, @Param("parentRef") String parentRef,
             @Param("limit") int limit);
+
+    /**
+     * 同父且同类型的兄弟（P2-17：previous/next 导航只回同类节点——
+     * section 的前后邻居不得是 segment/table；排序 ordinal + ref 稳定 tie-break）。
+     */
+    List<StructureNodeRow> selectSiblingsOfType(
+            @Param("snapshotId") String snapshotId, @Param("parentRef") String parentRef,
+            @Param("nodeType") String nodeType, @Param("limit") int limit);
 
     /** 指定关系的显式边（references/footnotes 等；仅跟随显式可追溯边）。 */
     List<EdgeRow> selectEdges(

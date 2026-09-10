@@ -1,25 +1,27 @@
-"""A4 评测运行器（39 号 §4.2）——六类题的执行与指标产出.
+"""A4 评测运行器（39 号 §4.2）——题集驱动的执行与指标产出.
 
     docker exec cmkb python /app/release_tests/eval/run_eval.py \
         [--questions .../questions_smoke.yaml] [--keep]
 
 题集 schema（YAML）::
 
-    - category: source_accuracy | scope | table_golden | permission | ...
+    - category: source_accuracy | scope | table_golden | permission | quality
       # 各类题的载荷（harness truths 与题目分离，便于业务补题）
 
-产出：``/tmp/a4eval-report.json`` + stdout Markdown 摘要。
+产出：``/tmp/a4eval-report.json`` + ``/tmp/a4eval-report.md`` +
+stdout 摘要（含 P50/P95/P99）。
 真实业务题 50 条为业务输入缺口（34 号 §7），框架先行——不伪造完成。
 """
 from __future__ import annotations
 
 import argparse
 import json
-import statistics
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import httpx  # noqa: E402
 
 from harness import (  # noqa: E402
     DOMAIN,
@@ -33,6 +35,33 @@ from harness import (  # noqa: E402
     soft_delete,
     wait_terminal,
 )
+
+#: 题目 category → 执行 suite 的唯一映射（未知 category 拒绝）
+SUPPORTED_CATEGORIES = {
+    "source_accuracy", "scope", "table_golden", "permission", "quality", "unanswerable",
+}
+
+_CATEGORY_SUITES = {
+    "source_accuracy": "suite_source_accuracy",
+    "scope": "suite_scope",
+    "table_golden": "suite_table_golden",
+    "permission": "suite_permission",
+    "quality": "suite_quality_report",
+}
+
+
+from question_sets import load_questions  # noqa: E402
+from business_questions import run_business_questions, values_match  # noqa: E402
+
+
+def suites_for_categories(categories: set[str]) -> list[str]:
+    """题集内容决定执行的 suite（保持稳定执行顺序）."""
+    order = [
+        "suite_source_accuracy", "suite_scope", "suite_table_golden",
+        "suite_permission", "suite_quality_report",
+    ]
+    wanted = {_CATEGORY_SUITES[c] for c in categories}
+    return [s for s in order if s in wanted]
 
 
 class Report:
@@ -80,7 +109,11 @@ def search(ctx: EvalContext, paradigm: str, query: str, **kw) -> dict:
         headers=ctx.headers, json=payload,
     )
     resp.raise_for_status()
-    return resp.json().get("evidenceResponse") or {}
+    body = resp.json()
+    result = body.get("evidenceResponse") if isinstance(body, dict) else None
+    if not isinstance(result, dict) or not isinstance(result.get("evidence"), list):
+        raise ValueError("invalid search response: evidenceResponse.evidence must be a list")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -127,10 +160,12 @@ def suite_scope(ctx: EvalContext, report: Report, paradigm: str) -> None:
         ctx, "GET", f"{MINING}/api/kb/{ctx.kb_id}/documents",
         headers=ctx.headers, params={"limit": 50},
     )
+    document_body = docs.json()
+    document_items = document_body.get("items", []) if isinstance(document_body, dict) else document_body
     doc_id = next(
         (
             d["id"]
-            for d in docs.json().get("items", docs.json() or [])
+            for d in document_items
             if "手册" in str(d.get("document_name", ""))
         ),
         None,
@@ -169,6 +204,7 @@ def suite_scope(ctx: EvalContext, report: Report, paradigm: str) -> None:
         },
     )
     evidence = ev.get("evidence") or []
+    report.check("scope/evidence-found", bool(evidence))
     leaked = [
         e
         for e in evidence
@@ -187,15 +223,20 @@ def suite_table_golden(ctx: EvalContext, report: Report, paradigm: str) -> None:
     print("== 表格黄金查询（fixture 真值）==")
     truth = ctx.truths["xlsx"]
     ev = search(ctx, paradigm, truth["table_search"])
-    table_ref = None
-    doc_key = None
+    asset_ref = None
     for e in ev.get("evidence") or []:
-        loc = (e.get("source") or {}).get("locator") or {}
-        if loc.get("table_ref"):
-            table_ref = loc["table_ref"]
-            doc_key = str((e.get("source") or {}).get("document_ref") or "")
+        if not e.get("ref"):
+            continue
+        inspected = call(ctx, "GET", f"{SERVING}/api/v1/structure/inspect",
+                         headers=ctx.headers,
+                         params={"ref": e["ref"], "domain": DOMAIN, "kbId": ctx.kb_id})
+        inspected.raise_for_status()
+        assets = inspected.json().get("assets") or []
+        matching = [a for a in assets if "告警码" in (a.get("columns") or []) and a.get("ref")]
+        if len(matching) == 1:
+            asset_ref = matching[0]["ref"]
             break
-    if not table_ref or not doc_key:
+    if not asset_ref:
         report.check(
             "table/evidence-with-table-anchor", False,
             json.dumps(ev.get("evidence") or [], ensure_ascii=False)[:300],
@@ -203,13 +244,15 @@ def suite_table_golden(ctx: EvalContext, report: Report, paradigm: str) -> None:
         return
     report.check("table/evidence-with-table-anchor", True)
 
-    asset_ref = f"{doc_key}#table:{table_ref}"
     for i, case in enumerate(truth["golden"]):
         resp = call(
-            ctx, "POST", f"{SERVING}/api/v1/structure/{asset_ref}/query",
+            ctx, "POST", f"{SERVING}/api/v1/structure/query",
             headers=ctx.headers,
-            params={"domain": DOMAIN, "kbId": ctx.kb_id},
-            json={"query": case["spec"]},
+            params={},
+            json={
+                "ref": asset_ref, "query": case["spec"],
+                "domain": DOMAIN, "kbId": ctx.kb_id,
+            },
         )
         if resp.status_code != 200:
             report.check(f"table/golden-{i}", False, resp.text[:200])
@@ -218,8 +261,7 @@ def suite_table_golden(ctx: EvalContext, report: Report, paradigm: str) -> None:
         if "aggregate" in case["spec"]:
             value = (body.get("aggregate") or {}).get("value")
             expect = case["expect"]
-            ok = value is not None and abs(float(value) - float(expect)) < 0.01 \
-                or value == expect
+            ok = values_match(value, expect)
             report.check(f"table/golden-{i}", bool(ok), f"value={value} expect={expect}")
         else:
             got_rows = [
@@ -235,10 +277,12 @@ def suite_table_golden(ctx: EvalContext, report: Report, paradigm: str) -> None:
 
     # 类型守卫：date 列 sum → 400（typed error，不退化）
     bad = call(
-        ctx, "POST", f"{SERVING}/api/v1/structure/{asset_ref}/query",
+        ctx, "POST", f"{SERVING}/api/v1/structure/query",
         headers=ctx.headers,
-        params={"domain": DOMAIN, "kbId": ctx.kb_id},
-        json={"query": {"aggregate": {"op": "sum", "field": "投产日期"}}},
+        json={
+            "ref": asset_ref, "domain": DOMAIN, "kbId": ctx.kb_id,
+            "query": {"aggregate": {"op": "sum", "field": "投产日期"}},
+        },
     )
     report.check(
         "table/date-sum-rejected-typed",
@@ -297,86 +341,122 @@ def suite_quality_report(ctx: EvalContext, report: Report) -> None:
     )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(prog="a4-eval")
-    parser.add_argument(
-        "--questions", default=str(Path(__file__).parent / "questions_smoke.yaml"),
-        help="题集 YAML（smoke=框架自证；真实题集见 TEMPLATE）",
-    )
-    parser.add_argument("--keep", action="store_true", help="保留评测库（调试）")
-    args = parser.parse_args()
+# ---------------------------------------------------------------------------
 
-    ctx = EvalContext(username="admin")
-    ctx.headers = headers_for()
-    import httpx
 
-    ctx.client = httpx.Client(timeout=90)
-    report = Report()
-    ctx.kb_id = ""
-    try:
-        prefix = "a4eval"
-        print(f"[setup] 创建评测库并挖掘（prefix={prefix}）…")
-        ctx.kb_id = create_and_mine(ctx, prefix)
-        ctx.truths.setdefault("run_id", "")
-        terminal = wait_terminal(ctx, str(ctx.truths.get("run_id") or ""))
-        report.check(
-            "setup/mining-terminal-ok",
-            str(terminal.get("status") or "") in {"completed", "success", "partial"},
-            str(terminal),
-        )
-        import time as _t
-
-        _t.sleep(5)  # 二级索引/检索单元可见
-
-        ctx.truths["md"], _ = __import__("harness").build_md_fixture()
-        ctx.truths["xlsx"], _ = __import__("harness").build_xlsx_fixture()
-
-        paradigm = resolve_paradigm(ctx)
-        suite_source_accuracy(ctx, report, paradigm)
-        suite_scope(ctx, report, paradigm)
-        suite_table_golden(ctx, report, paradigm)
-        suite_permission(ctx, report, paradigm)
-        suite_quality_report(ctx, report)
-    finally:
-        if not args.keep:
-            print(f"[cleanup] 软删除评测库 {ctx.kb_id}")
-            soft_delete(ctx, ctx.kb_id)
-        ctx.client.close()
-
-    # 性能采样（小样本；正式 P50/P95 需按 34 号 §7 负载条件）
+def _perf_summary(ctx: EvalContext) -> dict[str, dict[str, float]]:
+    """性能采样 → 每端点 P50/P95/P99（39 号 §4.2 输出要求）."""
     durations: dict[str, list[float]] = {}
     for stat in ctx.stats:
         durations.setdefault(stat.name.split("/")[-1], []).append(stat.duration_ms)
-    perf = {
+    return {
         name: {
             "n": len(vals),
             "p50": round(percentile(vals, 50), 1),
             "p95": round(percentile(vals, 95), 1),
+            "p99": round(percentile(vals, 99), 1),
         }
         for name, vals in durations.items()
     }
 
+
+def _markdown_report(out: dict, questions_path: str) -> str:
+    summary = out["summary"]
+    lines = [
+        "# A4 评测报告",
+        "",
+        f"- 题集：`{questions_path}`",
+        f"- 自动检查：**{summary['passed']}/{summary['total']}** passed",
+        "",
+        "| 分组 | 通过/总数 |",
+        "|---|---|",
+    ]
+    for group, g in summary["groups"].items():
+        lines.append(f"| {group} | {g['passed']}/{g['total']} |")
+    question_results = out.get("question_results") or []
+    if question_results:
+        passed = sum(q["passed"] for q in question_results)
+        lines += ["", f"业务题通过：{passed}/{len(question_results)}（待人工核验不计为通过）"]
+    lines += ["", "## 性能采样（ms）", "", "| 端点 | n | P50 | P95 | P99 |", "|---|---|---|---|---|"]
+    for name, perf in out["perf_sample"].items():
+        lines.append(
+            f"| {name} | {perf['n']} | {perf['p50']} | {perf['p95']} | {perf['p99']} |"
+        )
+    lines += ["", "## 明细", ""]
+    for c in out["checks"]:
+        mark = "✓" if c["ok"] else "✗"
+        lines.append(f"- {mark} {c['name']}" + (f" — {c['detail']}" if not c["ok"] else ""))
+    return "\n".join(lines) + "\n"
+
+
+def main(argv=None) -> int:
+    import tempfile
+    parser = argparse.ArgumentParser(prog="a4-eval")
+    parser.add_argument("--questions", default=str(Path(__file__).parent / "questions_smoke.yaml"))
+    parser.add_argument("--keep", action="store_true", help="保留本次创建的 smoke 库")
+    parser.add_argument("--kb-id", help="business 模式必填：已存在的只读评测知识库")
+    parser.add_argument("--output-dir", default=tempfile.gettempdir())
+    args = parser.parse_args(argv)
+    questions = load_questions(args.questions)
+    if questions.kind == "business" and not args.kb_id:
+        parser.error("business 题集必须提供 --kb-id；不会创建替代业务资料的 fixture 库")
+    if questions.kind == "smoke" and args.kb_id:
+        parser.error("smoke 自建临时库，不接受 --kb-id")
+    categories = {q["category"] for q in questions}
+    ctx, report = EvalContext(username="admin"), Report()
+    question_results = []
+    ctx.client = httpx.Client(timeout=90)
+    try:
+        ctx.headers = headers_for()
+        if questions.kind == "business":
+            ctx.kb_id = args.kb_id
+            paradigm = resolve_paradigm(ctx)
+            question_results = run_business_questions(ctx, report, paradigm, questions, search=search)
+        else:
+            ctx.kb_id = create_and_mine(ctx, "a4eval")
+            terminal = wait_terminal(ctx, str(ctx.truths.get("run_id") or ""))
+            ready = str(terminal.get("status") or "") in {"completed", "success", "partial"}
+            report.check("setup/mining-terminal-ok", ready, str(terminal))
+            if not ready:
+                raise RuntimeError("smoke mining did not complete")
+            paradigm = resolve_paradigm(ctx)
+            for name in suites_for_categories(categories):
+                try:
+                    if name == "suite_quality_report":
+                        suite_quality_report(ctx, report)
+                    else:
+                        globals()[name](ctx, report, paradigm)
+                except Exception as exc:
+                    report.check(f"{name}/error", False, type(exc).__name__)
+    except Exception as exc:
+        report.check("runtime/error", False, type(exc).__name__)
+    finally:
+        try:
+            if questions.kind == "smoke" and ctx.kb_id and not args.keep:
+                soft_delete(ctx, ctx.kb_id)
+        except Exception as exc:
+            report.check("cleanup/error", False, type(exc).__name__)
+        finally:
+            ctx.client.close()
     summary = report.summary()
     out = {
         "summary": summary,
-        "perf_sample": perf,
-        "checks": report.checks,
-        "business_gap": {
-            "real_questions_50": (
-                "真实业务题 50 条未提供（业务输入缺口）——本运行使用 fixture "
-                "自证 smoke 题。补题后把题集 YAML 换成 --questions 传入即可，"
-                "指标口径（来源正确/章节正确/位置正确/证据是否支持结论）已就绪。"
-            ),
-        },
+        "questions": {"path": args.questions, "count": len(questions),
+                      "mode": questions.kind, "categories": sorted(categories)},
+        "perf_sample": _perf_summary(ctx), "checks": report.checks,
+        "question_results": question_results,
+        "business_gap": {"note": (
+            "本次为 fixture smoke，不作为真实业务题验收。" if questions.kind == "smoke"
+            else "已逐题执行；证据支持结论仍需人工确认。题数及自动通过不等于业务放量验收。")},
     }
-    Path("/tmp/a4eval-report.json").write_text(
-        json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    print(
-        f"\n== A4 eval: {summary['passed']}/{summary['total']} passed | "
-        f"perf_sample={json.dumps(perf)} | report=/tmp/a4eval-report.json =="
-    )
-    return 0 if summary["passed"] == summary["total"] else 1
+    directory = Path(args.output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "a4eval-report.json").write_text(
+        json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    (directory / "a4eval-report.md").write_text(
+        _markdown_report(out, args.questions), encoding="utf-8")
+    print(f"A4 {questions.kind}: {summary['passed']}/{summary['total']} passed; report={directory}")
+    return 0 if summary["total"] and summary["passed"] == summary["total"] else 1
 
 
 if __name__ == "__main__":

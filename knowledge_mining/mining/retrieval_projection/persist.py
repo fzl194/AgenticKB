@@ -106,7 +106,11 @@ class AssetPersistService:
         )
         embedding_records = run_sync(self._embeddings.list_for_snapshot(snapshot_id))
         table_facts = None
+        ir_elements = ()
         if self._ir_loader is not None:
+            from knowledge_mining.mining.snapshot_store.ir_access import (
+                SnapshotIRUnavailable,
+            )
             from knowledge_mining.mining.table_assets.facts import (
                 extract_table_facts,
             )
@@ -114,10 +118,18 @@ class AssetPersistService:
                 ir = run_sync(self._ir_loader(snapshot_id))
                 if ir is not None:
                     table_facts = extract_table_facts(ir)
-            except Exception:  # noqa: BLE001 — 事实增强失败不阻断三面入库
+                    ir_elements = ir.elements
+            except SnapshotIRUnavailable:
+                # 按设计的降级（无对象注册/缺 object_id 的旧快照）：
+                # table_facts=None 继续发布（A3 列留空，回填 CLI 兜底）
                 table_facts = None
+            # 其余异常（StorageObjectCorrupt/Missing、JSON 损坏、读块失败、
+            # extract 意外错误）必须向上抛出——P1-10：不得把数据损坏/瞬时
+            # 故障固化为"缺类型化事实"的正式 Build（看似成功实则残缺）。
+            # 文档失败/重试由 workflow 层处理。
         structure = project_structure(
             segments, document_ref=document_ref, table_facts=table_facts,
+            ir_elements=ir_elements,
         )
         readiness = compute_readiness(
             representations=representations,

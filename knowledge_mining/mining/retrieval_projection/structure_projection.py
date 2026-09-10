@@ -35,12 +35,12 @@ class StructureProjection:
 
 def _section_ref(
     index: SectionIdentityIndex,
-    chain: tuple[tuple[int, str], ...],
+    segment_index: int,
     *,
     doc_node_ref: str,
 ) -> str:
-    """标题链 → section 节点 ref（A2 身份索引；无归属回落文档节点）."""
-    ref = index.ref_of(chain)
+    """segment_index → 所属 section 节点 ref（P1-3 阅读序绑定；无归属回落文档节点）."""
+    ref = index.bound_ref(segment_index)
     return ref if ref is not None else doc_node_ref
 
 
@@ -69,6 +69,7 @@ def project_structure(
     *,
     document_ref: str,
     table_facts: Any = None,
+    ir_elements: Iterable[Any] = (),
 ) -> StructureProjection:
     materialized = tuple(segments)
     # A0-2：document 节点 ref 与 retrieval 的 document target_ref 同身份
@@ -78,7 +79,7 @@ def project_structure(
     # A2：章节身份一次推导（nodes 的 ref/ordinal/element_id 与检索投影的
     # section_ref 共用同一索引——两侧 ref 逐字一致是范围搜索的前提）。
     identity_index = build_section_identities(
-        materialized, document_ref=document_ref
+        materialized, document_ref=document_ref, ir_elements=ir_elements,
     )
     nodes: list[dict[str, Any]] = [
         {"node_type": "document", "ref": doc_node_ref, "title": document_ref}
@@ -98,7 +99,7 @@ def project_structure(
 
     for segment in materialized:
         parent_ref = _section_ref(
-            identity_index, tuple(segment.heading_chain), doc_node_ref=doc_node_ref
+            identity_index, segment.segment_index, doc_node_ref=doc_node_ref
         )
         seg_ref = f"{document_ref}#seg:{segment.segment_index}"
         nodes.append({
@@ -142,7 +143,7 @@ def project_structure(
             nodes.append({
                 "node_type": "table", "ref": f"{document_ref}#table:{table_ref}",
                 "parent_ref": _section_ref(
-                    identity_index, tuple(segment.heading_chain),
+                    identity_index, segment.segment_index,
                     doc_node_ref=doc_node_ref,
                 ),
             })

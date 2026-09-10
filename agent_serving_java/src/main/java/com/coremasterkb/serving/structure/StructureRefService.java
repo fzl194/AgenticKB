@@ -171,6 +171,9 @@ public class StructureRefService implements EvidenceRefResolver {
         }
         List<String> authorized = authorizeScope(domain, kbIds, username);
         List<String> activeSnapshots = activeSnapshots(domain, authorized);
+        if (activeSnapshots.isEmpty()) {
+            throw StructureToolException.outOfScope("ref 不在当前授权范围内（未开放、不存在或已失效）");
+        }
         List<StructureToolMapper.RefRow> candidates =
                 toolMapper.selectStructureRefCandidates(activeSnapshots, ACTIVE_CANDIDATE_CAP);
         for (StructureToolMapper.RefRow row : candidates) {

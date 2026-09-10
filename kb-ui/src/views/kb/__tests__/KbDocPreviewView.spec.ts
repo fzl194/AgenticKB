@@ -366,4 +366,21 @@ describe('A2 大纲导航与范围搜索（39 号 §2.4）', () => {
     expect(wrapper.find('[data-testid="outline-search-exact"]').exists()).toBe(false)
     expect(bar.text()).toContain('无范围锚')
   })
+
+  it('最新解析尚未进入搜索时禁用章节搜索和精确查询', async () => {
+    kbApi.getDocumentParseResult.mockResolvedValue(parseResult({
+      view: 'latest_revision',
+      snapshot: { ...parseResult().snapshot, id: 's2', document_ref: 'manual.md' },
+      outline: OUTLINE,
+      tables: [{ table_id: 't1', rows: 1, columns: 1, header: ['字段'], preview: [['新值']] }],
+    }))
+    const wrapper = await mountViewWithTree('h0')
+    await wrapper.findAll('[data-testid="doc-outline-tree"] .el-tree-node')[1]!.trigger('click')
+    expect(wrapper.get('[data-testid="outline-search-exact"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="outline-search-exact"]').trigger('click')
+    expect(routerPush).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="table-query-toggle-t1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('仅当前可搜索版本')
+    wrapper.unmount()
+  })
 })

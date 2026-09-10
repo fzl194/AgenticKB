@@ -60,8 +60,8 @@ class AssetRetrievalUnitV2MapperXmlTest {
         String xml = mapperXml();
 
         assertThat(xml).contains("FROM asset_retrieval_embeddings_v2 e");
-        assertThat(xml).contains("JOIN asset_retrieval_units_v2 u");
-        assertThat(xml).contains("u.dense_eligible = TRUE");
+        assertThat(xml).contains("JOIN asset_retrieval_units_v2 un");
+        assertThat(xml).contains("un.dense_eligible = TRUE");
         assertThat(xml).contains("e.dimension = #{dim}");
         assertThat(xml).contains("e.embedding_vector_vec &lt;=&gt; #{queryVector}::vector");
         // 旧 unit_type / text_kind 映射不得再出现
@@ -82,10 +82,12 @@ class AssetRetrievalUnitV2MapperXmlTest {
 
         // exact：section_ref IN 主匹配 + 存量 NULL 行 target_ref 回落（同一 predicate）
         assertThat(xml).contains("section_ref IN");
-        assertThat(xml).contains("section_ref IS NULL AND target_ref IN");
+        assertThat(xml).contains("un.section_ref IS NULL AND un.target_ref IN");
         // descendants：SQL 内递归闭包（不做应用层 IN-list），FTS/dense 共用
-        assertThat(xml).contains("WITH RECURSIVE sec(ref)");
-        assertThat(xml).contains("JOIN sec s ON n.parent_ref = s.ref");
+        // P1-4/P2-15：闭包携带 (snapshot_id, ref) 对且只遍历 section 节点
+        assertThat(xml).contains("WITH RECURSIVE sec(snapshot_id, ref)");
+        assertThat(xml).contains("JOIN sec ON c.parent_ref = sec.ref");
+        assertThat(xml).contains("c.snapshot_id = sec.snapshot_id");
         // 闭包限定同快照集（结构节点与召回单元同 snapshot 语义）
         assertThat(xml).contains("n.snapshot_id IN");
         // 守卫查询：每 root 闭包计数

@@ -177,7 +177,7 @@ export function useServingApi() {
         kbIds?: string[]
         debug?: boolean
         /** A2 章节范围（39 号 §2.2）：within.section_refs + section_scope */
-        within?: { section_refs?: string[]; section_scope?: 'exact' | 'descendants' }
+        within?: { document_refs?: string[]; section_refs?: string[]; section_scope?: 'exact' | 'descendants' }
       },
     ): Promise<ParadigmSearchResult> {
       const payload: Record<string, unknown> = {
@@ -199,12 +199,16 @@ export function useServingApi() {
      * A3 结构化查询（39 号 §3.3）：表格资产 ref（st_ 或内部 "{doc}#table:{t}"）
      * + schema-bound DSL。与 MCP get_knowledge 的 query 分支同一 service——
      * 网页与 Agent 对同一查询同结果。
+     *
+     * P1-6 契约：POST /api/v1/structure/query，ref/domain/kbId 全在 body——
+     * 内部 ref 含 # 与 /，不进 URL path（fragment 截断 + path 编码陷阱）。
      */
     async queryStructure(
       ref: string, query: TableQuerySpec,
       opts?: { domain?: string; kbId?: string },
     ): Promise<TableQueryResult> {
-      const { data } = await client.post(`/api/v1/structure/${ref}/query`, {
+      const { data } = await client.post('/api/v1/structure/query', {
+        ref,
         query,
         domain: opts?.domain,
         ...(opts?.kbId ? { kbId: opts.kbId } : {}),
@@ -213,22 +217,24 @@ export function useServingApi() {
     },
 
     /**
-     * A2 结构导航（39 号 §2.3）：st_ ref + 白名单关系（parent/children/
+     * A2 结构导航（39 号 §2.3）：ref + 白名单关系（parent/children/
      * previous/next/ancestors/descendants…）。与 MCP get_knowledge 的
      * navigate 分支同一 service，网页与 Agent 同源。
+     *
+     * P1-6 契约：ref 走 query 参数（内部 ref 含 # / 不能进 path）。
      */
     async navigateStructure(
       ref: string, relation: string,
       opts?: { domain?: string; kbId?: string; depth?: number; limit?: number; cursor?: string },
     ): Promise<StructureNavigateResult> {
       const params: Record<string, unknown> = {
-        relation, domain: opts?.domain,
+        ref, relation, domain: opts?.domain,
       }
       if (opts?.kbId) params.kbId = opts.kbId
       if (opts?.depth != null) params.depth = opts.depth
       if (opts?.limit != null) params.limit = opts.limit
       if (opts?.cursor) params.cursor = opts.cursor
-      const { data } = await client.get(`/api/v1/structure/${ref}/navigate`, { params })
+      const { data } = await client.get('/api/v1/structure/navigate', { params })
       return data
     },
   }

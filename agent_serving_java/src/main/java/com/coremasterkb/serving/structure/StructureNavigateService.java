@@ -143,8 +143,10 @@ public class StructureNavigateService {
         if (node.getParentRef() == null || node.getOrdinal() == null) {
             return List.of(); // 无序节点（如 section）没有确定的前后邻居
         }
-        List<StructureNodeRow> siblings =
-                toolMapper.selectSiblings(snapshotId, node.getParentRef(), SIBLING_SCAN_CAP);
+        // P2-17：previous/next 只在同类型兄弟中找——章节的前后邻居是章节，
+        // 不得混入同父的 segment/table（大纲导航误回正文段）。
+        List<StructureNodeRow> siblings = toolMapper.selectSiblingsOfType(
+                snapshotId, node.getParentRef(), node.getNodeType(), SIBLING_SCAN_CAP);
         int idx = -1;
         for (int i = 0; i < siblings.size(); i++) {
             if (node.getRef().equals(siblings.get(i).getRef())) {

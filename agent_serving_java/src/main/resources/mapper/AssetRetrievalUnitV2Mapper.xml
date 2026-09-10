@@ -32,18 +32,18 @@
             <!-- facets.document 是标量 facet，多值 ref 用 OR 语义连接（参数化 JSONB containment）。 -->
             AND (
             <foreach collection="documentJsonParams" item="docParam" separator=" OR ">
-                facets_json @&gt; #{docParam}::jsonb
+                un.facets_json @&gt; #{docParam}::jsonb
             </foreach>
             )
         </if>
         <if test="representationTypes != null and representationTypes.size() > 0">
-            AND representation_type IN
+            AND un.representation_type IN
             <foreach collection="representationTypes" item="rt" open="(" separator="," close=")">
                 #{rt}
             </foreach>
         </if>
         <if test="contentTypes != null and contentTypes.size() > 0">
-            AND content_type IN
+            AND un.content_type IN
             <foreach collection="contentTypes" item="ct" open="(" separator="," close=")">
                 #{ct}
             </foreach>
@@ -54,18 +54,22 @@
                  D4 旧语义，section_backfill 回填后自然消失）。 -->
             <choose>
                 <when test="sectionScopeDescendants">
+                    <!-- P1-4：闭包按 (snapshot_id, ref) 对——按行内快照过滤（外层
+                         units 统一别名 un），杜绝 KB-A 根闭包里的 KB-B ref 命中
+                         KB-B 的 units 行 -->
                     AND (
-                        section_ref IN (SELECT ref FROM sec)
-                        OR (section_ref IS NULL AND target_ref IN (SELECT ref FROM sec))
+                        un.section_ref IN (SELECT ref FROM sec WHERE snapshot_id = un.snapshot_id)
+                        OR (un.section_ref IS NULL AND un.target_ref IN
+                            (SELECT ref FROM sec WHERE snapshot_id = un.snapshot_id))
                     )
                 </when>
                 <otherwise>
                     AND (
-                        section_ref IN
+                        un.section_ref IN
                         <foreach collection="targetRefs" item="tr" open="(" separator="," close=")">
                             #{tr}
                         </foreach>
-                        OR (section_ref IS NULL AND target_ref IN
+                        OR (un.section_ref IS NULL AND un.target_ref IN
                         <foreach collection="targetRefs" item="tr" open="(" separator="," close=")">
                             #{tr}
                         </foreach>
@@ -77,26 +81,32 @@
     </sql>
 
     <!--
-      A2 descendants 模式的章节闭包（SQL 内递归 CTE，不做应用层 IN-list）：
-      asset_structure_nodes.parent_ref 沿同快照集展开；UNION 去重天然防环。
+      A2 descendants 模式的章节闭包（SQL 内递归 CTE，不做应用层 IN-list）。
+      P1-4/P2-15：闭包携带 (snapshot_id, ref) 对——递归腿 JOIN 同时匹配
+      snapshot_id 与 parent_ref（多 KB 同 ref 不合并树）；种子与递归腿均
+      限定 node_type='section'（segment/table 不计入后代）。UNION 去重防环。
       由 searchFtsV2 顶层 / searchDenseV2 内层子查询按需前置（同为语句级 CTE）。
     -->
     <sql id="sectionClosureCte">
         <if test="targetRefs != null and targetRefs.size() > 0 and sectionScopeDescendants">
-            WITH RECURSIVE sec(ref) AS (
-                SELECT v.ref FROM (VALUES
-                <foreach collection="targetRefs" item="tr" separator=",">
-                    (#{tr}::text)
-                </foreach>
-                ) v(ref)
-                UNION
-                SELECT n.ref
+            WITH RECURSIVE sec(snapshot_id, ref) AS (
+                SELECT n.snapshot_id, n.ref
                 FROM asset_structure_nodes n
-                JOIN sec s ON n.parent_ref = s.ref
-                WHERE n.snapshot_id IN
+                WHERE n.node_type = 'section'
+                  AND n.ref IN
+                <foreach collection="targetRefs" item="tr" open="(" separator="," close=")">
+                    #{tr}
+                </foreach>
+                  AND n.snapshot_id IN
                 <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
                     #{sid}
                 </foreach>
+                UNION
+                SELECT c.snapshot_id, c.ref
+                FROM asset_structure_nodes c
+                JOIN sec ON c.parent_ref = sec.ref
+                       AND c.snapshot_id = sec.snapshot_id
+                WHERE c.node_type = 'section'
             )
         </if>
     </sql>
@@ -112,15 +122,16 @@
         SELECT
         <include refid="unitColumns"/>,
         ts_rank(search_vector, plainto_tsquery('simple', #{lexicalQuery})) AS channel_score
-        FROM asset_retrieval_units_v2
-        WHERE lexical_eligible = TRUE
-          AND snapshot_id IN
+        FROM asset_retrieval_units_v2 un
+        WHERE un.lexical_eligible = TRUE
+          AND un.snapshot_id IN
         <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
             #{sid}
         </foreach>
         <include refid="unitPushdownFilters"/>
-          AND search_vector @@ plainto_tsquery('simple', #{lexicalQuery})
-        ORDER BY channel_score DESC, canonical_evidence_id ASC, representation_id ASC
+          AND un.search_vector @@ plainto_tsquery('simple', #{lexicalQuery})
+        ORDER BY ts_rank(un.search_vector, plainto_tsquery('simple', #{lexicalQuery})) DESC,
+                 un.canonical_evidence_id ASC, un.representation_id ASC
         LIMIT #{limit}
     </select>
 
@@ -129,13 +140,13 @@
         SELECT t.* FROM (
             <include refid="sectionClosureCte"/>
             SELECT DISTINCT ON (e.representation_id)
-                   u.representation_id, u.snapshot_id, u.representation_type, u.content_type,
-                   u.content_text, u.structural_context, u.target_type, u.target_ref,
-                   u.canonical_evidence_id, u.container_ref, u.ordinal, u.facets_json,
+                   un.representation_id, un.snapshot_id, un.representation_type, un.content_type,
+                   un.content_text, un.structural_context, un.target_type, un.target_ref,
+                   un.canonical_evidence_id, un.container_ref, un.ordinal, un.facets_json,
                    (1 - (e.embedding_vector_vec &lt;=&gt; #{queryVector}::vector)) AS channel_score
             FROM asset_retrieval_embeddings_v2 e
-            JOIN asset_retrieval_units_v2 u ON u.representation_id = e.representation_id
-            WHERE u.dense_eligible = TRUE
+            JOIN asset_retrieval_units_v2 un ON un.representation_id = e.representation_id
+            WHERE un.dense_eligible = TRUE
               AND e.dimension = #{dim}
               AND e.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
@@ -152,22 +163,29 @@
       A2 descendants 守卫（33 号 G3 限制）：每 root 闭包计数（含 root）。
       roots ≤64 在 Java 侧（列表长度）；每 root 后代 ≤512 由本查询计数判定，
       超限 section_scope_too_broad ——不退化为宽搜索。
+      P1-4/P2-15：与召回闭包同口径——(root, snapshot_id, ref) 三列携带，
+      递归腿同快照配对 + node_type='section'，按 root 分组（同 ref 跨快照
+      各自计数，不合并两棵树）。
     -->
     <select id="countSectionClosure" resultType="map">
-        WITH RECURSIVE sec(root, ref) AS (
-            SELECT v.ref, v.ref FROM (VALUES
-            <foreach collection="targetRefs" item="tr" separator=",">
-                (#{tr}::text)
-            </foreach>
-            ) v(ref)
-            UNION
-            SELECT sec.root, n.ref
+        WITH RECURSIVE sec(root, snapshot_id, ref) AS (
+            SELECT n.ref, n.snapshot_id, n.ref
             FROM asset_structure_nodes n
-            JOIN sec ON n.parent_ref = sec.ref
-            WHERE n.snapshot_id IN
+            WHERE n.node_type = 'section'
+              AND n.ref IN
+            <foreach collection="targetRefs" item="tr" open="(" separator="," close=")">
+                #{tr}
+            </foreach>
+              AND n.snapshot_id IN
             <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
                 #{sid}
             </foreach>
+            UNION
+            SELECT sec.root, c.snapshot_id, c.ref
+            FROM asset_structure_nodes c
+            JOIN sec ON c.parent_ref = sec.ref
+                    AND c.snapshot_id = sec.snapshot_id
+            WHERE c.node_type = 'section'
         )
         SELECT root, count(*) AS total FROM sec GROUP BY root
     </select>

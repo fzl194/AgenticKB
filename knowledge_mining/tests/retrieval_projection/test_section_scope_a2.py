@@ -38,13 +38,20 @@ def _seg(i, block="paragraph", chain=(), text=None, element_ids=()):
 # ---------------------------------------------------------------------------
 
 
+def _heading(element_id, level):
+    from knowledge_mining.mining.contracts.parse_ir.types import Element
+    return Element(element_id=element_id, element_type="heading", order_index=0,
+                   style={"level": level})
+
+
 def test_ordinal_path_refs_are_unique_for_distinguishable_sections():
     segs = [
         _seg(0, chain=[(1, "概述")], element_ids=("e1",)),
         _seg(1, chain=[(1, "参数")], element_ids=("e2",)),
         _seg(2, chain=[]),
     ]
-    index = build_section_identities(segs, document_ref="doc.md")
+    index = build_section_identities(segs, document_ref="doc.md",
+        ir_elements=(_heading("e1", 1), _heading("e2", 1)))
     ids = index.identities
     refs = [s.ref for s in ids]
     assert refs == ["doc.md#section:0", "doc.md#section:1"]
@@ -81,11 +88,13 @@ def test_reopened_section_gets_fresh_identity():
     # 第3章 > 概述 ... 第4章 ... 第3章 > 概述（重复章标题）：第3章重开是
     # 全新身份；其子「概述」在新父下从序号 0 重新计。
     segs = [
-        _seg(0, chain=[(1, "第3章"), (2, "概述")], element_ids=("h1",)),
+        _seg(0, chain=[(1, "第3章"), (2, "概述")], element_ids=("h1", "c1")),
         _seg(1, chain=[(1, "第4章")], element_ids=("h2",)),
-        _seg(2, chain=[(1, "第3章"), (2, "概述")], element_ids=("h3",)),
+        _seg(2, chain=[(1, "第3章"), (2, "概述")], element_ids=("h3", "c3")),
     ]
-    ids = build_section_identities(segs, document_ref="d").identities
+    ids = build_section_identities(segs, document_ref="d", ir_elements=(
+        _heading("h1", 1), _heading("c1", 2), _heading("h2", 1),
+        _heading("h3", 1), _heading("c3", 2))).identities
     refs = [s.ref for s in ids]
     assert refs == [
         "d#section:0", "d#section:0/0", "d#section:1", "d#section:2",
@@ -165,7 +174,8 @@ def test_section_nodes_carry_ordinal_and_element_id():
         _seg(1, chain=[(1, "B")], element_ids=("h2",)),
         _seg(2, chain=[(1, "B"), (2, "C")], element_ids=("h3",)),
     ]
-    structure = project_structure(segs, document_ref="d")
+    structure = project_structure(segs, document_ref="d", ir_elements=(
+        _heading("h1", 1), _heading("h2", 1), _heading("h3", 2)))
     sections = [n for n in structure.nodes if n["node_type"] == "section"]
     assert [n["ref"] for n in sections] == [
         "d#section:0", "d#section:1", "d#section:1/0",
@@ -223,10 +233,11 @@ def test_backfill_plan_uses_title_path_refs():
         plan_section_refs,
     )
 
+    # P1-2：真实列名 section_path（[{level, title}] JSON；[[l, t]] 兼容）
     segments = [
-        {"segment_index": 0, "heading_chain_json": "[[1, \"A\"], [2, \"B\"]]"},
-        {"segment_index": 1, "heading_chain_json": "[[1, \"A\"]]"},
-        {"segment_index": 2, "heading_chain_json": "null"},
+        {"segment_index": 0, "section_path": "[[1, \"A\"], [2, \"B\"]]"},
+        {"segment_index": 1, "section_path": "[[1, \"A\"]]"},
+        {"segment_index": 2, "section_path": None},
     ]
     units = [
         {"representation_id": "u-doc", "representation_type": "document",

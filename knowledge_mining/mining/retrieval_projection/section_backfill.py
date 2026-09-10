@@ -2,11 +2,14 @@
 
 补齐式（A1 同款纪律）：
 
-- 不重新解析/切片/投影——读 final ``asset_raw_segments`` 的标题链，
+- 不重新解析/切片/投影——读 final ``asset_raw_segments`` 的标题链
+  （``section_path``，TEXT 存 ``[{level, title}]`` JSON——生产 DDL 列名），
   按快照当时的节点 ref 口径（**标题路径**，与旧快照已落库的
   section 节点/section 单元 target_ref 逐字一致）回填；
 - 不改 snapshot 指纹、不发 Build、不失效 ref（新增可空列的 UPDATE）；
-- 幂等：``WHERE section_ref IS NULL``，二跑零变更；
+- 幂等：目标查询只取 ``section_ref IS NULL`` 的非 document 单元，
+  二跑零变更（document 单元按设计恒 NULL，不计缺口——否则永不收敛）；
+- 统计以事务内实际 UPDATE 语句数（每语句一行）为准，不按计划数虚报；
 - 新快照（015 之后挖掘）在投影期即写 section_ref（序号路径口径），
   本 CLI 对其天然跳过（列已非 NULL）。
 
@@ -26,6 +29,10 @@ from typing import Any, Mapping, Sequence
 
 _MAX_FAILURES_PRINTED = 20
 
+#: 按设计 section_ref 恒 NULL 的单元类型（document=文档级；alias 在
+#: 无源可继时也允许 NULL——继承失败不伪造归属）
+_PLAN_EXCLUDED_TYPES = {"document"}
+
 
 @dataclass
 class BackfillStats:
@@ -34,6 +41,34 @@ class BackfillStats:
     updated_units: int = 0
     already_done: int = 0
     failed: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _parse_chain(raw: Any) -> tuple[tuple[int, str], ...]:
+    """``section_path`` 文本 → ((level, title), ...)。
+
+    两种历史形态都接受：``[{"level": l, "title": t}]``（pipeline 写入）
+    与 ``[[l, t]]``（早期口径）。非法形态按空链处理（宁缺勿伪造）。
+    """
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    chain: list[tuple[int, str]] = []
+    for entry in parsed:
+        if isinstance(entry, dict):
+            level, title = entry.get("level"), entry.get("title")
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            level, title = entry
+        else:
+            return ()  # 形状不明——整体放弃（不猜测部分链）
+        if not isinstance(level, int) or not isinstance(title, str):
+            return ()
+        chain.append((level, title))
+    return tuple(chain)
 
 
 def plan_section_refs(
@@ -47,18 +82,15 @@ def plan_section_refs(
     - segment 型单元（含 prose/table/table_row/list/code/formula/
       figure_caption）：按其 ordinal(=segment_index) 的标题链取 section ref；
     - section 单元：自身 target_ref 即 section ref；
-    - document 单元：不赋值；
-    - alias 单元：按 provenance.source_representation 继承源单元赋值。
+    - document 单元：不赋值（设计上恒 NULL）；
+    - alias 单元：按 provenance.source_representation 继承源单元赋值
+      （源不在计划中则不伪造——保持 NULL）。
     """
     chain_by_index: dict[int, tuple[tuple[int, str], ...]] = {}
     for seg in segments:
-        raw = seg.get("heading_chain_json")
-        parsed = json.loads(raw) if raw else None
-        chain = tuple(
-            (int(level), str(title))
-            for level, title in (parsed or ())
+        chain_by_index[int(seg["segment_index"])] = _parse_chain(
+            seg.get("section_path")
         )
-        chain_by_index[int(seg["segment_index"])] = chain
 
     def _title_path_ref(
         chain: tuple[tuple[int, str], ...],
@@ -75,7 +107,7 @@ def plan_section_refs(
     for unit in units:
         rep_id = str(unit["representation_id"])
         rep_type = str(unit.get("representation_type") or "")
-        if rep_type == "document":
+        if rep_type in _PLAN_EXCLUDED_TYPES:
             continue
         if rep_type in ("query_alias", "summary_alias"):
             pending_aliases.append(unit)
@@ -113,13 +145,20 @@ def plan_section_refs(
 async def _iter_snapshots(
     pool: Any, *, domain: str, kb_id: str | None, snapshot_id: str | None
 ) -> list[dict[str, Any]]:
-    """候选快照：final units 存在 section_ref 缺口的 committed 快照."""
+    """候选快照：final units 存在 section_ref 缺口的 committed 快照.
+
+    缺口口径排除 document 单元（设计上恒 NULL）与 alias（源缺继允许
+    NULL）——只看 segment/section 型单元，保证二跑收敛。
+    """
     query = """
         SELECT DISTINCT s.id
         FROM asset_document_snapshots s
         JOIN asset_retrieval_units_v2 u ON u.snapshot_id = s.id
         WHERE s.lifecycle_status = 'READY'
           AND u.section_ref IS NULL
+          AND u.representation_type IN ('segment', 'prose', 'table',
+              'table_row', 'list', 'code', 'formula', 'figure_caption',
+              'section')
     """
     params: list[Any] = []
     if domain:
@@ -178,8 +217,8 @@ async def backfill(
                 continue
             async with pool.connection() as conn:
                 cursor = await conn.execute(
-                    "SELECT segment_index, heading_chain_json "
-                    "FROM asset_raw_segments WHERE snapshot_id = %s "
+                    "SELECT segment_index, section_path "
+                    "FROM asset_raw_segments WHERE document_snapshot_id = %s "
                     "ORDER BY segment_index",
                     [target],
                 )
@@ -188,7 +227,8 @@ async def backfill(
                     "SELECT representation_id, representation_type, "
                     "target_ref, ordinal, provenance_json "
                     "FROM asset_retrieval_units_v2 WHERE snapshot_id = %s "
-                    "AND section_ref IS NULL",
+                    "AND section_ref IS NULL "
+                    "AND representation_type NOT IN ('document')",
                     [target],
                 )
                 units = [dict(r) for r in await cursor.fetchall()]
@@ -198,13 +238,14 @@ async def backfill(
             plan = plan_section_refs(
                 segments=segments, units=units, document_ref=document_ref
             )
-            if not plan and not units:
+            if not plan:
                 stats.already_done += 1
                 continue
             if dry_run:
                 stats.updated_snapshots += 1
                 stats.updated_units += len(plan)
                 continue
+            written = 0
             async with pool.connection() as conn:
                 async with conn.transaction():
                     for rep_id, ref in plan.items():
@@ -215,8 +256,10 @@ async def backfill(
                             "AND section_ref IS NULL",
                             [ref, target, rep_id],
                         )
+                        written += 1
+            # 统计=事务内实际 UPDATE 语句数（每语句至多一行——rep_id 唯一）
             stats.updated_snapshots += 1
-            stats.updated_units += len(plan)
+            stats.updated_units += written
         except Exception as exc:  # noqa: BLE001 — 单快照失败不阻断批量
             stats.failed.append((target, f"{type(exc).__name__}: {exc}"))
     return stats

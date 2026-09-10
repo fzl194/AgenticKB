@@ -97,6 +97,9 @@
           </div>
 
           <template v-else-if="parseResult">
+            <p v-if="!canQueryCurrentKnowledge" class="doc-preview__muted" data-testid="current-only-actions-notice">
+              章节范围搜索和表格精确查询仅当前可搜索版本可用；此解析结果尚未进入搜索，请切回当前可搜索版本。
+            </p>
             <!-- A0-1 版本横幅：当前可搜索版本 vs 最新上传版本 -->
             <div
               v-if="parseResult.versioning"
@@ -198,12 +201,14 @@
                   <el-button
                     v-if="selectedOutline.section_ref"
                     size="small" type="primary" plain
+                    :disabled="!canQueryCurrentKnowledge"
                     @click="goScopedSearch('exact')"
                     data-testid="outline-search-exact"
                   >本节搜索</el-button>
                   <el-button
                     v-if="selectedOutline.section_ref"
                     size="small" type="primary" plain
+                    :disabled="!canQueryCurrentKnowledge"
                     @click="goScopedSearch('descendants')"
                     data-testid="outline-search-descendants"
                   >本节及子节搜索</el-button>
@@ -286,6 +291,7 @@
                     {{ t.rows }} 行 × {{ t.columns }} 列
                     <el-button
                       size="small" type="primary" plain
+                      :disabled="!canQueryCurrentKnowledge"
                       :data-testid="`table-query-toggle-${t.table_id}`"
                       @click="toggleQueryPanel(t.table_id)"
                     >精确查询</el-button>
@@ -306,7 +312,7 @@
                     </el-table-column>
                   </el-table>
                   <TbTableQueryPanel
-                    v-if="queryPanelTableId === t.table_id && tableAssetRef(t)"
+                    v-if="canQueryCurrentKnowledge && queryPanelTableId === t.table_id && tableAssetRef(t)"
                     :asset-ref="tableAssetRef(t)!"
                     :kb-id="kbId"
                     :domain="domain"
@@ -462,6 +468,11 @@ type OutlineItem = {
   section_ref?: string | null
 }
 const selectedOutlineElementId = ref('')
+const canQueryCurrentKnowledge = computed(() => {
+  const result = parseResult.value
+  const servingSnapshot = result?.versioning?.serving?.document_snapshot_id
+  return !!servingSnapshot && result?.snapshot.id === servingSnapshot
+})
 
 function onOutlineNodeClick(data: OutlineItem) {
   selectedOutlineElementId.value = data.element_id
@@ -512,7 +523,7 @@ const outlineChildren = computed<OutlineItem[]>(() =>
 
 function goScopedSearch(mode: 'exact' | 'descendants') {
   const sel = selectedOutline.value
-  if (!sel?.section_ref) return
+  if (!sel?.section_ref || !canQueryCurrentKnowledge.value) return
   void router.push({
     name: 'kb-detail',
     params: { kbId: props.kbId },
@@ -521,6 +532,8 @@ function goScopedSearch(mode: 'exact' | 'descendants') {
       scopeRef: sel.section_ref,
       scopeTitle: sel.title,
       scopeMode: mode,
+      scopeDocumentRef: parseResult.value?.snapshot.document_ref || undefined,
+      scopeDocumentTitle: doc.value?.document_name || undefined,
     },
   })
 }
@@ -535,6 +548,7 @@ const highlightedTableId = ref('')
 const queryPanelTableId = ref('')
 const queryHitRow = ref<number | undefined>()
 function toggleQueryPanel(tableId: string) {
+  if (!canQueryCurrentKnowledge.value) return
   queryPanelTableId.value = queryPanelTableId.value === tableId ? '' : tableId
   queryHitRow.value = undefined
 }

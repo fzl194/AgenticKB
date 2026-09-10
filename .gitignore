@@ -36,6 +36,10 @@
 !docker/**
 !docs/
 !docs/**
+!release_tests/
+!release_tests/eval/
+!release_tests/eval/*.py
+!release_tests/eval/*.yaml
 !.github/
 !.github/**
 

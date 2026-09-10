@@ -371,9 +371,37 @@ class ParseResultReadService:
             )
             for a in table_assets[:_TABLE_LIMIT]
         ]
+        # completeness-1：文档级质量报告（结构/表格完整度 + 定位覆盖——
+        # 单文档口径，与 KB 级 get_kb_quality 同轴；无新增查询，全部来自
+        # 已加载的 IR/segments/锚数据）
+        typed_cells = sum(
+            1 for a in doc.structured_assets.values()
+            if isinstance(a, TableAsset)
+            for cell in a.cells if cell.value_type is not None
+        )
+        total_cells = sum(
+            1 for a in doc.structured_assets.values()
+            if isinstance(a, TableAsset)
+            for _ in a.cells
+        )
+        anchored = sum(1 for o in outline_items if o.get("section_ref"))
+        quality = {
+            "coverage_version": "1",
+            "structure": {
+                "outline_total": outline_total,
+                "sections_anchored": anchored,
+                "segments_total": len(segments),
+            },
+            "tables": {
+                "tables_total": table_total,
+                "cells_total": total_cells,
+                "cells_typed": typed_cells,
+            },
+        }
         return {
             "view": view,
             "versioning": versioning,
+            "quality": quality,
             "snapshot": {
                 "id": snapshot.id,
                 "title": snapshot.title,

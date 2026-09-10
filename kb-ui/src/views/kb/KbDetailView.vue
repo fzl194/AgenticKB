@@ -100,7 +100,7 @@
         />
       </el-tab-pane>
       <el-tab-pane label="质量" name="quality">
-        <KbQualityPanel :kb-id="kbId" />
+        <KbQualityPanel :kb-id="kbId" :active="activeTab === 'quality'" />
       </el-tab-pane>
       <el-tab-pane label="设置" name="settings">
         <KbSettingsPanel

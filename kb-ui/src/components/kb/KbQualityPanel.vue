@@ -1,5 +1,6 @@
 <template>
   <div class="kbq" data-testid="kb-quality-panel">
+    <el-button size="small" :loading="loading" data-testid="quality-refresh" @click="reload">刷新质量报告</el-button>
     <p v-if="!quality && !error" class="kbq__muted">加载质量报告…</p>
     <div v-if="error" class="kbq__error">{{ error }}</div>
 
@@ -16,7 +17,7 @@
           <div class="kbq__line">
             检索单元 <b>{{ quality.structure.units_total }}</b>，
             归属章节 <b>{{ quality.structure.units_with_section }}</b>
-            <span class="kbq__muted">（缺失=旧版本快照或无标题文档，重挖补齐）</span>
+            <span class="kbq__muted">（未归属章节可能与资料没有标题、格式支持或加工尚未完成有关）</span>
           </div>
           <el-progress
             :percentage="pct(quality.structure.units_with_section, quality.structure.units_total)"
@@ -34,7 +35,7 @@
           <div class="kbq__line">
             单元格 <b>{{ quality.tables.cells_total }}</b>，类型化
             <b>{{ quality.tables.cells_typed }}</b>
-            <span class="kbq__muted">（类型化缺失=旧版本快照，重挖或回填补齐）</span>
+            <span class="kbq__muted">（未识别类型可能与空值、资料格式或加工状态有关）</span>
           </div>
           <el-progress
             :percentage="pct(quality.tables.cells_typed, quality.tables.cells_total)"
@@ -71,8 +72,8 @@
       </div>
 
       <p class="kbq__muted">
-        报告按当前可搜索版本（current 快照口径）聚合；缺口的主要修复方式是重新挖掘
-        （新版本自带章节锚/类型化事实），历史快照可用回填 CLI 补齐元数据。
+        报告统计当前可搜索知识。存在缺口时，请先查看原文件和挖掘记录，
+        确认资料结构、格式支持和加工情况，再决定是否补充资料或重新挖掘。
       </p>
     </template>
   </div>
@@ -83,27 +84,41 @@
  * A4 质量报告（34 号 P1-1；39 号 §4.1）：维护者可见的结构/表格完整度、
  * 来源定位覆盖与不可用原因。只读聚合，重新加工入口在挖掘 tab。
  */
-import { onMounted, ref } from 'vue'
+import { onUnmounted, ref, watch } from 'vue'
 import { useKbApi, type KbQualityReport } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 
-const props = defineProps<{ kbId: string }>()
+const props = defineProps<{ kbId: string; active?: boolean }>()
 
 const kbApi = useKbApi()
 const quality = ref<KbQualityReport | null>(null)
 const error = ref('')
+const loading = ref(false)
+let generation = 0
 
 function pct(a: number, b: number): number {
   return b > 0 ? Math.round((a / b) * 100) : 0
 }
 
-onMounted(async () => {
+async function reload() {
+  const current = ++generation
+  const kbId = props.kbId
+  quality.value = null
+  error.value = ''
+  loading.value = true
   try {
-    quality.value = await kbApi.getKbQuality(props.kbId)
+    const result = await kbApi.getKbQuality(kbId)
+    if (current === generation && kbId === props.kbId) quality.value = result
   } catch (e) {
-    error.value = await apiErrorDetail(e)
+    const message = await apiErrorDetail(e)
+    if (current === generation && kbId === props.kbId) error.value = message
+  } finally {
+    if (current === generation) loading.value = false
   }
-})
+}
+watch(() => props.kbId, reload, { immediate: true })
+watch(() => props.active, (active, previous) => { if (active && !previous) void reload() })
+onUnmounted(() => { generation += 1 })
 </script>
 
 <style scoped>

@@ -58,7 +58,7 @@ class StructureApiControllerTest {
                                 null, List.of())),
                         null, false, Map.of()));
 
-        mvc.perform(get("/api/v1/structure/st_ab/navigate")
+        mvc.perform(get("/api/v1/structure/navigate").param("ref", "st_ab")
                         .param("relation", "children")
                         .param("domain", "cloud_core_network")
                         .param("kbId", "kb-1")
@@ -82,7 +82,7 @@ class StructureApiControllerTest {
                 .thenThrow(StructureToolException.unsupportedOperation(
                         "未知关系: jump", Map.of()));
 
-        mvc.perform(get("/api/v1/structure/st_ab/navigate")
+        mvc.perform(get("/api/v1/structure/navigate").param("ref", "st_ab")
                         .param("relation", "jump")
                         .param("domain", "cloud_core_network"))
                 .andExpect(status().isBadRequest())
@@ -98,7 +98,7 @@ class StructureApiControllerTest {
                         "st_ab", "structure", "section", "section",
                         Map.of(), Map.of(), List.of(), List.of()));
 
-        mvc.perform(get("/api/v1/structure/st_ab/inspect")
+        mvc.perform(get("/api/v1/structure/inspect").param("ref", "st_ab")
                         .param("domain", "cloud_core_network")
                         .param("kbId", "kb-1")
                         .header("X-KB-User", "bob"))
@@ -115,22 +115,22 @@ class StructureApiControllerTest {
                         null, false, null));
 
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                        .post("/api/v1/structure/st_tbl/query")
-                        .content("{\"query\": {\"where\": [{\"field\": \"告警码\", "
-                                + "\"op\": \"eq\", \"value\": \"A101\"}]}}")
+                        .post("/api/v1/structure/query")
+                        .content("{\"ref\": \"st_tbl\", \"query\": {\"where\": "
+                                + "[{\"field\": \"告警码\", \"op\": \"eq\", "
+                                + "\"value\": \"A101\"}]}, "
+                                + "\"domain\": \"cloud_core_network\", \"kbId\": \"kb-1\"}")
                         .contentType("application/json")
-                        .param("domain", "cloud_core_network")
-                        .param("kbId", "kb-1")
                         .header("X-KB-User", "alice"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.table_name").value("tbl:alarm"));
 
         // DSL 白名单外键 → 400（不静默当空条件）
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                        .post("/api/v1/structure/st_tbl/query")
-                        .content("{\"query\": {\"filter\": {}}}")
-                        .contentType("application/json")
-                        .param("domain", "cloud_core_network"))
+                        .post("/api/v1/structure/query")
+                        .content("{\"ref\": \"st_tbl\", \"query\": {\"filter\": {}}, "
+                                + "\"domain\": \"cloud_core_network\"}")
+                        .contentType("application/json"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_query"));
     }

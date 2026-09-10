@@ -191,7 +191,8 @@ class PgRepresentationStore(_PgRepository):
                             rep.content_text, rep.structural_context,
                             None, None,
                             rep.target_type, rep.target_ref,
-                            rep.canonical_evidence_id, rep.container_ref,
+                            rep.canonical_evidence_id, rep.section_ref,
+                            rep.container_ref,
                             rep.parent_ref, rep.context_group_id,
                             json.dumps(
                                 [dict(r) for r in rep.source_refs],
@@ -280,7 +281,8 @@ class PgRepresentationStore(_PgRepository):
                             rep.content_text, rep.structural_context,
                             None, None,
                             rep.target_type, rep.target_ref,
-                            rep.canonical_evidence_id, rep.container_ref,
+                            rep.canonical_evidence_id, rep.section_ref,
+                            rep.container_ref,
                             rep.parent_ref, rep.context_group_id,
                             json.dumps(
                                 [dict(r) for r in rep.source_refs],

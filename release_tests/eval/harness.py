@@ -122,15 +122,16 @@ def build_md_fixture() -> tuple[bytes, dict[str, Any]]:
 
 def build_xlsx_fixture() -> tuple[bytes, dict[str, Any]]:
     from openpyxl import Workbook
+    from datetime import date
 
     wb = Workbook()
     ws = wb.active
     ws.title = "告警表"
     rows = [
         ["告警码", "级别", "功耗(W)", "投产日期"],
-        ["A1-101", "紧急", 1234.5, "2026-01-05"],
-        ["A1-102", "重要", 2000, "2026-09-07"],
-        ["A1-103", "次要", 500.25, "2025-12-31"],
+        ["A1-101", "紧急", 1234.5, date(2026, 1, 5)],
+        ["A1-102", "重要", 2000, date(2026, 9, 7)],
+        ["A1-103", "次要", 500.25, date(2025, 12, 31)],
     ]
     for row in rows:
         ws.append(row)
@@ -166,6 +167,12 @@ def build_xlsx_fixture() -> tuple[bytes, dict[str, Any]]:
 
 
 def create_and_mine(ctx: EvalContext, prefix: str) -> str:
+    """建库 → 逐文件上传（产品 API=单 ``file`` 字段）→ 触发挖掘.
+
+    P1-8：产品 API 只接受单 ``file`` UploadFile——逐文件上传并逐个检查
+    状态；任一失败异常上抛（finally 软删除由 run_eval 兜底）。
+    fixture 真值（trurhs dict）在构造期固定并写入 ctx.truths。
+    """
     resp = call(
         ctx, "POST", f"{MINING}/api/kb",
         headers=ctx.headers,
@@ -177,19 +184,26 @@ def create_and_mine(ctx: EvalContext, prefix: str) -> str:
     )
     resp.raise_for_status()
     kb_id = resp.json()["id"]
+    ctx.kb_id = kb_id  # Register ownership before uploads/mine can fail.
 
-    files = [
-        ("files", ("a4eval-手册.md", *build_md_fixture()[:1], "text/markdown")),
-        ("files", (
-            "a4eval-告警表.xlsx", build_xlsx_fixture()[0],
+    md_bytes, md_truths = build_md_fixture()
+    xlsx_bytes, xlsx_truths = build_xlsx_fixture()
+    ctx.truths["md"] = md_truths
+    ctx.truths["xlsx"] = xlsx_truths
+
+    uploads = [
+        ("file", ("a4eval-手册.md", md_bytes, "text/markdown")),
+        ("file", (
+            "a4eval-告警表.xlsx", xlsx_bytes,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )),
     ]
-    up = call(
-        ctx, "POST", f"{MINING}/api/kb/{kb_id}/documents",
-        headers=ctx.headers, files=files,
-    )
-    up.raise_for_status()
+    for file_field in uploads:
+        up = call(
+            ctx, "POST", f"{MINING}/api/kb/{kb_id}/documents",
+            headers=ctx.headers, files=[file_field],
+        )
+        up.raise_for_status()
 
     mine = call(
         ctx, "POST", f"{MINING}/api/kb/{kb_id}/mine", headers=ctx.headers, json={},

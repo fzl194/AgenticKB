@@ -46,6 +46,9 @@ async function mountPanel() {
     },
     global: {
       stubs: {
+        ElSelect: { props: ['modelValue'], emits: ['update:modelValue', 'change'], template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value); $emit(\'change\', $event.target.value)"><slot /></select>' },
+        ElOption: { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
+        ElInput: { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
         ElAlert: { props: ['title', 'description'], template: '<div class="el-alert">{{ title }} {{ description }}<slot /></div>' },
       },
     },
@@ -101,5 +104,47 @@ describe('A3 表格精确查询面板', () => {
     const agg = wrapper.find('[data-testid="table-query-aggregate"]')
     expect(agg.text()).toContain('3234.5')
     expect(agg.text()).toContain('2')
+  })
+
+  it('翻页保留已执行的排序和筛选，修改条件后从第一页重查', async () => {
+    queryStructure.mockResolvedValue(okResult({ has_more: true, cursor: 'page-2' }))
+    const wrapper = await mountPanel()
+    await wrapper.get('[data-testid="table-query-order-field"]').setValue('功耗')
+    await wrapper.get('[data-testid="table-query-order-dir"]').setValue('desc')
+    await wrapper.findAll('button').find(b => b.text() === '+ 条件')!.trigger('click')
+    await wrapper.get('[data-testid="table-query-filter-value"]').setValue('A1')
+    await wrapper.get('[data-testid="table-query-run"]').trigger('click')
+    await flushPromises()
+    const first = queryStructure.mock.calls.at(-1)![1]
+    expect(first.where).toHaveLength(1)
+    await wrapper.get('[data-testid="table-query-next"]').trigger('click')
+    await flushPromises()
+    expect(queryStructure.mock.calls.at(-1)![1]).toEqual({ ...first, cursor: 'page-2' })
+    await wrapper.get('[data-testid="table-query-filter-value"]').setValue('A2')
+    await wrapper.get('[data-testid="table-query-next"]').trigger('click')
+    await flushPromises()
+    expect(queryStructure.mock.calls.at(-1)![1].cursor).toBeUndefined()
+    expect(queryStructure.mock.calls.at(-1)![1].where[0].value).toBe('A2')
+    expect(wrapper.findAll('[data-testid="table-query-row"]')).toHaveLength(2)
+  })
+
+  it('筛选操作不包含聚合且选列变化后重新查询第一页', async () => {
+    queryStructure.mockResolvedValue(okResult({ has_more: true, cursor: 'page-2' }))
+    const wrapper = await mountPanel()
+    await wrapper.findAll('button').find(b => b.text() === '+ 条件')!.trigger('click')
+    const ops = wrapper.get('[data-testid="table-query-filter-op"]').findAll('option').map(o => o.attributes('value'))
+    expect(ops).toContain('eq')
+    expect(ops).not.toContain('count')
+    await wrapper.get('[data-testid="table-query-run"]').trigger('click')
+    await flushPromises()
+    const check = wrapper.findAllComponents({ name: 'ElCheckbox' })
+    // 未全局注册的 el-checkbox 仍可触发 change（与实际复选框事件一致）。
+    if (check.length) check[0]!.vm.$emit('change', false)
+    else await wrapper.findAll('[data-testid="table-query-col-check"]')[0]!.trigger('change')
+    await flushPromises()
+    await wrapper.get('[data-testid="table-query-next"]').trigger('click')
+    await flushPromises()
+    expect(queryStructure.mock.calls.at(-1)![1].cursor).toBeUndefined()
+    expect(queryStructure.mock.calls.at(-1)![1].select).toEqual(['功耗'])
   })
 })

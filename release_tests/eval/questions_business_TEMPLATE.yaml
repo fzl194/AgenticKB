@@ -6,9 +6,10 @@
 # 业务补充方式：按下方 schema 填写题目（每题一节），指向**真实业务文档**
 # （先上传到目标知识库并完成挖掘），然后：
 #   docker exec cmkb python /app/release_tests/eval/run_eval.py \
-#       --questions /app/release_tests/eval/questions_business.yaml
+#       --questions /app/release_tests/eval/questions_business.yaml --kb-id EXISTING_KB_ID
 #
-# schema（extend run_eval.py 的 business suite 消费）：
+# business 模式逐题只读执行，不创建/清理指定 KB。ref 从当前库 inspect/大纲取得。
+# supports_conclusion 属人工核验，运行器会标待人工而非假定为通过。
 
 version: 1
 kind: business
@@ -24,14 +25,16 @@ questions:
   - id: q002
     category: table_golden
     question: 某表某列合计是多少
-    table_hint: 表名关键词
+    asset_ref: st_替换为inspect返回的当前表格引用
     expect:
       spec: {aggregate: {op: sum, field: 列名}}   # 期望查询（DSL）
       value: 12345.6                               # 期望值（人工核对）
   - id: q003
     category: scope
     question: 在某章节内找某内容
-    section_hint: 章节标题关键词
+    within:
+      section_refs: [替换为大纲中的section_ref]
+      section_scope: descendants
     expect:
       must_not_contain: [范围外特征词]
   - id: q004

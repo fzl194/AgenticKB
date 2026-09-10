@@ -8,12 +8,12 @@ version: 1
 kind: smoke
 suites:
   - category: source_accuracy
-    description: 检索命中 → 章节/定位解析（fixture：1.1 组网要求）
+    description: "检索命中 → 章节/定位解析（fixture：1.1 组网要求）"
   - category: scope
-    description: 第二章 descendants 搜索零越界（must-not: 环网/组网）
+    description: "第二章 descendants 搜索零越界（must-not: 环网/组网）"
   - category: table_golden
-    description: 告警表 count/sum/avg/min/max + 复合过滤（fixture 真值）
+    description: "告警表 count/sum/avg/min/max + 复合过滤（fixture 真值）"
   - category: permission
-    description: private 库 × admin/stranger/anonymous 期望矩阵
+    description: "private 库 × admin/stranger/anonymous 期望矩阵"
   - category: quality
-    description: KB 质量报告面可计算
+    description: "KB 质量报告面可计算"

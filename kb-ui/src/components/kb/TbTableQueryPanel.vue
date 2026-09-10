@@ -10,11 +10,11 @@
             <el-option v-for="c in columns" :key="c.name" :value="c.name"
                        :label="`${c.name}（${typeLabel(c.value_type)}）`" />
           </el-select>
-          <el-select v-model="f.op" size="small" class="tbq__op" placeholder="操作">
+          <el-select v-model="f.op" size="small" class="tbq__op" placeholder="操作" data-testid="table-query-filter-op">
             <el-option v-for="op in opsOf(f.field)" :key="op" :value="op" :label="opLabel(op)" />
           </el-select>
           <el-input v-if="f.op !== 'is_null'" v-model="f.value" size="small"
-                    class="tbq__value" :placeholder="f.op ? valueHint(f.field, f.op) : ''"
+                    class="tbq__value" data-testid="table-query-filter-value" :placeholder="f.op ? valueHint(f.field, f.op) : ''"
                     @keyup.enter="run" />
           <el-button link size="small" @click="filters.splice(i, 1)">✕</el-button>
         </template>
@@ -22,10 +22,10 @@
       </div>
       <div class="tbq__row">
         <span class="tbq__label">排序</span>
-        <el-select v-model="orderField" size="small" class="tbq__field" clearable placeholder="（不排序）">
+        <el-select v-model="orderField" size="small" class="tbq__field" clearable placeholder="（不排序）" data-testid="table-query-order-field">
           <el-option v-for="c in sortableColumns" :key="c.name" :value="c.name" :label="c.name" />
         </el-select>
-        <el-select v-model="orderDir" size="small" class="tbq__op" :disabled="!orderField">
+        <el-select v-model="orderDir" size="small" class="tbq__op" :disabled="!orderField" data-testid="table-query-order-dir">
           <el-option value="asc" label="升序" />
           <el-option value="desc" label="降序" />
         </el-select>
@@ -55,24 +55,33 @@
       <span class="tbq__muted">（符合条件 {{ aggregate.row_count }} 行）</span>
     </div>
 
+    <!-- 选列（completeness-5：select 投影复选框） -->
+    <div v-if="columns.length" class="tbq__row tbq__select-cols">
+      <span class="tbq__label">显示列</span>
+      <el-checkbox v-for="c in columns" :key="c.name" :model-value="selectedColumns.includes(c.name)"
+                   size="small" @change="toggleColumn(c.name)" data-testid="table-query-col-check">
+        {{ c.name }}
+      </el-checkbox>
+    </div>
+
     <!-- 结果 -->
     <div v-if="rows.length" class="tbq__result">
       <table class="tbq__table" data-testid="table-query-rows">
         <thead>
           <tr>
-            <th v-for="c in selectedColumns" :key="c">{{ c }}</th>
+            <th v-for="c in resultColumns" :key="c">{{ c }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="r in rows" :key="String(r._row)" class="tbq__row-hit"
               data-testid="table-query-row" @click="$emit('row-click', r._row)">
-            <td v-for="c in selectedColumns" :key="c">{{ r[c] }}</td>
+            <td v-for="c in resultColumns" :key="c">{{ r[c] }}</td>
           </tr>
         </tbody>
       </table>
       <div class="tbq__pager">
         <span class="tbq__muted">{{ rows.length }} 行{{ hasMore ? '（更多未列）' : '' }}</span>
-        <el-button v-if="hasMore" size="small" :loading="loading" @click="runNext">下一页</el-button>
+        <el-button v-if="hasMore" size="small" :loading="loading" :disabled="loading" data-testid="table-query-next" @click="runNext">{{ queryChanged ? '条件已修改，重新查询' : '下一页' }}</el-button>
       </div>
     </div>
     <p v-else-if="!loading && searched" class="tbq__muted">无符合条件的行——调整筛选条件试试。</p>
@@ -100,7 +109,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useServingApi, type TableFieldSchema, type TableQueryResult } from '@/api/serving'
+import { useServingApi, type TableFieldSchema, type TableQueryResult, type TableQuerySpec } from '@/api/serving'
 
 const props = defineProps<{
   /** 表格资产 ref（内部 "{doc}#table:{t}" 或 st_） */
@@ -115,6 +124,18 @@ const servingApi = useServingApi()
 const columns = ref<TableFieldSchema[]>([])
 const rows = ref<TableQueryResult['rows']>([])
 const selectedColumns = ref<string[]>([])
+const resultColumns = ref<string[]>([])
+const executedSpec = ref<TableQuerySpec | null>(null)
+/** completeness-5：列复选框开关（至少保留一列，空投影=全列语义不直观）。 */
+function toggleColumn(name: string) {
+  const has = selectedColumns.value.includes(name)
+  if (!has) {
+    selectedColumns.value = [...selectedColumns.value, name]
+    return
+  }
+  if (selectedColumns.value.length <= 1) return // 保底一列
+  selectedColumns.value = selectedColumns.value.filter(c => c !== name)
+}
 const hasMore = ref(false)
 const cursor = ref<string | undefined>()
 const aggregate = ref<TableQueryResult['aggregate']>(null)
@@ -140,7 +161,8 @@ function schemaOf(field: string | undefined): TableFieldSchema | undefined {
   return columns.value.find(c => c.name === field)
 }
 function opsOf(field: string | undefined): string[] {
-  return schemaOf(field)?.operations ?? []
+  return (schemaOf(field)?.operations ?? []).filter(op =>
+    ['eq', 'ne', 'lt', 'lte', 'gt', 'gte', 'in', 'contains', 'is_null'].includes(op))
 }
 function defaultOp(field: string): string {
   const ops = opsOf(field)
@@ -159,10 +181,11 @@ function aggOpsOf(c: TableFieldSchema): string[] {
   return c.value_type === 'date' ? ['min', 'max'] : ['sum', 'min', 'max', 'avg']
 }
 function addFilter() {
-  filters.value.push({ field: columns.value[0]?.name, op: undefined, value: '' })
+  const field = columns.value[0]?.name
+  filters.value = [...filters.value, { field, op: field ? defaultOp(field) : undefined, value: '' }]
 }
 
-function buildSpec(nextCursor?: string) {
+function buildSpec(): TableQuerySpec {
   const where = filters.value
     .filter(f => f.field && f.op)
     .filter(f => f.op === 'is_null' || String(f.value).trim() !== '')
@@ -175,26 +198,35 @@ function buildSpec(nextCursor?: string) {
           ? Number(f.value)
           : f.value,
     }))
-  const spec: Record<string, unknown> = { where, limit: 20 }
-  if (nextCursor) spec.cursor = nextCursor
-  else {
-    if (orderField.value) spec.order_by = [{ field: orderField.value, direction: orderDir.value }]
-    if (aggOp.value) {
-      const [op, field] = aggOp.value.split(':')
-      spec.aggregate = field ? { op, field } : { op }
-    }
+  const spec: TableQuerySpec = { where, limit: 20 }
+  // completeness-5：选列 = select 投影（服务端裁列，传输与渲染同源）
+  if (selectedColumns.value.length) spec.select = [...selectedColumns.value]
+  if (orderField.value) spec.order_by = [{ field: orderField.value, direction: orderDir.value }]
+  if (aggOp.value) {
+    const split = aggOp.value.indexOf(':')
+    spec.aggregate = split < 0 ? { op: aggOp.value }
+      : { op: aggOp.value.slice(0, split), field: aggOp.value.slice(split + 1) }
   }
   return spec
 }
 
+function queryKey(spec: TableQuerySpec) {
+  return JSON.stringify([spec.where, spec.select, spec.order_by, spec.aggregate, spec.limit])
+}
+const queryChanged = computed(() => !executedSpec.value
+  || queryKey(buildSpec()) !== queryKey(executedSpec.value))
+
 async function run() {
+  if (loading.value) return
   await execute(buildSpec())
 }
 async function runNext() {
-  await execute(buildSpec(cursor.value))
+  if (loading.value) return
+  if (queryChanged.value || !cursor.value || !executedSpec.value) return run()
+  await execute({ ...executedSpec.value, cursor: cursor.value })
 }
 
-async function execute(spec: Record<string, unknown>) {
+async function execute(spec: TableQuerySpec) {
   loading.value = true
   error.value = ''
   try {
@@ -207,6 +239,8 @@ async function execute(spec: Record<string, unknown>) {
         ? props.defaultColumns.filter(c => out.columns.some(s => s.name === c))
         : out.columns.map(c => c.name)
     }
+    resultColumns.value = spec.select?.length ? [...spec.select] : [...selectedColumns.value]
+    if (!spec.cursor) executedSpec.value = { ...spec, select: [...resultColumns.value] }
     // 聚合态由响应声明（aggregate 出现即展示；行结果为空）
     aggregate.value = out.aggregate ?? null
     rows.value = spec.cursor

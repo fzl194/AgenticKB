@@ -52,6 +52,7 @@ def _result_row(task_id: str, parsed: dict | None = None, text: str | None = Non
 
 def _attempt_row(task_id: str, attempt_no: int, error_type: str, error_message: str) -> dict:
     return {
+        "id": f"att-{task_id}-{attempt_no}",
         "task_id": task_id,
         "attempt_no": attempt_no,
         "error_type": error_type,
@@ -60,23 +61,53 @@ def _attempt_row(task_id: str, attempt_no: int, error_type: str, error_message: 
 
 
 class _FakeDB:
-    """Dispatches fetchall by SQL table — enough for get_tasks_batch's 3 queries."""
+    """Dispatches fetchall by SQL table — enough for get_tasks_batch's queries."""
 
     def __init__(self, *, tasks=(), results=(), attempts=()):
         self._tasks = list(tasks)
         self._results = list(results)
         self._attempts = list(attempts)
 
+    async def fetchone(self, sql, params):
+        rows = await self.fetchall(sql, params)
+        return rows[0] if rows else None
+
     async def fetchall(self, sql, params):
         ids = list(params)
         if "FROM agent_llm_results" in sql:
-            return [r for r in self._results if r["task_id"] in ids]
+            # Return in configured order — the query contract must not rely on it.
+            # JOIN 语义由 fake 合成：_attempt_no 取 attempts 行（缺省 0）。
+            attempt_no = {a["id"]: a["attempt_no"] for a in self._attempts}
+            rows = []
+            for r in self._results:
+                if r["task_id"] not in ids:
+                    continue
+                row = dict(r)
+                row["_attempt_no"] = attempt_no.get(r.get("attempt_id"), 0)
+                rows.append(row)
+            return rows
         if "FROM agent_llm_attempts" in sql:
             return [a for a in self._attempts if a["task_id"] in ids]
-        if "FROM agent_llm_tasks WHERE id IN" in sql:
+        if "FROM agent_llm_tasks" in sql:
             by_id = {t["id"]: t for t in self._tasks}
             return [by_id[i] for i in ids if i in by_id]
         raise AssertionError(f"unexpected SQL in get_tasks_batch: {sql}")
+
+
+def _chat_result_row(task_id: str, attempt_id: str, parse_status: str, parsed: dict | None) -> dict:
+    import json
+
+    return {
+        "id": f"res-{attempt_id}",
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "parse_status": parse_status,
+        "parsed_output_json": json.dumps(parsed or {}),
+        "text_output": None,
+        "parse_error": None if parse_status == "succeeded" else "bad json",
+        "validation_errors_json": "[]",
+        "created_at": "2026-09-09T00:00:01+00:00",
+    }
 
 
 def _svc(db, config) -> LLMService:
@@ -179,3 +210,62 @@ async def test_route_returns_service_payload(config):
     out = await batch_status_tasks(body, request)
     assert out["success"] is True
     assert out["data"]["tasks"][0]["task_id"] == "t-a"
+
+
+async def test_get_tasks_batch_picks_result_of_latest_attempt_out_of_order(config):
+    """chat 重试产生多条 results 行且行序不定时，必须取最新 attempt 的结果。
+
+    attempt-1 解析失败、attempt-2 成功；结果行按【新在前】的乱序返回
+    （模拟 PG 无序），若按行序 last-wins 会拿到 attempt-1 的 parse_failed。
+    """
+    db = _FakeDB(
+        tasks=[_task_row("t-chat", "succeeded", task_type="chat", attempt_count=2)],
+        results=[
+            _chat_result_row("t-chat", "att-2", "succeeded", {"ok": True}),
+            _chat_result_row("t-chat", "att-1", "parse_failed", None),
+        ],
+        attempts=[
+            {"task_id": "t-chat", "attempt_no": 2, "id": "att-2"},
+            {"task_id": "t-chat", "attempt_no": 1, "id": "att-1"},
+        ],
+    )
+    out = await _svc(db, config).get_tasks_batch(["t-chat"])
+    entry = out["tasks"][0]
+    assert entry["result"]["parse_status"] == "succeeded"
+    assert entry["result"]["parsed_output"] == {"ok": True}
+
+
+async def test_get_tasks_batch_picks_latest_attempt_when_rows_returned_oldest_first(config):
+    """同一契约的反向乱序：旧行在前时不得让 dict 覆盖顺序决定结果。"""
+    db = _FakeDB(
+        tasks=[_task_row("t-chat", "succeeded", task_type="chat", attempt_count=2)],
+        results=[
+            _chat_result_row("t-chat", "att-1", "parse_failed", None),
+            _chat_result_row("t-chat", "att-2", "succeeded", {"ok": True}),
+        ],
+        attempts=[
+            {"task_id": "t-chat", "attempt_no": 1, "id": "att-1"},
+            {"task_id": "t-chat", "attempt_no": 2, "id": "att-2"},
+        ],
+    )
+    out = await _svc(db, config).get_tasks_batch(["t-chat"])
+    assert out["tasks"][0]["result"]["parse_status"] == "succeeded"
+
+
+async def test_get_result_picks_latest_attempt_result(config):
+    """单任务 get_result（GET /tasks/{id} 的 result 字段）同一契约。"""
+    db = _FakeDB(
+        tasks=[_task_row("t-chat", "succeeded", task_type="chat")],
+        results=[
+            _chat_result_row("t-chat", "att-2", "succeeded", {"final": 1}),
+            _chat_result_row("t-chat", "att-1", "parse_failed", None),
+        ],
+        attempts=[
+            {"task_id": "t-chat", "attempt_no": 2, "id": "att-2"},
+            {"task_id": "t-chat", "attempt_no": 1, "id": "att-1"},
+        ],
+    )
+    result = await _svc(db, config).get_result("t-chat")
+    assert result is not None
+    assert result["parse_status"] == "succeeded"
+    assert result["parsed_output"] == {"final": 1}

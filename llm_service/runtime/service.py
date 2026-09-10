@@ -13,7 +13,10 @@ from llm_service.db import LlmRuntimeDB
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.runtime.event_bus import EventBus
-from llm_service.runtime.idempotency import find_existing_task
+from llm_service.runtime.idempotency import (
+    find_existing_task,
+    request_fingerprint as idempotency_request_fingerprint,
+)
 from llm_service.runtime.parser import ParseResult, parse_output
 from llm_service.runtime.persist_writer import PersistWriter, SyncChatRecord
 from llm_service.runtime.task_manager import TaskManager
@@ -336,8 +339,22 @@ class LLMService:
         async with self._submit_lock:
             if idempotency_key:
                 # Delegate to find_existing_task for consistent priority semantics
-                # (succeeded > running > queued). See runtime/idempotency.py.
-                existing = await find_existing_task(self._db, idempotency_key)
+                # (succeeded > running > queued). The fingerprint makes a key hit
+                # count only when the stored request describes the same response
+                # contract (messages/input/params/expected type) — a model or
+                # dimensions flip must not reuse stale results under a same key.
+                # request_params: (provider, model, template_key, messages_json,
+                # input_json, params_json, expected_output_type, schema_json)
+                existing = await find_existing_task(
+                    self._db,
+                    idempotency_key,
+                    request_fingerprint=idempotency_request_fingerprint(
+                        messages_json=request_params[3],
+                        input_json=request_params[4],
+                        params_json=request_params[5],
+                        expected_output_type=request_params[6],
+                    ),
+                )
                 if existing:
                     return existing
 
@@ -711,8 +728,23 @@ class LLMService:
         await self._mgr.cancel(task_id)
 
     async def get_result(self, task_id: str) -> dict | None:
-        row = await self._db.fetchone("SELECT * FROM agent_llm_results WHERE task_id = %s", (task_id,))
-        return _map_result_row(row) if row else None
+        """Latest-attempt result for a task (a retried task has one row per attempt).
+
+        Joined with attempts for ``attempt_no`` and picked in Python — driver
+        row order is not a contract, and returning a stale parse_failed row for
+        a now-succeeded task would poison consumers.
+        """
+        rows = await self._db.fetchall(
+            "SELECT r.*, a.attempt_no AS _attempt_no "
+            "FROM agent_llm_results r "
+            "JOIN agent_llm_attempts a ON a.id = r.attempt_id "
+            "WHERE r.task_id = %s",
+            (task_id,),
+        )
+        if not rows:
+            return None
+        best = max(rows, key=lambda r: int(r.get("_attempt_no") or 0))
+        return _map_result_row(best)
 
     async def get_attempts(self, task_id: str) -> list[dict]:
         rows = await self._db.fetchall("SELECT * FROM agent_llm_attempts WHERE task_id = %s ORDER BY attempt_no", (task_id,))
@@ -747,10 +779,22 @@ class LLMService:
         results_by_id: dict = {}
         if include_results:
             result_rows = await self._db.fetchall(
-                f"SELECT * FROM agent_llm_results WHERE task_id IN ({placeholders})",
+                f"SELECT r.*, a.attempt_no AS _attempt_no "
+                f"FROM agent_llm_results r "
+                f"JOIN agent_llm_attempts a ON a.id = r.attempt_id "
+                f"WHERE r.task_id IN ({placeholders})",
                 tuple(unique_ids),
             )
-            results_by_id = {row["task_id"]: row for row in result_rows}
+            # A retried task carries one result row per attempt (parse failures
+            # retry); only the newest attempt's result is the task's answer.
+            # Picked in Python — driver row order is not a contract.
+            for row in result_rows:
+                current = results_by_id.get(row["task_id"])
+                if (
+                    current is None
+                    or int(row.get("_attempt_no") or 0) > int(current.get("_attempt_no") or 0)
+                ):
+                    results_by_id[row["task_id"]] = row
 
         errors_by_id: dict = {}
         failed_ids = [

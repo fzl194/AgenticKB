@@ -14,6 +14,7 @@ N 次 GET，succeeded 任务内联 result）。
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -58,23 +59,37 @@ class LlmTaskClient:
         self._status_chunk = min(status_chunk, 256)
         self._transport = transport
         self._client: httpx.Client | None = None
+        # Guards lazy creation/swap of the shared httpx.Client. The instance is
+        # shared across document threads in a Run; request execution itself is
+        # httpx-thread-safe and runs OUTSIDE the lock — only the pointer swap
+        # is critical. A single request failure must never close the pool
+        # under another thread's in-flight request.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
 
     def _get_client(self) -> httpx.Client:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.Client(
-                timeout=self._timeout, proxy=None, trust_env=False,
-                transport=self._transport,
-            )
-        return self._client
+        with self._lock:
+            if self._client is None or self._client.is_closed:
+                self._client = httpx.Client(
+                    timeout=self._timeout, proxy=None, trust_env=False,
+                    transport=self._transport,
+                )
+            return self._client
 
     def close(self) -> None:
-        if self._client is not None and not self._client.is_closed:
-            self._client.close()
-        self._client = None
+        """Idempotent, thread-safe release; a later call recreates the client.
+
+        httpx.Client survives transient failures (its pool self-heals), so
+        error paths must NOT close — closing here is an explicit end-of-run
+        action only.
+        """
+        with self._lock:
+            if self._client is not None and not self._client.is_closed:
+                self._client.close()
+            self._client = None
 
     # ------------------------------------------------------------------
     # submit
@@ -147,7 +162,8 @@ class LlmTaskClient:
             resp.raise_for_status()
             body = resp.json()
         except Exception as e:
-            self.close()
+            # No close(): the shared pool self-heals; closing would break
+            # concurrent threads mid-request (see class docstring).
             raise LlmTaskError(f"task submit to {path} failed: {e}") from e
         data = body.get("data", body) if isinstance(body, dict) else {}
         task_id = data.get("task_id") if isinstance(data, dict) else None
@@ -182,7 +198,8 @@ class LlmTaskClient:
                 resp.raise_for_status()
                 body = resp.json()
             except Exception as e:
-                self.close()
+                # No close() — see _submit; transient poll errors are retried
+                # by wait_for_tasks until the deadline.
                 raise LlmTaskError(f"batch-status failed: {e}") from e
             data = body.get("data", {}) if isinstance(body, dict) else {}
             for entry in data.get("tasks", []):

@@ -141,3 +141,82 @@ def test_summarizer_success_uses_summary_stage_key():
     assert out == "摘要"
     assert fake.submits[0]["pipeline_stage"] == "mining_summary"
     assert fake.submits[0]["idempotency_key"].startswith("sum:")
+
+
+# ---------------------------------------------------------------------------
+# 幂等键完整性（batch 审查问题三）：键必须覆盖完整有效请求
+# ---------------------------------------------------------------------------
+
+def _capture_keys(fake_result_text: str = "摘要") -> list[str]:
+    keys: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        if request.url.path == "/api/v1/tasks":
+            keys.append(body.get("idempotency_key"))
+            return httpx.Response(200, json={
+                "success": True, "data": {"task_id": f"task-{len(keys)}", "status": "queued"},
+            })
+        return httpx.Response(200, json={"success": True, "data": {"tasks": [{
+            "task_id": f"task-{len(keys)}", "status": "succeeded",
+            "result": {"parse_status": "succeeded", "text_output": fake_result_text},
+        }]}})
+
+    return keys, handler
+
+
+def _client_for(handler) -> LLMServiceAsyncGenerationClient:
+    return LLMServiceAsyncGenerationClient(
+        base_url="http://fake", poll_interval=0.01, wait_timeout=0.5,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_summary_key_differs_when_content_differs_beyond_512_chars():
+    """同一标题、前 512 字相同但后续不同 → 必须不同键（截断键碰撞修复）。"""
+    prefix = "同" * 600
+    keys, handler = _capture_keys()
+    client = _client_for(handler)
+    summarizer = LLMSummarizer(client)
+    summarizer.summarize("章节标题", [prefix + "甲"])
+    summarizer.summarize("章节标题", [prefix + "乙"])
+    assert len(keys) == 2
+    assert keys[0] != keys[1], "512 字截断键碰撞：不同请求拿到了同一个键"
+
+
+def test_summary_identical_request_yields_stable_key():
+    keys, handler = _capture_keys()
+    client = _client_for(handler)
+    summarizer = LLMSummarizer(client)
+    summarizer.summarize("标题", ["完全相同的内容"])
+    summarizer.summarize("标题", ["完全相同的内容"])
+    assert keys[0] == keys[1], "完全相同的请求必须稳定去重"
+
+
+def test_summary_key_covers_prompt_version(monkeypatch):
+    """prompt 版本升级 → 同内容必须换键（不复用旧 prompt 的输出）。"""
+    import knowledge_mining.mining.retrieval_projection.llm_generation as mod
+
+    keys_a, handler_a = _capture_keys()
+    LLMSummarizer(_client_for(handler_a)).summarize("标题", ["内容"])
+
+    monkeypatch.setattr(mod, "SUMMARY_PROMPT_VERSION", "hier-summary-2")
+    keys_b, handler_b = _capture_keys()
+    LLMSummarizer(_client_for(handler_b)).summarize("标题", ["内容"])
+
+    assert keys_a[0] != keys_b[0], "prompt 版本变化未反映进幂等键"
+
+
+def test_question_key_covers_prompt_version(monkeypatch):
+    import knowledge_mining.mining.retrieval_projection.llm_generation as mod
+
+    def run_question() -> list:
+        keys, handler = _capture_keys(fake_result_text='{"q": "Q"}')
+        gen = LLMQuestionGenerator(_client_for(handler))
+        gen.generate_questions([{"text": "一些内容"}])
+        return keys
+
+    keys_a = run_question()
+    monkeypatch.setattr(mod, "QUESTION_PROMPT_VERSION", "qe-doc2query-2")
+    keys_b = run_question()
+    assert keys_a[0] != keys_b[0], "question prompt 版本变化未反映进幂等键"

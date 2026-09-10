@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from llm_service.db import LlmRuntimeDB
 from llm_service.providers.base import ProviderProtocol
-from llm_service.providers.model_base import ModelProviderProtocol
+from llm_service.providers.model_base import ModelProviderError, ModelProviderProtocol
 from llm_service.providers.utils import extract_doc_text
 from llm_service.runtime.event_bus import EventBus
 from llm_service.runtime.task_manager import TaskManager
@@ -215,6 +215,11 @@ class Worker:
         start = time.monotonic()
         try:
             result = await self._model_provider.embed(texts, model=model, dimensions=dimensions)
+            # Completing a malformed result would poison the idempotency cache:
+            # callers key on content, so a succeeded-but-broken task is reused
+            # forever and RETRY can never recover. Validate BEFORE completing —
+            # violations enter the normal fail -> retry -> dead_letter flow.
+            _validate_embedding_result(result, texts, dimensions)
             latency = int((time.monotonic() - start) * 1000)
             finished = datetime.now(timezone.utc).isoformat()
 
@@ -350,6 +355,64 @@ class Worker:
             )
 
             await self._mgr.fail(task_id, error_type, error_msg)
+
+
+def _validate_embedding_result(result, texts: list, dimensions) -> None:
+    """Provider result completeness gate for embedding tasks.
+
+    Raises ModelProviderError("invalid_response") on:
+    - data missing / not a list / item count != input count (short return)
+    - malformed items (non-dict / missing or empty embedding)
+    - index missing / non-int / out of range / duplicate / incomplete cover
+    - inconsistent vector dimensions across items
+    - requested dimensions present but actual dimension differs
+    """
+    data = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(data, list):
+        raise ModelProviderError(
+            "invalid_response", "embedding result has no data list")
+    if len(data) != len(texts):
+        raise ModelProviderError(
+            "invalid_response",
+            f"embedding result returned {len(data)} vectors for {len(texts)} inputs")
+
+    seen_indices: set[int] = set()
+    vector_dim: int | None = None
+    for position, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise ModelProviderError(
+                "invalid_response", f"embedding item {position} is not an object")
+        vector = item.get("embedding")
+        if not isinstance(vector, list) or not vector:
+            raise ModelProviderError(
+                "invalid_response", f"embedding item {position} has an empty vector")
+        if vector_dim is None:
+            vector_dim = len(vector)
+        elif len(vector) != vector_dim:
+            raise ModelProviderError(
+                "invalid_response",
+                f"embedding dimension inconsistent: {len(vector)} vs {vector_dim}")
+        index = item.get("index")
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise ModelProviderError(
+                "invalid_response", f"embedding item {position} has no int index")
+        if index < 0 or index >= len(texts):
+            raise ModelProviderError(
+                "invalid_response", f"embedding index {index} out of range")
+        if index in seen_indices:
+            raise ModelProviderError(
+                "invalid_response", f"embedding index {index} duplicated")
+        seen_indices.add(index)
+
+    if len(seen_indices) != len(texts):
+        missing = sorted(set(range(len(texts))) - seen_indices)
+        raise ModelProviderError(
+            "invalid_response", f"embedding indices incomplete, missing {missing[:5]}")
+
+    if dimensions is not None and vector_dim is not None and vector_dim != int(dimensions):
+        raise ModelProviderError(
+            "invalid_response",
+            f"embedding dimension {vector_dim} != requested {int(dimensions)}")
 
 
 class LeaseRecovery:

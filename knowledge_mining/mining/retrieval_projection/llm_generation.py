@@ -138,8 +138,25 @@ class LLMServiceGenerationClient:
         return text
 
 
-def _stable_key(prefix: str, text: str) -> str:
-    return f"{prefix}:{hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]}"
+def _generation_key(
+    kind: str, prompt_version: str, expected_output_type: str, payload: Any,
+) -> str:
+    """幂等键 = 完整有效请求的规范化哈希。
+
+    键必须覆盖 prompt 版本、输出类型与**完整**请求载荷——截断哈希（旧
+    sum: 键的 title+前 512 字）会让仅尾部不同的两个请求静默复用同一任务；
+    缺 prompt 版本则让 prompt 升级后继续复用旧输出。载荷取实际发送给
+    模型的内容（调用方截断后的），同一有效请求 → 同一键（稳定去重）。
+    服务端另以 request fingerprint 校验（模型/参数变化不复用），此处覆
+    盖客户端可知的全部契约面。
+    """
+    canonical = json.dumps(
+        {"kind": kind, "v": prompt_version, "type": expected_output_type,
+         "payload": payload},
+        ensure_ascii=False, sort_keys=True,
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+    return f"{kind}:{digest}"
 
 
 class LLMServiceAsyncGenerationClient:
@@ -172,6 +189,10 @@ class LLMServiceAsyncGenerationClient:
         )
         self._max_attempts = max_attempts
         self._knowledge_domain = knowledge_domain
+
+    def close(self) -> None:
+        """Release the underlying task-channel client (end of run)."""
+        self._client.close()
 
     def execute(
         self,
@@ -243,13 +264,16 @@ class LLMQuestionGenerator:
                 out.append("SKIP")
                 continue
             try:
+                effective_text = text[:4000]
                 obj = self._client.execute(
                     [
                         {"role": "system", "content": _QUESTION_SYSTEM},
-                        {"role": "user", "content": text[:4000]},
+                        {"role": "user", "content": effective_text},
                     ],
                     expected_output_type="json_object",
-                    idempotency_key=_stable_key("qe", text),
+                    idempotency_key=_generation_key(
+                        "qe", QUESTION_PROMPT_VERSION, "json_object", effective_text,
+                    ),
                 )
                 if obj.get("skip"):
                     out.append("SKIP")
@@ -285,7 +309,10 @@ class LLMSummarizer:
                 },
             ],
             expected_output_type="text",
-            idempotency_key=_stable_key("sum", f"{title}\n{joined[:512]}"),
+            idempotency_key=_generation_key(
+                "sum", SUMMARY_PROMPT_VERSION, "text",
+                {"title": title, "content": joined},
+            ),
             pipeline_stage="mining_summary",
         )
         return str(out).strip()

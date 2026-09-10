@@ -70,3 +70,86 @@ def test_init_embedding_explicit_mode_param_beats_config():
 def test_init_embedding_blank_url_returns_none():
     assert _init_embedding(None) is None
     assert _init_embedding("") is None
+
+
+def test_init_image_captioner_passes_full_async_config():
+    """组合根全量透传（batch 审查问题五）：不只默认值。"""
+    _set_config({
+        "llm_service_url": "http://x:8900",
+        "llm_call_mode": "async",
+        "llm_async_poll_interval": 0.25,
+        "llm_async_chat_wait_timeout": 77.0,
+        "llm_async_max_attempts": 4,
+    })
+    from knowledge_mining.mining.jobs.run import _init_image_captioner
+
+    captioner = _init_image_captioner("http://x:8900", knowledge_domain="d", enabled=True)
+    assert captioner._call_mode == "async"
+    assert captioner._task_client._poll_interval == 0.25
+    assert captioner._task_client._wait_timeout == 77.0
+    assert captioner._async_max_attempts == 4
+
+
+def test_init_image_captioner_sync_mode_has_no_task_client():
+    _set_config({"llm_service_url": "http://x:8900", "llm_call_mode": "sync"})
+    from knowledge_mining.mining.jobs.run import _init_image_captioner
+
+    captioner = _init_image_captioner("http://x:8900")
+    assert captioner._call_mode == "sync"
+    assert captioner._task_client is None
+
+
+def test_close_llm_resources_closes_duck_typed_and_swallows_errors():
+    from knowledge_mining.mining.jobs.run import _close_llm_resources
+
+    closed = []
+
+    class Closable:
+        def close(self):
+            closed.append("a")
+
+    class Broken:
+        def close(self):
+            raise RuntimeError("boom")
+
+    class Plain:
+        pass  # 同步回退实现：没有 close()
+
+    _close_llm_resources(Closable(), Broken(), Plain(), None)
+    assert closed == ["a"]
+
+
+def test_workflow_job_services_close_releases_llm_clients():
+    """Run 终止释放（成功/失败/取消共用 finally 路径）。"""
+    from knowledge_mining.mining.jobs.run import _WorkflowJobServices
+
+    closed = []
+
+    def _once(name):
+        state = {"done": False}
+
+        def close():
+            if not state["done"]:  # 真实 LlmTaskClient.close 幂等
+                state["done"] = True
+                closed.append(name)
+
+        return close
+
+    class FakeGen:
+        close = staticmethod(_once("embedding"))
+
+    class FakeLlmGen:
+        close = staticmethod(_once("generation"))
+
+    class FakeCaptioner:
+        close = staticmethod(_once("captioner"))
+
+    svc = _WorkflowJobServices.__new__(_WorkflowJobServices)
+    from types import SimpleNamespace
+    svc.pipeline_config = SimpleNamespace(embedding_generator=FakeGen())
+    svc._owned_llm_generator = FakeLlmGen()
+    svc._llm_stage_services = {"image_captioner": FakeCaptioner(), "other": object()}
+
+    svc.close()
+    svc.close()  # 幂等
+    assert closed == ["embedding", "generation", "captioner"]

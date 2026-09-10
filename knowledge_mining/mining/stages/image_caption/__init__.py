@@ -43,6 +43,8 @@ class ImageCaptioner:
         enabled: bool = True,
         call_mode: str = "async",
         async_wait_timeout: float = 180.0,
+        async_poll_interval: float = 1.0,
+        async_max_attempts: int = 3,
     ) -> None:
         from knowledge_mining.mining.infra.llm_client import LlmClient
 
@@ -53,13 +55,21 @@ class ImageCaptioner:
         self.prompt = prompt
         self.enabled = enabled
         self._call_mode = "sync" if call_mode == "sync" else "async"
+        self._async_max_attempts = async_max_attempts
         self._task_client = None
         if self._call_mode == "async":
             from knowledge_mining.mining.infra.llm_task_client import LlmTaskClient
 
             self._task_client = LlmTaskClient(
-                base_url=base_url, wait_timeout=async_wait_timeout,
+                base_url=base_url,
+                poll_interval=async_poll_interval,
+                wait_timeout=async_wait_timeout,
             )
+
+    def close(self) -> None:
+        """Release the async task-channel client (end of run; sync path has none)."""
+        if self._task_client is not None:
+            self._task_client.close()
 
     def caption_tree(self, tree: SectionNode) -> SectionNode:
         """Return a new tree with image captions filled where possible."""
@@ -156,6 +166,7 @@ class ImageCaptioner:
                 pipeline_stage="segment",
                 model=self.model,
                 knowledge_domain=self._knowledge_domain,
+                max_attempts=self._async_max_attempts,
             )
             entries = self._task_client.wait_for_tasks([task_id])
             entry = entries.get(task_id) or {"task_id": task_id, "status": "timeout"}

@@ -68,12 +68,13 @@ class _FakeLlm:
             return httpx.Response(200, json={"success": True, "data": {"tasks": tasks}})
         raise AssertionError(f"unexpected path {path}")
 
-    def client(self) -> LLMServiceAsyncEmbeddingGenerator:
+    def client(self, **kwargs) -> LLMServiceAsyncEmbeddingGenerator:
         return LLMServiceAsyncEmbeddingGenerator(
             base_url="http://fake",
             poll_interval=0.01,
             wait_timeout=1.0,
             transport=httpx.MockTransport(self.handler),
+            **kwargs,
         )
 
 
@@ -161,3 +162,39 @@ def test_embed_single_call_submits_all_texts():
     embed_submits = [s for s in fake.submits if s["path"] == "/api/v1/tasks/embed"]
     assert len(embed_submits) == 1
     assert embed_submits[0]["body"]["input"] == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# batch_size 构造参数（batch 审查问题六）
+# ---------------------------------------------------------------------------
+
+def test_embed_batch_default_uses_constructor_batch_size():
+    fake = _FakeLlm()
+    gen = fake.client(batch_size=3)
+    gen.embed_batch(["a", "b", "c", "d", "e"])  # 省略参数 → 构造值生效
+    embed_submits = [s for s in fake.submits if s["path"] == "/api/v1/tasks/embed"]
+    assert [len(s["body"]["input"]) for s in embed_submits] == [3, 2]
+
+
+def test_embed_batch_explicit_override_beats_constructor():
+    fake = _FakeLlm()
+    gen = fake.client(batch_size=3)
+    gen.embed_batch(["a", "b", "c", "d", "e", "f"], batch_size=4)
+    embed_submits = [s for s in fake.submits if s["path"] == "/api/v1/tasks/embed"]
+    assert [len(s["body"]["input"]) for s in embed_submits] == [4, 2]
+
+
+def test_embed_batch_rejects_invalid_batch_size():
+    fake = _FakeLlm()
+    gen = fake.client()
+    with pytest.raises(ValueError):
+        gen.embed_batch(["a"], batch_size=0)
+    with pytest.raises(ValueError):
+        LLMServiceAsyncEmbeddingGenerator(batch_size=0).close()
+
+
+def test_async_embedding_generator_close_releases_task_client():
+    fake = _FakeLlm()
+    gen = fake.client()
+    gen.close()
+    assert gen._client._client is None

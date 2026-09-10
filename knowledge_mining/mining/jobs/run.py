@@ -464,6 +464,9 @@ def _run_legacy(
     lease_claimed = False
     lease_stop = threading.Event()
     lease_thread: threading.Thread | None = None
+    # LLM/embedding 客户端在嵌套 try 里创建；finally 统一释放（duck-typed）。
+    embedding_generator: Any | None = None
+    llm_services: dict[str, Any] | None = None
 
     try:
         if submitted_run_id is None:
@@ -559,6 +562,7 @@ def _run_legacy(
         _stop_run_lease(
             runtime_db, run_id, lease_claimed, worker_id, lease_stop, lease_thread,
         )
+        _close_llm_resources(embedding_generator, *(llm_services or {}).values())
         asset_db.close()
         runtime_db.close()
 
@@ -944,6 +948,9 @@ class _WorkflowJobServices:
             ontology_store=self.ontology_store,
             ontology_version_id=ontology_version_id,
         ) or {}
+        # Run 结束时统一释放（duck-typed close，见 self.close()）。
+        self._llm_stage_services = llm
+        self._owned_llm_generator: Any | None = None
         has_ontology = (
             (manifest.get("runtimeBinding") or {}).get("ontologyApplicable")
             is True
@@ -1510,13 +1517,15 @@ class _WorkflowJobServices:
         """Bind production v2 parse/segment services exactly once per job."""
         if self._object_input_services_ready:
             return
+        llm_generator = _init_llm_generator(
+            getattr(self, "llm_base_url", None),
+            knowledge_domain=getattr(self, "profile", None) and self.profile.domain_id,
+        )
+        self._owned_llm_generator = llm_generator
         services = _build_workflow_object_input_services(
             sync_pool=self.asset_db.pool,
             embedding_generator=self.pipeline_config.embedding_generator,
-            llm_generator=_init_llm_generator(
-                getattr(self, "llm_base_url", None),
-                knowledge_domain=getattr(self, "profile", None) and self.profile.domain_id,
-            ),
+            llm_generator=llm_generator,
         )
         self.document_parse_service = services.document_parse_service
         self.segment_compile_service = services.segment_compile_service
@@ -1532,6 +1541,18 @@ class _WorkflowJobServices:
         # handler 看到的 runtime.services，漏搬即静默降级（E2E 实测教训）。
         self.source_locator_service = services.source_locator_service
         self._object_input_services_ready = True
+
+    def close(self) -> None:
+        """Run 终止路径（成功/失败/取消）的 LLM 客户端确定性释放。
+
+        duck-typed close：异步实现释放任务通道连接池，同步实现没有
+        close() 则静默跳过；幂等可重复调用。
+        """
+        _close_llm_resources(
+            getattr(self, "pipeline_config", None) and self.pipeline_config.embedding_generator,
+            self._owned_llm_generator,
+            *(self._llm_stage_services or {}).values(),
+        )
 
 
 def _execute_workflow_job(
@@ -1571,6 +1592,7 @@ def _execute_workflow_job(
     lease_claimed = False
     lease_stop = threading.Event()
     lease_thread: threading.Thread | None = None
+    services: _WorkflowJobServices | None = None
     try:
         run_data = runtime_db.get_run(run_id)
         if run_data is None:
@@ -1712,6 +1734,8 @@ def _execute_workflow_job(
         _stop_run_lease(
             runtime_db, run_id, lease_claimed, worker_id, lease_stop, lease_thread,
         )
+        if services is not None:
+            services.close()
         asset_db.close()
         runtime_db.close()
 
@@ -2262,23 +2286,55 @@ def _init_llm(
     try:
         import os
 
-        from knowledge_mining.mining.infra.mining_config import MiningConfig
-        from knowledge_mining.mining.stages.image_caption import ImageCaptioner
-
         legacy_on = os.environ.get("MINING_ENABLE_IMAGE_CAPTION", "").strip().lower() in (
             "1", "true", "yes",
         )
-        cfg = MiningConfig()
-        result["image_captioner"] = ImageCaptioner(
-            base_url=llm_base_url,
+        result["image_captioner"] = _init_image_captioner(
+            llm_base_url,
             knowledge_domain=knowledge_domain,
             enabled=legacy_on,
-            call_mode=cfg.llm_call_mode,
         )
     except (ImportError, Exception):
         pass
 
     return result
+
+
+def _init_image_captioner(
+    llm_base_url: str | None,
+    *,
+    knowledge_domain: str | None = None,
+    enabled: bool = False,
+):
+    """组合根构造 ImageCaptioner：异步参数全量取自 MiningConfig。"""
+    from knowledge_mining.mining.infra.mining_config import MiningConfig
+    from knowledge_mining.mining.stages.image_caption import ImageCaptioner
+
+    cfg = MiningConfig()
+    return ImageCaptioner(
+        base_url=llm_base_url,
+        knowledge_domain=knowledge_domain,
+        enabled=enabled,
+        call_mode=cfg.llm_call_mode,
+        async_poll_interval=cfg.llm_async_poll_interval,
+        async_wait_timeout=cfg.llm_async_chat_wait_timeout,
+        async_max_attempts=cfg.llm_async_max_attempts,
+    )
+
+
+def _close_llm_resources(*objs: Any) -> None:
+    """Run 终止路径的确定性释放：duck-typed close，异常不外溢。
+
+    同步回退实现没有 close()——静默跳过；双重关闭幂等（LlmTaskClient
+    契约）。
+    """
+    for obj in objs:
+        closer = getattr(obj, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:
+                logger.debug("llm resource close failed", exc_info=True)
 
 
 def _init_resolver(asset_db: AssetCoreDB, profile: DomainProfile | None) -> Any | None:

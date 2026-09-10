@@ -126,6 +126,8 @@ class LLMServiceAsyncEmbeddingGenerator:
         knowledge_domain: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
         self._client = LlmTaskClient(
             base_url=base_url,
             poll_interval=poll_interval,
@@ -136,15 +138,21 @@ class LLMServiceAsyncEmbeddingGenerator:
         self._batch_size = batch_size
         self._knowledge_domain = knowledge_domain
 
+    def close(self) -> None:
+        """Release the underlying task-channel client (end of run)."""
+        self._client.close()
+
     @staticmethod
     def _batch_key(batch: list[str]) -> str:
         """内容哈希幂等键：同内容同任务（文档共享快照/重跑天然去重）。
 
-        dead_letter 不在 llm_service 幂等查找范围（只匹配 succeeded/
-        running/queued），重提交会建新任务——正是期望的行为。
+        ``v1`` 是请求协议版本——批切分/键构成变化时递增，避免跨协议复用。
+        模型/维度等服务端契约由 llm_service 的 request fingerprint 校验
+        （同 key 不同请求不复用）。dead_letter 不在幂等查找范围（只匹配
+        succeeded/running/queued），重提交会建新任务——正是期望的行为。
         """
         digest = hashlib.sha256("\x1f".join(batch).encode("utf-8")).hexdigest()[:24]
-        return f"emb:{digest}"
+        return f"emb:v1:{digest}"
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """协议完备性保留：单任务提交全部 texts。
@@ -157,10 +165,15 @@ class LLMServiceAsyncEmbeddingGenerator:
         results = self._run([texts])
         return results[0]
 
-    def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
+    def embed_batch(
+        self, texts: list[str], batch_size: int | None = None,
+    ) -> list[list[float]]:
+        """按批提交并回填。省略 ``batch_size`` 时用构造值。"""
         if not texts:
             return []
-        size = batch_size or self._batch_size
+        size = batch_size if batch_size is not None else self._batch_size
+        if size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {size}")
         batches = [texts[i : i + size] for i in range(0, len(texts), size)]
         results = self._run(batches)
         out: list[list[float]] = []

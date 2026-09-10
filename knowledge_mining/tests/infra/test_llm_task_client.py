@@ -160,3 +160,84 @@ def test_wait_for_tasks_chunks_requests_over_status_chunk():
     out = client.wait_for_tasks(ids)
     assert all(entry["status"] == "timeout" for entry in out.values())
     assert seen_sizes and max(seen_sizes) <= 3
+
+
+# ---------------------------------------------------------------------------
+# 并发与生命周期（batch 审查问题四）
+# ---------------------------------------------------------------------------
+
+def test_submit_error_keeps_shared_client_usable():
+    """单请求失败不得关闭共享连接池：同一 client 实例继续可用。"""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(500, text="transient")
+        return httpx.Response(200, json={
+            "success": True, "data": {"task_id": "tid-ok", "status": "queued"},
+        })
+
+    client = LlmTaskClient(transport=httpx.MockTransport(handler))
+    first = client._get_client()
+    with pytest.raises(LlmTaskError):
+        client.submit_embedding(["poison"])
+    # 失败后未关闭未重建：同一线程与其他线程继续复用同一连接池
+    assert client._get_client() is first
+    assert client.submit_embedding(["ok"]) == "tid-ok"
+
+
+def test_close_is_idempotent_and_client_recreatable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "success": True, "data": {"task_id": "tid-1", "status": "queued"},
+        })
+
+    client = LlmTaskClient(transport=httpx.MockTransport(handler))
+    first = client._get_client()
+    client.close()
+    client.close()  # 双重关闭不得抛异常
+    assert first.is_closed
+    # 关闭后仍可重建（迟到的调用不崩）
+    recreated = client._get_client()
+    assert recreated is not first
+    assert client.submit_embedding(["a"]) == "tid-1"
+
+
+def test_concurrent_failure_does_not_break_other_threads():
+    """故障注入：一半线程持续 500，另一半的提交必须全部成功。"""
+    import threading
+
+    barrier = threading.Barrier(8)
+    good_ok = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        if any("poison" in str(v) for v in body.get("input", [])):
+            return httpx.Response(500, text="boom")
+        return httpx.Response(200, json={
+            "success": True, "data": {"task_id": "tid-x", "status": "queued"},
+        })
+
+    client = LlmTaskClient(transport=httpx.MockTransport(handler))
+
+    def worker(name: str, poison: bool) -> None:
+        barrier.wait()
+        for _ in range(5):
+            if poison:
+                with pytest.raises(LlmTaskError):
+                    client.submit_embedding(["poison"])
+            else:
+                good_ok.append(client.submit_embedding([f"good-{name}"]) == "tid-x")
+
+    threads = [
+        threading.Thread(target=worker, args=(f"p{i}", True)) for i in range(4)
+    ] + [
+        threading.Thread(target=worker, args=(f"g{i}", False)) for i in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(good_ok) == 20 and all(good_ok), "好请求被其他线程的失败中断"

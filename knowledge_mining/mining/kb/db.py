@@ -126,15 +126,24 @@ LEFT JOIN LATERAL (
 # 无 KB Build → 子查询为 NULL → 恒 FALSE（继续走 published 等旧档位）。
 _KB_BUILD_JOIN_SQL = """
 LEFT JOIN LATERAL (
-    SELECT bs.selection_status = 'active' AS in_active_build
+    SELECT bs.selection_status = 'active' AS in_active_build,
+           s.raw_content_hash AS serving_raw_hash
     FROM asset_build_document_snapshots bs
     JOIN asset_builds b ON b.id = bs.build_id
+    LEFT JOIN asset_document_snapshots s ON s.id = bs.document_snapshot_id
     WHERE bs.document_id = d.id
       AND b.kb_id = d.kb_id
       AND b.status IN ('validated', 'published')
     ORDER BY b.created_at DESC, b.id DESC
     LIMIT 1
 ) kbmv ON TRUE"""
+
+# A separate freshness fact: keep the established status vocabulary unchanged.
+_KNOWLEDGE_OUTDATED_SQL = """COALESCE(
+    kbmv.in_active_build
+    AND NULLIF(kbmv.serving_raw_hash, '') IS NOT NULL
+    AND NULLIF(d.source_raw_hash, '') IS NOT NULL
+    AND kbmv.serving_raw_hash <> d.source_raw_hash, FALSE)"""
 
 # published / withdrawn 两档要查 active release，是这段里最贵的部分（每文档两次
 # release⋈snapshot 的 EXISTS）。单独拆出来，好让只关心「挖没挖成」的调用方（概览页聚合）
@@ -636,7 +645,9 @@ WITH latest AS (
            bs.document_snapshot_id, bs.selection_status
     FROM asset_build_document_snapshots bs
     JOIN asset_builds b ON b.id = bs.build_id
+    JOIN asset_documents d ON d.id = bs.document_id
     WHERE b.kb_id = ANY(%(kb)s)
+      AND b.kb_id = d.kb_id AND d.deleted_at IS NULL
       AND b.status IN ('validated', 'published')
     ORDER BY bs.document_id, b.created_at DESC, b.id DESC
 ), cur AS (
@@ -1017,7 +1028,7 @@ WITH latest AS (
                           s.created_at AS snapshot_created_at
                    FROM (
                        SELECT DISTINCT ON (bs.document_id)
-                              bs.document_snapshot_id, bs.build_id, bs.selection_status
+                              bs.document_id, bs.document_snapshot_id, bs.build_id, bs.selection_status
                        FROM asset_build_document_snapshots bs
                        JOIN asset_builds b ON b.id = bs.build_id
                        JOIN asset_documents d ON d.id = bs.document_id
@@ -1029,7 +1040,7 @@ WITH latest AS (
                        ORDER BY bs.document_id, b.created_at DESC, b.id DESC
                    ) t
                    JOIN asset_document_snapshot_links l
-                     ON l.document_snapshot_id = t.document_snapshot_id
+                     ON l.document_snapshot_id = t.document_snapshot_id AND l.document_id = t.document_id
                    JOIN asset_document_snapshots s ON s.id = t.document_snapshot_id
                    WHERE t.selection_status = 'active'
                    ORDER BY l.linked_at DESC
@@ -1248,22 +1259,26 @@ WITH latest AS (
         field and must not be populated by new uploads: object identity plus
         the first content revision are committed with the document row.
         """
+        from .location_repository import lock_kb, assert_location_free, assert_directory_exists
         now = _utcnow()
         async with self._pool.connection() as conn:
+            await lock_kb(conn, kb_id)
+            folder_id = await assert_directory_exists(conn, kb_id, directory_path)
+            await assert_location_free(conn, kb_id, directory_path, document_name)
             cur = await conn.execute(
                 """INSERT INTO asset_documents
                      (id, domain, document_key, document_name, document_type,
                       metadata_json, created_at, kb_id, directory_path, owner_id,
                       file_size, modified_at, storage_object_id, source_raw_hash,
-                      content_revision, content_updated_at)
+                      content_revision, content_updated_at, folder_id)
                    VALUES
                      (%(id)s, %(dom)s, %(k)s, %(n)s, %(t)s, '{}'::jsonb,
                       %(now)s, %(kb)s, %(dp)s, %(own)s, %(fs)s, %(ma)s,
-                      %(so)s, %(hash)s, 1, %(now2)s)
+                      %(so)s, %(hash)s, 1, %(now2)s, %(folder)s)
                    RETURNING id, domain, kb_id, document_key, document_name,
                              document_type, storage_path, directory_path, owner_id,
                              created_at, file_size, modified_at, storage_object_id,
-                             source_raw_hash, content_revision""",
+                             source_raw_hash, content_revision, folder_id""",
                 {
                     "id": _new_id(), "dom": domain, "k": document_key,
                     "n": document_name, "t": document_type, "now": now,
@@ -1273,7 +1288,7 @@ WITH latest AS (
                     "now2": now,
                     "kb": kb_id, "dp": directory_path, "own": owner_id,
                     "fs": file_size, "ma": modified_at,
-                    "so": storage_object_id, "hash": source_raw_hash,
+                    "so": storage_object_id, "hash": source_raw_hash, "folder": folder_id,
                 },
             )
             return dict(await cur.fetchone())  # type: ignore[arg-type]
@@ -1297,7 +1312,8 @@ WITH latest AS (
                 f"""SELECT d.id, d.domain, d.kb_id, d.document_key, d.document_name,
                            d.document_type, d.storage_path, d.directory_path, d.owner_id,
                            d.created_at, d.file_size, d.modified_at,
-                           d.storage_object_id, d.source_raw_hash, d.content_revision,
+                           d.storage_object_id, d.source_raw_hash, d.content_revision, d.folder_id,
+                           {_KNOWLEDGE_OUTDATED_SQL} AS knowledge_outdated,
                            rs.rd_action,
                            {_STATUS_CASE_SQL} AS status
                     FROM asset_documents d
@@ -1322,7 +1338,8 @@ WITH latest AS (
                 f"""SELECT d.id, d.domain, d.kb_id, d.document_key, d.document_name,
                            d.document_type, d.storage_path, d.directory_path, d.owner_id,
                            d.metadata_json, d.created_at, d.file_size, d.modified_at,
-                           d.storage_object_id, d.source_raw_hash, d.content_revision,
+                           d.storage_object_id, d.source_raw_hash, d.content_revision, d.folder_id,
+                           {_KNOWLEDGE_OUTDATED_SQL} AS knowledge_outdated,
                            {_STATUS_CASE_SQL} AS status
                     FROM asset_documents d
                     {_STATUS_JOIN_SQL}
@@ -1335,13 +1352,27 @@ WITH latest AS (
     async def revive_document_from_storage(
         self, document_id: str, *, storage_object_id: str, source_raw_hash: str,
         file_size: int | None = None, modified_at: str | None = None,
+        expected_kb_id: str | None = None, expected_directory_path: str | None = None,
+        expected_document_name: str | None = None,
     ) -> dict[str, Any] | None:
         """软删文档的重传复活（P08-S1）：软删行占着 uq_asset_documents_kb_key，
         同名重传不能 409——清软删标记并把对象指针/哈希/revision 前移到新内容。"""
+        from .location_repository import lock_document, assert_location_free, assert_directory_exists
         async with self._pool.connection() as conn:
+            doc = await lock_document(conn, document_id)
+            if doc is None or doc["deleted_at"] is None:
+                return None
+            if any(expected is not None and actual != expected for actual, expected in (
+                (doc["kb_id"], expected_kb_id),
+                (doc["directory_path"] or "", expected_directory_path),
+                (doc["document_name"], expected_document_name),
+            )):
+                return None
+            folder_id = await assert_directory_exists(conn, doc["kb_id"], doc["directory_path"])
+            await assert_location_free(conn, doc["kb_id"], doc["directory_path"], doc["document_name"], document_id)
             cur = await conn.execute(
                 """UPDATE asset_documents
-                   SET deleted_at = NULL, storage_object_id = %(so)s,
+                   SET deleted_at = NULL, folder_id = %(folder)s, storage_object_id = %(so)s,
                        source_raw_hash = %(hash)s, file_size = COALESCE(%(fs)s, file_size),
                        modified_at = %(ma)s,
                        content_revision = content_revision + 1,
@@ -1356,7 +1387,7 @@ WITH latest AS (
                  # 供两列会 AmbiguousParameter（PG 会把转型绑定到参数本身），
                  # 必须拆成两个独立参数。
                  "fs": file_size, "ma": modified_at or _utcnow(),
-                 "ca": modified_at or _utcnow(), "id": document_id},
+                 "ca": modified_at or _utcnow(), "id": document_id, "folder": folder_id},
             )
             row = await cur.fetchone()
             return dict(row) if row else None
@@ -1388,10 +1419,16 @@ WITH latest AS (
 
     async def clear_document_deleted(self, document_id: str) -> None:
         """restore：清软删标记（身份行与对象指针不变）。"""
+        from .location_repository import lock_document, assert_location_free, assert_directory_exists
         async with self._pool.connection() as conn:
+            doc = await lock_document(conn, document_id)
+            if doc is None:
+                return
+            folder_id = await assert_directory_exists(conn, doc["kb_id"], doc["directory_path"])
+            await assert_location_free(conn, doc["kb_id"], doc["directory_path"], doc["document_name"], document_id)
             await conn.execute(
-                "UPDATE asset_documents SET deleted_at = NULL WHERE id = %s",
-                [document_id],
+                "UPDATE asset_documents SET deleted_at = NULL, folder_id = %s WHERE id = %s",
+                [folder_id, document_id],
             )
 
     async def update_document_identity(
@@ -1408,7 +1445,13 @@ WITH latest AS (
             params["t"] = document_type
         if not fields:
             return await self.get_document_identity(document_id)
+        from .location_repository import lock_document, assert_location_free
         async with self._pool.connection() as conn:
+            doc = await lock_document(conn, document_id)
+            if doc is None or doc["deleted_at"] is not None:
+                return None
+            if document_name is not None:
+                await assert_location_free(conn, doc["kb_id"], doc["directory_path"], document_name, document_id)
             cur = await conn.execute(
                 "UPDATE asset_documents SET " + ", ".join(fields) + " WHERE id = %(id)s "
                 "RETURNING id, document_key, document_name, document_type, storage_path, directory_path",
@@ -1479,7 +1522,13 @@ WITH latest AS (
         self, *, folder_id: str, kb_id: str, parent_id: str | None, name: str,
         path: str, created_by: str | None = None,
     ) -> dict[str, Any]:
+        from .location_repository import lock_kb, folder_path
         async with self._pool.connection() as conn:
+            await lock_kb(conn, kb_id)
+            parent_path = await folder_path(conn, kb_id, parent_id)
+            expected_path = f"{parent_path}/{name}" if parent_path else name
+            if path != expected_path:
+                raise ValueError("parent folder changed; refresh and try again")
             cur = await conn.execute(
                 """INSERT INTO kb_folders (id, kb_id, parent_id, name, path, created_at, created_by)
                    VALUES (%(id)s, %(kb)s, %(p)s, %(n)s, %(path)s, %(t)s, %(cb)s)
@@ -1503,72 +1552,78 @@ WITH latest AS (
             cur = await conn.execute(
                 """SELECT COUNT(*) AS n FROM asset_documents
                    WHERE kb_id = %s AND deleted_at IS NULL
-                     AND (directory_path = %s OR directory_path LIKE %s)""",
-                [kb_id, path, path + "/%"],
+                     AND (directory_path = %s OR starts_with(directory_path, %s))""",
+                [kb_id, path, path + "/"],
             )
             return int((await cur.fetchone())["n"])
 
     async def delete_folder_row(self, folder_id: str) -> None:
+        from .location_repository import lock_kb
         async with self._pool.connection() as conn:
+            cur = await conn.execute("SELECT kb_id FROM kb_folders WHERE id = %s", [folder_id])
+            folder = await cur.fetchone()
+            if folder is None:
+                return
+            await lock_kb(conn, folder["kb_id"])
+            cur = await conn.execute("SELECT * FROM kb_folders WHERE id = %s", [folder_id])
+            folder = await cur.fetchone()
+            if folder is None:
+                return
+            cur = await conn.execute(
+                """SELECT 1 WHERE EXISTS (SELECT 1 FROM kb_folders WHERE parent_id = %s)
+                   OR EXISTS (SELECT 1 FROM asset_documents WHERE kb_id = %s
+                     AND deleted_at IS NULL AND (directory_path = %s OR starts_with(directory_path, %s)))""",
+                [folder_id, folder["kb_id"], folder["path"], folder["path"] + "/"])
+            if await cur.fetchone():
+                raise ValueError("folder is not empty")
             await conn.execute("DELETE FROM kb_folders WHERE id = %s", [folder_id])
 
-    # -- folder move / rename (G3)：身份键不变，只改位置（path / directory_path / storage_path）--
-
-    async def update_folder_name(self, folder_id: str, name: str) -> None:
+    async def move_document_logically(self, document_id: str, *, target_folder_id: str | None):
+        from .location_repository import move_document
         async with self._pool.connection() as conn:
-            await conn.execute(
-                "UPDATE kb_folders SET name = %s WHERE id = %s", [name, folder_id],
-            )
+            return await move_document(conn, document_id, target_folder_id)
 
-    async def set_folder_parent(self, folder_id: str, parent_id: str | None) -> None:
-        """parent_id 为 None 表示移到根。path 由 rewrite_folder_subtree_paths 处理。"""
+    async def relocate_folder_logically(self, folder_id: str, *, kb_id: str, name: str, parent_id: str | None, expected_path: str):
+        from .location_repository import relocate_folder
         async with self._pool.connection() as conn:
-            await conn.execute(
-                "UPDATE kb_folders SET parent_id = %s WHERE id = %s", [parent_id, folder_id],
-            )
+            return await relocate_folder(conn, folder_id, kb_id, name, parent_id, expected_path)
 
-    async def rewrite_folder_subtree_paths(
-        self, *, kb_id: str, old_prefix: str, new_prefix: str,
-    ) -> int:
-        """把 path == old_prefix 或 LIKE 'old_prefix/%' 的文件夹 path 前缀替换为 new_prefix。
-
-        返回受影响行数。path 是单列、纯前缀关系，SQL substr 重写安全。
-        """
+    async def find_document_by_location(self, kb_id: str, directory_path: str, document_name: str, *, include_deleted: bool = False):
+        soft = "" if include_deleted else " AND deleted_at IS NULL"
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """UPDATE kb_folders
-                   SET path = %s || substr(path, %s)
-                   WHERE kb_id = %s
-                     AND (path = %s OR path LIKE %s)""",
-                [new_prefix, len(old_prefix) + 1, kb_id, old_prefix, old_prefix + "/%"],
-            )
-            return cur.rowcount if hasattr(cur, "rowcount") else 0
+                """SELECT id, document_key, deleted_at FROM asset_documents
+                   WHERE kb_id = %s AND COALESCE(directory_path, '') = %s
+                     AND document_name = %s""" + soft +
+                " ORDER BY deleted_at NULLS FIRST, created_at DESC, id DESC LIMIT 1",
+                [kb_id, directory_path or "", document_name])
+            row = await cur.fetchone()
+            return dict(row) if row else None
 
-    async def list_docs_under_prefix(self, *, kb_id: str, prefix: str) -> list[dict[str, Any]]:
-        """列出身处某文件夹（含子文件夹）下的文档：directory_path = prefix 或 LIKE 'prefix/%'。"""
+    async def replace_document_content(
+        self, document_id: str, *, expected_revision: int, storage_object_id: str,
+        source_raw_hash: str, file_size: int, mime: str | None = None,
+        expected_document_name: str | None = None,
+    ) -> dict[str, Any] | None:
+        """CAS advances uploaded content; serving selections remain untouched."""
+        if expected_revision < 1 or file_size < 0 or not storage_object_id or not source_raw_hash:
+            raise ValueError("invalid content replacement")
+        name_match = " AND document_name = %(expected_name)s" if expected_document_name is not None else ""
+        now = _utcnow()
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """SELECT id, document_name, directory_path, storage_path
-                   FROM asset_documents
-                   WHERE kb_id = %s AND deleted_at IS NULL
-                     AND (directory_path = %s OR directory_path LIKE %s)""",
-                [kb_id, prefix, prefix + "/%"],
-            )
-            return [dict(r) for r in await cur.fetchall()]
-
-    async def update_doc_location(
-        self, document_id: str, *, directory_path: str, storage_path: str, document_key: str,
-    ) -> None:
-        """移动文件：更新位置 + document_key。
-
-        document_key 必须同步为新磁盘相对路径——挖掘从磁盘相对路径派生 key
-        （jobs/run.py: doc_key = doc:/{relative_path}），若移动后 asset_documents.document_key
-        仍停在旧路径，状态派生 LATERAL 按 document_key 匹配 mining_run_documents 会失败 →
-        永远显示 uploaded。改名（patch_document）不动磁盘文件，document_key 不变。
-        """
-        async with self._pool.connection() as conn:
-            await conn.execute(
-                "UPDATE asset_documents SET directory_path = %s, storage_path = %s, document_key = %s "
-                "WHERE id = %s",
-                [directory_path, storage_path, document_key, document_id],
-            )
+                f"""UPDATE asset_documents SET storage_object_id = %(object)s,
+                       source_raw_hash = %(hash)s, file_size = %(size)s,
+                       content_revision = content_revision + 1, content_updated_at = %(now)s,
+                       modified_at = %(modified_at)s
+                   WHERE id = %(id)s AND content_revision = %(revision)s{name_match}
+                     AND deleted_at IS NULL AND EXISTS (
+                       SELECT 1 FROM knowledge_bases k WHERE k.id = asset_documents.kb_id
+                         AND k.status = 'active')
+                   RETURNING *""",
+                {"object": storage_object_id, "hash": source_raw_hash, "size": file_size,
+                 # Separate bindings: modified_at is TEXT; content_updated_at is TIMESTAMPTZ.
+                 "now": now, "modified_at": now, "id": document_id, "revision": expected_revision,
+                 "expected_name": expected_document_name})
+            row = await cur.fetchone()
+            return dict(row) if row else None

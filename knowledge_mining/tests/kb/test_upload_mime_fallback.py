@@ -45,6 +45,10 @@ async def test_upload_records_resolved_mime_for_markdown(tmp_path) -> None:
         async def get_kb(self, kb_id):
             return {"id": kb_id, "domain": "generic"}
 
+        async def find_document_by_location(self, kb_id, directory_path, document_name, *, include_deleted=False):
+            from knowledge_mining.mining.kb.storage import build_document_key
+            return await self.find_document_by_key(kb_id, build_document_key(directory_path, document_name), include_deleted=include_deleted)
+
         async def find_document_by_key(self, kb_id, document_key, *, include_deleted=False):
             return None
 

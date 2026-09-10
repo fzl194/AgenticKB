@@ -179,6 +179,7 @@ async def test_multi_format_document_to_structured_data(fmt: str, tmp_path):
     # 2. 切片编译：生产默认档（whole 整表 + 大窗口 + 小片治理）
     compiled = services.segment_compile_service.compile_for_snapshot(
         snapshot_id=outcome.snapshot_id,
+        frozen_input=outcome.frozen_input,
         parse_ir_storage_object_id=outcome.parse_ir_storage_object_id,
         params={},
     )
@@ -246,11 +247,13 @@ async def test_same_content_shares_snapshot_and_compiles_once(tmp_path):
 
     first = services.segment_compile_service.compile_for_snapshot(
         snapshot_id=outcomes[0].snapshot_id,
+        frozen_input=outcomes[0].frozen_input,
         parse_ir_storage_object_id=outcomes[0].parse_ir_storage_object_id,
         params={"tableView": "rows"},
     )
     second = services.segment_compile_service.compile_for_snapshot(
         snapshot_id=outcomes[1].snapshot_id,
+        frozen_input=outcomes[1].frozen_input,
         parse_ir_storage_object_id=outcomes[1].parse_ir_storage_object_id,
         params={"tableView": "rows"},
     )

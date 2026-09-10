@@ -24,7 +24,7 @@ from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.deps import get_document_service, get_folder_service, get_kb_db
 from knowledge_mining.mining.kb.routes.kbs import _map_error
 from knowledge_mining.mining.kb.services.document_service import (
-    DocumentService, UploadTooLarge, SYNC_ARCHIVE_MEMBERS, count_archive_members,
+    ContentRevisionConflict, DocumentService, UploadTooLarge, SYNC_ARCHIVE_MEMBERS, count_archive_members,
 )
 from knowledge_mining.mining.kb.services.folder_service import FolderService
 from knowledge_mining.mining.kb.services.kb_service import Duplicate, Forbidden, NotFound
@@ -229,7 +229,7 @@ async def upload_document(
         raise _map_error(exc) from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
-    except UniqueViolation as exc:
+    except (UniqueViolation, Duplicate) as exc:
         # KB 内同名文档已存在（uq_asset_documents_kb_key）——幂等冲突给 409，
         # 而不是把 SQL 异常裸抛成 500。
         raise HTTPException(
@@ -292,8 +292,36 @@ async def patch_document(
             document_id=document_id, user_id=user["id"],
             document_name=body.document_name, document_type=body.document_type,
         )
+    except (NotFound, Forbidden, Duplicate) as exc:
+        raise _map_error(exc) from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@router.post("/{document_id}/content")
+async def replace_document_content(
+    kb_id: str,
+    document_id: str,
+    file: UploadFile = File(...),
+    expected_revision: int = Form(..., ge=0),
+    user: dict[str, Any] = Depends(current_user),
+    svc: DocumentService = Depends(get_document_service),
+):
+    """Explicitly replace current bytes; never silently overwrite on upload."""
+    try:
+        return await svc.replace_content(
+            kb_id=kb_id, document_id=document_id, user_id=user["id"],
+            filename=file.filename or "", expected_revision=expected_revision,
+            stream=_upload_file_chunks(file), max_bytes=UploadConfig().upload_max_file_size,
+        )
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
+    except ContentRevisionConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except UploadTooLarge as exc:
+        raise HTTPException(413, "替换文件超过上传大小限制。") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 @router.get("/{document_id}/preview-url")
@@ -382,7 +410,7 @@ async def restore_document(
     """恢复软删文档（写权限校验在 service 内；幂等——未删状态原样返回）。"""
     try:
         return await svc.restore(document_id=document_id, user_id=user["id"])
-    except (NotFound, Forbidden) as exc:
+    except (NotFound, Forbidden, Duplicate) as exc:
         raise _map_error(exc) from None
 
 

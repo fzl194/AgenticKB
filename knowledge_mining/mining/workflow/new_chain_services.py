@@ -246,15 +246,19 @@ class DocumentParseFacade:
                 f"parse run {run.id} ended {run.status}: "
                 f"{run.error_message or 'no snapshot produced'}"
             )
-        return run
+        from .compiled_input import ParsedInputResult
+
+        return ParsedInputResult(run=run, frozen_input=frozen)
 
 
 class SegmentCompileFacade:
     """工作流 → 新链切片编译的同步门面（§4.12：策略档位生效）."""
 
-    def __init__(self, *, compiler: Any, segment_store: Any) -> None:
+    def __init__(self, *, compiler: Any, segment_store: Any,
+                 snapshot_compiler: Any | None = None) -> None:
         self._compiler = compiler
         self._store = segment_store
+        self._snapshot_compiler = snapshot_compiler
 
     def compile_for_snapshot(
         self,
@@ -262,6 +266,7 @@ class SegmentCompileFacade:
         snapshot_id: str | None,
         parse_ir_storage_object_id: str | None,
         params: dict,
+        frozen_input: Any | None = None,
     ) -> Any:
         """编译并返回切片列表（CompiledSegment 元组）."""
         if not snapshot_id or not parse_ir_storage_object_id:
@@ -282,14 +287,20 @@ class SegmentCompileFacade:
                 params.get("includeFigureCaptions", True)
             ),
         )
-        result = _run_sync(
-            self._compiler.compile(
-                snapshot_id,
-                parse_ir_storage_object_id=parse_ir_storage_object_id,
-                document_key=snapshot_id,
-                policy=policy,
+        if self._snapshot_compiler is not None:
+            result = _run_sync(self._snapshot_compiler.compile(
+                snapshot_id, frozen_input=frozen_input, policy=policy,
+            ))
+            snapshot_id = result.snapshot_id
+        else:
+            result = _run_sync(
+                self._compiler.compile(
+                    snapshot_id,
+                    parse_ir_storage_object_id=parse_ir_storage_object_id,
+                    document_key=snapshot_id,
+                    policy=policy,
+                )
             )
-        )
         segments = _run_sync(self._store.list_for_snapshot(snapshot_id))
         from types import SimpleNamespace
 
@@ -570,6 +581,8 @@ def build_new_chain_services(
         object_store=object_store, storage_objects=storage_objects,
         segment_store=segment_store,
     )
+    from .compiled_input import SnapshotCompilationCoordinator
+
     return NewChainServices(
         document_parse_service=DocumentParseFacade(
             operator=operator, documents=documents,
@@ -577,6 +590,9 @@ def build_new_chain_services(
         ),
         segment_compile_service=SegmentCompileFacade(
             compiler=compiler, segment_store=segment_store,
+            snapshot_compiler=SnapshotCompilationCoordinator(
+                snapshots=snapshots, commit_service=commit, compiler=compiler,
+            ),
         ),
         retrieval_project_service=RetrieProjectFacade(
             segment_store=segment_store,

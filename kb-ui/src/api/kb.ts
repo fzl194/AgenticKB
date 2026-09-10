@@ -179,6 +179,20 @@ export function useKbApi() {
       return extractOne<KbDocument>(data)
     },
 
+    /** 显式替换原件；保留文档身份、名称、目录和已生效知识，不自动挖掘。 */
+    async replaceDocumentContent(
+      kbId: string, docId: string, file: File, expectedRevision: number,
+    ): Promise<KbDocument> {
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+        throw new Error('文件版本信息无效，请刷新后重试')
+      }
+      const form = new FormData()
+      form.append('file', file)
+      form.append('expected_revision', String(expectedRevision))
+      const { data } = await client.post(`/api/kb/${kbId}/documents/${docId}/content`, form)
+      return extractOne<KbDocument>(data)
+    },
+
     /** 归档上传（zip/hdx/chm）：小包同步返回文档列表；大包返回任务 ID（HTTP 202）。 */
     async uploadArchive(
       kbId: string, file: File, directory?: string,

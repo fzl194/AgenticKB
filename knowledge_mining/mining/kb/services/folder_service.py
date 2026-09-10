@@ -1,25 +1,16 @@
-"""KB 文件夹管理 —— 一等文件夹（kb_folders）的磁盘 + DB 协调。
-
-kb_folders 是文件夹结构的唯一真相源；磁盘目录与之镜像（建→mkdir，删空→rmdir）。
-权限复用 KbService._assert_write/_assert_read。移动/改名同步 document_key 为新磁盘相对路径
-（mining 按磁盘相对路径派生 key，否则状态派生 LATERAL 对不上 → 永远 uploaded）；id 不变。
-mining 的 rglob 会自然 walk 出层级。
-"""
+"""KB logical folders. Object-store files and stable document identities do not move."""
 from __future__ import annotations
 
-import shutil
 import uuid
 from pathlib import Path
 from typing import Any
 
 from psycopg.errors import UniqueViolation
 
-from knowledge_mining.mining.infra.upload_config import UploadConfig
-from knowledge_mining.mining.kb.storage import build_document_key
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.services.kb_service import Duplicate, KbService, NotFound
 from knowledge_mining.mining.kb.storage import (
-    build_folder_dir, join_path, normalize_folder_name,
+    join_path, normalize_folder_name,
 )
 
 
@@ -37,7 +28,7 @@ class FolderService:
     def __init__(self, db: KbDB, upload_root: Path | None = None) -> None:
         self._db = db
         self._svc = KbService(db)
-        self._upload_root = Path(upload_root) if upload_root else UploadConfig().upload_root_path
+        # upload_root remains accepted for caller compatibility; folders are logical.
 
     async def list_folders(self, *, kb_id: str, user_id: str) -> list[dict[str, Any]]:
         await self._svc._assert_read(kb_id, user_id)
@@ -67,11 +58,13 @@ class FolderService:
         if await self._db.find_folder_by_parent(kb_id=kb_id, parent_id=parent_id, name=name):
             raise Duplicate(f"{kb_id}/{join_path(parent_path, name)}")
         path = join_path(parent_path, name)
-        build_folder_dir(self._upload_root, kb_id, path).mkdir(parents=True, exist_ok=True)
-        return await self._db.insert_folder(
-            folder_id=uuid.uuid4().hex, kb_id=kb_id, parent_id=parent_id, name=name,
-            path=path, created_by=user_id,
-        )
+        try:
+            return await self._db.insert_folder(
+                folder_id=uuid.uuid4().hex, kb_id=kb_id, parent_id=parent_id, name=name,
+                path=path, created_by=user_id,
+            )
+        except UniqueViolation as exc:
+            raise Duplicate(f"{kb_id}/{path}") from exc
 
     async def ensure_folder_path(
         self, *, kb_id: str, path: str, user_id: str,
@@ -95,7 +88,6 @@ class FolderService:
                 folder = existing
                 parent_id = existing["id"]
                 continue
-            build_folder_dir(self._upload_root, kb_id, acc).mkdir(parents=True, exist_ok=True)
             try:
                 folder = await self._db.insert_folder(
                     folder_id=uuid.uuid4().hex, kb_id=kb_id, parent_id=parent_id,
@@ -119,34 +111,9 @@ class FolderService:
         docs = await self._db.count_docs_under_path(kb_id=kb_id, path=folder["path"])
         if children or docs:
             raise ValueError(f"folder not empty: {children} subfolder(s), {docs} doc(s)")
-        d = build_folder_dir(self._upload_root, kb_id, folder["path"])
-        if d.is_dir():
-            d.rmdir()  # 仅空目录可删；非空会 OSError（双保险）
         await self._db.delete_folder_row(folder_id)
 
     # ----------------------------------------------- move / rename (G3)
-
-    def _kb_base(self, kb_id: str) -> Path:
-        return (self._upload_root / kb_id).resolve()
-
-    def _doc_storage(self, kb_id: str, directory_path: str, document_name: str) -> str:
-        base = self._kb_base(kb_id)
-        return str(base / directory_path / document_name) if directory_path else str(base / document_name)
-
-    async def _relocate_docs(self, *, kb_id: str, old_prefix: str, new_prefix: str) -> None:
-        """把身处 old_prefix（含子文件夹）下的文档 directory_path/storage_path/document_key 前缀替换。
-
-        document_key 同步为新磁盘相对路径（mining 按磁盘相对路径派生 key）；id 不动。
-        """
-        for d in await self._db.list_docs_under_prefix(kb_id=kb_id, prefix=old_prefix):
-            old_dir = d["directory_path"] or ""
-            suffix = old_dir[len(old_prefix):]  # "" 或 "/sub"
-            new_dir = new_prefix + suffix
-            new_storage = self._doc_storage(kb_id, new_dir, d["document_name"])
-            await self._db.update_doc_location(
-                d["id"], directory_path=new_dir, storage_path=new_storage,
-                document_key=build_document_key(new_dir, d["document_name"]),
-            )
 
     async def rename_folder(self, *, folder_id: str, name: str, user_id: str) -> dict[str, Any]:
         folder = await self._db.get_folder(folder_id)
@@ -159,19 +126,14 @@ class FolderService:
             return folder
         if await self._db.find_folder_by_parent(kb_id=kb_id, parent_id=folder["parent_id"], name=name):
             raise Duplicate(f"{kb_id}/{join_path(_parent_of(folder['path']), name)}")
-        old_path = folder["path"]
-        new_path = join_path(_parent_of(old_path), name)
-        base = self._kb_base(kb_id)
-        shutil.move(str(base / old_path), str(base / new_path))
         try:
-            await self._db.update_folder_name(folder_id, name)
-            await self._db.rewrite_folder_subtree_paths(
-                kb_id=kb_id, old_prefix=old_path, new_prefix=new_path)
-            await self._relocate_docs(kb_id=kb_id, old_prefix=old_path, new_prefix=new_path)
-        except Exception:
-            shutil.move(str(base / new_path), str(base / old_path))  # 补偿回滚磁盘
-            raise
-        return await self._db.get_folder(folder_id)
+            result = await self._db.relocate_folder_logically(
+                folder_id, kb_id=kb_id, name=name, parent_id=folder["parent_id"], expected_path=folder["path"])
+        except UniqueViolation as exc:
+            raise Duplicate("target folder already exists") from exc
+        if result is None:
+            raise NotFound(folder_id)
+        return result
 
     async def move_folder(
         self, *, folder_id: str, target_parent_id: str | None, user_id: str,
@@ -199,19 +161,14 @@ class FolderService:
             kb_id=kb_id, parent_id=target_parent_id, name=folder["name"]
         ):
             raise Duplicate(f"{kb_id}/{new_path}")
-        base = self._kb_base(kb_id)
-        if new_parent_path:
-            (base / new_parent_path).mkdir(parents=True, exist_ok=True)
-        shutil.move(str(base / old_path), str(base / new_path))
         try:
-            await self._db.set_folder_parent(folder_id, target_parent_id)
-            await self._db.rewrite_folder_subtree_paths(
-                kb_id=kb_id, old_prefix=old_path, new_prefix=new_path)
-            await self._relocate_docs(kb_id=kb_id, old_prefix=old_path, new_prefix=new_path)
-        except Exception:
-            shutil.move(str(base / new_path), str(base / old_path))
-            raise
-        return await self._db.get_folder(folder_id)
+            result = await self._db.relocate_folder_logically(
+                folder_id, kb_id=kb_id, name=folder["name"], parent_id=target_parent_id, expected_path=folder["path"])
+        except UniqueViolation as exc:
+            raise Duplicate("target folder already exists") from exc
+        if result is None:
+            raise NotFound(folder_id)
+        return result
 
     async def move_document(
         self, *, document_id: str, target_folder_id: str | None, user_id: str,
@@ -230,17 +187,10 @@ class FolderService:
         old_dir = doc["directory_path"] or ""
         if old_dir == new_dir:
             return doc
-        old_storage = doc["storage_path"]
-        new_storage = self._doc_storage(kb_id, new_dir, doc["document_name"])
-        new_key = build_document_key(new_dir, doc["document_name"])
-        base = self._kb_base(kb_id)
-        if new_dir:
-            (base / new_dir).mkdir(parents=True, exist_ok=True)
-        shutil.move(old_storage, new_storage)
         try:
-            await self._db.update_doc_location(
-                document_id, directory_path=new_dir, storage_path=new_storage, document_key=new_key)
-        except Exception:
-            shutil.move(new_storage, old_storage)
-            raise
-        return await self._db.get_document_identity(document_id)
+            result = await self._db.move_document_logically(document_id, target_folder_id=target_folder_id)
+        except UniqueViolation as exc:
+            raise Duplicate("a document with this name already exists in the target folder") from exc
+        if result is None:
+            raise NotFound(document_id)
+        return result

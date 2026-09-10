@@ -1,4 +1,4 @@
-"""G3 — 移动 / 改名（文件 + 文件夹子树）。身份键不变，只动位置 + 磁盘。"""
+"""G3 — 移动 / 改名（文件 + 文件夹子树）。对象文件的身份键不变，只改逻辑位置。"""
 from __future__ import annotations
 
 import pytest
@@ -20,15 +20,11 @@ async def _make_kb(db: KbDB, name: str):
 
 
 async def _make_doc(db, kb_id, directory_path, name, owner_id, tmp_path):
-    """建文档身份 + 落盘真实文件（移动测试需要文件存在）。返回 (id, document_key)。"""
-    base = tmp_path / kb_id
-    storage = (base / directory_path / name) if directory_path else (base / name)
-    storage.parent.mkdir(parents=True, exist_ok=True)
-    storage.write_bytes(b"content-" + name.encode())
-    doc = await db.insert_document_identity(
+    """Object-backed identity: no local source path exists."""
+    doc = await db.insert_document_from_storage(
         domain=DOMAIN, kb_id=kb_id,
-        document_key=build_document_key(directory_path, name),
-        document_name=name, storage_path=str(storage),
+        document_key=build_document_key(directory_path, name), document_name=name,
+        storage_object_id="object-" + name, source_raw_hash="hash-" + name,
         directory_path=directory_path or "", owner_id=owner_id,
     )
     return doc["id"], doc["document_key"]
@@ -49,16 +45,14 @@ async def test_rename_folder_relocates_subtree(async_pool, tmp_path):
     folders = {f["id"]: f for f in await svc.list_folders(kb_id=kb_id, user_id=owner_id)}
     assert folders[p["id"]]["path"] == "q" and folders[p["id"]]["name"] == "q"
     assert folders[c["id"]]["path"] == "q/c"
-    # 文档位置重写，document_key 同步为新磁盘相对路径（mining 按磁盘相对路径派生 key）
+    # 文档位置改变，稳定身份键不变
     dp = await db.get_document_identity(d_p_id)
     dc = await db.get_document_identity(d_c_id)
-    assert dp["directory_path"] == "q" and dp["storage_path"].replace("\\", "/").endswith("q/a.md")
-    assert dc["directory_path"] == "q/c" and dc["storage_path"].replace("\\", "/").endswith("q/c/b.md")
-    assert dp["document_key"] == "doc:/q/a.md" and dc["document_key"] == "doc:/q/c/b.md"
-    # 磁盘迁移
-    assert (tmp_path / kb_id / "q" / "a.md").is_file()
-    assert (tmp_path / kb_id / "q" / "c" / "b.md").is_file()
-    assert not (tmp_path / kb_id / "p").exists()
+    assert dp["directory_path"] == "q" and dp["storage_path"] is None
+    assert dc["directory_path"] == "q/c" and dc["storage_path"] is None
+    assert dp["document_key"] == k_p and dc["document_key"] == k_c
+    # 对象存储不做磁盘迁移
+    assert list(tmp_path.iterdir()) == []
 
 
 async def test_move_folder_into_another(async_pool, tmp_path):
@@ -75,8 +69,6 @@ async def test_move_folder_into_another(async_pool, tmp_path):
     assert folders[a["id"]]["path"] == "b/a" and folders[a["id"]]["parent_id"] == b["id"]
     doc = await db.get_document_identity(d_id)
     assert doc["directory_path"] == "b/a"
-    assert (tmp_path / kb_id / "b" / "a" / "x.md").is_file()
-    assert not (tmp_path / kb_id / "a").exists()
 
 
 async def test_move_folder_cycle_blocked(async_pool, tmp_path):
@@ -102,17 +94,14 @@ async def test_move_document_into_folder(async_pool, tmp_path):
 
     doc = await db.get_document_identity(d_id)
     assert doc["directory_path"] == "f"
-    assert doc["storage_path"].replace("\\", "/").endswith("f/root.md")
-    assert doc["document_key"] == "doc:/f/root.md"  # 同步为新磁盘相对路径
-    assert (tmp_path / kb_id / "f" / "root.md").is_file()
-    assert not (tmp_path / kb_id / "root.md").exists()
+    assert doc["storage_path"] is None
+    assert doc["document_key"] == key
 
-    # 移回根（target_folder_id=None）→ key 同步回根路径
+    # 移回根（target_folder_id=None），key 始终不变
     await svc.move_document(document_id=d_id, target_folder_id=None, user_id=owner_id)
     doc2 = await db.get_document_identity(d_id)
     assert doc2["directory_path"] == ""
     assert doc2["document_key"] == "doc:/root.md"
-    assert (tmp_path / kb_id / "root.md").is_file()
 
 
 async def test_move_viewer_forbidden(async_pool, tmp_path):

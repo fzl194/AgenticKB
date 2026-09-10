@@ -10,17 +10,16 @@ import pytest
 from knowledge_mining.mining.kb.db import KbDB
 
 
-def _kbdb(calls: list) -> KbDB:
+def _kbdb(calls: list, *, rows: list | None = None) -> KbDB:
     import asyncio
 
     class _Conn:
         async def execute(self, sql, params):
             calls.append((sql, params))
+            result = rows.pop(0) if rows else None
             class _Cur:
                 async def fetchone(self):
-                    class _Row(dict):
-                        pass
-                    return None
+                    return result
                 async def fetchall(self):
                     return []
             return _Cur()
@@ -82,13 +81,21 @@ def test_soft_delete_writes_timestamp_not_delete():
 
 def test_revive_moves_pointer_and_clears_deleted():
     calls: list = []
-    db = _kbdb(calls)
+    doc = {"id": "doc-1", "kb_id": "kb-1", "directory_path": "",
+           "document_name": "a.pdf", "deleted_at": "2026-08-01", "content_revision": 1}
+    rows = [{"kb_id": "kb-1"}, {"id": "kb-1"}, doc, None,
+            {**doc, "deleted_at": None, "storage_object_id": "obj-2", "content_revision": 2}]
+    db = _kbdb(calls, rows=rows)
     import asyncio
-    asyncio.run(db.revive_document_from_storage(
+    result = asyncio.run(db.revive_document_from_storage(
         "doc-1", storage_object_id="obj-2", source_raw_hash="h2",
         file_size=9, modified_at="2026-08-27T00:00:00+00:00",
     ))
-    sql = calls[0][0]
+    assert not rows
+    assert result["content_revision"] == 2 and result["storage_object_id"] == "obj-2"
+    assert "FOR UPDATE" in calls[1][0] and "knowledge_bases" in calls[1][0]
+    assert "document_name = %s" in calls[3][0]  # conflict checked under the same lock
+    sql = calls[-1][0]
     assert "deleted_at = NULL" in sql and "content_revision = content_revision + 1" in sql
     assert "deleted_at IS NOT NULL" in sql  # 只复活软删行
 
@@ -133,6 +140,10 @@ class _FakeDb:
     async def clear_document_deleted(self, document_id):
         self.operations.append("restore")
         self.row["deleted_at"] = None
+
+    async def find_document_by_location(self, kb_id, directory_path, document_name, *, include_deleted=False):
+        from knowledge_mining.mining.kb.storage import build_document_key
+        return await self.find_document_by_key(kb_id, build_document_key(directory_path, document_name), include_deleted=include_deleted)
 
     async def find_document_by_key(self, kb_id, document_key, *, include_deleted=False):
         if not include_deleted and self.row.get("deleted_at"):

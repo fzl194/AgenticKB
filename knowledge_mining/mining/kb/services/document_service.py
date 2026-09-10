@@ -28,7 +28,7 @@ from knowledge_mining.mining.contracts.storage.types import ObjectLocation, PutO
 from knowledge_mining.mining.infra.object_store.keys import build_object_key
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.services.folder_service import FolderService
-from knowledge_mining.mining.kb.services.kb_service import Forbidden, KbService, NotFound
+from knowledge_mining.mining.kb.services.kb_service import Duplicate, Forbidden, KbService, NotFound
 from knowledge_mining.mining.kb.storage import build_document_key, build_storage_path
 
 
@@ -96,6 +96,10 @@ class UploadTooLarge(Exception):
     def __init__(self, message: str, *, limit_bytes: int):
         super().__init__(message)
         self.limit_bytes = limit_bytes
+
+
+class ContentRevisionConflict(Exception):
+    """The file changed or was removed while its replacement was uploaded."""
 
 
 _SPILL_CHUNK = 256 * 1024
@@ -167,33 +171,11 @@ class DocumentService:
         storage_object = await self._store_source(
             content=content, mime=resolve_upload_mime(filename, mime),
         )
-        document_key = build_document_key(normalized_directory, normalized_filename)
-        # P08-S1：软删行仍占 uq_asset_documents_kb_key——同名重传复活身份行
-        #（指针/哈希/revision 前移），而不是 409 或插入第二行。
-        soft_deleted = await self._db.find_document_by_key(
-            kb_id, document_key, include_deleted=True,
+        return await self._register_uploaded_document(
+            kb=kb, kb_id=kb_id, owner_id=owner_id,
+            normalized_directory=normalized_directory, normalized_filename=normalized_filename,
+            storage_object=storage_object, document_type=document_type,
         )
-        if soft_deleted is not None and soft_deleted.get("deleted_at") is not None:
-            revived = await self._db.revive_document_from_storage(
-                soft_deleted["id"],
-                storage_object_id=storage_object.id,
-                source_raw_hash=storage_object.sha256,
-                file_size=storage_object.size, modified_at=_utcnow_iso(),
-            )
-            if revived is not None:
-                revived["status"] = "uploaded"
-                return revived
-        doc = await self._db.insert_document_from_storage(
-            domain=kb["domain"], kb_id=kb_id,
-            document_key=document_key,
-            document_name=normalized_filename,
-            storage_object_id=storage_object.id,
-            source_raw_hash=storage_object.sha256,
-            directory_path=normalized_directory, document_type=document_type,
-            owner_id=owner_id, file_size=storage_object.size, modified_at=_utcnow_iso(),
-        )
-        doc["status"] = "uploaded"
-        return doc
 
     async def upload_stream(
         self, *, kb_id: str, owner_id: str, filename: str,
@@ -230,19 +212,28 @@ class DocumentService:
     ) -> dict[str, Any]:
         """内容入库后的文档登记（含软删同名复活，P08-S1）。单文件/zip 共用。"""
         document_key = build_document_key(normalized_directory, normalized_filename)
-        soft_deleted = await self._db.find_document_by_key(
-            kb_id, document_key, include_deleted=True,
+        soft_deleted = await self._db.find_document_by_location(
+            kb_id, normalized_directory, normalized_filename, include_deleted=True,
         )
+        if soft_deleted is not None and soft_deleted.get("deleted_at") is None:
+            raise Duplicate("同目录已存在该文件；更新内容请使用替换当前文件。")
         if soft_deleted is not None and soft_deleted.get("deleted_at") is not None:
             revived = await self._db.revive_document_from_storage(
                 soft_deleted["id"],
                 storage_object_id=storage_object.id,
                 source_raw_hash=storage_object.sha256,
                 file_size=storage_object.size, modified_at=_utcnow_iso(),
+                expected_kb_id=kb_id, expected_directory_path=normalized_directory,
+                expected_document_name=normalized_filename,
             )
             if revived is not None:
                 revived["status"] = "uploaded"
                 return revived
+            raise Duplicate("目标文件的位置或状态已改变，请刷新后重新上传。")
+        # A moved document retains its key. Reusing its old display location
+        # must create a distinct identity, not collide with that retained key.
+        if await self._db.find_document_by_key(kb_id, document_key, include_deleted=True):
+            document_key = f"doc:/{uuid.uuid4().hex}/{normalized_filename}"
         doc = await self._db.insert_document_from_storage(
             domain=kb["domain"], kb_id=kb_id,
             document_key=document_key,
@@ -508,7 +499,7 @@ class DocumentService:
                     ))
                 except UploadTooLarge:
                     failed += 1  # 单成员超限：如实计数，不中断整包
-                except UniqueViolation:
+                except (UniqueViolation, Duplicate):
                     continue  # KB 内同名已存在，跳过
                 if on_progress is not None:
                     on_progress(done, total, parts[-1])
@@ -606,7 +597,10 @@ class DocumentService:
         await self._svc._assert_write(doc["kb_id"], user_id)
         if doc.get("deleted_at") is None:
             return doc  # 幂等：本来就没删
-        await self._db.clear_document_deleted(document_id)
+        try:
+            await self._db.clear_document_deleted(document_id)
+        except UniqueViolation:
+            raise Duplicate("原目录已有同名文件，请先调整位置后恢复。") from None
         restored = await self._db.get_document_identity(document_id)
         assert restored is not None
         return restored
@@ -619,9 +613,47 @@ class DocumentService:
         if doc is None:
             raise NotFound(document_id)
         await self._svc._assert_write(doc["kb_id"], user_id)
-        return await self._db.update_document_identity(
-            document_id, document_name=document_name, document_type=document_type,
+        try:
+            return await self._db.update_document_identity(
+                document_id, document_name=document_name, document_type=document_type,
+            )
+        except UniqueViolation:
+            raise Duplicate("同目录已存在该名称的文件。") from None
+
+    async def replace_content(
+        self, *, kb_id: str, document_id: str, user_id: str,
+        filename: str, expected_revision: int, stream: AsyncIterator[bytes],
+        max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        """Replace only the current file; existing snapshots/Builds stay readable."""
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int) or expected_revision < 0:
+            raise ValueError("expected_revision must be a non-negative integer")
+        doc = await self._db.get_document_identity(document_id)
+        if doc is None or doc["kb_id"] != kb_id:
+            raise NotFound(document_id)
+        await self._svc._assert_write(kb_id, user_id)
+        if doc.get("content_revision") != expected_revision:
+            raise ContentRevisionConflict("文件已发生变化，请刷新后重新选择替换。")
+        # Preserve the document name/type: replacing a PDF with XLSX would make
+        # its identity, MIME and parser selection disagree.
+        suffix = Path(doc["document_name"]).suffix.lower()
+        if not filename or Path(filename).suffix.lower() != suffix:
+            raise ValueError("替换文件须与当前文件格式相同；其他格式请作为新文件上传。")
+        obj = await self._store_source_stream(
+            stream, mime=resolve_upload_mime(doc["document_name"], None),
+            max_bytes=max_bytes if max_bytes is not None else UploadConfig().upload_max_file_size,
         )
+        # Recheck authorization after potentially long I/O, then CAS the revision
+        # in the database. A concurrent replacement/delete cannot be overwritten.
+        await self._svc._assert_write(kb_id, user_id)
+        updated = await self._db.replace_document_content(
+            document_id, expected_revision=expected_revision,
+            expected_document_name=doc["document_name"],
+            storage_object_id=obj.id, source_raw_hash=obj.sha256, file_size=obj.size,
+        )
+        if updated is None:
+            raise ContentRevisionConflict("文件已更新或删除，请刷新后重试。")
+        return updated
 
     async def download_object(
         self, *, document_id: str, user_id: str

@@ -53,6 +53,15 @@ class StructureRefServiceTest {
                 .thenReturn(List.of(snapshot(SNAP)));
     }
 
+    @Test
+    void internalRefWithoutActiveSnapshotsDoesNotQueryCandidates() {
+        when(buildSnapshotMapper.selectLatestKbSnapshots(anyString(), anyList()))
+                .thenReturn(List.of());
+        assertThatThrownBy(() -> service.resolveInternal("doc#table:1", DOMAIN, List.of(KB), USER))
+                .isInstanceOfSatisfying(StructureToolException.class,
+                        error -> assertThat(error.code()).isEqualTo("out_of_scope"));
+        org.mockito.Mockito.verifyNoInteractions(toolMapper);
+    }
     // ---- happy path ------------------------------------------------------------
 
     @Test

@@ -31,20 +31,20 @@ _UNITS_INSERT = """
     INSERT INTO asset_retrieval_units_v2_staging (
         representation_id, snapshot_id, representation_type, content_type,
         content_text, structural_context, lexical_text, tokenizer_version,
-        target_type, target_ref, canonical_evidence_id, container_ref,
-        parent_ref, context_group_id, source_refs_json,
+        target_type, target_ref, canonical_evidence_id, section_ref,
+        container_ref, parent_ref, context_group_id, source_refs_json,
         ordinal, lexical_eligible, dense_eligible, returnable,
         facets_json, provenance_json
     ) VALUES (
-        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s::jsonb,%s::jsonb
+        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s::jsonb,%s::jsonb
     )
 """
 
 _UNITS_SELECT = """
     SELECT representation_id, representation_type, content_type, content_text,
            structural_context, target_type, target_ref, canonical_evidence_id,
-           container_ref, parent_ref, context_group_id, source_refs_json,
-           ordinal, lexical_eligible, dense_eligible,
+           section_ref, container_ref, parent_ref, context_group_id,
+           source_refs_json, ordinal, lexical_eligible, dense_eligible,
            returnable, facets_json, provenance_json
     FROM asset_retrieval_units_v2_staging
     WHERE snapshot_id = %s
@@ -84,8 +84,8 @@ _STRUCTURE_NODES_DELETE = (
 _STRUCTURE_NODES_INSERT = """
     INSERT INTO asset_structure_nodes_staging (
         snapshot_id, node_type, ref, parent_ref, ordinal, title, level,
-        block_type
-    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        block_type, element_id
+    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 _STRUCTURE_EDGES_DELETE = (
@@ -102,8 +102,8 @@ _STRUCTURED_ASSETS_DELETE = (
 _STRUCTURED_ASSETS_INSERT = """
     INSERT INTO asset_structured_assets_staging (
         snapshot_id, asset_ref, asset_type, table_ref, columns_json,
-        row_count, readiness, schema_version
-    ) VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+        row_count, readiness, schema_version, sheet_name
+    ) VALUES (%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s)
 """
 
 _TABLE_CELLS_DELETE = "DELETE FROM asset_table_cells_staging WHERE snapshot_id = %s"
@@ -121,8 +121,9 @@ _READINESS_INSERT = """
 _TABLE_CELLS_INSERT = """
     INSERT INTO asset_table_cells_staging (
         snapshot_id, table_ref, row_index, column_index, column_name, value,
-        is_header
-    ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+        is_header, value_type, normalized_value, formula, row_span,
+        column_span, source_span_id
+    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 
@@ -190,7 +191,8 @@ class PgRepresentationStore(_PgRepository):
                             rep.content_text, rep.structural_context,
                             None, None,
                             rep.target_type, rep.target_ref,
-                            rep.canonical_evidence_id, rep.container_ref,
+                            rep.canonical_evidence_id, rep.section_ref,
+                            rep.container_ref,
                             rep.parent_ref, rep.context_group_id,
                             json.dumps(
                                 [dict(r) for r in rep.source_refs],
@@ -224,6 +226,7 @@ class PgRepresentationStore(_PgRepository):
                 target_ref=str(row["target_ref"]),
                 canonical_evidence_id=str(row["canonical_evidence_id"]),
                 structural_context=str(row.get("structural_context") or ""),
+                section_ref=_as_str(row.get("section_ref")),
                 container_ref=_as_str(row.get("container_ref")),
                 parent_ref=_as_str(row.get("parent_ref")),
                 context_group_id=_as_str(row.get("context_group_id")),
@@ -278,7 +281,8 @@ class PgRepresentationStore(_PgRepository):
                             rep.content_text, rep.structural_context,
                             None, None,
                             rep.target_type, rep.target_ref,
-                            rep.canonical_evidence_id, rep.container_ref,
+                            rep.canonical_evidence_id, rep.section_ref,
+                            rep.container_ref,
                             rep.parent_ref, rep.context_group_id,
                             json.dumps(
                                 [dict(r) for r in rep.source_refs],
@@ -449,7 +453,8 @@ class PgAssetWriter(_PgRepository):
                     lexical.get("lexical_text") if lexical else None,
                     lexical.get("tokenizer_version") if lexical else None,
                     rep["target_type"], rep["target_ref"],
-                    rep["canonical_evidence_id"], rep.get("container_ref"),
+                    rep["canonical_evidence_id"], rep.get("section_ref"),
+                    rep.get("container_ref"),
                     rep.get("parent_ref"),
                     rep.get("context_group_id"),
                     rep.get("source_refs_json") or "[]",
@@ -472,7 +477,7 @@ class PgAssetWriter(_PgRepository):
                     snapshot_id, node.get("node_type"), node.get("ref"),
                     node.get("parent_ref"), node.get("ordinal"),
                     node.get("title"), node.get("level"),
-                    node.get("block_type"),
+                    node.get("block_type"), node.get("element_id"),
                 ],
             )
         for edge in faces.get("structure_edges") or ():
@@ -496,7 +501,7 @@ class PgAssetWriter(_PgRepository):
                     asset.get("table_ref"),
                     json.dumps(list(asset.get("columns") or ())),
                     asset.get("row_count"), asset.get("readiness"),
-                    schema_version,
+                    schema_version, asset.get("sheet_name"),
                 ],
             )
         for cell in faces.get("table_cells") or ():
@@ -506,6 +511,9 @@ class PgAssetWriter(_PgRepository):
                     snapshot_id, cell["table_ref"], cell["row"],
                     cell["column_index"], cell["column"], cell["value"],
                     bool(cell.get("is_header", False)),
+                    cell.get("value_type"), cell.get("normalized_value"),
+                    cell.get("formula"), cell.get("row_span"),
+                    cell.get("column_span"), cell.get("source_span_id"),
                 ],
             )
 
@@ -555,3 +563,23 @@ __all__ = [
     "PgEmbeddingStore",
     "PgRepresentationStore",
 ]
+
+
+class PgStructureNodeStore(_PgRepository):
+    """结构节点只读面（A2）：章节锚查询——element_id → section 节点 ref."""
+
+    async def list_section_anchors(self, snapshot_id: str) -> dict[str, str]:
+        """快照内全部带大纲锚的 section 节点（{element_id: ref}）.
+
+        旧快照（015 前投影，element_id NULL）自然不在结果里——前端对
+        无锚章节隐藏范围入口（诚实降级，不做标题文本匹配）。
+        """
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(
+                "SELECT element_id, ref FROM asset_structure_nodes "
+                "WHERE snapshot_id = %s AND node_type = 'section' "
+                "AND element_id IS NOT NULL",
+                [snapshot_id],
+            )
+            rows = await cursor.fetchall()
+        return {str(row["element_id"]): str(row["ref"]) for row in rows}

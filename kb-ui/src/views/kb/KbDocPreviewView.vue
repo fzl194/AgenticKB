@@ -97,6 +97,9 @@
           </div>
 
           <template v-else-if="parseResult">
+            <p v-if="!canQueryCurrentKnowledge" class="doc-preview__muted" data-testid="current-only-actions-notice">
+              章节范围搜索和表格精确查询仅当前可搜索版本可用；此解析结果尚未进入搜索，请切回当前可搜索版本。
+            </p>
             <!-- A0-1 版本横幅：当前可搜索版本 vs 最新上传版本 -->
             <div
               v-if="parseResult.versioning"
@@ -172,7 +175,7 @@
                 />
               </el-collapse-item>
 
-              <!-- 文档大纲 -->
+              <!-- 文档大纲（A2：可选中 + 前后/父子导航 + 范围搜索入口） -->
               <el-collapse-item v-if="parseResult.outline.length" name="outline" title="文档大纲">
                 <el-tree
                   ref="outlineTreeRef"
@@ -183,7 +186,36 @@
                   default-expand-all
                   class="doc-preview__outline"
                   data-testid="doc-outline-tree"
+                  @node-click="onOutlineNodeClick"
                 />
+                <div
+                  v-if="selectedOutline"
+                  class="doc-preview__outline-actions"
+                  data-testid="doc-outline-actions"
+                >
+                  <span class="doc-preview__outline-title">{{ selectedOutline.title }}</span>
+                  <el-button size="small" :disabled="!outlineParent" @click="jumpOutline(outlineParent?.element_id)">父章节</el-button>
+                  <el-button size="small" :disabled="!outlinePrev" @click="jumpOutline(outlinePrev?.element_id)">上一节</el-button>
+                  <el-button size="small" :disabled="!outlineNext" @click="jumpOutline(outlineNext?.element_id)">下一节</el-button>
+                  <el-button v-if="outlineChildren.length" size="small" @click="jumpOutline(outlineChildren[0].element_id)">首个子节</el-button>
+                  <el-button
+                    v-if="selectedOutline.section_ref"
+                    size="small" type="primary" plain
+                    :disabled="!canQueryCurrentKnowledge"
+                    @click="goScopedSearch('exact')"
+                    data-testid="outline-search-exact"
+                  >本节搜索</el-button>
+                  <el-button
+                    v-if="selectedOutline.section_ref"
+                    size="small" type="primary" plain
+                    :disabled="!canQueryCurrentKnowledge"
+                    @click="goScopedSearch('descendants')"
+                    data-testid="outline-search-descendants"
+                  >本节及子节搜索</el-button>
+                  <span v-else class="doc-preview__muted">
+                    此版本章节无范围锚（旧版本快照），重新挖掘后可用
+                  </span>
+                </div>
               </el-collapse-item>
 
               <!-- 切片 -->
@@ -257,8 +289,18 @@
                   <div class="doc-preview__table-caption">
                     <el-tag v-if="t.sheet_name" size="small" effect="plain">{{ t.sheet_name }}</el-tag>
                     {{ t.rows }} 行 × {{ t.columns }} 列
+                    <el-button
+                      size="small" type="primary" plain
+                      :disabled="!canQueryCurrentKnowledge"
+                      :data-testid="`table-query-toggle-${t.table_id}`"
+                      @click="toggleQueryPanel(t.table_id)"
+                    >精确查询</el-button>
                   </div>
-                  <el-table :data="tableRows(t)" size="small" border class="kb-table">
+                  <el-table
+                    :data="tableRows(t)" size="small" border class="kb-table"
+                    :row-class-name="({ rowIndex }: { rowIndex: number }) =>
+                      tableQueryRowClass(t.table_id, rowIndex)"
+                  >
                     <el-table-column
                       v-for="(_, ci) in tableRows(t)[0] || []"
                       :key="ci"
@@ -269,8 +311,16 @@
                       </template>
                     </el-table-column>
                   </el-table>
+                  <TbTableQueryPanel
+                    v-if="canQueryCurrentKnowledge && queryPanelTableId === t.table_id && tableAssetRef(t)"
+                    :asset-ref="tableAssetRef(t)!"
+                    :kb-id="kbId"
+                    :domain="domain"
+                    :default-columns="t.header"
+                    @row-click="onQueryRowHit"
+                  />
                   <p v-if="t.rows > t.preview.length" class="doc-preview__muted">
-                    仅预览前 {{ t.preview.length }} 行（共 {{ t.rows }} 行数据行）——完整表格查询目前可通过 Agent 的 get_knowledge 表格查询能力使用。
+                    仅预览前 {{ t.preview.length }} 行（共 {{ t.rows }} 行数据行）——用「精确查询」筛选/排序/统计全表数据。
                   </p>
                 </div>
               </el-collapse-item>
@@ -333,11 +383,13 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Document, Download, Picture, Tickets, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { useDomainStore } from '@/stores/domain'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useKbApi } from '@/api/kb'
 import type { ParseResult } from '@/api/mining'
 import DocumentStructureGraph from '@/components/kb/DocumentStructureGraph.vue'
+import TbTableQueryPanel from '@/components/kb/TbTableQueryPanel.vue'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
@@ -348,6 +400,8 @@ const PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 const TEXT_RENDER_LIMIT = 200_000
 
 const props = defineProps<{ kbId: string; docId: string }>()
+const domainStore = useDomainStore()
+const domain = computed(() => domainStore.currentDomain ?? 'default')
 const router = useRouter()
 const route = useRoute()
 const kbApi = useKbApi()
@@ -403,10 +457,116 @@ function tableRows(t: { preview: string[][] }): string[][] {
   return t.preview.map(row => row.map(cell => cell ?? ''))
 }
 
+// A2 大纲导航（39 号 §2.4）：树内父子/前后由大纲自身结构客户端完成；
+// 范围搜索跳检索面板（章节 ref 由服务端投影，前端不拼内部编号）。
+type OutlineItem = {
+  element_id: string
+  title: string
+  level?: number | null
+  order_index?: number | null
+  parent_section_element_id?: string | null
+  section_ref?: string | null
+}
+const selectedOutlineElementId = ref('')
+const canQueryCurrentKnowledge = computed(() => {
+  const result = parseResult.value
+  const servingSnapshot = result?.versioning?.serving?.document_snapshot_id
+  return !!servingSnapshot && result?.snapshot.id === servingSnapshot
+})
+
+function onOutlineNodeClick(data: OutlineItem) {
+  selectedOutlineElementId.value = data.element_id
+}
+
+function jumpOutline(elementId: string | undefined) {
+  if (!elementId) return
+  selectedOutlineElementId.value = elementId
+  outlineTreeRef.value?.setCurrentKey?.(elementId)
+}
+
+const selectedOutline = computed<OutlineItem | null>(() =>
+  (parseResult.value?.outline ?? []).find(
+    o => o.element_id === selectedOutlineElementId.value) ?? null)
+
+const outlineParent = computed<OutlineItem | null>(() =>
+  selectedOutline.value?.parent_section_element_id
+    ? ((parseResult.value?.outline ?? []).find(
+        o => o.element_id === selectedOutline.value?.parent_section_element_id) ?? null)
+    : null)
+
+const outlineSiblings = computed<OutlineItem[]>(() => {
+  const parent = selectedOutline.value?.parent_section_element_id ?? null
+  return (parseResult.value?.outline ?? [])
+    .filter(o => (o.parent_section_element_id ?? null) === parent)
+    .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+})
+
+const outlinePrev = computed<OutlineItem | null>(() => {
+  const idx = outlineSiblings.value.findIndex(
+    o => o.element_id === selectedOutline.value?.element_id)
+  return idx > 0 ? outlineSiblings.value[idx - 1] : null
+})
+
+const outlineNext = computed<OutlineItem | null>(() => {
+  const idx = outlineSiblings.value.findIndex(
+    o => o.element_id === selectedOutline.value?.element_id)
+  return idx >= 0 && idx < outlineSiblings.value.length - 1
+    ? outlineSiblings.value[idx + 1] : null
+})
+
+const outlineChildren = computed<OutlineItem[]>(() =>
+  selectedOutline.value
+    ? (parseResult.value?.outline ?? [])
+        .filter(o => o.parent_section_element_id === selectedOutline.value?.element_id)
+        .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+    : [])
+
+function goScopedSearch(mode: 'exact' | 'descendants') {
+  const sel = selectedOutline.value
+  if (!sel?.section_ref || !canQueryCurrentKnowledge.value) return
+  void router.push({
+    name: 'kb-detail',
+    params: { kbId: props.kbId },
+    query: {
+      tab: 'search',
+      scopeRef: sel.section_ref,
+      scopeTitle: sel.title,
+      scopeMode: mode,
+      scopeDocumentRef: parseResult.value?.snapshot.document_ref || undefined,
+      scopeDocumentTitle: doc.value?.document_name || undefined,
+    },
+  })
+}
+
 // A1 来源导航锚（37 号 P0-6）：route.query 的 anchor=大纲元素锚、table=表格锚。
 // 检索面板经服务端解析端点取得这些锚后路由过来——本页只负责定位呈现。
 const outlineTreeRef = ref<{ setCurrentKey?: (key: string | number) => void } | null>(null)
 const highlightedTableId = ref('')
+
+// A3 表格精确查询（39 号 §3.3）：内部 ref = doc_key#table:{table_id}，
+// 服务端在当前权限下解析（与 MCP 同一 StructuredQueryService）。
+const queryPanelTableId = ref('')
+const queryHitRow = ref<number | undefined>()
+function toggleQueryPanel(tableId: string) {
+  if (!canQueryCurrentKnowledge.value) return
+  queryPanelTableId.value = queryPanelTableId.value === tableId ? '' : tableId
+  queryHitRow.value = undefined
+}
+function tableAssetRef(t: { table_id: string }): string | null {
+  const docRef = parseResult.value?.snapshot?.document_ref
+  return docRef ? `${docRef}#table:${t.table_id}` : null
+}
+function tableQueryRowClass(tableId: string, rowIndex: number): string {
+  // 预览不含表头行；查询 _row 是网格行号（单表头为主型，多表头时不高亮——诚实降级）
+  return tableId === queryPanelTableId.value && rowIndex + 1 === queryHitRow.value
+    ? 'doc-preview__row-hit'
+    : ''
+}
+
+function onQueryRowHit(row: number | undefined) {
+  queryHitRow.value = row
+  ElMessage.info(row != null ? `命中数据行 ${row}（预览区高亮，超出预览范围请看查询结果）` : '')
+}
 
 function applyNavigationAnchors() {
   const q = route.query as Record<string, string | string[] | undefined>
@@ -822,4 +982,5 @@ onUnmounted(cleanup)
 .doc-preview__tab-tag {
   margin-left: 6px;
 }
+.doc-preview__row-hit { background: var(--el-color-warning-light-8) !important; }
 </style>

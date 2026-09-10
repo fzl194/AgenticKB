@@ -65,11 +65,15 @@ class AssetPersistService:
         representation_store: Any,
         embedding_store: Any,
         writer: Any,
+        ir_loader: Any = None,
     ) -> None:
         self._segments = segment_store
         self._representations = representation_store
         self._embeddings = embedding_store
         self._writer = writer
+        # A3：snapshot_id -> ParsedDocument | None（异步可调用）。缺省 None
+        # = 不做 cell 类型化事实增强（旧链路行为）；IR 不可用按降级跳过。
+        self._ir_loader = ir_loader
         self._locks_guard = Lock()
         self._snapshot_locks: dict[str, RLock] = {}
         self._completed_outcomes: dict[str, PersistOutcome] = {}
@@ -101,7 +105,32 @@ class AssetPersistService:
             self._representations.list_for_snapshot(snapshot_id)
         )
         embedding_records = run_sync(self._embeddings.list_for_snapshot(snapshot_id))
-        structure = project_structure(segments, document_ref=document_ref)
+        table_facts = None
+        ir_elements = ()
+        if self._ir_loader is not None:
+            from knowledge_mining.mining.snapshot_store.ir_access import (
+                SnapshotIRUnavailable,
+            )
+            from knowledge_mining.mining.table_assets.facts import (
+                extract_table_facts,
+            )
+            try:
+                ir = run_sync(self._ir_loader(snapshot_id))
+                if ir is not None:
+                    table_facts = extract_table_facts(ir)
+                    ir_elements = ir.elements
+            except SnapshotIRUnavailable:
+                # 按设计的降级（无对象注册/缺 object_id 的旧快照）：
+                # table_facts=None 继续发布（A3 列留空，回填 CLI 兜底）
+                table_facts = None
+            # 其余异常（StorageObjectCorrupt/Missing、JSON 损坏、读块失败、
+            # extract 意外错误）必须向上抛出——P1-10：不得把数据损坏/瞬时
+            # 故障固化为"缺类型化事实"的正式 Build（看似成功实则残缺）。
+            # 文档失败/重试由 workflow 层处理。
+        structure = project_structure(
+            segments, document_ref=document_ref, table_facts=table_facts,
+            ir_elements=ir_elements,
+        )
         readiness = compute_readiness(
             representations=representations,
             structure=structure,
@@ -154,6 +183,7 @@ class AssetPersistService:
                     "target_type": rep.target_type,
                     "target_ref": rep.target_ref,
                     "canonical_evidence_id": rep.canonical_evidence_id,
+                    "section_ref": rep.section_ref,
                     "container_ref": rep.container_ref,
                     "parent_ref": rep.parent_ref,
                     "context_group_id": rep.context_group_id,

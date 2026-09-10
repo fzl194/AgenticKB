@@ -55,6 +55,14 @@
       </el-input>
     </div>
 
+    <!-- A2 范围徽标：本节/本节及子节（从文档页大纲进入），可一键回整篇 -->
+    <div v-if="scope || scopeDocumentRef" class="kb-search__scope" data-testid="kb-search-scope">
+      <el-tag size="small" type="warning" effect="light" closable @close="clearScope">
+        范围：{{ scope?.title || scopeDocumentTitle }}（{{ scope ? scopeModeLabel : '整篇' }}）
+      </el-tag>
+      <el-button link size="small" @click="clearScope">{{ scope && scopeDocumentRef ? '改回整篇' : '搜索整个知识库' }}</el-button>
+    </div>
+
     <!-- 生效管线 -->
     <el-alert v-if="effective" class="kb-search__effective" :closable="false" type="info">
       <template #title>
@@ -136,7 +144,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { useOperatorApi } from '@/api/operator'
@@ -159,6 +167,7 @@ const operatorApi = useOperatorApi()
 const servingApi = useServingApi()
 const domainStore = useDomainStore()
 const router = useRouter()
+const route = useRoute()
 
 const paradigms = ref<ParadigmView[]>([])
 const selectedParadigmId = ref<string | null>(null)
@@ -167,6 +176,20 @@ const savingBinding = ref(false)
 
 const query = ref('')
 const searching = ref(false)
+
+// A2 章节范围（39 号 §2.4）：从文档页大纲「本节(及子节)搜索」跳转带入；
+// ref 是服务端投影的章节内部 ref（within 直收），前端不拼接。
+const scope = ref<{ ref: string; title: string; mode: 'exact' | 'descendants' } | null>(null)
+const scopeDocumentRef = ref<string | null>(null)
+const scopeDocumentTitle = ref('当前文档')
+function clearScope() {
+  if (scope.value) scope.value = null
+  else scopeDocumentRef.value = null
+  evidence.value = []
+  searched.value = false
+}
+const scopeModeLabel = computed(() =>
+  scope.value?.mode === 'descendants' ? '本节及子节' : '本节')
 const searched = ref(false)
 const error = ref('')
 const evidence = ref<EvidenceItem[]>([])
@@ -294,6 +317,9 @@ async function run() {
     const out = await servingApi.runParadigmSearch(resolved.paradigmId, q, {
       domain: domainStore.currentDomain ?? undefined,
       kbIds: [props.kb.id],
+      within: scope.value
+        ? { section_refs: [scope.value.ref], section_scope: scope.value.mode }
+        : scopeDocumentRef.value ? { document_refs: [scopeDocumentRef.value] } : undefined,
     })
     evidence.value = out.evidenceResponse?.evidence ?? []
     hasMore.value = out.evidenceResponse?.has_more ?? false
@@ -386,12 +412,28 @@ async function goToSource(ev: EvidenceItem, mode: 'document' | 'section' | 'tabl
   }
 }
 
+// A2：进入面板时吸收路由携带的范围（文档页「本节搜索」跳转）
+{
+  const q = route.query as Record<string, string | undefined>
+  if (q.scopeRef && typeof q.scopeRef === 'string' && q.scopeRef) {
+    scope.value = {
+      ref: q.scopeRef,
+      title: q.scopeTitle || '选中章节',
+      mode: q.scopeMode === 'descendants' ? 'descendants' : 'exact',
+    }
+    scopeDocumentRef.value = typeof q.scopeDocumentRef === 'string' && q.scopeDocumentRef ? q.scopeDocumentRef : null
+    scopeDocumentTitle.value = typeof q.scopeDocumentTitle === 'string' && q.scopeDocumentTitle ? q.scopeDocumentTitle : '当前文档'
+  }
+}
+
 watch(() => props.kb.id, () => {
   // 切库必须清上一库的检索结果与管线横幅——只重载范式配置的话，
   // B 库页面会显示 A 库挖出的证据（2026-08-31 前端审查 M9）。
   evidence.value = []
   hasMore.value = false
   effective.value = null
+  scope.value = null
+  scopeDocumentRef.value = null
   searched.value = false
   error.value = ''
   reload()

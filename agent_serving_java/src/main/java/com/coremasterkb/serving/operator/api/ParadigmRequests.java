@@ -103,6 +103,16 @@ final class ParadigmRequests {
 
     /** 单个 filter 值的形状校验（数组、非空串、长度上限、ref kind 匹配、类型枚举）。 */
     private static void validateFilterValue(String key, Object value) {
+        // A2：section_scope 是字符串枚举（exact|descendants），不是数组。
+        if ("section_scope".equals(key)) {
+            if (!(value instanceof String mode)
+                    || !com.coremasterkb.serving.domain.ActiveScope
+                            .SECTION_SCOPE_MODES.contains(mode)) {
+                throw new IllegalArgumentException(
+                        "filter_value_invalid:section_scope: 必须是 exact 或 descendants");
+            }
+            return;
+        }
         if (!(value instanceof List<?> list)) {
             throw new IllegalArgumentException(
                     "filter_value_invalid:" + key + ": 必须是字符串数组");

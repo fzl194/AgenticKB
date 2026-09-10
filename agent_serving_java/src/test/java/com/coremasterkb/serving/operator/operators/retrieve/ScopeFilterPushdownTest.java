@@ -91,4 +91,24 @@ class ScopeFilterPushdownTest {
         assertThat(p.documentJsonParams()).containsExactly("{\"document\":\"doc-1\"}");
         assertThat(p.representationTypes()).isEmpty();
     }
+    @Test
+    @DisplayName("A2: section_scope=descendants 置闭包标志，缺省/精确为 false")
+    void sectionScopeDescendantsFlag() {
+        var descendants = ScopeFilterPushdown.fromFilters(Map.of(
+                "section_refs", List.of("d#section:0"),
+                "section_scope", "descendants"));
+        assertThat(descendants.sectionScopeDescendants()).isTrue();
+        assertThat(descendants.targetRefs()).containsExactly("d#section:0");
+
+        var exact = ScopeFilterPushdown.fromFilters(Map.of(
+                "section_refs", List.of("d#section:0")));
+        assertThat(exact.sectionScopeDescendants()).isFalse();
+
+        var explicitExact = ScopeFilterPushdown.fromFilters(Map.of(
+                "section_refs", List.of("d#section:0"),
+                "section_scope", "exact"));
+        assertThat(explicitExact.sectionScopeDescendants()).isFalse();
+
+        assertThat(ScopeFilterPushdown.none().sectionScopeDescendants()).isFalse();
+    }
 }

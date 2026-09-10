@@ -155,6 +155,36 @@ public class StructureRefService implements EvidenceRefResolver {
         }
     }
 
+    /**
+     * A3：明文内部结构 ref（"{doc}#table:{t}" 等）解析——授权与快照集与
+     * opaque 路径完全一致（33 号「同一 ACL/ref resolver」）；区别仅在匹配
+     * internal 字符串本身而非 HMAC。网页 tables tab 没有 st_（表格不走
+     * 检索命中时），服务端在当前权限下解析是 P0-6 的既有语义。
+     */
+    public EvidenceRefResolver.ResolvedRef resolveInternal(
+            String internalRef, String domain, List<String> kbIds, String username) {
+        if (internalRef == null || internalRef.isBlank()) {
+            throw StructureToolException.invalidRef("ref 缺失");
+        }
+        if (kbIds == null || kbIds.isEmpty()) {
+            throw StructureToolException.outOfScope("缺少知识库范围（kb_ids 必填）");
+        }
+        List<String> authorized = authorizeScope(domain, kbIds, username);
+        List<String> activeSnapshots = activeSnapshots(domain, authorized);
+        if (activeSnapshots.isEmpty()) {
+            throw StructureToolException.outOfScope("ref 不在当前授权范围内（未开放、不存在或已失效）");
+        }
+        List<StructureToolMapper.RefRow> candidates =
+                toolMapper.selectStructureRefCandidates(activeSnapshots, ACTIVE_CANDIDATE_CAP);
+        for (StructureToolMapper.RefRow row : candidates) {
+            if (internalRef.equals(row.ref())) {
+                return new EvidenceRefResolver.ResolvedRef(
+                        row.snapshotId(), EvidenceRefResolver.RefKind.STRUCTURE, row.ref());
+            }
+        }
+        throw StructureToolException.outOfScope("ref 不在当前授权范围内（未开放、不存在或已失效）");
+    }
+
     /** 枚举候选并匹配；返回 "snapshot|internal"（找到时），null = 未命中。 */
     private String match(EvidenceRefResolver.RefKind kind, String opaqueRef,
                          List<String> snapshotIds, int cap) {

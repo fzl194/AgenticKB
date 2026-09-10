@@ -62,55 +62,24 @@ class SourceLocatorService:
         ``representations``：显式传入（主链 = staging units）；缺省时经
         ``locator_store.list_final_representations`` 读 final（重放路径）。
         """
-        from knowledge_mining.mining.contracts.storage.errors import (
-            StorageObjectMissing,
+        from knowledge_mining.mining.snapshot_store.ir_access import (
+            SnapshotIRUnavailable,
+            load_parsed_document,
         )
 
-        snapshot = await self._snapshots.get(snapshot_id)
-        if snapshot is None:
-            return MaterializeOutcome(
-                snapshot_id, 0, "skipped_no_snapshot",
+        try:
+            doc = await load_parsed_document(
+                snapshots=self._snapshots,
+                storage_objects=self._storage_objects,
+                object_store=self._object_store,
+                snapshot_id=snapshot_id,
             )
-        object_id = getattr(snapshot, "parse_ir_storage_object_id", None)
-        if not object_id:
-            return MaterializeOutcome(
-                snapshot_id, 0, "skipped_no_ir",
-                detail="snapshot has no parse IR object",
+        except SnapshotIRUnavailable as exc:
+            status = (
+                "skipped_no_snapshot" if exc.reason == "no_snapshot"
+                else "skipped_no_ir"
             )
-        record = await self._storage_objects.get(object_id)
-        if record is None:
-            raise StorageObjectMissing(
-                f"parse IR storage object {object_id!r} is not registered"
-            )
-        from knowledge_mining.mining.contracts.storage.types import ObjectLocation
-
-        location = ObjectLocation(
-            bucket=record.bucket,
-            object_key=record.object_key,
-            version_id=record.object_version_id,
-        )
-        chunks: list[bytes] = []
-        async for chunk in self._object_store.get_stream(location):
-            chunks.append(chunk)
-        payload = b"".join(chunks)
-        recorded = record.sha256
-        if not (isinstance(recorded, str) and len(recorded) == 64):
-            from knowledge_mining.mining.contracts.storage.errors import (
-                StorageObjectCorrupt,
-            )
-
-            raise StorageObjectCorrupt(
-                f"parse IR object {object_id!r} has invalid registered sha256"
-            )
-        if recorded != hashlib.sha256(payload).hexdigest():
-            from knowledge_mining.mining.contracts.storage.errors import (
-                StorageObjectCorrupt,
-            )
-
-            raise StorageObjectCorrupt(
-                f"parse IR object {object_id!r} sha256 mismatch"
-            )
-        doc = ParsedDocument.from_dict(json.loads(payload))
+            return MaterializeOutcome(snapshot_id, 0, status, detail=str(exc))
 
         if representations is None:
             representations = await self._locator_store.list_final_representations(

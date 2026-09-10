@@ -89,7 +89,7 @@ public class StructuredQueryService {
             boolean has_more,
             AggregateResult aggregate) {}
 
-    public record AggregateResult(String op, String field, Double value, long row_count) {}
+    public record AggregateResult(String op, String field, Object value, long row_count) {}
 
     /** 表格 schema（columns + 能力），inspect_knowledge 复用。 */
     public record TableSchema(String asset_ref, String readiness, List<FieldSchema> columns,
@@ -99,7 +99,7 @@ public class StructuredQueryService {
 
     public QueryResult query(String assetRef, QuerySpec spec,
                              String domain, List<String> kbIds, String username) {
-        EvidenceRefResolver.ResolvedRef resolved = refService.resolve(assetRef, domain, kbIds, username);
+        EvidenceRefResolver.ResolvedRef resolved = resolveRef(assetRef, domain, kbIds, username);
         TableAssetRow asset =
                 toolMapper.selectTableAssetByAssetRef(resolved.snapshotId(), resolved.internalRef());
         if (asset == null) {
@@ -142,7 +142,9 @@ public class StructuredQueryService {
 
         // 行模式
         List<String> select = validatedSelect(spec.select(), columnNames);
-        String orderField = null;
+        // P2-11：未指定 order_by 时默认 row_index ASC——cursor(offset) 分页的
+        // 前后页一致前提；无 ORDER BY 的 LIMIT/OSET 结果顺序未定义（可能重复/遗漏）
+        String orderField = null; // null denotes physical row order; any string is a user column.
         String orderDir = "asc";
         boolean numericOrder = false;
         if (spec.order_by() != null && !spec.order_by().isEmpty()) {
@@ -189,6 +191,19 @@ public class StructuredQueryService {
                 hasMore ? Cursors.encodeOffset(offset + limit) : null, hasMore, null);
     }
 
+    /**
+     * ref 解析：st_ opaque 走 HMAC 反查；明文内部 ref（网页 tables tab，
+     * "{doc}#table:{t}"）走同授权集的直接匹配——两条路同一 ACL 与快照语义。
+     */
+    private EvidenceRefResolver.ResolvedRef resolveRef(
+            String assetRef, String domain, List<String> kbIds, String username) {
+        boolean opaqueRef = assetRef != null && (assetRef.startsWith("st_")
+                || assetRef.startsWith("doc_") || assetRef.startsWith("ev_"));
+        return opaqueRef
+                ? refService.resolve(assetRef, domain, kbIds, username)
+                : refService.resolveInternal(assetRef, domain, kbIds, username);
+    }
+
     // ------------------------------------------------------------------ schema
 
     /** 列能力扫描 + schema 组装（inspect_knowledge 与 query 同源）。 */
@@ -207,6 +222,9 @@ public class StructuredQueryService {
         }
 
         boolean truncated = cells.size() >= TYPING_SCAN_CAP;
+        // A3：IR 声明类型（value_type）权威优先——全列一致声明即该型；
+        // 未声明/混合/截断 → 回退既有值扫描（number）或 text。
+        Map<String, Set<String>> declaredByColumn = new LinkedHashMap<>();
         Map<String, Boolean> numericByColumn = new LinkedHashMap<>();
         int nonHeader = 0;
         for (TableCellRow c : cells) {
@@ -215,23 +233,38 @@ public class StructuredQueryService {
             }
             nonHeader++;
             String col = c.getColumnName();
+            if (c.getValueType() != null && !c.getValueType().isBlank()) {
+                declaredByColumn.computeIfAbsent(col, k -> new LinkedHashSet<>())
+                        .add(c.getValueType());
+            }
             boolean numericValue = isNumber(c.getValue());
             numericByColumn.merge(col, numericValue, (a, b) -> a && b);
         }
 
         List<FieldSchema> out = new ArrayList<>(names.size());
         for (String name : names) {
-            Boolean numeric = numericByColumn.get(name);
-            boolean isNumeric = !truncated && numeric != null && numeric && nonHeader > 0;
-            out.add(new FieldSchema(
-                    name,
-                    isNumeric ? "number" : "text",
-                    true,
-                    isNumeric,
-                    isNumeric
+            Set<String> declaredTypes = declaredByColumn.get(name);
+            String type;
+            // P2-13：扫描截断时不得独断声明类型——前 2000 cells 全声明
+            // number 不代表后半表没有文本（::numeric 会 500）。截断=未见全量，
+            // 保守降级 text（值扫描分支同样受 truncated 抑制）。
+            if (declaredTypes != null && declaredTypes.size() == 1 && !truncated) {
+                type = declaredTypes.iterator().next();
+            } else {
+                Boolean numeric = numericByColumn.get(name);
+                type = (!truncated && Boolean.TRUE.equals(numeric) && nonHeader > 0)
+                        ? "number" : "text";
+            }
+            boolean isNumeric = "number".equals(type);
+            boolean isDate = "date".equals(type);
+            List<String> operations = isNumeric
+                    ? List.of("eq", "ne", "lt", "lte", "gt", "gte", "in", "is_null",
+                              "count", "sum", "min", "max", "avg")
+                    : isDate
                             ? List.of("eq", "ne", "lt", "lte", "gt", "gte", "in", "is_null",
-                                      "count", "sum", "min", "max", "avg")
-                            : List.of("eq", "ne", "in", "contains", "is_null", "count")));
+                                      "count", "min", "max")
+                            : List.of("eq", "ne", "in", "contains", "is_null", "count");
+            out.add(new FieldSchema(name, type, true, isNumeric || isDate, operations));
         }
         return new TableSchema(asset.getAssetRef(), asset.getReadiness(), out, asset.getRowCount());
     }
@@ -263,6 +296,13 @@ public class StructuredQueryService {
                         "字段 " + field.name() + " 是文本列（或值扫描不完整），仅允许 count 聚合",
                         Map.of("field", field.name(), "allowed", List.of("count")));
             }
+            // A3：date 列可 min/max（ISO 文本序）但不可 sum/avg
+            if ("date".equals(field.value_type())
+                    && ("sum".equals(op) || "avg".equals(op))) {
+                throw StructureToolException.unsupportedOperation(
+                        "字段 " + field.name() + " 是日期列，仅允许 count/min/max 聚合",
+                        Map.of("field", field.name(), "allowed", List.of("count", "min", "max")));
+            }
         }
         if (criteria.isEmpty()) {
             Integer rowCount = asset.getRowCount();
@@ -272,9 +312,10 @@ public class StructuredQueryService {
             }
         }
 
+        boolean textualAggregate = field != null && "date".equals(field.value_type());
         StructureToolMapper.AggregateRow agg = toolMapper.aggregateStructuredRows(
                 asset.getSnapshotId(), asset.getTableRef(), criteria, op,
-                field == null ? null : field.name());
+                field == null ? null : field.name(), textualAggregate);
         long count = toolMapper.countStructuredRows(asset.getSnapshotId(), asset.getTableRef(),
                 criteria);
         return new QueryResult(assetRef, asset.getTableRef(), schema.columns(), null, null, false,
@@ -300,15 +341,45 @@ public class StructuredQueryService {
                     Map.of("field", w.field(), "allowed", f.operations()));
         }
         boolean numeric = "number".equals(f.value_type());
-        if (NUMERIC_ONLY_OPS.contains(op) && !numeric) {
+        boolean date = "date".equals(f.value_type());
+        // A3：date 列支持序数比较（ISO 文本字典序），数值列同前
+        boolean ordinal = numeric || date;
+        if (NUMERIC_ONLY_OPS.contains(op) && !ordinal) {
             throw StructureToolException.unsupportedOperation(
-                    "文本列不支持 " + op + "（仅数值列）", Map.of("field", w.field(),
+                    "文本列不支持 " + op + "（仅数值/日期列）", Map.of("field", w.field(),
                             "allowed", f.operations()));
         }
-        if ("contains".equals(op) && numeric) {
+        if ("contains".equals(op) && (numeric || date)) {
             throw StructureToolException.unsupportedOperation(
-                    "数值列不支持 contains（文本匹配）", Map.of("field", w.field(),
+                    "数值/日期列不支持 contains（文本匹配）", Map.of("field", w.field(),
                             "allowed", f.operations()));
+        }
+        if (date && !"is_null".equals(op)) {
+            // date 过滤值必须 ISO（YYYY-MM-DD）——可修正错误，不静默退化文本包含
+            java.util.function.Predicate<String> iso = v -> {
+                if (v == null) {
+                    return false;
+                }
+                // P2-12：真实日历语义——形状合法但日历非法（2026-99-99、
+                // 2026-02-31）必须 type_mismatch，不得靠文本序静默通过
+                try {
+                    java.time.LocalDate.parse(v);
+                    return true;
+                } catch (java.time.format.DateTimeParseException e) {
+                    return false;
+                }
+            };
+            if ("in".equals(op)) {
+                for (JsonNode item : w.value() == null ? java.util.List.<JsonNode>of() : w.value()) {
+                    if (item == null || !iso.test(item.asText())) {
+                        throw StructureToolException.typeMismatch(
+                                w.field() + " in", "日期数组（YYYY-MM-DD）");
+                    }
+                }
+            } else if (w.value() != null && !w.value().isNull()
+                    && !iso.test(w.value().asText())) {
+                throw StructureToolException.typeMismatch(w.field(), "日期（YYYY-MM-DD）");
+            }
         }
         if ("is_null".equals(op)) {
             return new StructureToolMapper.Criterion(w.field(), "is_null", null, null, numeric);

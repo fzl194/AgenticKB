@@ -36,6 +36,10 @@
 !docker/**
 !docs/
 !docs/**
+!release_tests/
+!release_tests/eval/
+!release_tests/eval/*.py
+!release_tests/eval/*.yaml
 !.github/
 !.github/**
 
@@ -117,3 +121,4 @@ var/
 
 # deploy-sync 依赖清单基线（pack 自动落盘，下次 pack 对比）
 .cmkb-sync-last/
+release_tests/eval/__pycache__/

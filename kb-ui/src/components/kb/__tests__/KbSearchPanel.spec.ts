@@ -27,7 +27,10 @@ vi.mock('@/api/proxyClient', () => ({ apiErrorDetail: async () => '网络错误'
 vi.mock('@/stores/domain', () => ({
   useDomainStore: () => ({ currentDomain: 'generic' }),
 }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: routerPush }),
+  useRoute: () => ({ query: {} as Record<string, unknown>, params: {} }),
+}))
 
 import KbSearchPanel from '@/components/kb/KbSearchPanel.vue'
 import type { EvidenceItem } from '@/types/operator'

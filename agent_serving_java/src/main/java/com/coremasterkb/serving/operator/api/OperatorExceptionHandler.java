@@ -44,7 +44,7 @@ public class OperatorExceptionHandler {
 
     private static final List<String> CALLER_FIXABLE_PREFIXES = List.of(
             "unsupported_scope_filter:", "invalid_scope_ref", "unsupported_query_key:",
-            "filter_value_invalid", "scope_ref_requires_kb");
+            "filter_value_invalid", "scope_ref_requires_kb", "section_scope_too_broad");
 
     private final GlobalExceptionHandler globalExceptionHandler;
 

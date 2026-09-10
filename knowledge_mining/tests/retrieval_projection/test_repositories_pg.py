@@ -299,11 +299,14 @@ async def test_representation_replace_is_transactional_delete_then_insert():
     assert delete[1] == ["snap-1"]
     assert insert[1] is not None and insert[1][0] == "d:s1:prose:0"
     assert insert[1][6] is None and insert[1][7] is None  # lexical/tokenizer
-    # 27号修复 E：parent_ref/context_group_id/source_refs_json 三列
-    # （12/13/14）随契约持久化；facets/provenance 顺延至 19/20
-    assert insert[1][12] is None and insert[1][13] is None
-    assert json.loads(insert[1][14]) == []
-    assert json.loads(insert[1][19]) == {"document": "manual.md"}
+    # P1-1 后 22 参契约：11=section_ref；27号修复 E 的
+    # parent_ref/context_group_id/source_refs_json 顺延至 13/14/15；
+    # facets/provenance 顺延至 20/21（列序契约由 test_units_insert_arity 独立钉）
+    assert len(insert[1]) == 22
+    assert insert[1][11] is None  # section_ref（样本未设）
+    assert insert[1][13] is None and insert[1][14] is None
+    assert json.loads(insert[1][15]) == []
+    assert json.loads(insert[1][20]) == {"document": "manual.md"}
     # Schema 必须由启动 migration 完成；业务热路径不得执行 DDL，否则多个
     # 文档 worker 首次并发会发生 relation lock upgrade deadlock。
     ddl = [entry for entry in log if "CREATE TABLE" in entry[0]]
@@ -520,9 +523,11 @@ def test_asset_writer_maps_structure_and_table_faces():
     assert asset[1] is not None
     assert json.loads(asset[1][4]) == ["告警码", "功耗"]  # columns_json
     assert asset[1][7] == "asset-v2-1"  # schema_version 来自 faces
+    assert asset[1][8] is None  # sheet_name（A3，无 IR 事实时 NULL）
 
     cell = find_statement(pool, "INSERT INTO asset_table_cells")
-    assert cell[1] == ["snap-1", "tbl-1", 0, 0, "告警码", "A-101", False]
+    assert cell[1] == ["snap-1", "tbl-1", 0, 0, "告警码", "A-101", False,
+                       None, None, None, None, None, None]  # A3 类型化事实列
 
 
 def test_asset_writer_backfills_embedding_metadata_without_clobbering():

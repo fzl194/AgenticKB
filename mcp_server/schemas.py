@@ -42,7 +42,9 @@ class SearchInput(BaseModel):
     #: Name (as listed in error hints) or id of a specific retrieval paradigm.
     #: Omitted = the KB binding / official default, i.e. exactly the pre-existing behaviour.
     paradigm: str | None = None
-    #: §7.1 within：document_refs/section_refs/structure_ref/include_descendants 等
+    #: §7.1 within：document_refs/section_refs（st_ 或明文内部 ref）+ section_scope
+    #: （exact|descendants，A2 起真实支持——descendants 在召回前展开章节闭包，
+    #: FTS/dense 共用同一谓词，越界率 0；include_descendants 为旧拼写不再接受）
     within: dict | None = None
     #: §7.1 filters：relative_path_prefix/asset_types/evidence_types/date_range 等
     filters: dict | None = None

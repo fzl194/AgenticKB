@@ -14,6 +14,25 @@ import type {
   DocumentKnowledge,
 } from '@/types/kb'
 
+export interface KbQualityReport {
+  documents: number
+  structure: {
+    sections_total: number
+    sections_with_ordinal: number
+    sections_bridged: number
+    units_total: number
+    units_with_section: number
+  }
+  tables: {
+    tables_total: number
+    tables_query_ready: number
+    cells_total: number
+    cells_typed: number
+    unqueryable: Array<{ table_ref: string; reason: string; row_count?: number | null; sheet_name?: string | null }>
+  }
+  locator: { denominator: number; resolved: number; degraded: number }
+}
+
 export function useKbApi() {
   const client = createProxyClient('mining')
 
@@ -205,11 +224,28 @@ export function useKbApi() {
       return data
     },
 
-    async listDocuments(kbId: string, directory?: string): Promise<KbDocument[]> {
+    /**
+     * 目录内文件（2026-09-08 起服务端分页：limit ≤500 / offset——此前后端
+     * 固定 limit=200 静默截断，大库文件列表不完整且前端无感知）。
+     */
+    async listDocuments(
+      kbId: string, directory?: string, limit = 200, offset = 0,
+    ): Promise<KbDocument[]> {
       const { data } = await client.get(`/api/kb/${kbId}/documents`, {
-        params: directory !== undefined ? { directory } : undefined,
+        params: {
+          ...(directory !== undefined ? { directory } : {}),
+          limit, offset,
+        },
       })
       return extractItems<KbDocument>(data)
+    },
+
+    /** 文件总数（与 listDocuments 同过滤口径）——分页总数。 */
+    async countDocuments(kbId: string, directory?: string): Promise<number> {
+      const { data } = await client.get(`/api/kb/${kbId}/documents/count`, {
+        params: directory !== undefined ? { directory } : undefined,
+      })
+      return Number(data?.total ?? 0)
     },
 
     async getDocument(kbId: string, docId: string): Promise<KbDocument> {
@@ -267,6 +303,12 @@ export function useKbApi() {
     },
 
     /** 本 KB 的挖掘记录（最新在前）。 */
+    /** A4 质量报告（34 号 P1-1）：结构/表格完整度 + 定位覆盖（只读聚合）。 */
+    async getKbQuality(kbId: string): Promise<KbQualityReport> {
+      const { data } = await client.get(`/api/kb/${kbId}/quality`)
+      return data
+    },
+
     async getKbRuns(kbId: string): Promise<KbRunRecord[]> {
       const { data } = await client.get(`/api/kb/${kbId}/runs`)
       return extractItems<KbRunRecord>(data)

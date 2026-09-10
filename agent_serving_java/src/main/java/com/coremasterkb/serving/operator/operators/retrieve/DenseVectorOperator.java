@@ -73,7 +73,8 @@ public class DenseVectorOperator implements Operator {
         List<UnitV2Row> rows = mapper.searchDenseV2(
                 formatVector(vec), vec.length, scope.snapshotIds(),
                 pushdown.documentJsonParams(), pushdown.representationTypes(),
-                pushdown.contentTypes(), pushdown.targetRefs(), recall);
+                pushdown.contentTypes(), pushdown.targetRefs(),
+                pushdown.sectionScopeDescendants(), recall);
 
         if (rows.isEmpty() && mapper != null) {
             // 空候选的能力性留痕：区分"无向量数据"（capability 缺失）与"正常无命中"。

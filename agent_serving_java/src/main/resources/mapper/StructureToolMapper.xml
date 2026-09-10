@@ -68,6 +68,8 @@
         <result column="column_name"   property="columnName"/>
         <result column="value"         property="value"/>
         <result column="is_header"     property="isHeader"/>
+        <result column="value_type"     property="valueType"/>
+        <result column="normalized_value" property="normalizedValue"/>
     </resultMap>
 
     <resultMap id="structuredRowMap"
@@ -81,7 +83,7 @@
     <resultMap id="aggregateRowMap"
                type="com.coremasterkb.serving.operator.mapper.StructureToolMapper$AggregateRow">
         <constructor>
-            <arg column="value" javaType="java.lang.Double"/>
+            <arg column="value" javaType="java.lang.Object"/>
         </constructor>
     </resultMap>
 
@@ -236,6 +238,17 @@
         LIMIT #{limit}
     </select>
 
+    <!-- P2-17：previous/next 的兄弟集限定同 node_type（章节导航不混正文段/表格）；
+         ordinal + ref 双键稳定排序（并列值 deterministic）。 -->
+    <select id="selectSiblingsOfType" resultMap="nodeMap">
+        SELECT snapshot_id, node_type, ref, parent_ref, ordinal, title, level, block_type
+        FROM asset_structure_nodes
+        WHERE snapshot_id = #{snapshotId} AND parent_ref = #{parentRef}
+          AND node_type = #{nodeType}
+        ORDER BY ordinal ASC NULLS LAST, ref ASC
+        LIMIT #{limit}
+    </select>
+
     <select id="selectEdges" resultMap="edgeRowMap">
         SELECT snapshot_id, relation, from_ref, to_ref
         FROM asset_structure_edges
@@ -295,7 +308,8 @@
     </select>
 
     <select id="selectCellsForTyping" resultMap="cellMap">
-        SELECT snapshot_id, table_ref, row_index, column_index, column_name, value, is_header
+        SELECT snapshot_id, table_ref, row_index, column_index, column_name, value,
+               is_header, value_type, normalized_value
         FROM asset_table_cells
         WHERE snapshot_id = #{snapshotId} AND table_ref = #{tableRef}
         ORDER BY is_header DESC, row_index ASC, column_index ASC
@@ -309,7 +323,10 @@
     <select id="selectStructuredRows" resultMap="structuredRowMap">
         SELECT t.row_index AS rowIndex, t.cells::text AS cellsJson
         FROM (
-            SELECT c.row_index, jsonb_object_agg(c.column_name, c.value) AS cells
+            SELECT c.row_index,
+                   jsonb_object_agg(c.column_name, c.value) AS cells,
+                   jsonb_object_agg(c.column_name,
+                       COALESCE(c.normalized_value, c.value)) AS cells_norm
             FROM asset_table_cells c
             WHERE c.snapshot_id = #{snapshotId} AND c.table_ref = #{tableRef} AND c.is_header = FALSE
             GROUP BY c.row_index
@@ -319,27 +336,33 @@
                 <include refid="criterion"/>
             </foreach>
         </where>
-        <if test="orderField != null and orderField != ''">
-            ORDER BY
-            <choose>
-                <when test="numericOrder">
-                    NULLIF(REPLACE(t.cells ->> #{orderField}, ',', ''), '')::numeric
-                </when>
-                <otherwise>t.cells ->> #{orderField}</otherwise>
-            </choose>
-            <choose>
-                <when test="orderDir == 'desc'">DESC</when>
-                <otherwise>ASC</otherwise>
-            </choose>
-            , t.row_index ASC
-        </if>
+        <!-- P2-11：ORDER BY 恒存在（service 默认 row_index ASC）；行号 tie-break
+             保证并列值分页 deterministic（无重复/无遗漏）。 -->
+        ORDER BY
+        <choose>
+            <when test="orderField == null">
+                t.row_index
+            </when>
+            <when test="numericOrder">
+                NULLIF(REPLACE(t.cells_norm ->> #{orderField}, ',', ''), '')::numeric
+            </when>
+            <otherwise>t.cells_norm ->> #{orderField}</otherwise>
+        </choose>
+        <choose>
+            <when test="orderDir == 'desc'">DESC</when>
+            <otherwise>ASC</otherwise>
+        </choose>
+        , t.row_index ASC
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
     <select id="countStructuredRows" resultType="long">
         SELECT COUNT(*)
         FROM (
-            SELECT c.row_index, jsonb_object_agg(c.column_name, c.value) AS cells
+            SELECT c.row_index,
+                   jsonb_object_agg(c.column_name, c.value) AS cells,
+                   jsonb_object_agg(c.column_name,
+                       COALESCE(c.normalized_value, c.value)) AS cells_norm
             FROM asset_table_cells c
             WHERE c.snapshot_id = #{snapshotId} AND c.table_ref = #{tableRef} AND c.is_header = FALSE
             GROUP BY c.row_index
@@ -357,21 +380,31 @@
         <choose>
             <when test="aggOp == 'count'">COUNT(*)</when>
             <when test="aggOp == 'sum'">
-                SUM(NULLIF(REPLACE(t.cells ->> #{aggField}, ',', ''), '')::numeric)
+                SUM(NULLIF(REPLACE(t.cells_norm ->> #{aggField}, ',', ''), '')::numeric)
             </when>
             <when test="aggOp == 'min'">
-                MIN(NULLIF(REPLACE(t.cells ->> #{aggField}, ',', ''), '')::numeric)
+                <choose>
+                    <!-- A3 date：ISO 文本字典序=时间序（规范值），不数值化 -->
+                    <when test="textualAggregate">MIN(t.cells_norm ->> #{aggField})</when>
+                    <otherwise>MIN(NULLIF(REPLACE(t.cells_norm ->> #{aggField}, ',', ''), '')::numeric)</otherwise>
+                </choose>
             </when>
             <when test="aggOp == 'max'">
-                MAX(NULLIF(REPLACE(t.cells ->> #{aggField}, ',', ''), '')::numeric)
+                <choose>
+                    <when test="textualAggregate">MAX(t.cells_norm ->> #{aggField})</when>
+                    <otherwise>MAX(NULLIF(REPLACE(t.cells_norm ->> #{aggField}, ',', ''), '')::numeric)</otherwise>
+                </choose>
             </when>
             <otherwise>
-                AVG(NULLIF(REPLACE(t.cells ->> #{aggField}, ',', ''), '')::numeric)
+                AVG(NULLIF(REPLACE(t.cells_norm ->> #{aggField}, ',', ''), '')::numeric)
             </otherwise>
         </choose>
         AS value
         FROM (
-            SELECT c.row_index, jsonb_object_agg(c.column_name, c.value) AS cells
+            SELECT c.row_index,
+                   jsonb_object_agg(c.column_name, c.value) AS cells,
+                   jsonb_object_agg(c.column_name,
+                       COALESCE(c.normalized_value, c.value)) AS cells_norm
             FROM asset_table_cells c
             WHERE c.snapshot_id = #{snapshotId} AND c.table_ref = #{tableRef} AND c.is_header = FALSE
             GROUP BY c.row_index
@@ -389,41 +422,73 @@
             <when test="c.op == 'eq'">
                 <choose>
                     <when test="c.numeric">
-                        NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric = #{c.value}
+                        NULLIF(REPLACE(t.cells_norm ->> #{c.field}, ',', ''), '')::numeric = #{c.value}
                     </when>
-                    <otherwise>t.cells ->> #{c.field} = #{c.value}</otherwise>
+                    <otherwise>t.cells_norm ->> #{c.field} = #{c.value}</otherwise>
                 </choose>
             </when>
             <when test="c.op == 'ne'">
                 <choose>
                     <when test="c.numeric">
-                        NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric != #{c.value}
+                        NULLIF(REPLACE(t.cells_norm ->> #{c.field}, ',', ''), '')::numeric != #{c.value}
                     </when>
-                    <otherwise>t.cells ->> #{c.field} != #{c.value}</otherwise>
+                    <otherwise>t.cells_norm ->> #{c.field} != #{c.value}</otherwise>
                 </choose>
             </when>
             <when test="c.op == 'lt'">
-                NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric &lt; #{c.value}
+                <choose>
+                    <when test="c.numeric">
+                        NULLIF(REPLACE(t.cells_norm ->> #{c.field}, ',', ''), '')::numeric &lt; #{c.value}
+                    </when>
+                    <otherwise>
+                        <!-- A3 date：ISO 文本字典序 = 时间序（规范值基准） -->
+                        t.cells_norm ->> #{c.field} &lt; #{c.value}
+                    </otherwise>
+                </choose>
             </when>
             <when test="c.op == 'lte'">
-                NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric &lt;= #{c.value}
+                <choose>
+                    <when test="c.numeric">
+                        NULLIF(REPLACE(t.cells_norm ->> #{c.field}, ',', ''), '')::numeric &lt;= #{c.value}
+                    </when>
+                    <otherwise>
+                        <!-- A3 date：ISO 文本字典序 = 时间序（规范值基准） -->
+                        t.cells_norm ->> #{c.field} &lt;= #{c.value}
+                    </otherwise>
+                </choose>
             </when>
             <when test="c.op == 'gt'">
-                NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric &gt; #{c.value}
+                <choose>
+                    <when test="c.numeric">
+                        NULLIF(REPLACE(t.cells_norm ->> #{c.field}, ',', ''), '')::numeric &gt; #{c.value}
+                    </when>
+                    <otherwise>
+                        <!-- A3 date：ISO 文本字典序 = 时间序（规范值基准） -->
+                        t.cells_norm ->> #{c.field} &gt; #{c.value}
+                    </otherwise>
+                </choose>
             </when>
             <when test="c.op == 'gte'">
-                NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric &gt;= #{c.value}
+                <choose>
+                    <when test="c.numeric">
+                        NULLIF(REPLACE(t.cells_norm ->> #{c.field}, ',', ''), '')::numeric &gt;= #{c.value}
+                    </when>
+                    <otherwise>
+                        <!-- A3 date：ISO 文本字典序 = 时间序（规范值基准） -->
+                        t.cells_norm ->> #{c.field} &gt;= #{c.value}
+                    </otherwise>
+                </choose>
             </when>
             <when test="c.op == 'in'">
                 <choose>
                     <when test="c.numeric">
-                        NULLIF(REPLACE(t.cells ->> #{c.field}, ',', ''), '')::numeric IN
+                        NULLIF(REPLACE(t.cells_norm ->> #{c.field}, ',', ''), '')::numeric IN
                         <foreach collection="c.values" item="v" open="(" separator="," close=")">
                             CAST(#{v} AS numeric)
                         </foreach>
                     </when>
                     <otherwise>
-                        t.cells ->> #{c.field} IN
+                        t.cells_norm ->> #{c.field} IN
                         <foreach collection="c.values" item="v" open="(" separator="," close=")">
                             #{v}
                         </foreach>
@@ -431,10 +496,10 @@
                 </choose>
             </when>
             <when test="c.op == 'contains'">
-                t.cells ->> #{c.field} LIKE ('%' || #{c.value} || '%')
+                t.cells_norm ->> #{c.field} LIKE ('%' || #{c.value} || '%')
             </when>
             <otherwise>
-                (t.cells ->> #{c.field}) IS NULL
+                (t.cells_norm ->> #{c.field}) IS NULL
             </otherwise>
         </choose>
     </sql>

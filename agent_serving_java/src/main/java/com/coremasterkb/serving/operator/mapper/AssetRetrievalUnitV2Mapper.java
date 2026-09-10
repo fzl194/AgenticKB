@@ -25,7 +25,9 @@ public interface AssetRetrievalUnitV2Mapper {
      * @param documentJsonParams  facets_json @> 参数化 JSONB（{"document":"<ref>"}，OR 语义）
      * @param representationTypes representation_type IN (...)（evidence_types；空 = 不过滤）
      * @param contentTypes        content_type IN (...)（asset_types；空 = 不过滤）
-     * @param targetRefs          target_ref IN (...)（section_refs；空 = 不过滤）
+     * @param targetRefs          section_refs 值（section_ref IN 主匹配 + 存量 NULL 行
+     *                             target_ref 回落；descendants 时作闭包种子；空 = 不过滤）
+     * @param sectionScopeDescendants A2：true = 闭包展开（WITH RECURSIVE，SQL 内完成）
      * @param limit               有界召回窗口（Top-K 前于 canonical 聚合的多表示冗余预留）
      */
     List<UnitV2Row> searchFtsV2(
@@ -35,6 +37,7 @@ public interface AssetRetrievalUnitV2Mapper {
             @Param("representationTypes") List<String> representationTypes,
             @Param("contentTypes") List<String> contentTypes,
             @Param("targetRefs") List<String> targetRefs,
+            @Param("sectionScopeDescendants") boolean sectionScopeDescendants,
             @Param("limit") int limit);
 
     /**
@@ -54,6 +57,7 @@ public interface AssetRetrievalUnitV2Mapper {
             @Param("representationTypes") List<String> representationTypes,
             @Param("contentTypes") List<String> contentTypes,
             @Param("targetRefs") List<String> targetRefs,
+            @Param("sectionScopeDescendants") boolean sectionScopeDescendants,
             @Param("limit") int limit);
 
     /**
@@ -61,4 +65,13 @@ public interface AssetRetrievalUnitV2Mapper {
      * 空 = 该 scope 无任何向量数据。
      */
     List<Integer> selectDistinctDimensions(@Param("snapshotIds") List<String> snapshotIds);
+
+    /**
+     * A2 descendants 守卫：每 root 的闭包计数（含 root 自身）。
+     * 返回行 = {root: String, total: Long}；roots 上限（64）由调用方按入参长度判定，
+     * 每 root 后代 ≤512 由本查询 total-1 判定——超限 section_scope_too_broad，不退化宽搜索。
+     */
+    List<java.util.Map<String, Object>> countSectionClosure(
+            @Param("snapshotIds") List<String> snapshotIds,
+            @Param("targetRefs") List<String> targetRefs);
 }

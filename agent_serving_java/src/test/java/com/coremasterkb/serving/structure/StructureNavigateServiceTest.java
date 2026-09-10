@@ -120,7 +120,8 @@ class StructureNavigateServiceTest {
     void adjacentSiblings() {
         String ref = stRef(SEG);
         when(toolMapper.selectNode(SNAP, SEG)).thenReturn(node("segment", SEG, SECTION, 3));
-        when(toolMapper.selectSiblings(eq(SNAP), eq(SECTION), anyInt()))
+        // P2-17：previous/next 改走同类型兄弟查询（node_type 过滤在 SQL 内）
+        when(toolMapper.selectSiblingsOfType(eq(SNAP), eq(SECTION), eq("segment"), anyInt()))
                 .thenReturn(List.of(node("segment", "doc:/spec#seg:2", SECTION, 2),
                         node("segment", SEG, SECTION, 3),
                         node("segment", "doc:/spec#seg:4", SECTION, 4)));

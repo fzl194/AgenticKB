@@ -21,8 +21,8 @@ PROMOTE_TABLE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "representation_id", "snapshot_id", "representation_type",
             "content_type", "content_text", "structural_context",
             "lexical_text", "tokenizer_version", "target_type", "target_ref",
-            "canonical_evidence_id", "container_ref", "parent_ref",
-            "context_group_id", "source_refs_json", "ordinal",
+            "canonical_evidence_id", "section_ref", "container_ref",
+            "parent_ref", "context_group_id", "source_refs_json", "ordinal",
             "lexical_eligible", "dense_eligible", "returnable",
             "facets_json", "provenance_json",
         ),
@@ -39,7 +39,7 @@ PROMOTE_TABLE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "asset_structure_nodes",
         ("snapshot_id", "node_type", "ref", "parent_ref", "ordinal", "title",
-         "level", "block_type"),
+         "level", "block_type", "element_id"),
     ),
     (
         "asset_structure_edges",
@@ -48,12 +48,15 @@ PROMOTE_TABLE_COLUMNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "asset_structured_assets",
         ("snapshot_id", "asset_ref", "asset_type", "table_ref",
-         "columns_json", "row_count", "readiness", "schema_version"),
+         "columns_json", "row_count", "readiness", "schema_version",
+         "sheet_name"),
     ),
     (
         "asset_table_cells",
         ("snapshot_id", "table_ref", "row_index", "column_index",
-         "column_name", "value", "is_header"),
+         "column_name", "value", "is_header", "value_type",
+         "normalized_value", "formula", "row_span", "column_span",
+         "source_span_id"),
     ),
     (
         "asset_snapshot_readiness",

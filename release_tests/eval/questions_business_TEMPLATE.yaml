@@ -1,0 +1,44 @@
+# A4 评测题集——真实业务题模板（需要业务补充，不得伪造完成）
+#
+# 34 号 §7 发布指标：首批至少 50 条真实题，来源正确通过 ≥48 条（≥96%）；
+# 分别记录 文档正确 / 章节正确 / 位置正确 / 证据是否支持结论。
+#
+# 业务补充方式：按下方 schema 填写题目（每题一节），指向**真实业务文档**
+# （先上传到目标知识库并完成挖掘），然后：
+#   docker exec cmkb python /app/release_tests/eval/run_eval.py \
+#       --questions /app/release_tests/eval/questions_business.yaml --kb-id EXISTING_KB_ID
+#
+# business 模式逐题只读执行，不创建/清理指定 KB。ref 从当前库 inspect/大纲取得。
+# supports_conclusion 属人工核验，运行器会标待人工而非假定为通过。
+
+version: 1
+kind: business
+questions:
+  - id: q001                      # 业务编号（追溯用）
+    category: source_accuracy     # source_accuracy | scope | table_golden | unanswerable
+    question: 真实业务问题（原话）
+    expect:
+      document: 期望文档名（或含关键词）
+      section: 期望章节（可空 = 不校验章节）
+      locator_kind: page|line_range|sheet_cell（可空 = 不校验位置）
+      supports_conclusion: true   # 证据是否支持结论（人工判定，评机械执行）
+  - id: q002
+    category: table_golden
+    question: 某表某列合计是多少
+    asset_ref: st_替换为inspect返回的当前表格引用
+    expect:
+      spec: {aggregate: {op: sum, field: 列名}}   # 期望查询（DSL）
+      value: 12345.6                               # 期望值（人工核对）
+  - id: q003
+    category: scope
+    question: 在某章节内找某内容
+    within:
+      section_refs: [替换为大纲中的section_ref]
+      section_scope: descendants
+    expect:
+      must_not_contain: [范围外特征词]
+  - id: q004
+    category: unanswerable
+    question: 语料里没有答案的问题
+    expect:
+      empty_or_unsupported: true   # 不得伪造来源（无证据问题不给伪造引用）

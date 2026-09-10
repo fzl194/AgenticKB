@@ -16,7 +16,7 @@ BackendBlock"映射。
 - 表格 Element.text 由统一 rendered_text 渲染（骨架保证）；
 - cell 级 EvidenceSpan（native_ref=sheet+绝对 A1）经 ``_make_cell_spans``。
 
-fingerprint：``native_xlsx@2.0.0#openpyxl-<ver>``（区域策略变更 -> 版本升）。
+fingerprint：``native_xlsx@2.1.0#openpyxl-<ver>``（区域策略变更 -> 版本升）。
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from knowledge_mining.mining.parse_adapters.native._base import (
 )
 
 NATIVE_XLSX_PARSER_ID = "native_xlsx"
-NATIVE_XLSX_VERSION = "2.0.0"
+NATIVE_XLSX_VERSION = "2.1.0"
 _OPENPYXL_VERSION = _pkg_version("openpyxl")
 NATIVE_XLSX_FINGERPRINT = (
     f"{NATIVE_XLSX_PARSER_ID}@{NATIVE_XLSX_VERSION}"
@@ -372,13 +372,19 @@ def _region_block(
                 continue
             cell = sheet_formula.cell(row=row0 + r + 1, column=col0 + c + 1)
             formula = _formula_of(cell.value)
-            display = sheet_values.cell(
+            display_cell = sheet_values.cell(
                 row=row0 + r + 1, column=col0 + c + 1
-            ).value
+            )
+            display = display_cell.value
             if formula is None and display is None and pos not in origin_spans:
                 continue
             empty = False
             row_span, col_span = origin_spans.get(pos, (1, 1))
+            # A3（P1-7）：类型化 cell 事实——按 display（计算结果）值与
+            # openpyxl 的 Excel 原生类型推导；公式格类型按其计算结果。
+            value_type, normalized = _typed_value(
+                display, display_cell, header_row=(r == 0),
+            )
             cells.append({
                 "row_index": r,
                 "column_index": c,
@@ -387,6 +393,8 @@ def _region_block(
                 "column_span": col_span,
                 "is_header": r == 0,  # 首行表头约定（excel_table 亦然）
                 "formula": formula,
+                "value_type": value_type,
+                "normalized_value": normalized,
                 "evidence_index": evidence,
             })
             evidence += 1
@@ -429,6 +437,77 @@ def _formula_of(value: Any) -> str | None:
     return None
 
 
+def _normalize_number(value: int | float) -> str:
+    """数值 → 规范十进制文本（int 无小数点；float 最短表示，无尾零）.
+
+    独立于单元格 display format（千分位/货币等不进入规范化值）——
+    A3 数值比较基准由此可稳定解析（``::numeric``）。
+    """
+    if isinstance(value, bool):  # 防御：openpyxl 极少把布尔塞数值格
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    text = repr(float(value))
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text
+
+
+def _normalize_datetime(value: Any) -> str | None:
+    """datetime/date/time → ISO 文本（纯日期=YYYY-MM-DD；含时刻则完整 ISO）."""
+    import datetime as _dt
+
+    if isinstance(value, _dt.datetime):
+        # 00:00:00 时刻是 openpyxl 纯日期格的默认时间——折叠为纯日期
+        if (value.hour, value.minute, value.second, value.microsecond) == (0, 0, 0, 0):
+            return value.date().isoformat()
+        return value.isoformat()
+    if isinstance(value, _dt.date):
+        return value.isoformat()
+    if isinstance(value, _dt.time):
+        return value.isoformat()
+    return None
+
+
+def _typed_value(
+    display: Any, display_cell: Any, *, header_row: bool,
+) -> tuple[str | None, str | None]:
+    """display 值 + openpyxl 原生类型 → (value_type, normalized_value).
+
+    推导优先级（SRS §7.6 宁缺勿伪造）：
+    1. ``is_date``（openpyxl 按 number format 判定的 Excel 日期型）→ date；
+    2. bool → text（不强标 number——语义不是数值）；
+    3. int/float → number（规范十进制）；
+    4. datetime/date/time 实例 → date（ISO）；
+    5. str → text（normalized=text 本身）；
+    6. None / 无法确认 → (None, None)。
+
+    表头行（r==0 约定）恒 text——表头是列名不是值。
+    """
+    if display is None:
+        return None, None
+    if header_row:
+        text = str(display)
+        return "text", text
+    is_date = bool(getattr(display_cell, "is_date", False))
+    if is_date:
+        normalized = _normalize_datetime(display)
+        if normalized is not None:
+            return "date", normalized
+        # is_date 但值不可解析（异常格式）——回落文本，不伪造日期
+        return "text", str(display)
+    if isinstance(display, bool):
+        return "text", str(display).lower()
+    if isinstance(display, (int, float)):
+        return "number", _normalize_number(display)
+    normalized = _normalize_datetime(display)
+    if normalized is not None:
+        return "date", normalized
+    if isinstance(display, str):
+        return "text", display
+    return None, None
+
+
 def _col_letter(index_1based: int) -> str:
     from openpyxl.utils import get_column_letter
 
@@ -442,7 +521,7 @@ def _col_letter(index_1based: int) -> str:
 class XlsxNormalizer(BaseNativeNormalizer):
     """XLSX backend artifact -> Parse IR：workbook/sheet 层级 + cell 证据."""
 
-    normalizer_version = "native-xlsx@2"
+    normalizer_version = "native-xlsx@3"
     _default_fingerprints = {NATIVE_XLSX_PARSER_ID: NATIVE_XLSX_FINGERPRINT}
     _element_type_map = {"table": "table"}
 

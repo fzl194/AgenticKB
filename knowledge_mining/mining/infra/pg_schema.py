@@ -88,6 +88,16 @@ _SOURCE_LOCATORS_DDL = (
     / "schemas"
     / "014_a1_source_locators.sql"
 )
+# A2/A3（39 号）：units.section_ref（范围下推键）+ nodes.element_id（大纲桥）
+# + table cells 类型化事实 + structured_assets.sheet_name。幂等 ALTER，
+# 存量行为 NULL；历史补齐走专用重放 CLI。
+_SECTION_SCOPE_TYPED_CELLS_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "asset_core"
+    / "schemas"
+    / "015_a2a3_section_scope_typed_cells.sql"
+)
 # 阶段 A（批次5）：用户级 MCP 接入（一人一钥 + 开放库清单）与库级默认检索范式。
 _MCP_ACCESS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "008_mcp_access.sql"
 _KB_DEFAULT_PARADIGM_DDL = (
@@ -194,6 +204,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _RETRIEVAL_ASSETS_V2_DDL,
         # A1 来源记录面：依赖 013 的 units 表语义（仅审计视图口径，无 FK）。
         _SOURCE_LOCATORS_DDL,
+        # A2/A3：013 表的幂等 ALTER（依赖 units/nodes/cells 表已存在）。
+        _SECTION_SCOPE_TYPED_CELLS_DDL,
         # 阶段 A（批次5）：MCP 用户接入（依赖 kb_users/knowledge_bases，链尾安全）。
         _MCP_ACCESS_DDL,
         _KB_DEFAULT_PARADIGM_DDL,

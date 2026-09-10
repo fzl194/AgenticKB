@@ -71,7 +71,7 @@ class DenseVectorOperatorTest {
     @Test
     @DisplayName("textKind param and unit_type mapping are gone; dim = query vector length")
     void noTextKindDimensionMatched() {
-        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyInt()))
+        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
                 .thenReturn(List.of());
 
         op.execute(inputs(new float[]{0.1f, 0.2f, 0.3f}), Params.empty(), ctx);
@@ -80,13 +80,13 @@ class DenseVectorOperatorTest {
         verify(mapper).searchDenseV2(
                 argThat(v -> v.startsWith("[") && v.endsWith("]")),
                 eq(3), eq(List.of("snap-1")),
-                eq(List.of()), eq(List.of()), eq(List.of()), eq(List.of()), anyInt());
+                eq(List.of()), eq(List.of()), eq(List.of()), eq(List.of()), anyBoolean(), anyInt());
     }
 
     @Test
     @DisplayName("no embeddings in scope → empty candidates + capability degraded trace")
     void noVectorsCapabilityDiagnostic() {
-        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyInt()))
+        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
                 .thenReturn(List.of());
         when(mapper.selectDistinctDimensions(anyList())).thenReturn(List.of());
 
@@ -100,7 +100,7 @@ class DenseVectorOperatorTest {
     @Test
     @DisplayName("dimension mismatch with scope profile → degraded trace (not silent empty)")
     void dimensionMismatchDiagnostic() {
-        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyInt()))
+        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
                 .thenReturn(List.of());
         when(mapper.selectDistinctDimensions(anyList())).thenReturn(List.of(1024));
 
@@ -112,7 +112,7 @@ class DenseVectorOperatorTest {
     @Test
     @DisplayName("normal no-hit with matching dims → empty result, no degraded trace")
     void normalEmptyNoTrace() {
-        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyInt()))
+        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
                 .thenReturn(List.of());
         when(mapper.selectDistinctDimensions(anyList())).thenReturn(List.of(2));
 
@@ -125,7 +125,7 @@ class DenseVectorOperatorTest {
     @Test
     @DisplayName("rows aggregate by canonical within the channel")
     void canonicalAggregation() {
-        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyInt()))
+        when(mapper.searchDenseV2(anyString(), anyInt(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
                 .thenReturn(List.of(
                         row("rep-a", "ev-1", 0.95),
                         row("rep-b", "ev-1", 0.90),

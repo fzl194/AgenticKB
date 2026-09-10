@@ -145,6 +145,22 @@ async def restore_kb(
         raise _map_error(exc) from None
 
 
+@router.get("/{kb_id}/quality")
+async def get_kb_quality(
+    kb_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+):
+    """A4 质量报告（34 号 P1-1）：结构/表格完整度 + 来源定位覆盖 + 不可查原因.
+
+    维护者视图——current 快照口径（与 readiness 一致）的只读聚合，
+    无 DDL、无写路径；作为重挖决策与 A4 评测（来源可解析率分母）的输入。
+    """
+    if not await kbdb.is_visible(kb_id=kb_id, user_id=user["id"]):
+        raise HTTPException(404, f"KB {kb_id} not found")
+    return await kbdb.get_kb_quality(kb_id)
+
+
 @router.get("/{kb_id}/runs")
 async def list_kb_runs(
     kb_id: str,

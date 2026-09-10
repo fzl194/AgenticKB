@@ -419,3 +419,84 @@ async def test_table_summary_carries_sheet_name_from_ir_containers() -> None:
     by_id = {t["table_id"]: t for t in result["tables"]}
     assert by_id["t-sheet"]["sheet_name"] == "告警表"
     assert by_id["t-page"]["sheet_name"] is None
+
+
+async def test_outline_items_carry_section_ref_anchors(tmp_path) -> None:
+    """A2：outline 项携带 section_ref（结构节点 element_id 锚 join）.
+
+    - 有锚的章节：section_ref = 投影节点 ref（网页范围搜索的 within 入参）；
+    - 仓储抛错：section_ref=None，不阻断预览主数据（诚实降级）。
+    """
+    from knowledge_mining.mining.snapshot_store.read_service import (
+        ParseResultReadService,
+    )
+    from knowledge_mining.mining.segment_compiler.service import (
+        SegmentCompileService,
+    )
+    from tests.snapshot_store.test_commit_service import _decision
+
+    store = FakeObjectStore(str(tmp_path / "objects"))
+    objects = MemoryStorageObjectRepository()
+    ir_id = await _seed_ir(store, objects)
+    snapshots = MemorySnapshotRepository()
+
+    async def _no_stale(frozen) -> None:  # noqa: ANN001
+        return None
+
+    commit = SnapshotCommitService(
+        snapshots=snapshots, stale_checker=_no_stale,
+        storage_objects=objects, object_store=store,
+    )
+    frozen = _frozen()
+    committed = await commit.commit(
+        frozen=frozen, document=_doc(),
+        parse_ir_storage_object_id=ir_id,
+        quality_decision=_decision(), run_id="r1", domain="default",
+        title="手册",
+    )
+    seg_store = MemorySegmentStore()
+    await SegmentCompileService(
+        object_store=store, storage_objects=objects, segment_store=seg_store,
+    ).compile(
+        committed.snapshot.id, parse_ir_storage_object_id=ir_id,
+        document_key="a.pdf",
+    )
+
+    class _AnchorStore:
+        async def list_section_anchors(self, snapshot_id):
+            return {"h0": "a.pdf#section:0"}
+
+    class _BrokenStore:
+        async def list_section_anchors(self, snapshot_id):
+            raise RuntimeError("db down")
+
+    # 正常：join 命中（章一 = h0）
+    read = ParseResultReadService(
+        snapshots=snapshots, storage_objects=objects, object_store=store,
+        segment_store=seg_store, structure_nodes=_AnchorStore(),
+    )
+    result = await read.get_parse_result(
+        domain="default", document_id=frozen.document_id,
+    )
+    assert result["outline"][0]["element_id"] == "h0"
+    assert result["outline"][0]["section_ref"] == "a.pdf#section:0"
+
+    # 仓储故障：锚缺失但不阻断主数据
+    read_broken = ParseResultReadService(
+        snapshots=snapshots, storage_objects=objects, object_store=store,
+        segment_store=seg_store, structure_nodes=_BrokenStore(),
+    )
+    result_broken = await read_broken.get_parse_result(
+        domain="default", document_id=frozen.document_id,
+    )
+    assert result_broken["outline"][0]["section_ref"] is None
+
+    # 未注入仓储（缺省）：section_ref=None，行为与旧版一致
+    read_plain = ParseResultReadService(
+        snapshots=snapshots, storage_objects=objects, object_store=store,
+        segment_store=seg_store,
+    )
+    result_plain = await read_plain.get_parse_result(
+        domain="default", document_id=frozen.document_id,
+    )
+    assert result_plain["outline"][0]["section_ref"] is None

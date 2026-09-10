@@ -80,6 +80,12 @@ public class GlobalExceptionHandler {
                             "message", "A document_refs/section_refs value could not be "
                                     + "resolved to an in-scope internal ref: " + ex.getMessage()));
         }
+        // A2（39 号 §2.2；33 号 G3）：章节范围超护栏 → typed 400，不静默放宽为宽搜索
+        if (ex.getMessage() != null && ex.getMessage().startsWith("section_scope_too_broad")) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "section_scope_too_broad",
+                            "message", ex.getMessage()));
+        }
         // 29号 2.9：structured query DSL 未知键 → typed 400（不静默当空条件）
         if (ex.getMessage() != null && ex.getMessage().startsWith("unsupported_query_key:")) {
             return ResponseEntity.badRequest()

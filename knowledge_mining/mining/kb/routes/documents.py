@@ -447,6 +447,9 @@ async def restore_document(
         return await svc.restore(document_id=document_id, user_id=user["id"])
     except (NotFound, Forbidden, Duplicate) as exc:
         raise _map_error(exc) from None
+    except ValueError as exc:
+        # 目录已删等位置冲突：可解释的 409，不落裸 500（与 43 号交付承诺一致）
+        raise HTTPException(409, str(exc)) from None
 
 
 @router.post("/{document_id}/move")

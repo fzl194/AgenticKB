@@ -428,14 +428,19 @@ def _browse_top(ident: Identity, domain: str | None) -> dict:
 
 @mcp.tool()
 def upload_document(kb_name: str, filename: str, content_b64: str) -> dict:
-    """上传一个文件到开放的知识库（base64 编码内容，≤50MB）。
+    """上传一个文件到开放的知识库（base64 编码内容，≤50MB），自动排队挖掘。
 
-    **上传不会自动挖掘**：文件入库后需密钥主人在平台界面发起挖掘，内容才可被
-    检索到。上传需要对该库有编辑权限。
+    上传成功后自动入队该库的整库增量挖掘 Run：库空闲则立即排队执行；库正在
+    挖掘/审核中则排在后面串行执行（响应 run_id）。挖掘完成后内容才可被
+    检索到——刚上传的文件用 search_knowledge 查不到是正常的，需等挖掘完成。
+    响应 auto_mined=false 时表示未触发（如库未绑定挖掘范式），需密钥主人在
+    平台界面处理。上传需要对该库有编辑权限。
 
     Args:
         kb_name: 目标知识库名称（get_knowledge 顶层浏览返回的 name）。
-        filename: 文件名（含扩展名，如 "手册.pdf"；不含路径）。
+        filename: 文件名（含扩展名，如 "手册.pdf"；不含路径）。可被挖掘的
+            格式：md/txt/html/pdf/doc(x)/xls(x)/ppt(x)/csv/json 及归档
+            zip/hdx/chm；其他格式可上传但挖掘会标记不支持。
         content_b64: 文件内容的 base64 编码。
     """
     ident = _identity()

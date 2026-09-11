@@ -98,6 +98,30 @@ class AsyncDomainRunRepository:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    async def find_queued_whole_kb_run(self, kb_id: str) -> dict[str, Any] | None:
+        """该库最早的一条整库 Run（无 document_ids；force_redo 语义更强同样计入）。
+
+        自动触发排队语义的去重锚点：整库 Run 在 worker 认领时才枚举文档，
+        排队期间新上传的文件会被自然捞走——重复排队只是空转。选择性 Run
+        （metadata_json.document_ids 为非空数组）覆盖面不完整，不作合并目标。
+        """
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(
+                """SELECT id, status, started_at
+                   FROM mining_runs
+                   WHERE kb_id = %s
+                     AND status = 'queued'
+                     AND COALESCE(
+                             jsonb_typeof(metadata_json -> 'document_ids'),
+                             'null'
+                         ) <> 'array'
+                   ORDER BY started_at, id
+                   LIMIT 1""",
+                (kb_id,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
 
 class DomainRunRepository:
     """Synchronous Domain Runtime access used by background Workflow workers."""

@@ -11,6 +11,33 @@ logger = logging.getLogger(__name__)
 Candidate = dict[str, Any]
 Outcome = dict[str, Any] | None
 
+#: 认领候选 SQL：域内 FIFO（interrupted 优先）+ 租约 fencing + 同库排队守卫
+#: （010 号：queued Run 只在本库无活跃 Run 时可被认领，见下方 NOT EXISTS）。
+_NEXT_CANDIDATE_SQL = """
+    SELECT id, domain, status, input_path, kb_id
+    FROM mining_runs AS r
+    WHERE r.domain = %s
+      AND (
+          r.status = 'queued'
+          OR (r.status = 'interrupted' AND r.execution_engine = 'workflow')
+      )
+      AND (
+          r.worker_id IS NULL OR r.lease_until IS NULL
+          OR r.lease_until < NOW()
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM mining_runs AS active
+          WHERE active.kb_id = r.kb_id
+            AND active.kb_id IS NOT NULL
+            AND active.status IN ('running', 'awaiting_review', 'interrupted')
+            AND active.id <> r.id
+      )
+    ORDER BY
+      CASE r.status WHEN 'interrupted' THEN 0 ELSE 1 END,
+      r.started_at, r.id
+    LIMIT 1
+"""
+
 
 class DomainRunQueueDispatcher:
     """Drain one domain serially; database leases remain the ownership fence."""
@@ -101,24 +128,7 @@ def build_domain_run_dispatcher(domain_pools: Any, db_config: Any) -> DomainRunQ
     def next_candidate(domain: str) -> Candidate | None:
         pool = domain_pools.sync_pool(domain)
         with pool.connection() as conn:
-            cursor = conn.execute(
-                """SELECT id, domain, status, input_path, kb_id
-                   FROM mining_runs
-                   WHERE domain = %s
-                     AND (
-                         status = 'queued'
-                         OR (status = 'interrupted' AND execution_engine = 'workflow')
-                     )
-                     AND (
-                         worker_id IS NULL OR lease_until IS NULL
-                         OR lease_until < NOW()
-                     )
-                   ORDER BY
-                     CASE status WHEN 'interrupted' THEN 0 ELSE 1 END,
-                     started_at, id
-                   LIMIT 1""",
-                (domain,),
-            )
+            cursor = conn.execute(_NEXT_CANDIDATE_SQL, (domain,))
             row = cursor.fetchone()
             return dict(row) if row else None
 

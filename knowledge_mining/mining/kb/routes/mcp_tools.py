@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from knowledge_mining.mining.infra.control_plane import get_internal_verify_secret
 from knowledge_mining.mining.kb.deps import get_document_service, get_kb_db
 from knowledge_mining.mining.kb.db import KbDB
+from knowledge_mining.mining.kb.services import auto_mine
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/kb/mcp-tools", tags=["kb-mcp-tools"])
@@ -106,8 +107,9 @@ async def upload(
     kbdb: KbDB = Depends(get_kb_db),
     doc_svc: Any = Depends(get_document_service),
 ) -> dict[str, Any]:
-    """Agent 上传文件入库（不自动触发挖掘——D2 用户拍板）。"""
-    user_id = await _user_id(kbdb, str(body.get("username") or ""))
+    """Agent 上传文件入库，成功后自动入队整库增量挖掘（排队语义，见 auto_mine）。"""
+    username = str(body.get("username") or "")
+    user_id = await _user_id(kbdb, username)
     kb_id = str(body.get("kb_id") or "")
     await _visible_kb(kbdb, user_id, kb_id)
     if not await kbdb.can_write(kb_id=kb_id, user_id=user_id):
@@ -132,9 +134,37 @@ async def upload(
         kb_id=kb_id, owner_id=user_id, filename=filename, stream=_stream(),
     )
     logger.info("[mcp-tools] upload by %s -> kb=%s file=%s",
-                body.get("username"), kb_id, filename)
+                username, kb_id, filename)
+
+    # 自动挖掘入队：失败只降级，绝不影响上传结果
+    auto = await _auto_mine(request.app.state, kbdb, kb_id, user_id, username)
+    if auto.get("auto_mined"):
+        message = (
+            f"已上传并{auto.get('detail') or '入队挖掘'}"
+            f"（run={auto.get('run_id')[:8]}）；挖掘完成后内容才可检索"
+        )
+    else:
+        reason = auto_mine.REASON_MESSAGES.get(
+            str(auto.get("reason") or ""), "未知原因"
+        )
+        message = f"已上传（自动挖掘未触发：{reason}）；可在平台界面手动发起挖掘"
     return {
         "document_id": result.get("id"),
         "document_name": result.get("document_name"),
-        "message": "已上传（未自动挖掘）：请在平台界面发起挖掘后内容才可检索",
+        "auto_mined": bool(auto.get("auto_mined")),
+        **({"run_id": auto["run_id"]} if auto.get("run_id") else {}),
+        **({"reason": auto["reason"]} if auto.get("reason") else {}),
+        "message": message,
     }
+
+
+async def _auto_mine(
+    app_state: Any, kbdb: KbDB, kb_id: str, user_id: str, username: str,
+) -> dict[str, Any]:
+    """enqueue_auto_mining 的兜底包装：任何异常都降级为 internal。"""
+    kb = await kbdb.get_kb(kb_id)
+    if kb is None:
+        return {"auto_mined": False, "reason": "internal"}
+    return await auto_mine.enqueue_auto_mining(
+        app_state=app_state, kbdb=kbdb, kb=kb, user_id=user_id, username=username,
+    )

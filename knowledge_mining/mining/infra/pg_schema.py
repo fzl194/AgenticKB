@@ -47,6 +47,10 @@ _MINING_RUN_LEASE_DDL = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" 
 _MINING_RUN_KB_QUEUE_DDL = (
     _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "009_mining_run_kb_queue.sql"
 )
+# 同库排队（MCP 上传自动触发）：queued 不占唯一性槽位，仅活跃状态互斥。
+_MINING_RUN_KB_AUTO_QUEUE_DDL = (
+    _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "010_mining_run_kb_auto_queue.sql"
+)
 # M1 对象存储地基（WP0.4/WP1A）：storage objects / upload sessions / quotas /
 # outbox + asset_documents/snapshots/snapshot_links 扩展。纯增量幂等（ADR-0003 D-004）。
 _OBJECT_STORAGE_DDL = (
@@ -190,6 +194,7 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _MINING_RUN_KB_DDL,
         _MINING_RUN_LEASE_DDL,
         _MINING_RUN_KB_QUEUE_DDL,
+        _MINING_RUN_KB_AUTO_QUEUE_DDL,
         # M1 对象存储地基：依赖 asset_documents / asset_document_snapshots（链内已建）。
         _OBJECT_STORAGE_DDL,
         # M2 影子解析投影：依赖 008 的 asset_storage_objects（parse_ir 对象注册），挂链尾。
@@ -246,6 +251,7 @@ def _ensure_schema_paths(cfg: MiningDbConfig, ddl_paths: tuple[Path, ...]) -> No
                     _ASSET_BUILD_KB_DDL,
                     _MINING_RUN_KB_DDL,
                     _MINING_RUN_KB_QUEUE_DDL,
+                    _MINING_RUN_KB_AUTO_QUEUE_DDL,
                     _RETRIEVAL_ASSETS_V2_DDL,
                     _KB_LIFECYCLE_DDL,
                 ),

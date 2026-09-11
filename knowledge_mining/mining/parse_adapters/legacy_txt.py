@@ -69,12 +69,28 @@ class LegacyPlainTextParser:
 
 
 def _decode_utf8(data: bytes, parser_id: str) -> str:
-    """严格 UTF-8 解码；坏字节包 ParserAdapterError（契约 v1.1，D-028）。"""
+    """文本源解码：UTF-8 优先，GB18030 回落；仍失败才报错（契约 v1.1，D-028）。
+
+    2026-09-11：严格 UTF-8 会让 GBK/ANSI 保存的中文 md/txt 直接 FAILED
+    （MML配置生成技术.md 案例：Windows 记事本 ANSI 保存）。回落链按确定性
+    排序：utf-8-sig（裸 UTF-8 与带 BOM 者）→ 带 BOM 的 UTF-16（gb18030 会
+    把它解成乱码，按 BOM 优先）→ gb18030（GBK 超集 = 中文 Windows ANSI
+    默认）。UTF-8 文件输出逐字节不变，不 bump 解析指纹、不触发存量重解析。
+    """
     try:
-        return data.decode("utf-8")
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            return data.decode("utf-16")
+        except UnicodeDecodeError:
+            pass
+    try:
+        return data.decode("gb18030")
     except UnicodeDecodeError as exc:
         raise ParserAdapterError(
-            f"{parser_id}: source bytes are not valid UTF-8: {exc}"
+            f"{parser_id}: source bytes are not valid UTF-8/GB18030: {exc}"
         ) from exc
 
 

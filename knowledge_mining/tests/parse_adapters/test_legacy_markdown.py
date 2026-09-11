@@ -156,3 +156,12 @@ def test_descriptor_identity(parser: LegacyMarkdownParser) -> None:
     assert d.parser_id == "legacy_markdown"
     assert d.parser_fingerprint.startswith("legacy_markdown@1.0.0#")
     assert "text/markdown" in d.supported_mimes
+
+
+def test_gbk_source_decodes_via_gb18030_fallback(parser: LegacyMarkdownParser) -> None:
+    """中文 Windows ANSI（GBK）保存的 md 不再直接 FAILED——共享 _decode_utf8 回落。"""
+    artifact = parser.parse(
+        "# 配置生成技术\n\n正文段落".encode("gbk"), mime="text/markdown",
+    )
+    headings = [b for b in artifact.blocks if b.block_type == "heading"]
+    assert headings[0].text == "配置生成技术"

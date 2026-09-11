@@ -101,10 +101,38 @@ def test_descriptor_identity(parser: LegacyPlainTextParser) -> None:
 
 
 def test_invalid_utf8_bytes_raise_adapter_error() -> None:
-    """契约 v1.1：decode 责任在适配器，坏字节包 ParserAdapterError（D-028）。"""
+    """契约 v1.1：decode 责任在适配器，坏字节包 ParserAdapterError（D-028）。
+
+    样本须三链全败（utf-8-sig / utf-16 / gb18030）：孤立的 GB18030 双字节
+    前导 0x81——utf-8 非法、无 BOM 不走 utf-16、gb18030 尾部截断。
+    """
     import pytest
 
     from knowledge_mining.mining.contracts.parser_adapter import ParserAdapterError
 
     with pytest.raises(ParserAdapterError):
-        LegacyPlainTextParser().parse(b"\xff\xfe\x00bad", mime="text/plain")
+        LegacyPlainTextParser().parse(b"ok\x81", mime="text/plain")
+
+
+def test_gbk_source_decodes_via_gb18030_fallback() -> None:
+    """中文 Windows ANSI（GBK）保存的 txt 不再直接 FAILED（2026-09-11 案例）。"""
+    artifact = LegacyPlainTextParser().parse(
+        "配置生成技术\n\n第二段".encode("gbk"), mime="text/plain",
+    )
+    assert [b.text for b in artifact.blocks] == ["配置生成技术", "第二段"]
+
+
+def test_utf16_bom_source_decodes() -> None:
+    """带 BOM 的 UTF-16：按 BOM 解码，不落 gb18030 乱码。"""
+    artifact = LegacyPlainTextParser().parse(
+        "标题\n\n正文".encode("utf-16"), mime="text/plain",
+    )
+    assert [b.text for b in artifact.blocks] == ["标题", "正文"]
+
+
+def test_utf8_bom_is_stripped_not_leaked() -> None:
+    """UTF-8 BOM 不再以 \\ufeff 泄进首个段落。"""
+    artifact = LegacyPlainTextParser().parse(
+        "标题".encode("utf-8-sig"), mime="text/plain",
+    )
+    assert artifact.blocks[0].text == "标题"

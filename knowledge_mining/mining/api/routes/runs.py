@@ -1216,6 +1216,11 @@ async def resume_run(
             _mark_resume_failure(e)
         finally:
             run_lock.release()
+            # 续跑到达终态（completed/failed）后，同库可能有排队中的 Run
+            # （MCP 上传自动入队）在等本 Run 腾出活跃槽位：dispatcher 线程在
+            # 队列排空时已退出，这里必须唤醒一次，否则排队 Run 滞留到下次
+            # 上传/重启才被捞走。
+            request.app.state.domain_run_dispatcher.kick(resume_domain)
 
     try:
         threading.Thread(target=_resume_in_thread, daemon=True).start()

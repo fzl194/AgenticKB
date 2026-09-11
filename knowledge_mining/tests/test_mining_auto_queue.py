@@ -366,20 +366,30 @@ def _mcp_app(monkeypatch, repo, kb):
     return app, kicked
 
 
-def _upload_body() -> dict:
-    import base64
-    return {
-        "username": "alice", "kb_id": "kb-1",
-        "filename": "手册.md",
-        "content_b64": base64.b64encode("# 标题\n".encode("utf-8")).decode("ascii"),
-    }
+def _begin_body(filename: str = "手册.md") -> dict:
+    return {"username": "alice", "kb_id": "kb-1", "filename": filename}
 
 
 _HEADERS = {"X-Internal-Auth": "test-ivs"}
+_PUT_HEADERS = {**_HEADERS, "X-MCP-Username": "alice"}
+
+
+async def _direct_upload(client, filename: str = "手册.md",
+                         *, put_headers: dict | None = None):
+    begin = await client.post("/api/kb/mcp-tools/begin-upload",
+                              json=_begin_body(filename), headers=_HEADERS)
+    assert begin.status_code == 200, begin.text
+    ticket = begin.json()["ticket"]
+    assert begin.json()["max_bytes"] == 50 * 1024 * 1024
+    return await client.put(
+        f"/api/kb/mcp-tools/upload-direct/{ticket}",
+        headers=put_headers or _PUT_HEADERS,
+        content="# 标题\n内容".encode("utf-8"),
+    )
 
 
 @pytest.mark.asyncio
-async def test_mcp_upload_auto_enqueues_mining(monkeypatch) -> None:
+async def test_mcp_direct_upload_auto_enqueues_mining(monkeypatch) -> None:
     from httpx import ASGITransport, AsyncClient
 
     repo = _Repo(queued_whole=None)
@@ -388,8 +398,7 @@ async def test_mcp_upload_auto_enqueues_mining(monkeypatch) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
-        resp = await client.post("/api/kb/mcp-tools/upload",
-                                 json=_upload_body(), headers=_HEADERS)
+        resp = await _direct_upload(client)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -403,7 +412,7 @@ async def test_mcp_upload_auto_enqueues_mining(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_upload_survives_auto_mine_degradation(monkeypatch) -> None:
+async def test_mcp_direct_upload_survives_auto_mine_degradation(monkeypatch) -> None:
     """库没绑范式：上传仍 200，auto_mined=false + 原因透传。"""
     from httpx import ASGITransport, AsyncClient
 
@@ -414,8 +423,7 @@ async def test_mcp_upload_survives_auto_mine_degradation(monkeypatch) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
-        resp = await client.post("/api/kb/mcp-tools/upload",
-                                 json=_upload_body(), headers=_HEADERS)
+        resp = await _direct_upload(client)
 
     assert resp.status_code == 200
     body = resp.json()
@@ -424,3 +432,92 @@ async def test_mcp_upload_survives_auto_mine_degradation(monkeypatch) -> None:
     assert body["reason"] == "kb_no_paradigm"
     assert "挖掘范式" in body["message"]
     assert repo.inserted == [] and kicked == []
+
+
+@pytest.mark.asyncio
+async def test_upload_ticket_is_single_use(monkeypatch) -> None:
+    """票据单次使用：redeem 一次后失效；未知票据 PUT 404（不泄露原因）。"""
+    from httpx import ASGITransport, AsyncClient
+    from knowledge_mining.mining.kb.routes.mcp_tools import _TICKETS
+
+    repo = _Repo(queued_whole=None)
+    app, _ = _mcp_app(monkeypatch, repo, _KbDb().kb)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        first = await _direct_upload(client)
+        unknown = await client.put(
+            "/api/kb/mcp-tools/upload-direct/up_never-issued",
+            headers=_PUT_HEADERS, content=b"x",
+        )
+
+    assert first.status_code == 200
+    assert unknown.status_code == 404
+    entry = _TICKETS.issue(kb_id="kb-1", user_id="u1",
+                           username="alice", filename="a.md")
+    consumed = _TICKETS.redeem(entry["ticket"], username="alice")
+    again = _TICKETS.redeem(entry["ticket"], username="alice")
+    assert consumed is not None and again is None
+
+
+@pytest.mark.asyncio
+async def test_upload_ticket_binds_username(monkeypatch) -> None:
+    """票据不得跨密钥转手：X-MCP-Username 不匹配按无效处理（404）。"""
+    from httpx import ASGITransport, AsyncClient
+
+    repo = _Repo(queued_whole=None)
+    app, _ = _mcp_app(monkeypatch, repo, _KbDb().kb)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        begin = await client.post("/api/kb/mcp-tools/begin-upload",
+                                  json=_begin_body(), headers=_HEADERS)
+        ticket = begin.json()["ticket"]
+        stolen = await client.put(
+            f"/api/kb/mcp-tools/upload-direct/{ticket}",
+            headers={**_HEADERS, "X-MCP-Username": "mallory"},
+            content=b"x",
+        )
+
+    assert stolen.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_upload_direct_requires_internal_auth(monkeypatch) -> None:
+    """直传端点仍要内部密钥（Agent 面走 mcp_server 代理，不直连这里）。"""
+    from httpx import ASGITransport, AsyncClient
+
+    repo = _Repo(queued_whole=None)
+    app, _ = _mcp_app(monkeypatch, repo, _KbDb().kb)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        begin = await client.post("/api/kb/mcp-tools/begin-upload",
+                                  json=_begin_body(), headers=_HEADERS)
+        ticket = begin.json()["ticket"]
+        no_auth = await client.put(
+            f"/api/kb/mcp-tools/upload-direct/{ticket}",
+            headers={"X-MCP-Username": "alice"}, content=b"x",
+        )
+
+    assert no_auth.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_begin_upload_rejects_path_like_filename(monkeypatch) -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    repo = _Repo(queued_whole=None)
+    app, _ = _mcp_app(monkeypatch, repo, _KbDb().kb)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/api/kb/mcp-tools/begin-upload",
+                                 json=_begin_body("../evil.md"),
+                                 headers=_HEADERS)
+
+    assert resp.status_code == 422

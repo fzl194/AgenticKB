@@ -9,7 +9,6 @@
 """
 from __future__ import annotations
 
-import base64
 import uuid
 
 import psycopg
@@ -81,15 +80,18 @@ async def _client(async_pool):
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-def _b64(text: str) -> str:
-    return base64.b64encode(text.encode("utf-8")).decode("ascii")
-
-
 async def _mcp_upload(c, kb_id: str, filename: str) -> dict:
-    resp = await c.post("/api/kb/mcp-tools/upload", headers=INTERNAL_HEADERS, json={
-        "username": "auto-queue-owner", "kb_id": kb_id,
-        "filename": filename, "content_b64": _b64(f"# {filename}\n内容"),
+    """两步直传：begin-upload 拿票据 → PUT 原始字节 → 最终结果。"""
+    begin = await c.post("/api/kb/mcp-tools/begin-upload", headers=INTERNAL_HEADERS, json={
+        "username": "auto-queue-owner", "kb_id": kb_id, "filename": filename,
     })
+    assert begin.status_code == 200, begin.text
+    ticket = begin.json()["ticket"]
+    resp = await c.put(
+        f"/api/kb/mcp-tools/upload-direct/{ticket}",
+        headers={**INTERNAL_HEADERS, "X-MCP-Username": "auto-queue-owner"},
+        content=f"# {filename}\n内容".encode("utf-8"),
+    )
     assert resp.status_code == 200, resp.text
     return resp.json()
 

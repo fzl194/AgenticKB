@@ -12,11 +12,9 @@
 - get_knowledge：一切读取行为（ref 分流 ev_/doc_/st_ + 层级浏览 + 能力报告默认），
   合并了 get_content / browse_knowledge / inspect_knowledge / navigate_structure /
   query_structured_asset 五件——Agent 只需知道"有了 ref 或库名就调它"
-- upload_document：上传（不变）
+- upload_document：上传（两步直传：工具发一次性 URL，Agent PUT 原始字节）
 """
 from __future__ import annotations
-
-import base64
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -41,7 +39,8 @@ from mcp_server.schemas import SearchInput
 DEFAULT_INSTRUCTIONS = """\
 你是多领域知识证据检索服务（用户级接入：调用必须携带 Bearer 密钥）。
 
-只有三个工具：search_knowledge 模糊找、get_knowledge 深入读、upload_document 上传。
+只有三个工具：search_knowledge 模糊找、get_knowledge 深入读、upload_document 上传
+（两步：先拿 upload_url，再 PUT 文件原始字节，不要 base64）。
 
 知识按三层组织：知识域（domain）→ 知识库（knowledge base）→ 文档（document）。
 密钥主人决定开放哪些知识库；一台部署通常只有一个 domain——domain 参数可不传，
@@ -427,32 +426,94 @@ def _browse_top(ident: Identity, domain: str | None) -> dict:
 
 
 @mcp.tool()
-def upload_document(kb_name: str, filename: str, content_b64: str) -> dict:
-    """上传一个文件到开放的知识库（base64 编码内容，≤50MB），自动排队挖掘。
+def upload_document(kb_name: str, filename: str) -> dict:
+    """上传一个文件到开放的知识库——两步直传（原始字节，≤50MB），自动排队挖掘。
 
-    上传成功后自动入队该库的整库增量挖掘 Run：库空闲则立即排队执行；库正在
-    挖掘/审核中则排在后面串行执行（响应 run_id）。挖掘完成后内容才可被
-    检索到——刚上传的文件用 search_knowledge 查不到是正常的，需等挖掘完成。
-    响应 auto_mined=false 时表示未触发（如库未绑定挖掘范式），需密钥主人在
-    平台界面处理。上传需要对该库有编辑权限。
+    第一步调本工具拿到 upload_url；第二步用 PUT 把**文件原始字节**传上去
+    （不要 base64——大文件 base64 会超出工具参数上限）：
+
+        curl -X PUT -H "Authorization: Bearer <你的 MCP 密钥>" \\
+             --data-binary @手册.pdf "<upload_url>"
+
+    PUT 的响应即最终结果（document_id / auto_mined / run_id）。上传成功后
+    自动入队该库的整库增量挖掘 Run：库空闲则立即排队执行；库正在挖掘/审核
+    中则排在后面串行执行。挖掘完成后内容才可被检索到——刚上传的文件用
+    search_knowledge 查不到是正常的，需等挖掘完成。上传需要对该库有编辑
+    权限。票据 10 分钟内有效且单次使用；超时或失败重调本工具取新 URL。
 
     Args:
         kb_name: 目标知识库名称（get_knowledge 顶层浏览返回的 name）。
         filename: 文件名（含扩展名，如 "手册.pdf"；不含路径）。可被挖掘的
-            格式：md/txt/html/pdf/doc(x)/xls(x)/ppt(x)/csv/json 及归档
+            格式：md/txt/html/pdf/doc(x)/xls(x)/ppt(x)/json 及归档
             zip/hdx/chm；其他格式可上传但挖掘会标记不支持。
-        content_b64: 文件内容的 base64 编码。
     """
     ident = _identity()
     kb_id = _resolve_open_kb(ident, kb_name)
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        raise ToolError("filename 非法：须为不含路径分隔符的纯文件名。")
     try:
-        base64.b64decode(content_b64, validate=True)
-    except Exception:
-        raise ToolError("content_b64 不是有效的 base64 编码。") from None
-    try:
-        return backend.upload_document(ident.username, kb_id, filename, content_b64)
+        issued = backend.begin_upload(ident.username, kb_id, str(filename))
     except backend.ToolBackendError as exc:
         raise ToolError(str(exc)) from None
+
+    headers = get_http_headers(include={"host", "x-forwarded-proto"}) or {}
+
+    def _header(name: str) -> str:
+        for key, value in headers.items():
+            if str(key).lower() == name:
+                return str(value)
+        return ""
+
+    host = _header("host")
+    proto = _header("x-forwarded-proto") or "http"
+    # 无 Host 上下文（理论不可达）时退化为相对路径，Agent 自行补全
+    upload_url = (
+        f"{proto}://{host}/upload/{issued['ticket']}" if host
+        else f"/upload/{issued['ticket']}"
+    )
+    return {
+        "upload_url": upload_url,
+        "method": "PUT",
+        "headers_hint": "Authorization: Bearer <你的 MCP 密钥>",
+        "content_type": "application/octet-stream",
+        "max_bytes": issued.get("max_bytes"),
+        "expires_in": issued.get("expires_in"),
+        "filename": filename,
+        "next": (
+            "用 PUT 把文件原始字节传到 upload_url（带 Bearer 密钥，"
+            "--data-binary @文件，不要 base64）；PUT 响应即上传与挖掘入队结果。"
+        ),
+    }
+
+
+@mcp.custom_route("/upload/{ticket}", methods=["PUT"])
+async def _direct_upload(request):
+    """Agent 直传落点：验 MCP 密钥后把请求体流式转发给 mining。"""
+    from starlette.responses import JSONResponse
+
+    try:
+        ident = require_identity(request.headers)
+    except IdentityError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=401)
+
+    ticket = str(request.path_params.get("ticket") or "")
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > 50 * 1024 * 1024:
+        return JSONResponse({"detail": "文件过大：MCP 上传上限 50MB。"}, status_code=413)
+
+    try:
+        status, body = await backend.put_upload_direct(
+            ticket, ident.username, request.stream(),
+        )
+    except backend.ToolBackendError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=502)
+    if status != 200:
+        detail = body.get("detail") if isinstance(body, dict) else None
+        return JSONResponse(
+            {"detail": detail or "上传失败，请重取上传地址重试。"},
+            status_code=status,
+        )
+    return JSONResponse(body)
 
 
 __all__ = ["mcp", "__version__"]

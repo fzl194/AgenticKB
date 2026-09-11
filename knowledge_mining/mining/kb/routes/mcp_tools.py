@@ -3,14 +3,22 @@
 身份模型：mcp_server 已按密钥验明 username；本组端点信任该身份并做**资源级授权**
 （is_visible / can_write），不重复验密钥。路径前缀为静态字面量，需在 kb_router
 （动态 /api/kb/{kb_id}）之前注册。
+
+上传（2026-09-11 直传改造，用户拍板只留一条路）：
+- ``POST /begin-upload``：签发一次性上传票据（TTL 10 分钟、单次使用、绑定
+  kb/user/filename）。工具层把它包装成 Agent 可 PUT 的公网直传 URL。
+- ``PUT /upload-direct/{ticket}`：mcp_server 流式转发 Agent 的**原始字节**
+  （无 base64），走同一条 upload_stream + 自动挖掘入队管线。
+- 旧 base64 端点（POST /upload）已退役：MCP 工具参数是 JSON，大文件
+  base64 既撑爆上下文又翻倍传输。
 """
 from __future__ import annotations
 
-import base64
-import json
 import logging
+import secrets
+import time
 from hmac import compare_digest
-from typing import Any
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -18,12 +26,16 @@ from knowledge_mining.mining.infra.control_plane import get_internal_verify_secr
 from knowledge_mining.mining.kb.deps import get_document_service, get_kb_db
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.services import auto_mine
+from knowledge_mining.mining.kb.services.document_service import UploadTooLarge
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/kb/mcp-tools", tags=["kb-mcp-tools"])
 
-#: 上传内容 base64 解码后的硬上限（与常规上传上限独立、更保守：Agent 场景）。
+#: 直传硬上限（与常规上传上限独立、更保守：Agent 场景）。
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+#: 票据有效期（秒）。窗口内未完成的直传作废，Agent 重取即可。
+UPLOAD_TICKET_TTL = 600
 
 
 def _require_internal(request: Request) -> None:
@@ -39,6 +51,48 @@ def _require_internal_body(request: Request) -> dict[str, Any]:
     return {}
 
 
+class _UploadTicketStore:
+    """一次性上传票据账本（capability URL 的服务端侧）。
+
+    票据即凭证：随机 192 位、TTL 内单次使用、绑定 (kb_id, user_id, username,
+    filename)。进程内存储——单实例部署约定；重启丢票据只是 10 分钟窗口内的
+    直传作废。过期清理在签发/兑换时顺手做，不起后台线程。
+    """
+
+    def __init__(self, ttl_seconds: int = UPLOAD_TICKET_TTL) -> None:
+        self._ttl = ttl_seconds
+        self._tickets: dict[str, dict[str, Any]] = {}
+
+    def issue(
+        self, *, kb_id: str, user_id: str, username: str, filename: str,
+    ) -> dict[str, Any]:
+        self._sweep()
+        ticket = f"up_{secrets.token_urlsafe(24)}"
+        self._tickets[ticket] = {
+            "kb_id": kb_id, "user_id": user_id, "username": username,
+            "filename": filename, "expires_at": time.monotonic() + self._ttl,
+        }
+        return {"ticket": ticket, "expires_in": self._ttl}
+
+    def redeem(self, ticket: str, *, username: str) -> dict[str, Any] | None:
+        """取出并作废票据；用户不匹配视为无效（票据不得跨密钥转手）。"""
+        self._sweep()
+        entry = self._tickets.pop(ticket, None)  # pop = 单次使用
+        if entry is None or entry["expires_at"] < time.monotonic():
+            return None
+        if entry["username"] != username:
+            return None
+        return entry
+
+    def _sweep(self) -> None:
+        now = time.monotonic()
+        for stale in [k for k, v in self._tickets.items() if v["expires_at"] < now]:
+            del self._tickets[stale]
+
+
+_TICKETS = _UploadTicketStore()
+
+
 async def _user_id(kbdb: KbDB, username: str) -> str:
     user = await kbdb.get_user_by_username(username)
     if user is None:
@@ -50,6 +104,13 @@ async def _visible_kb(kbdb: KbDB, user_id: str, kb_id: str) -> None:
     if not await kbdb.is_visible(kb_id=kb_id, user_id=user_id):
         # 不泄露存在性——与 KB 族路由同语义
         raise HTTPException(404, f"knowledge base not found: {kb_id}")
+
+
+def _validated_filename(raw: Any) -> str:
+    filename = str(raw or "").strip()
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(422, "invalid filename")
+    return filename
 
 
 @router.post("/list-kbs", dependencies=[Depends(_require_internal_body)])
@@ -100,48 +161,82 @@ async def list_documents(
     ]}
 
 
-@router.post("/upload", dependencies=[Depends(_require_internal_body)])
-async def upload(
+@router.post("/begin-upload", dependencies=[Depends(_require_internal_body)])
+async def begin_upload(
     body: dict[str, Any],
-    request: Request,
     kbdb: KbDB = Depends(get_kb_db),
-    doc_svc: Any = Depends(get_document_service),
 ) -> dict[str, Any]:
-    """Agent 上传文件入库，成功后自动入队整库增量挖掘（排队语义，见 auto_mine）。"""
+    """直传第一步：校验权限与文件名，签发一次性上传票据。"""
     username = str(body.get("username") or "")
     user_id = await _user_id(kbdb, username)
     kb_id = str(body.get("kb_id") or "")
     await _visible_kb(kbdb, user_id, kb_id)
     if not await kbdb.can_write(kb_id=kb_id, user_id=user_id):
         raise HTTPException(403, "only owner or editor may upload")
+    filename = _validated_filename(body.get("filename"))
 
-    filename = str(body.get("filename") or "").strip()
-    if not filename or "/" in filename or "\\" in filename or ".." in filename:
-        raise HTTPException(422, "invalid filename")
-    try:
-        content = base64.b64decode(str(body.get("content_b64") or ""), validate=True)
-    except Exception:
-        raise HTTPException(422, "content_b64 is not valid base64") from None
-    if not content:
-        raise HTTPException(422, "empty content")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"file too large (>{MAX_UPLOAD_BYTES // (1024*1024)}MB)")
-
-    async def _stream():
-        yield content
-
-    result = await doc_svc.upload_stream(
-        kb_id=kb_id, owner_id=user_id, filename=filename, stream=_stream(),
+    issued = _TICKETS.issue(
+        kb_id=kb_id, user_id=user_id, username=username, filename=filename,
     )
-    logger.info("[mcp-tools] upload by %s -> kb=%s file=%s",
-                username, kb_id, filename)
+    logger.info("[mcp-tools] begin-upload by %s -> kb=%s file=%s ticket=%s",
+                username, kb_id, filename, issued["ticket"][:11] + "…")
+    return {
+        "ticket": issued["ticket"],
+        "upload_path": f"/api/kb/mcp-tools/upload-direct/{issued['ticket']}",
+        "max_bytes": MAX_UPLOAD_BYTES,
+        "expires_in": issued["expires_in"],
+    }
+
+
+@router.put("/upload-direct/{ticket}")
+async def upload_direct(
+    ticket: str,
+    request: Request,
+    kbdb: KbDB = Depends(get_kb_db),
+    doc_svc: Any = Depends(get_document_service),
+) -> dict[str, Any]:
+    """直传第二步：票据 + 内部密钥 + 用户绑定三重校验，流式落库并自动入队挖掘。
+
+    调用方是 mcp_server（持 X-Internal-Auth）；Agent 面向的公网 URL 在
+    mcp_server 侧（PUT /upload/{ticket}，验 MCP Bearer 密钥后转发到这里）。
+    """
+    _require_internal(request)
+    username = request.headers.get("X-MCP-Username", "")
+    entry = _TICKETS.redeem(ticket, username=username)
+    if entry is None:
+        # 不泄露票据是否存在/过期/归属——统一 404
+        raise HTTPException(404, "upload ticket invalid or expired")
+
+    async def _stream() -> AsyncIterator[bytes]:
+        async for chunk in request.stream():
+            yield chunk
+
+    try:
+        result = await doc_svc.upload_stream(
+            kb_id=entry["kb_id"], owner_id=entry["user_id"],
+            filename=entry["filename"], stream=_stream(),
+            max_bytes=MAX_UPLOAD_BYTES,
+        )
+    except UploadTooLarge as exc:
+        raise HTTPException(
+            413, f"file too large (>{MAX_UPLOAD_BYTES // (1024*1024)}MB)"
+        ) from exc
+    logger.info("[mcp-tools] upload-direct by %s -> kb=%s file=%s",
+                username, entry["kb_id"], entry["filename"])
 
     # 自动挖掘入队：失败只降级，绝不影响上传结果
-    auto = await _auto_mine(request.app.state, kbdb, kb_id, user_id, username)
+    kb = await kbdb.get_kb(entry["kb_id"])
+    auto = (
+        await auto_mine.enqueue_auto_mining(
+            app_state=request.app.state, kbdb=kbdb, kb=kb,
+            user_id=entry["user_id"], username=username,
+        )
+        if kb is not None else {"auto_mined": False, "reason": "internal"}
+    )
     if auto.get("auto_mined"):
         message = (
             f"已上传并{auto.get('detail') or '入队挖掘'}"
-            f"（run={auto.get('run_id')[:8]}）；挖掘完成后内容才可检索"
+            f"（run={str(auto.get('run_id'))[:8]}）；挖掘完成后内容才可检索"
         )
     else:
         reason = auto_mine.REASON_MESSAGES.get(
@@ -156,15 +251,3 @@ async def upload(
         **({"reason": auto["reason"]} if auto.get("reason") else {}),
         "message": message,
     }
-
-
-async def _auto_mine(
-    app_state: Any, kbdb: KbDB, kb_id: str, user_id: str, username: str,
-) -> dict[str, Any]:
-    """enqueue_auto_mining 的兜底包装：任何异常都降级为 internal。"""
-    kb = await kbdb.get_kb(kb_id)
-    if kb is None:
-        return {"auto_mined": False, "reason": "internal"}
-    return await auto_mine.enqueue_auto_mining(
-        app_state=app_state, kbdb=kbdb, kb=kb, user_id=user_id, username=username,
-    )

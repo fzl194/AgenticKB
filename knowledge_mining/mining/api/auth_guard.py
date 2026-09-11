@@ -22,13 +22,18 @@ _SERVICE_ONLY_ROUTES = frozenset({
     # 批次7：MCP 工具族数据端点（internal-only，路由内自验 X-Internal-Auth）
     ("POST", "/api/kb/mcp-tools/list-kbs"),
     ("POST", "/api/kb/mcp-tools/list-documents"),
-    ("POST", "/api/kb/mcp-tools/upload"),
+    ("POST", "/api/kb/mcp-tools/begin-upload"),
     ("POST", "/api/kb/admin/reload-auth-config"),
 })
 
+#: 直传 PUT 是动态票据路径（内部密钥 + 票据 + 用户绑定三重校验在路由内）。
+_UPLOAD_DIRECT_PREFIX = "PUT:/api/kb/mcp-tools/upload-direct/"
+
 
 def _is_exempt(method: str, path: str) -> bool:
-    return (method, path) in _PUBLIC_ROUTES | _SERVICE_ONLY_ROUTES
+    if (method, path) in _PUBLIC_ROUTES | _SERVICE_ONLY_ROUTES:
+        return True
+    return f"{method}:{path}".startswith(_UPLOAD_DIRECT_PREFIX)
 
 
 class MiningApiAuthMiddleware(BaseHTTPMiddleware):

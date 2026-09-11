@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 MINING_URL = os.environ.get("MINING_URL", "http://localhost:8901").rstrip("/")
 TOOLS_TIMEOUT = float(os.environ.get("MCP_TOOLS_TIMEOUT", "60.0"))
-UPLOAD_TIMEOUT = float(os.environ.get("MCP_UPLOAD_TIMEOUT", "120.0"))
+#: 直传流式 PUT 的整体超时：50MB 慢速上链也要能传完（票据 TTL 600s 对齐）。
+UPLOAD_TIMEOUT = float(os.environ.get("MCP_UPLOAD_TIMEOUT", "600.0"))
 
 #: serving internal REST（批次8 R7）：容器内同网 127.0.0.1:8081。
 SERVING_INTERNAL_URL = os.environ.get(
@@ -197,10 +198,42 @@ def list_documents(username: str, kb_id: str, limit: int = 50, offset: int = 0) 
 # mining 的旧 /api/kb/mcp-tools/get-document 端点已随代码瘦身批次3 删除。
 
 
-def upload_document(username: str, kb_id: str, filename: str, content_b64: str) -> dict:
-    return _post(
-        "/api/kb/mcp-tools/upload",
-        {"username": username, "kb_id": kb_id,
-         "filename": filename, "content_b64": content_b64},
-        timeout=UPLOAD_TIMEOUT,
-    )
+def begin_upload(username: str, kb_id: str, filename: str) -> dict:
+    """直传第一步：签发一次性上传票据（mining 校验权限/文件名后返回）。"""
+    return _post("/api/kb/mcp-tools/begin-upload", {
+        "username": username, "kb_id": kb_id, "filename": filename,
+    })
+
+
+async def put_upload_direct(
+    ticket: str, username: str, stream,
+) -> tuple[int, dict]:
+    """直传第二步：把 Agent 的原始字节流式转发给 mining（无 base64）。
+
+    返回 (http_status, body)；把 mining 的状态码语义原样带回给自定义路由，
+    Agent 的 curl 能看到正确的 404/413/422 而不是一律 502。
+    """
+    secret = _internal_auth_secret()
+    if not secret:
+        raise ToolBackendError("服务端未完成内部鉴权配置，请联系管理员。")
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT, trust_env=False) as client:
+            resp = await client.put(
+                f"{MINING_URL}/api/kb/mcp-tools/upload-direct/{ticket}",
+                content=stream,
+                headers={
+                    "X-Internal-Auth": secret,
+                    "X-MCP-Username": username,
+                    "Content-Type": "application/octet-stream",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("mcp-upload-direct %s unreachable: %s", ticket[:11], exc)
+        raise ToolBackendError("知识服务暂不可用，请稍后重试。") from None
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {"detail": resp.text[:200]}
+    return resp.status_code, body

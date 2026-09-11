@@ -345,8 +345,21 @@ class _McpKbDb:
 
 
 class _DocSvc:
-    async def upload_stream(self, **_kwargs):
-        return {"id": "doc-new", "document_name": "手册.md"}
+    """intake_upload 假件：file 分支固定返回；archive 分支按文件名后缀分流。"""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    async def intake_upload(self, **kwargs):
+        self.calls.append(kwargs)
+        filename = str(kwargs.get("filename") or "")
+        if filename.lower().endswith((".zip", ".hdx", ".chm")):
+            return {"kind": "archive", "documents": [
+                {"id": "doc-z1", "document_name": "包/a.md"},
+                {"id": "doc-z2", "document_name": "包/b.txt"},
+            ]}
+        return {"kind": "file",
+                "document": {"id": "doc-new", "document_name": "手册.md"}}
 
 
 def _mcp_app(monkeypatch, repo, kb):
@@ -361,9 +374,10 @@ def _mcp_app(monkeypatch, repo, kb):
     app.state.workflow_run_binder = state.workflow_run_binder
     app.state.domain_run_dispatcher = state.domain_run_dispatcher
     app.dependency_overrides[mcp_tools.get_kb_db] = lambda: _McpKbDb(kb)
-    app.dependency_overrides[mcp_tools.get_document_service] = lambda: _DocSvc()
+    doc_svc = _DocSvc()
+    app.dependency_overrides[mcp_tools.get_document_service] = lambda: doc_svc
     app.include_router(mcp_tools.router)
-    return app, kicked
+    return app, kicked, doc_svc
 
 
 def _begin_body(filename: str = "手册.md") -> dict:
@@ -371,7 +385,7 @@ def _begin_body(filename: str = "手册.md") -> dict:
 
 
 _HEADERS = {"X-Internal-Auth": "test-ivs"}
-_PUT_HEADERS = {**_HEADERS, "X-MCP-Username": "alice"}
+_PUT_HEADERS = dict(_HEADERS)
 
 
 async def _direct_upload(client, filename: str = "手册.md",
@@ -380,7 +394,6 @@ async def _direct_upload(client, filename: str = "手册.md",
                               json=_begin_body(filename), headers=_HEADERS)
     assert begin.status_code == 200, begin.text
     ticket = begin.json()["ticket"]
-    assert begin.json()["max_bytes"] == 50 * 1024 * 1024
     return await client.put(
         f"/api/kb/mcp-tools/upload-direct/{ticket}",
         headers=put_headers or _PUT_HEADERS,
@@ -393,7 +406,7 @@ async def test_mcp_direct_upload_auto_enqueues_mining(monkeypatch) -> None:
     from httpx import ASGITransport, AsyncClient
 
     repo = _Repo(queued_whole=None)
-    app, kicked = _mcp_app(monkeypatch, repo, _KbDb().kb)
+    app, kicked, _doc_svc = _mcp_app(monkeypatch, repo, _KbDb().kb)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
@@ -418,7 +431,7 @@ async def test_mcp_direct_upload_survives_auto_mine_degradation(monkeypatch) -> 
 
     repo = _Repo(queued_whole=None)
     kb = {"id": "kb-1", "domain": "odn", "mining_workflow_id": None}
-    app, kicked = _mcp_app(monkeypatch, repo, kb)
+    app, kicked, _doc_svc = _mcp_app(monkeypatch, repo, kb)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
@@ -441,7 +454,7 @@ async def test_upload_ticket_is_single_use(monkeypatch) -> None:
     from knowledge_mining.mining.kb.routes.mcp_tools import _TICKETS
 
     repo = _Repo(queued_whole=None)
-    app, _ = _mcp_app(monkeypatch, repo, _KbDb().kb)
+    app, _, _doc_svc = _mcp_app(monkeypatch, repo, _KbDb().kb)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
@@ -456,32 +469,9 @@ async def test_upload_ticket_is_single_use(monkeypatch) -> None:
     assert unknown.status_code == 404
     entry = _TICKETS.issue(kb_id="kb-1", user_id="u1",
                            username="alice", filename="a.md")
-    consumed = _TICKETS.redeem(entry["ticket"], username="alice")
-    again = _TICKETS.redeem(entry["ticket"], username="alice")
+    consumed = _TICKETS.redeem(entry["ticket"])
+    again = _TICKETS.redeem(entry["ticket"])
     assert consumed is not None and again is None
-
-
-@pytest.mark.asyncio
-async def test_upload_ticket_binds_username(monkeypatch) -> None:
-    """票据不得跨密钥转手：X-MCP-Username 不匹配按无效处理（404）。"""
-    from httpx import ASGITransport, AsyncClient
-
-    repo = _Repo(queued_whole=None)
-    app, _ = _mcp_app(monkeypatch, repo, _KbDb().kb)
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test",
-    ) as client:
-        begin = await client.post("/api/kb/mcp-tools/begin-upload",
-                                  json=_begin_body(), headers=_HEADERS)
-        ticket = begin.json()["ticket"]
-        stolen = await client.put(
-            f"/api/kb/mcp-tools/upload-direct/{ticket}",
-            headers={**_HEADERS, "X-MCP-Username": "mallory"},
-            content=b"x",
-        )
-
-    assert stolen.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -490,7 +480,7 @@ async def test_upload_direct_requires_internal_auth(monkeypatch) -> None:
     from httpx import ASGITransport, AsyncClient
 
     repo = _Repo(queued_whole=None)
-    app, _ = _mcp_app(monkeypatch, repo, _KbDb().kb)
+    app, _, _doc_svc = _mcp_app(monkeypatch, repo, _KbDb().kb)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
@@ -511,7 +501,7 @@ async def test_begin_upload_rejects_path_like_filename(monkeypatch) -> None:
     from httpx import ASGITransport, AsyncClient
 
     repo = _Repo(queued_whole=None)
-    app, _ = _mcp_app(monkeypatch, repo, _KbDb().kb)
+    app, _, _doc_svc = _mcp_app(monkeypatch, repo, _KbDb().kb)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
@@ -521,3 +511,32 @@ async def test_begin_upload_rejects_path_like_filename(monkeypatch) -> None:
                                  headers=_HEADERS)
 
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_mcp_direct_upload_zip_extracts_and_mines(monkeypatch) -> None:
+    """归档走同源 intake：解压成多文档 + 自动入队。"""
+    from httpx import ASGITransport, AsyncClient
+
+    repo = _Repo(queued_whole=None)
+    app, kicked, doc_svc = _mcp_app(monkeypatch, repo, _KbDb().kb)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await _direct_upload(client, filename="资料.zip")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "archive"
+    assert body["document_count"] == 2
+    assert [d["document_id"] for d in body["documents"]] == ["doc-z1", "doc-z2"]
+    assert body["auto_mined"] is True
+    assert "解压" in body["message"]
+    # begin-upload 给归档的是归档上限（与网页端一致），不是 50MB
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        begin = await client.post("/api/kb/mcp-tools/begin-upload",
+                                  json=_begin_body("资料.zip"), headers=_HEADERS)
+    assert begin.json()["max_bytes"] > 50 * 1024 * 1024

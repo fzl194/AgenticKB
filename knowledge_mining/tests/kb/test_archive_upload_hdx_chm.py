@@ -178,13 +178,19 @@ def test_upload_config_accepts_hdx_chm():
     assert 50000 == uc._DEFAULT_UPLOAD["max_files_per_request"]
 
 
-def test_route_archive_detection_covers_new_formats(monkeypatch):
-    """_is_archive 语义按扩展名集合判定（模块级 _archive_exts 快照自控制面，
-    测试里打桩为新配置集合，验证大小写不敏感与排除项）。"""
-    from knowledge_mining.mining.kb.routes import documents as docs_mod
-    monkeypatch.setattr(
-        docs_mod, "_archive_exts", frozenset({".zip", ".hdx", ".chm"}))
-    assert docs_mod._is_archive("a.zip")
-    assert docs_mod._is_archive("b.hdx")
-    assert docs_mod._is_archive("c.CHM")  # 大小写不敏感
-    assert not docs_mod._is_archive("d.pdf")
+def test_archive_detection_follows_control_plane_config(monkeypatch):
+    """is_upload_archive 按控制面 upload.archive_extensions 判定（路由侧
+    模块级 _archive_exts 快照已收敛进 service，每次判定都读最新配置）；
+    测试打桩缓存为新配置集合，验证大小写不敏感与排除项。"""
+    from knowledge_mining.mining.infra import control_plane as cp
+    from knowledge_mining.mining.kb.services import document_service as ds_mod
+
+    monkeypatch.setattr(cp, "_service_config_cache", {
+        **(cp._service_config_cache or {}),
+        "upload": {"archive_extensions": ".zip .hdx .chm"},
+    })
+    assert ds_mod.is_upload_archive("a.zip")
+    assert ds_mod.is_upload_archive("b.hdx")
+    assert ds_mod.is_upload_archive("c.CHM")  # 大小写不敏感
+    assert not ds_mod.is_upload_archive("d.pdf")
+    assert not ds_mod.is_upload_archive("")

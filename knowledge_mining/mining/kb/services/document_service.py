@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import shutil
+import tempfile
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -77,6 +79,43 @@ def resolve_upload_mime(filename: str, declared: str | None) -> str:
 #: 同步解压的成员数阈值（批次2c）：≤ 此值的归档在 HTTP 请求内同步完成，
 #: 超出走后台任务（网关 proxy_read_timeout 300s 内 200 成员有余量）。
 SYNC_ARCHIVE_MEMBERS = 200
+
+#: chm 无廉价成员枚举——按包体大小决策同步/异步（超过即异步）
+_ASYNC_ARCHIVE_BYTES = 10 * 1024 * 1024
+
+#: 后台归档任务的强引用（防事件循环只留弱引用被 GC）
+_archive_bg_tasks: set = set()
+
+
+def is_upload_archive(filename: str) -> bool:
+    """按扩展名判定归档上传（统一入口 intake_upload 的分流依据）。"""
+    return Path(filename).suffix.lower() in UploadConfig().archive_exts_set
+
+
+async def _run_archive_task(
+    task_id: str, svc: "DocumentService", *,
+    kb_id: str, owner_id: str, archive_path: Path,
+    archive_name: str, max_member_bytes: int | None,
+) -> None:
+    """后台解压任务：进度回写注册表，结束删暂存包。"""
+    from knowledge_mining.mining.kb.services.archive_tasks import registry
+
+    try:
+        docs = await svc.upload_archive_path(
+            kb_id=kb_id, owner_id=owner_id, archive_path=archive_path,
+            archive_name=archive_name, persist_archive=True,
+            max_member_bytes=max_member_bytes,
+            on_progress=lambda done, total, name: registry.update(
+                task_id, done=done, total=total),
+        )
+        registry.complete(task_id, document_count=len(docs), failed=0)
+    except Exception as exc:
+        registry.fail(task_id, f"{type(exc).__name__}: {exc}")
+    finally:
+        try:
+            archive_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 async def count_archive_members(archive_path: Path) -> int:
@@ -204,6 +243,92 @@ class DocumentService:
             normalized_filename=normalized_filename,
             storage_object=storage_object, document_type=document_type,
         )
+
+    async def intake_upload(
+        self, *, kb_id: str, owner_id: str, filename: str,
+        stream: AsyncIterator[bytes],
+        directory_path: str | None = None,
+        document_type: str | None = None,
+        mime: str | None = None,
+        file_max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        """统一上传入口（同源收敛）：普通文件直传 / 归档解压，一个方法两个入口。
+
+        网页路由（/documents POST）与 MCP 直传（upload-direct）都走这里，
+        差异只剩各自的 HTTP 响应映射与大小上限（file_max_bytes）。
+
+        返回形状（kind 供调用方分支，不外泄）：
+        - ``{"kind": "file", "document": {...}}``           单文件（upload_stream 结果）
+        - ``{"kind": "archive", "documents": [...]}``        归档同步解压完成
+        - ``{"kind": "archive_task", "archive_task_id", "status": "processing"}``
+          大归档后台解压中（调用方提示轮询/稍后查看）
+        """
+        cfg = UploadConfig()
+        if not is_upload_archive(filename):
+            document = await self.upload_stream(
+                kb_id=kb_id, owner_id=owner_id, filename=filename,
+                stream=stream, directory_path=directory_path,
+                document_type=document_type, mime=mime,
+                max_bytes=(
+                    file_max_bytes
+                    if file_max_bytes is not None else cfg.upload_max_file_size
+                ),
+            )
+            return {"kind": "file", "document": document}
+
+        # 归档需完整字节——分块落临时文件（内存有界），包体上限强制。
+        with TemporaryDirectory(prefix="agentickb-archive-") as tmp:
+            archive_path = Path(tmp) / Path(filename).name
+            written = 0
+            with archive_path.open("wb") as fh:
+                async for chunk in stream:
+                    written += len(chunk)
+                    if written > cfg.upload_max_archive_size:
+                        raise UploadTooLarge(
+                            (f"归档上传 {written} 字节超过上限 "
+                             f"{cfg.upload_max_archive_size} 字节"),
+                            limit_bytes=cfg.upload_max_archive_size,
+                        )
+                    fh.write(chunk)
+
+            # 同步阈值：zip/hdx 按成员数；chm 按包体大小（无廉价成员枚举）
+            ext = archive_path.suffix.lower()
+            if ext == ".chm":
+                go_async = archive_path.stat().st_size > _ASYNC_ARCHIVE_BYTES
+            else:
+                try:
+                    member_count = await count_archive_members(archive_path)
+                except Exception:
+                    member_count = SYNC_ARCHIVE_MEMBERS + 1  # 数不清→异步兜底
+                go_async = member_count > SYNC_ARCHIVE_MEMBERS
+
+            if not go_async:
+                docs = await self.upload_archive_path(
+                    kb_id=kb_id, owner_id=owner_id, archive_path=archive_path,
+                    archive_name=filename, persist_archive=True,
+                )
+                return {"kind": "archive", "documents": docs}
+
+            # 大包异步（批次2c）：包转存进程级暂存（请求临时目录随请求结束
+            # 清理），后台解压，返回任务 ID 供轮询。
+            from knowledge_mining.mining.kb.services.archive_tasks import registry
+
+            task_id = registry.create(kb_id=kb_id, archive_name=filename)
+            staging_dir = Path(tempfile.gettempdir()) / "agentickb-archive-tasks"
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            staging_path = staging_dir / f"{task_id}{archive_path.suffix}"
+            shutil.copyfile(archive_path, staging_path)
+            task = asyncio.create_task(_run_archive_task(
+                task_id, self, kb_id=kb_id, owner_id=owner_id,
+                archive_path=staging_path, archive_name=filename,
+                max_member_bytes=cfg.upload_max_file_size,
+            ))
+            _archive_bg_tasks.add(task)
+            task.add_done_callback(_archive_bg_tasks.discard)
+            return {
+                "kind": "archive_task", "archive_task_id": task_id,
+                "status": "processing",
+            }
 
     async def _register_uploaded_document(
         self, *, kb: dict[str, Any], kb_id: str, owner_id: str,

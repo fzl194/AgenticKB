@@ -89,7 +89,7 @@ async def _mcp_upload(c, kb_id: str, filename: str) -> dict:
     ticket = begin.json()["ticket"]
     resp = await c.put(
         f"/api/kb/mcp-tools/upload-direct/{ticket}",
-        headers={**INTERNAL_HEADERS, "X-MCP-Username": "auto-queue-owner"},
+        headers=INTERNAL_HEADERS,
         content=f"# {filename}\n内容".encode("utf-8"),
     )
     assert resp.status_code == 200, resp.text
@@ -140,6 +140,56 @@ async def test_mcp_upload_queues_then_merges_and_manual_still_409(
         manual = await c.post(f"/api/kb/{kb_id}/mine", headers=headers)
         assert manual.status_code == 409
         assert manual.json()["detail"]["code"] == "kb_mining_busy"
+
+
+@pytest.mark.asyncio
+async def test_mcp_direct_upload_zip_extracts_like_web_upload(async_pool, upload_root):
+    """同源验证：MCP 直传 zip 与网页上传同一 intake——自动解压成多文档+自动入队。"""
+    import io
+    import zipfile
+    from knowledge_mining.tests.conftest import kb_headers
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("dir1/x.md", "# x\n内容")
+        zf.writestr("dir1/y.txt", "y 内容")
+
+    async with await _client(async_pool) as c:
+        headers = kb_headers("auto-queue-owner")
+        created = await c.post(
+            "/api/kb", json={"domain": DOMAIN, "name": f"auto-queue-zip-{uuid.uuid4().hex[:6]}"},
+            headers=headers,
+        )
+        assert created.status_code == 201, created.text
+        kb_id = created.json()["id"]
+
+        begin = await c.post("/api/kb/mcp-tools/begin-upload", headers=INTERNAL_HEADERS, json={
+            "username": "auto-queue-owner", "kb_id": kb_id, "filename": "资料.zip",
+        })
+        assert begin.status_code == 200, begin.text
+        assert begin.json()["max_bytes"] > 50 * 1024 * 1024  # 归档上限
+        ticket = begin.json()["ticket"]
+        resp = await c.put(
+            f"/api/kb/mcp-tools/upload-direct/{ticket}",
+            headers=INTERNAL_HEADERS, content=buf.getvalue(),
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["kind"] == "archive"
+        assert body["document_count"] == 2
+        assert body["auto_mined"] is True
+        names = sorted(d["document_name"] for d in body["documents"])
+        assert names == ["x.md", "y.txt"]
+
+        # 库里真实可见：目录前缀 = 压缩包 stem（与网页上传一致，批次2b 决策）
+        docs = (await c.get(f"/api/kb/{kb_id}/documents", headers=headers)).json()
+        by_name = {d["document_name"]: d for d in docs}
+        assert set(by_name) == {"x.md", "y.txt"}
+        assert by_name["x.md"]["directory_path"] == "资料/dir1"
+
+        rows = await _queued_runs(async_pool, kb_id)
+        assert [r["status"] for r in rows] == ["queued"]
 
 
 @pytest.mark.asyncio

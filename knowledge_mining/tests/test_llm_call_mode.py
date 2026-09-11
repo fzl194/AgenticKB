@@ -18,8 +18,13 @@ from knowledge_mining.mining.jobs.run import _init_embedding
 
 @pytest.fixture(autouse=True)
 def _reset_control_plane():
+    # 快照-恢复而非清空：set_mining_service_config(None) 会把进程级缓存置空，
+    # 同进程后续测试文件里任何 UploadConfig()/MiningConfig() 构造都会冷缓存
+    # 懒拉控制面（本地 8910 拒连）——曾致全量套件 test_mining_auto_queue 5 挂。
+    from knowledge_mining.mining.infra import control_plane as _cp
+    saved = _cp._service_config_cache
     yield
-    set_mining_service_config(None)
+    set_mining_service_config(saved)
 
 
 def _set_config(payload: dict | None) -> None:

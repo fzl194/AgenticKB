@@ -303,7 +303,7 @@ Body:
 | `query_structured_asset` | 按 `st_` ref 对表格资产做 schema 化查询与聚合 |
 | `list_knowledge_bases` | 列出密钥主人开放的知识库 |
 | `list_documents` | 列出某库的文件清单 |
-| `upload_document` | 上传文件入库（不自动挖掘） |
+| `upload_document` | 上传一个或多个文件（两步直传 + 自动排队挖掘；zip/hdx/chm 自动解压） |
 
 工具开关按用户级 open_tools 控制；含已退役工具名的历史配置会在验钥时自动迁移（剔除退役名 + 补齐新结构工具）。
 

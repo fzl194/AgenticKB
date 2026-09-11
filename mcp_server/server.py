@@ -426,35 +426,47 @@ def _browse_top(ident: Identity, domain: str | None) -> dict:
 
 
 @mcp.tool()
-def upload_document(kb_name: str, filename: str) -> dict:
-    """上传一个文件到开放的知识库——两步直传（原始字节，≤50MB），自动排队挖掘。
+def upload_document(kb_name: str, filenames: list[str]) -> dict:
+    """上传一个或多个文件到开放的知识库——两步直传（原始字节），自动排队挖掘。
 
-    第一步调本工具拿到 upload_url；第二步用 PUT 把**文件原始字节**传上去
-    （不要 base64——大文件 base64 会超出工具参数上限）：
+    用法（两步）：
+    1. 调本工具，传入目标库名与文件名列表 → 返回每个文件的 upload_url
+       （一次性凭证，10 分钟内有效、单次使用，**不需要任何认证头**）；
+    2. 对每个文件用 PUT 把**原始字节**传到它自己的 upload_url
+       （不要 base64——大文件 base64 会超出工具参数上限）：
 
-        curl -X PUT -H "Authorization: Bearer <你的 MCP 密钥>" \\
-             --data-binary @手册.pdf "<upload_url>"
+           curl -X PUT --data-binary @手册.pdf "<该文件的 upload_url>"
 
-    PUT 的响应即最终结果（document_id / auto_mined / run_id）。上传成功后
-    自动入队该库的整库增量挖掘 Run：库空闲则立即排队执行；库正在挖掘/审核
-    中则排在后面串行执行。挖掘完成后内容才可被检索到——刚上传的文件用
-    search_knowledge 查不到是正常的，需等挖掘完成。上传需要对该库有编辑
-    权限。票据 10 分钟内有效且单次使用；超时或失败重调本工具取新 URL。
+    每个 PUT 的响应即该文件的上传与挖掘入队结果（document_id /
+    auto_mined / run_id）。
+
+    上传成功后自动入队该库的整库增量挖掘 Run：库空闲则立即排队执行；库
+    正在挖掘/审核中则排在后面串行执行——多个文件各自 PUT 即可，无需等待
+    或合并。挖掘完成后内容才可被检索到——刚上传的文件用 search_knowledge
+    查不到是正常的，需等挖掘完成。上传需要对该库有编辑权限。
+
+    多文件也可以打包：把若干文件压成一个 zip 只传一个 URL，服务端会
+    **自动解压成多个文档**（与网页端上传 zip 完全一致，解压后的文档在
+    "压缩包名/" 目录下）。两种方式任选：少量大文件逐个传；大量小文件
+    打包传更高效。
+
+    票据超时或 PUT 失败：重调本工具取新 URL 重传即可。普通文件上限
+    50MB；zip/hdx/chm 归档上限与网页端一致（500MB）。可被挖掘的格式：
+    md/txt/html/pdf/doc(x)/xls(x)/ppt(x)/json 及归档 zip/hdx/chm；其他
+    格式可上传但挖掘会标记不支持。
 
     Args:
         kb_name: 目标知识库名称（get_knowledge 顶层浏览返回的 name）。
-        filename: 文件名（含扩展名，如 "手册.pdf"；不含路径）。可被挖掘的
-            格式：md/txt/html/pdf/doc(x)/xls(x)/ppt(x)/json 及归档
-            zip/hdx/chm；其他格式可上传但挖掘会标记不支持。
+        filenames: 文件名列表（含扩展名，如 ["手册.pdf", "notes.md"]；
+            单文件传一个元素的列表）。每个文件名不含路径分隔符。
     """
     ident = _identity()
     kb_id = _resolve_open_kb(ident, kb_name)
-    if not filename or "/" in filename or "\\" in filename or ".." in filename:
-        raise ToolError("filename 非法：须为不含路径分隔符的纯文件名。")
-    try:
-        issued = backend.begin_upload(ident.username, kb_id, str(filename))
-    except backend.ToolBackendError as exc:
-        raise ToolError(str(exc)) from None
+    if not filenames:
+        raise ToolError("filenames 不能为空：至少给出一个文件名。")
+    for filename in filenames:
+        if not filename or "/" in filename or "\\" in filename or ".." in filename:
+            raise ToolError(f"filename 非法：{filename!r}（须为不含路径分隔符的纯文件名）。")
 
     headers = get_http_headers(include={"host", "x-forwarded-proto"}) or {}
 
@@ -466,44 +478,62 @@ def upload_document(kb_name: str, filename: str) -> dict:
 
     host = _header("host")
     proto = _header("x-forwarded-proto") or "http"
-    # 无 Host 上下文（理论不可达）时退化为相对路径，Agent 自行补全
-    upload_url = (
-        f"{proto}://{host}/upload/{issued['ticket']}" if host
-        else f"/upload/{issued['ticket']}"
-    )
+
+    uploads = []
+    for filename in filenames:
+        try:
+            issued = backend.begin_upload(ident.username, kb_id, str(filename))
+        except backend.ToolBackendError as exc:
+            raise ToolError(str(exc)) from None
+        # 无 Host 上下文（理论不可达）时退化为相对路径，Agent 自行补全
+        upload_url = (
+            f"{proto}://{host}/upload/{issued['ticket']}" if host
+            else f"/upload/{issued['ticket']}"
+        )
+        uploads.append({
+            "filename": filename,
+            "upload_url": upload_url,
+            "method": "PUT",
+            "content_type": "application/octet-stream",
+            "max_bytes": issued.get("max_bytes"),
+            "expires_in": issued.get("expires_in"),
+        })
     return {
-        "upload_url": upload_url,
-        "method": "PUT",
-        "headers_hint": "Authorization: Bearer <你的 MCP 密钥>",
-        "content_type": "application/octet-stream",
-        "max_bytes": issued.get("max_bytes"),
-        "expires_in": issued.get("expires_in"),
-        "filename": filename,
-        "next": (
-            "用 PUT 把文件原始字节传到 upload_url（带 Bearer 密钥，"
-            "--data-binary @文件，不要 base64）；PUT 响应即上传与挖掘入队结果。"
+        "uploads": uploads,
+        "usage": (
+            "对每个文件执行：curl -X PUT --data-binary @<本地文件路径> <该文件的 upload_url>"
+            "（原始字节，不要 base64；无需任何认证头，URL 即一次性凭证，10 分钟内单次有效）；"
+            "每个 PUT 的响应就是该文件的上传与挖掘入队结果。"
+        ),
+        "batch_tip": (
+            "多个小文件也可打包成一个 zip 上传单个 URL，服务端自动解压成多个文档"
+            "（与网页端上传 zip 一致）。"
         ),
     }
 
 
 @mcp.custom_route("/upload/{ticket}", methods=["PUT"])
 async def _direct_upload(request):
-    """Agent 直传落点：验 MCP 密钥后把请求体流式转发给 mining。"""
+    """Agent 直传落点：票据即凭证（presigned 模型），流式转发给 mining。
+
+    不验 MCP 密钥：密钥只存在于 MCP 客户端配置（模型不可见），Agent 的
+    out-of-band PUT 拿不到它。票据本身 192bit 随机、TTL 10 分钟、单次
+    使用、绑定 库/用户/文件名——泄露面收敛为"10 分钟内替某人传一个指定
+    名字的文件"，与 S3/MinIO 预签名 URL 同一信任模型。归属用户由票据
+    绑定值决定（mining 侧消费），本路由不做二次身份判定。
+    """
     from starlette.responses import JSONResponse
 
-    try:
-        ident = require_identity(request.headers)
-    except IdentityError as exc:
-        return JSONResponse({"detail": str(exc)}, status_code=401)
-
     ticket = str(request.path_params.get("ticket") or "")
+    # 提前拒绝明显超限的请求体；权威上限在 mining 按票据（普通文件 50MB /
+    # 归档 500MB）流式强制。这里用归档上限做粗过滤，避免误拒合法大包。
     declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > 50 * 1024 * 1024:
-        return JSONResponse({"detail": "文件过大：MCP 上传上限 50MB。"}, status_code=413)
+    if declared and declared.isdigit() and int(declared) > 500 * 1024 * 1024:
+        return JSONResponse({"detail": "文件过大：MCP 上传上限（归档 500MB）。"}, status_code=413)
 
     try:
         status, body = await backend.put_upload_direct(
-            ticket, ident.username, request.stream(),
+            ticket, request.stream(),
         )
     except backend.ToolBackendError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=502)

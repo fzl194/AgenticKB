@@ -8,7 +8,8 @@
 - ``POST /begin-upload``：签发一次性上传票据（TTL 10 分钟、单次使用、绑定
   kb/user/filename）。工具层把它包装成 Agent 可 PUT 的公网直传 URL。
 - ``PUT /upload-direct/{ticket}`：mcp_server 流式转发 Agent 的**原始字节**
-  （无 base64），走同一条 upload_stream + 自动挖掘入队管线。
+  （无 base64），走与网页上传同源的 intake_upload（普通文件直传 /
+  归档自动解压）+ 自动挖掘入队管线。
 - 旧 base64 端点（POST /upload）已退役：MCP 工具参数是 JSON，大文件
   base64 既撑爆上下文又翻倍传输。
 """
@@ -23,10 +24,14 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from knowledge_mining.mining.infra.control_plane import get_internal_verify_secret
+from knowledge_mining.mining.infra.upload_config import UploadConfig
 from knowledge_mining.mining.kb.deps import get_document_service, get_kb_db
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.services import auto_mine
-from knowledge_mining.mining.kb.services.document_service import UploadTooLarge
+from knowledge_mining.mining.kb.services.document_service import (
+    UploadTooLarge,
+    is_upload_archive,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/kb/mcp-tools", tags=["kb-mcp-tools"])
@@ -74,13 +79,11 @@ class _UploadTicketStore:
         }
         return {"ticket": ticket, "expires_in": self._ttl}
 
-    def redeem(self, ticket: str, *, username: str) -> dict[str, Any] | None:
-        """取出并作废票据；用户不匹配视为无效（票据不得跨密钥转手）。"""
+    def redeem(self, ticket: str) -> dict[str, Any] | None:
+        """取出并作废票据（单次使用；过期或未知返回 None）。"""
         self._sweep()
         entry = self._tickets.pop(ticket, None)  # pop = 单次使用
         if entry is None or entry["expires_at"] < time.monotonic():
-            return None
-        if entry["username"] != username:
             return None
         return entry
 
@@ -175,6 +178,11 @@ async def begin_upload(
         raise HTTPException(403, "only owner or editor may upload")
     filename = _validated_filename(body.get("filename"))
 
+    # 归档（zip/hdx/chm）与网页上传同限（默认 500MB）；普通文件走 MCP 上限
+    max_bytes = (
+        UploadConfig().upload_max_archive_size
+        if is_upload_archive(filename) else MAX_UPLOAD_BYTES
+    )
     issued = _TICKETS.issue(
         kb_id=kb_id, user_id=user_id, username=username, filename=filename,
     )
@@ -183,7 +191,7 @@ async def begin_upload(
     return {
         "ticket": issued["ticket"],
         "upload_path": f"/api/kb/mcp-tools/upload-direct/{issued['ticket']}",
-        "max_bytes": MAX_UPLOAD_BYTES,
+        "max_bytes": max_bytes,
         "expires_in": issued["expires_in"],
     }
 
@@ -195,34 +203,39 @@ async def upload_direct(
     kbdb: KbDB = Depends(get_kb_db),
     doc_svc: Any = Depends(get_document_service),
 ) -> dict[str, Any]:
-    """直传第二步：票据 + 内部密钥 + 用户绑定三重校验，流式落库并自动入队挖掘。
+    """直传第二步：票据即凭证 + 内部密钥，流式落库并自动入队挖掘。
 
     调用方是 mcp_server（持 X-Internal-Auth）；Agent 面向的公网 URL 在
-    mcp_server 侧（PUT /upload/{ticket}，验 MCP Bearer 密钥后转发到这里）。
+    mcp_server 侧（PUT /upload/{ticket}，不验 MCP 密钥——密钥只在 MCP
+    客户端配置里，模型拿不到；票据本身 192bit/单次/TTL 10min 即凭证，
+    与 S3 预签名 URL 同一信任模型）。归属用户/库/文件名全部取票据绑定值。
     """
     _require_internal(request)
-    username = request.headers.get("X-MCP-Username", "")
-    entry = _TICKETS.redeem(ticket, username=username)
+    entry = _TICKETS.redeem(ticket)
     if entry is None:
-        # 不泄露票据是否存在/过期/归属——统一 404
+        # 不泄露票据是否存在/过期——统一 404
         raise HTTPException(404, "upload ticket invalid or expired")
+    username = entry["username"]
 
     async def _stream() -> AsyncIterator[bytes]:
         async for chunk in request.stream():
             yield chunk
 
     try:
-        result = await doc_svc.upload_stream(
+        # 与网页上传同源（intake_upload）：普通文件直传 / zip/hdx/chm 自动解压
+        result = await doc_svc.intake_upload(
             kb_id=entry["kb_id"], owner_id=entry["user_id"],
             filename=entry["filename"], stream=_stream(),
-            max_bytes=MAX_UPLOAD_BYTES,
+            file_max_bytes=MAX_UPLOAD_BYTES,
         )
     except UploadTooLarge as exc:
         raise HTTPException(
-            413, f"file too large (>{MAX_UPLOAD_BYTES // (1024*1024)}MB)"
+            413, f"file too large（上限 {exc.limit_bytes} 字节）"
         ) from exc
-    logger.info("[mcp-tools] upload-direct by %s -> kb=%s file=%s",
-                username, entry["kb_id"], entry["filename"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    logger.info("[mcp-tools] upload-direct by %s -> kb=%s file=%s kind=%s",
+                username, entry["kb_id"], entry["filename"], result["kind"])
 
     # 自动挖掘入队：失败只降级，绝不影响上传结果
     kb = await kbdb.get_kb(entry["kb_id"])
@@ -233,19 +246,58 @@ async def upload_direct(
         )
         if kb is not None else {"auto_mined": False, "reason": "internal"}
     )
+    auto_fields = {
+        "auto_mined": bool(auto.get("auto_mined")),
+        **({"run_id": auto["run_id"]} if auto.get("run_id") else {}),
+        **({"reason": auto["reason"]} if auto.get("reason") else {}),
+    }
+    if result["kind"] == "file":
+        document = result["document"]
+        return _upload_response(document.get("id"), document.get("document_name"),
+                                auto, "已上传")
+    if result["kind"] == "archive":
+        docs = result["documents"]
+        return {
+            "kind": "archive",
+            "document_count": len(docs),
+            "documents": [
+                {"document_id": d.get("id"), "document_name": d.get("document_name")}
+                for d in docs
+            ],
+            **auto_fields,
+            "message": (
+                f"归档已解压为 {len(docs)} 个文档并"
+                f"{'入队挖掘' if auto.get('auto_mined') else '未自动挖掘'}"
+            ),
+        }
+    # 大归档后台解压中：挖掘 Run 已入队，认领时通常解压已完成（本地磁盘）
+    return {
+        "kind": "archive_task",
+        "archive_task_id": result["archive_task_id"],
+        "status": "processing",
+        **auto_fields,
+        "message": (
+            "归档较大，正在后台解压入库；解压完成后用 get_knowledge(kb_name=…) "
+            "可看到全部文档，挖掘任务已排队"
+        ),
+    }
+
+
+def _upload_response(document_id, document_name, auto, prefix) -> dict[str, Any]:
     if auto.get("auto_mined"):
         message = (
-            f"已上传并{auto.get('detail') or '入队挖掘'}"
+            f"{prefix}并{auto.get('detail') or '入队挖掘'}"
             f"（run={str(auto.get('run_id'))[:8]}）；挖掘完成后内容才可检索"
         )
     else:
         reason = auto_mine.REASON_MESSAGES.get(
             str(auto.get("reason") or ""), "未知原因"
         )
-        message = f"已上传（自动挖掘未触发：{reason}）；可在平台界面手动发起挖掘"
+        message = f"{prefix}（自动挖掘未触发：{reason}）；可在平台界面手动发起挖掘"
     return {
-        "document_id": result.get("id"),
-        "document_name": result.get("document_name"),
+        "kind": "file",
+        "document_id": document_id,
+        "document_name": document_name,
         "auto_mined": bool(auto.get("auto_mined")),
         **({"run_id": auto["run_id"]} if auto.get("run_id") else {}),
         **({"reason": auto["reason"]} if auto.get("reason") else {}),

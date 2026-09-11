@@ -159,7 +159,7 @@ const domainStore = useDomainStore()
 const ALL_TOOLS = [
   { name: 'search_knowledge', label: '检索知识证据（domain 单域免传）' },
   { name: 'get_knowledge', label: '深入读取：浏览层级 / 取原文 / 看能力 / 导航 / 查表格' },
-  { name: 'upload_document', label: '上传文件入库并自动排队挖掘（排队/合并，跑完才可检索）' },
+  { name: 'upload_document', label: '上传一个或多个文件（zip 自动解压）入库并自动排队挖掘（跑完才可检索）' },
 ] as const
 
 const status = ref<McpAccessStatus | null>(null)

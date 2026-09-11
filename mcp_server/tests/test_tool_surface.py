@@ -185,12 +185,13 @@ def test_tool_registry_is_the_three_piece_family() -> None:
 # ── upload_document 两步直传（2026-09-11 改造：无 base64） ────────────────
 
 
-def test_upload_document_returns_direct_upload_url(monkeypatch) -> None:
+def test_upload_document_returns_direct_upload_urls(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     monkeypatch.setattr(
         server.backend, "begin_upload",
         lambda username, kb_id, filename: {
-            "ticket": "up_abc123", "max_bytes": 52_428_800, "expires_in": 600,
+            "ticket": f"up_{filename}", "max_bytes": 52_428_800,
+            "expires_in": 600,
         },
     )
     monkeypatch.setattr(
@@ -198,13 +199,16 @@ def test_upload_document_returns_direct_upload_url(monkeypatch) -> None:
         lambda include=None: {"host": "kb.example.com:9000"},
     )
 
-    out = server.upload_document(kb_name="网络手册库", filename="手册.pdf")
+    out = server.upload_document(kb_name="网络手册库",
+                                 filenames=["手册.pdf", "notes.md"])
 
-    assert out["upload_url"] == "http://kb.example.com:9000/upload/up_abc123"
-    assert out["method"] == "PUT"
-    assert out["max_bytes"] == 52_428_800
-    assert out["expires_in"] == 600
-    assert "不要 base64" in out["next"]
+    assert [u["filename"] for u in out["uploads"]] == ["手册.pdf", "notes.md"]
+    assert out["uploads"][0]["upload_url"] ==         "http://kb.example.com:9000/upload/up_手册.pdf"
+    assert out["uploads"][0]["method"] == "PUT"
+    assert out["uploads"][0]["max_bytes"] == 52_428_800
+    assert out["uploads"][0]["expires_in"] == 600
+    assert "不要 base64" in out["usage"]
+    assert "zip" in out["batch_tip"]
 
 
 def test_upload_document_respects_forwarded_proto(monkeypatch) -> None:
@@ -218,49 +222,57 @@ def test_upload_document_respects_forwarded_proto(monkeypatch) -> None:
         lambda include=None: {"host": "kb.example.com",
                               "x-forwarded-proto": "https"},
     )
-    out = server.upload_document(kb_name="网络手册库", filename="a.md")
-    assert out["upload_url"].startswith("https://kb.example.com/upload/")
+    out = server.upload_document(kb_name="网络手册库", filenames=["a.md"])
+    assert out["uploads"][0]["upload_url"].startswith("https://kb.example.com/upload/")
 
 
 def test_upload_document_rejects_path_like_filename(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     with pytest.raises(ToolError, match="filename 非法"):
-        server.upload_document(kb_name="网络手册库", filename="../evil.md")
+        server.upload_document(kb_name="网络手册库", filenames=["../evil.md"])
     with pytest.raises(ToolError, match="filename 非法"):
-        server.upload_document(kb_name="网络手册库", filename="a/b.md")
+        server.upload_document(kb_name="网络手册库", filenames=["a/b.md"])
+    with pytest.raises(ToolError, match="不能为空"):
+        server.upload_document(kb_name="网络手册库", filenames=[])
 
 
 def test_upload_document_rejects_kb_not_open(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     with pytest.raises(ToolError, match="未开放或不存在"):
-        server.upload_document(kb_name="别的库", filename="a.md")
+        server.upload_document(kb_name="别的库", filenames=["a.md"])
 
 
 @pytest.mark.asyncio
-async def test_direct_upload_route_requires_bearer_key() -> None:
+async def test_direct_upload_route_needs_no_auth_header(monkeypatch) -> None:
+    """票据即凭证：无任何认证头的 PUT 直达 backend（密钥只在 MCP 客户端）。"""
     from httpx import ASGITransport, AsyncClient
+
+    seen: dict = {}
+
+    async def fake_put(ticket, stream):
+        body = b""
+        async for chunk in stream:
+            body += chunk
+        seen["ticket"], seen["body"] = ticket, body
+        return 200, {"document_id": "d1"}
+
+    monkeypatch.setattr(server.backend, "put_upload_direct", fake_put)
 
     app = server.mcp.http_app()
     async with AsyncClient(transport=ASGITransport(app=app),
                            base_url="http://t") as client:
-        no_key = await client.put("/upload/up_x", content=b"x")
-        bad_key = await client.put("/upload/up_x", content=b"x",
-                                   headers={"Authorization": "Bearer wrong"})
+        resp = await client.put("/upload/up_bare", content=b"raw")
 
-    assert no_key.status_code == 401
-    assert bad_key.status_code == 401
+    assert resp.status_code == 200
+    assert resp.json()["document_id"] == "d1"
+    assert seen == {"ticket": "up_bare", "body": b"raw"}
 
 
 @pytest.mark.asyncio
 async def test_direct_upload_route_streams_to_backend(monkeypatch) -> None:
     from httpx import ASGITransport, AsyncClient
 
-    monkeypatch.setattr(
-        server, "require_identity",
-        lambda headers: SINGLE,
-    )
-
-    async def fake_put(ticket, username, stream):
+    async def fake_put(ticket, stream):
         body = b""
         async for chunk in stream:
             body += chunk
@@ -283,9 +295,7 @@ async def test_direct_upload_route_streams_to_backend(monkeypatch) -> None:
 async def test_direct_upload_route_maps_backend_status(monkeypatch) -> None:
     from httpx import ASGITransport, AsyncClient
 
-    monkeypatch.setattr(server, "require_identity", lambda headers: SINGLE)
-
-    async def fake_put(ticket, username, stream):
+    async def fake_put(ticket, stream):
         return 413, {"detail": "file too large (>50MB)"}
 
     monkeypatch.setattr(server.backend, "put_upload_direct", fake_put)

@@ -205,13 +205,12 @@ def begin_upload(username: str, kb_id: str, filename: str) -> dict:
     })
 
 
-async def put_upload_direct(
-    ticket: str, username: str, stream,
-) -> tuple[int, dict]:
+async def put_upload_direct(ticket: str, stream) -> tuple[int, dict]:
     """直传第二步：把 Agent 的原始字节流式转发给 mining（无 base64）。
 
-    返回 (http_status, body)；把 mining 的状态码语义原样带回给自定义路由，
-    Agent 的 curl 能看到正确的 404/413/422 而不是一律 502。
+    归属用户由票据绑定值决定（mining 侧消费），本层不传用户名——公网
+    PUT 不验 MCP 密钥（密钥只在 MCP 客户端，模型不可见；票据即凭证）。
+    返回 (http_status, body)；把 mining 的状态码语义原样带回给自定义路由。
     """
     secret = _internal_auth_secret()
     if not secret:
@@ -225,7 +224,6 @@ async def put_upload_direct(
                 content=stream,
                 headers={
                     "X-Internal-Auth": secret,
-                    "X-MCP-Username": username,
                     "Content-Type": "application/octet-stream",
                 },
             )

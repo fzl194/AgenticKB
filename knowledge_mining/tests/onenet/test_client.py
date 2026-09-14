@@ -37,6 +37,7 @@ class FakeOnenet:
         self.token_history: list[str | None] = []
         # DSL/原生查询的响应数据（search body -> response）
         self.responses: list[dict] = []
+        self.repeat_last = False  # 耗尽后重复末条响应（持续异常/满页场景）
         self._resp_idx = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -56,6 +57,8 @@ class FakeOnenet:
             if self.responses and self._resp_idx < len(self.responses):
                 resp = self.responses[self._resp_idx]
                 self._resp_idx += 1
+            elif self.responses and self.repeat_last:
+                resp = self.responses[-1]
             else:
                 # 响应用尽 → 空页（模拟真实接口翻页到底）
                 resp = {"total": 0, "searchResults": []}
@@ -143,6 +146,7 @@ def test_query_dsl_dict_and_string(fake):
 
 
 def test_malformed_response_raises(fake):
+    fake.repeat_last = True
     fake.responses = [{"unexpected": 1}]
     c = _client(fake)
     with pytest.raises(OnenetQueryError):
@@ -218,6 +222,7 @@ def test_fetch_chunk_incomplete_raises(fake):
 
 
 def test_fetch_chunk_window_over_10000_raises(fake):
+    fake.repeat_last = True
     fake.responses = [{"total": 20000, "searchResults": [_slice(f"n{i}", i) for i in range(1, 3)]}]
     c = _client(fake)
     with pytest.raises(OnenetQueryError, match="窗口"):
@@ -239,6 +244,7 @@ def test_request_failure_retries_then_raises(fake, monkeypatch):
     import knowledge_mining.mining.onenet.client as client_mod
     sleeps: list[float] = []
     monkeypatch.setattr(client_mod.time, "sleep", lambda s: sleeps.append(s))
+    fake.repeat_last = True
     fake.responses = [{"bad": "shape"}]  # 每次都异常形状 → 重试 3 次后抛
     c = _client(fake)
     c.get_token()

@@ -300,4 +300,69 @@ async def kb_list_refs(
     return {"refs": refs}
 
 
+# ------------------------------------------------------------ 重同步 / selection
+
+
+@router.post("/imports/{import_id}/resync")
+async def onenet_resync(
+    import_id: str,
+    user: dict[str, Any] = Depends(require_admin),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """重同步：探测 → 有变化则重拉 diff → 文件级传播（47 号 §四-7）."""
+    from knowledge_mining.mining.onenet.refs_service import RefsService
+    from knowledge_mining.mining.onenet.resync import ResyncError, resync
+
+    repo = _repo(request)
+    import_row = await repo.get_import(import_id)
+    if import_row is None:
+        raise HTTPException(404, "import not found")
+    client = _client_factory(request)()
+    kbdb = KbDB(request.app.state.pg_pool)
+    from knowledge_mining.mining.kb.deps import get_document_service
+
+    refs = RefsService(request.app.state.pg_pool)
+    auto = _make_auto_miner(request)
+
+    async def _refs_cleanup(document_ids: list[str]) -> None:
+        await refs.remove_refs_for_documents(document_ids)
+
+    async def _reminer(kb_id: str) -> None:
+        if auto is None:
+            return
+        kb = await kbdb.get_kb(kb_id)
+        await auto(kb=kb, user_id=import_row["created_by"])
+
+    try:
+        return await resync(
+            repo=repo, kbdb=kbdb, doc_service=get_document_service(request),
+            client=client, import_id=import_id,
+            workspace_root=DEFAULT_WORKSPACE_ROOT,
+            refs_cleanup=_refs_cleanup, reminer=_reminer,
+        )
+    except ResyncError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.patch("/imports/{import_id}/selection")
+async def onenet_update_selection(
+    import_id: str,
+    body: dict[str, Any],
+    user: dict[str, Any] = Depends(require_admin),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """合并编辑勾选范围（47 号：追加子树=编辑 selection 后走重同步）."""
+    repo = _repo(request)
+    import_row = await repo.get_import(import_id)
+    if import_row is None:
+        raise HTTPException(404, "import not found")
+    if import_row.get("status") not in ("done", "failed"):
+        raise HTTPException(409, f"import_busy: {import_row.get('status')}")
+    current = Selection.from_dict(import_row.get("selection_json") or {})
+    incoming = Selection.from_dict(body.get("selection") or {})
+    merged = current.merge(incoming)
+    await repo.update_import(import_id, selection_json=merged.to_dict())
+    return {"selection": merged.to_dict()}
+
+
 __all__ = ["DEFAULT_WORKSPACE_ROOT", "refs_router", "router"]

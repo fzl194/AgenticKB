@@ -42,6 +42,13 @@ class Selection:
             "max_part_id": self.max_part_id,
         }
 
+    def merge(self, other: "Selection") -> "Selection":
+        """合并勾选范围（重同步前追加子树用，47 号 L1）：
+        subtrees 并集去重；max_part_id 取更宽者（None=整包优先）。"""
+        merged = tuple(sorted(set(self.subtrees) | set(other.subtrees)))
+        maxes = [m for m in (self.max_part_id, other.max_part_id) if m]
+        return Selection(subtrees=merged, max_part_id=min(maxes) if maxes else None)
+
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "Selection":
         data = data or {}

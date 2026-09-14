@@ -1491,6 +1491,36 @@ WITH latest AS (
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def replace_document_object(
+        self, document_id: str, *, storage_object_id: str,
+        source_raw_hash: str, file_size: int | None = None,
+    ) -> dict[str, Any] | None:
+        """活文档的内容替换（onenet 重同步用，47 号 §四-7）。
+
+        对象指针/哈希前移 + content_revision 递增——同 O5 替换合同的核心
+        语义，但不经 HTTP 上传链路（字节由导入任务直接写入对象存储）。
+        重挖掘由调用方入队（自动挖掘排队语义）。
+        """
+        now = _utcnow()
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE asset_documents
+                   SET storage_object_id = %(so)s,
+                       source_raw_hash = %(hash)s,
+                       file_size = COALESCE(%(fs)s, file_size),
+                       modified_at = %(ma)s,
+                       content_revision = content_revision + 1,
+                       content_updated_at = %(ca)s
+                   WHERE id = %(id)s AND deleted_at IS NULL
+                   RETURNING id, content_revision""",
+                {"so": storage_object_id, "hash": source_raw_hash,
+                 "fs": file_size,
+                 # modified_at TEXT / content_updated_at TIMESTAMPTZ 拆参（同上）
+                 "ma": now, "ca": now, "id": document_id},
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
     async def revive_document_from_storage(
         self, document_id: str, *, storage_object_id: str, source_raw_hash: str,
         file_size: int | None = None, modified_at: str | None = None,

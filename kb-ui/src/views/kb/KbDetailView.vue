@@ -102,6 +102,9 @@
       <el-tab-pane label="质量" name="quality">
         <KbQualityPanel :kb-id="kbId" :active="activeTab === 'quality'" />
       </el-tab-pane>
+      <el-tab-pane label="一张网" name="onenet">
+        <OnenetRefPanel :kb-id="kbId" :can-write="canWrite" :active="activeTab === 'onenet'" />
+      </el-tab-pane>
       <el-tab-pane label="设置" name="settings">
         <KbSettingsPanel
           :kb="kb"
@@ -128,6 +131,7 @@ import KbSearchPanel from '@/components/kb/KbSearchPanel.vue'
 import KbMembersPanel from '@/components/kb/KbMembersPanel.vue'
 import KbMiningPanel from '@/components/kb/KbMiningPanel.vue'
 import KbQualityPanel from '@/components/kb/KbQualityPanel.vue'
+import OnenetRefPanel from '@/components/kb/OnenetRefPanel.vue'
 import KbSettingsPanel from '@/components/kb/KbSettingsPanel.vue'
 import { roleLabel, roleTagType, visibilityLabel, visibilityTagType } from '@/views/kb/kbMeta'
 import type { KbReadiness, KbReadinessLevel, KbSummary } from '@/types/kb'
@@ -142,11 +146,11 @@ const kb = ref<KbSummary | null>(null)
 const readiness = ref<KbReadiness | null>(null)
 const loading = ref(false)
 const loadError = ref('')
-const activeTab = ref<'files' | 'search' | 'members' | 'mining' | 'quality' | 'settings'>('files')
+const activeTab = ref<'files' | 'search' | 'members' | 'mining' | 'quality' | 'onenet' | 'settings'>('files')
 // A2：文档页「本节搜索」跳转带 tab=search + 范围参数（面板自行吸收）
 {
   const t = (route.query as Record<string, string | undefined>).tab
-  const allowed = ['search', 'mining', 'members', 'quality', 'settings', 'files'] as const
+  const allowed = ['search', 'mining', 'members', 'quality', 'onenet', 'settings', 'files'] as const
   if (t && (allowed as readonly string[]).includes(t)) {
     activeTab.value = t as typeof allowed[number]
   }

@@ -65,6 +65,8 @@ const ALL_NAV = [
   { path: '/', label: '概览', icon: Monitor, requiresAdmin: false },
   { path: '/kb', label: '知识库', icon: Files, requiresAdmin: false },
   { path: '/mcp', label: 'MCP 接入', icon: Key, requiresAdmin: false },
+  // 47 号：一张网接入（管理员：产品文档导入/重同步；KB 侧引用在知识库详情 tab）
+  { path: '/onenet', label: '一张网接入', icon: Key, requiresAdmin: true },
   { path: '/mining/workflows', label: '挖掘范式', icon: Management, requiresAdmin: true },
   { path: '/paradigm', label: '检索范式', icon: Connection, requiresAdmin: true },
   { path: '/llm', label: 'LLM 服务', icon: Cpu, requiresAdmin: true },

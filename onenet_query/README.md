@@ -21,6 +21,20 @@ python app.py                # 或 python -m uvicorn app:app --host 0.0.0.0 --po
 
 离线自检（不打内网，只测聚合逻辑）：`python app.py --selftest`
 
+## 两步用户流
+
+**第一步 · 查询发现**：多条件三元组（12 字段 × 精确/模糊）→ 按 source_id 汇总为文档行 → 分页。
+默认预置 `来源站点=support`（产品文档主阵地）+ 文档名称精确。
+
+**第二步 · 进入文档（全量获取 + β 章节重建 + 勾选）**：
+1. 点「进入文档」→「开始全量获取」：分段拉取全字段全部切片（段文件幂等、断点续传、
+   nid/part 校验、manifest 落盘 `workspace/<source_id>/`）——对齐主项目 `fetch_selection`
+2. 获取完成自动 β 规则章节重建（对齐主项目 `restore_files`，rule_version=beta-1）：
+   左侧完整章节树（**可勾选**，勾父节点=选中整个子树，Selection 前缀语义）、
+   右侧文件清单（导入单位，带切片数/part 范围/单文件 markdown 预览）
+3. 「生成导入选择」→ `selection.json` 落盘 = **主项目 pipeline 的 selection 参数**
+   （`{subtrees: [...], max_part_id: null}` + 匹配文件/切片统计）——为入知识库直通做准备
+
 ## 查询语义
 
 - 多条件 **AND**；每条条件是三元组：`字段 + 精确/模糊 + 内容`

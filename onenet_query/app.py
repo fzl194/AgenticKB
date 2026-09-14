@@ -23,6 +23,7 @@ import base64
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -157,6 +158,54 @@ class Onenet:
             body["searchQueryList"] = conditions
         return self._post(body)
 
+    def query_dsl(self, dsl: dict) -> dict:
+        """DSL 模式（仅第二步 TOC 用）：三字段投影 / part_id range 分段 /
+        track_total_hits 是原生模式没有的能力（主项目 toc_scan 同款依赖）。"""
+        raw = dsl if isinstance(dsl, str) else json.dumps(dsl, ensure_ascii=False)
+        return self._post({"dsl": raw})
+
+    # ---- 以下三个方法逐字对齐 kone_connector（count/part_range/fetch_chunk）----
+
+    def count_source(self, source_id: str) -> int:
+        dsl = {"query": {"bool": {"must": [
+                   {"term": {"source_id.keyword": {"value": source_id}}}]}},
+               "track_total_hits": True, "from": 0, "size": 1}
+        return int(self.query_dsl(dsl).get("total") or 0)
+
+    def part_range(self, source_id: str) -> dict:
+        out = {}
+        for order, key in (("asc", "min"), ("desc", "max")):
+            dsl = {"query": {"bool": {"must": [
+                       {"term": {"source_id.keyword": {"value": source_id}}}]}},
+                   "from": 0, "size": 1,
+                   "sort": [{"part_id": order}, {"nid.keyword": order}]}
+            res = self.query_dsl(dsl).get("searchResults") or []
+            out[key] = int(res[0]["part_id"]) if res else None
+        return out
+
+    def fetch_chunk(self, source_id: str, lo: int, hi: int,
+                    fields: list[str] | None = None,
+                    page_size: int = 5000) -> list[dict]:
+        """拉取 part_id ∈ [lo,hi] 切片（对齐 fetch_source_chunk：range 分段 +
+        稳定双键排序，绕过 from+size≤10000 硬顶——大文档全量拉取的唯一路径）。
+        fields=None 拉全字段（全量获取用）；投影列表用于轻量扫描。"""
+        q = {"query": {"bool": {"must": [
+                 {"term": {"source_id.keyword": {"value": source_id}}},
+                 {"range": {"part_id": {"gte": lo, "lte": hi}}}]}},
+             "track_total_hits": True,
+             "sort": [{"part_id": "asc"}, {"nid.keyword": "asc"}]}
+        if fields:
+            q["_source"] = fields
+        out, frm = [], 0
+        while True:
+            q["from"], q["size"] = frm, page_size
+            res = self.query_dsl(q).get("searchResults") or []
+            out.extend(res)
+            frm += len(res)
+            if len(res) < page_size:
+                break
+        return out
+
 
 def _conds_brief(body: dict) -> str:
     """日志里打条件摘要。"""
@@ -243,9 +292,388 @@ def aggregate_documents(slices: list[dict]) -> list[dict]:
     return list(docs.values())
 
 
+# ---------------------------------------------------------------- 章节目录（第二步）
+# 自主项目 mining/onenet/restore.py#build_path_tree 移植：
+# path 以 " > " 分段 → 树；切片挂在其完整 path 的叶子节点；剔除包名首段。
+
+
+def split_path(path: str | None) -> list[str]:
+    return [p.strip() for p in (path or "").split(">") if p.strip()]
+
+
+def build_path_tree(slices: list[dict]) -> dict:
+    root: dict = {"title": "__ROOT__", "path": "", "depth": 0,
+                  "children": {}, "slice_count": 0}
+    for srow in slices:
+        segs = split_path(srow.get("path"))
+        if len(segs) >= 2:
+            segs = segs[1:]              # 剔除包名首段
+        if not segs:
+            continue
+        node = root
+        path_so_far = ""
+        for i, seg in enumerate(segs, start=1):
+            path_so_far = f"{path_so_far} > {seg}" if path_so_far else seg
+            node["slice_count"] += 1     # 祖先累计后代切片数
+            node = node["children"].setdefault(
+                seg, {"title": seg, "path": path_so_far, "depth": i,
+                      "children": {}, "slice_count": 0})
+    return root
+
+
+def tree_to_dicts(root: dict) -> list[dict]:
+    def to_dict(node: dict) -> dict:
+        return {"title": node["title"], "path": node["path"],
+                "depth": node["depth"], "slice_count": node["slice_count"],
+                "children": [to_dict(c) for c in node["children"].values()]}
+    return [to_dict(c) for c in root["children"].values()]
+
+
+# ---------------------------------------------------------------- 移植：主项目 restore.py
+# β 规则章节重建（rule_version=beta-1）：path[-2]=文件、path[-1]=文件内标题、
+# α 兜底；文件内 part_id 升序、文件间 min(part_id) 排序；目录=文件之上层级。
+RULE_VERSION = "beta-1"
+TBL_RE = re.compile(r"\[tbl_predict_(?:start|end)\]")
+
+
+def clean_content(content: str | None) -> str:
+    return TBL_RE.sub("", content or "").strip()
+
+
+def render_file_markdown(slices: list[dict], title: str = "") -> str:
+    """单文件切片 → markdown（带 nid 回源标记，标注逻辑文档）。"""
+    lines = ["<!-- 由一张网切片重建的逻辑文档（非原始文件） -->", ""]
+    heading = title or (slices[0].get("title") if slices else "") or ""
+    if heading:
+        lines.append(f"# {heading}")
+    for sr in sorted(slices, key=lambda x: int(x.get("part_id") or 0)):
+        lines.append(f"<!-- nid={sr.get('nid')} part_id={sr.get('part_id')} -->")
+        lines.append(clean_content(sr.get("content")))
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def restore_files(slices: list[dict]) -> dict:
+    """β 规则还原（对齐 mining/onenet/restore.py#restore_files）。"""
+    by_file: dict[str, list[dict]] = {}
+    headings: dict[str, str] = {}
+    unassigned = 0
+    for sr in sorted(slices, key=lambda x: int(x.get("part_id") or 0)):
+        segs = split_path(sr.get("path"))
+        if not segs:
+            unassigned += 1
+            continue
+        if len(segs) >= 2:
+            segs = segs[1:]                    # 剔包名
+        if len(segs) >= 2:
+            file_path, heading = " > ".join(segs[:-1]), segs[-1]
+        else:
+            file_path, heading = segs[0], segs[0]   # α 兜底
+        by_file.setdefault(file_path, []).append(sr)
+        headings.setdefault(file_path, heading)
+
+    folders: set[str] = set()
+    files = []
+    for file_path, rows in by_file.items():
+        fsegs = file_path.split(" > ")
+        for i in range(1, len(fsegs)):
+            folders.add("/".join(fsegs[:i]))
+        parts = [int(r.get("part_id") or 0) for r in rows]
+        files.append({
+            "file_path": file_path,
+            "file_title": fsegs[-1],
+            "heading_title": headings[file_path],
+            "folder_path": "/".join(fsegs[:-1]),
+            "slice_count": len(rows),
+            "part_min": min(parts), "part_max": max(parts),
+        })
+    files.sort(key=lambda f: f["part_min"])
+    return {"rule_version": RULE_VERSION, "files": files,
+            "folders": sorted(folders),
+            "slice_count": len(slices) - unassigned, "unassigned": unassigned}
+
+
+# ---------------------------------------------------------------- 移植：主项目 fetch.py 语义
+# 段幂等全量获取（对齐 mining/onenet/fetch.py#fetch_selection）：
+# parts/part_<lo>_<hi>.jsonl 存在即跳过（断点续传）→ 合并 → 校验 → manifest。
+
+
+class Selection:
+    """导入勾选范围（对齐主项目 fetch.Selection：subtrees 为 path 前缀段列表）。"""
+
+    def __init__(self, subtrees: tuple[str, ...] = (),
+                 max_part_id: int | None = None):
+        self.subtrees = tuple(dict.fromkeys(subtrees))
+        self.max_part_id = max_part_id
+
+    def to_dict(self) -> dict:
+        return {"subtrees": list(self.subtrees), "max_part_id": self.max_part_id}
+
+    def matches_path(self, path: str | None) -> bool:
+        if not self.subtrees:
+            return True
+        segs = split_path(path)
+        if len(segs) >= 2:
+            segs = segs[1:]
+        for prefix in self.subtrees:
+            psegs = split_path(prefix)
+            if segs[:len(psegs)] == psegs:
+                return True
+        return False
+
+
+def _ws(source_id: str) -> Path:
+    return Path(__file__).parent / "workspace" / source_id
+
+
+def verify_slices(slices: list[dict]) -> dict:
+    """nid/part 去重 + 1..max 覆盖（对齐 fetch.verify_file 整包口径）。"""
+    seen_nid: set[str] = set()
+    seen_part: set[int] = set()
+    dup_nid = dup_part = 0
+    for sr in slices:
+        nid = str(sr.get("nid") or "")
+        pid = int(sr.get("part_id") or -1)
+        if nid in seen_nid:
+            dup_nid += 1
+        seen_nid.add(nid)
+        if pid in seen_part:
+            dup_part += 1
+        seen_part.add(pid)
+    got_max = max(seen_part) if seen_part else 0
+    missing = sum(1 for i in range(1, got_max + 1) if i not in seen_part)
+    ok = dup_nid == 0 and dup_part == 0 and missing == 0
+    if not ok:
+        raise RuntimeError(
+            f"批次校验未通过: dup_nid={dup_nid} dup_part={dup_part} missing={missing}")
+    return {"ok": True, "slices": len(slices), "part_max": got_max}
+
+
+# ---------------------------------------------------------------- 获取任务（线程 + 磁盘持久）
+
+import threading
+
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _job(source_id: str) -> dict:
+    with _jobs_lock:
+        return _jobs.setdefault(source_id, {"status": "none", "progress": "",
+                                            "total": 0, "error": None})
+
+
+def _run_fetch(source_id: str) -> None:
+    job = _job(source_id)
+    try:
+        job.update(status="running", error=None)
+        client = get_client()
+        total = client.count_source(source_id)
+        if total <= 0:
+            raise RuntimeError(f"source 无切片: {source_id}")
+        pr = client.part_range(source_id)
+        lo = int(pr.get("min") or 1)
+        hi = int(pr.get("max") or total)
+        job["total"] = total
+        ws = _ws(source_id)
+        parts_dir = ws / "parts"
+        parts_dir.mkdir(parents=True, exist_ok=True)
+
+        # 分段拉取（段文件幂等：存在即跳过——断点续传）
+        seg_lo = lo
+        while seg_lo <= hi:
+            seg_hi = min(seg_lo + 10000 - 1, hi)
+            part_path = parts_dir / f"part_{seg_lo}_{seg_hi}.jsonl"
+            if not part_path.exists():
+                rows = client.fetch_chunk(source_id, seg_lo, seg_hi)
+                with part_path.open("w", encoding="utf-8") as fh:
+                    for row in rows:
+                        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            job["progress"] = f"{seg_hi}/{hi}"
+            seg_lo = seg_hi + 1
+            time.sleep(0.1)
+
+        # 合并 → 校验 → slices.jsonl + manifest
+        slices: list[dict] = []
+        for pf in sorted(parts_dir.glob("part_*.jsonl")):
+            with pf.open(encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        slices.append(json.loads(line))
+        verify = verify_slices(slices)
+        data_path = ws / "slices.jsonl"
+        with data_path.open("w", encoding="utf-8") as fh:
+            for row in slices:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        (ws / "manifest.json").write_text(json.dumps({
+            "source_id": source_id, "doc_total_slices": total,
+            "part_id_range": pr, "lines_in_jsonl": len(slices),
+            "verify": verify, "rule_version": RULE_VERSION,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        job.update(status="done", progress=f"{hi}/{hi}")
+        log.info("文档全量获取完成 %s: %s 切片", source_id, len(slices))
+    except Exception as e:  # noqa: BLE001
+        job.update(status="failed", error=str(e))
+        log.exception("文档全量获取失败 %s", source_id)
+
+
+def _load_workspace_slices(source_id: str) -> list[dict]:
+    data = _ws(source_id) / "slices.jsonl"
+    if not data.exists():
+        raise RuntimeError("尚未完成全量获取")
+    out = []
+    with data.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+    return out
+
+
 # ---------------------------------------------------------------- API
 
 app = FastAPI(title="知识一张网 · 文档查询原型")
+
+
+@app.post("/api/toc")
+def api_toc(body: dict[str, Any]) -> dict:
+    """第二步：按 source_id 构建章节目录树。"""
+    source_id = str(body.get("source_id") or "").strip()
+    if not source_id:
+        raise _err(422, "source_id required")
+    max_part_id = body.get("max_part_id")
+    t0 = time.monotonic()
+    log.info("=== TOC 扫描开始 source_id=%s max_part_id=%s ===", source_id, max_part_id)
+    try:
+        out = scan_toc(source_id,
+                       int(max_part_id) if max_part_id else None)
+    except Exception as e:
+        log.error("TOC 扫描失败: %s", e)
+        raise _err(502, f"章节目录构建失败：{e}")
+    log.info("=== TOC 扫描完成 %s 节点 / %s 切片，用时 %.1fs ===",
+             out["nodes"], out["scanned_slices"], time.monotonic() - t0)
+    return out
+
+
+# ---------------------------------------------------------------- 第二步 API
+
+@app.post("/api/document/fetch")
+def api_document_fetch(body: dict[str, Any]) -> dict:
+    """瞄准一篇文档：全量获取（后台线程，段幂等断点续传）。"""
+    source_id = str(body.get("source_id") or "").strip()
+    if not source_id:
+        raise _err(422, "source_id required")
+    job = _job(source_id)
+    if job["status"] == "running":
+        return {"status": "running", "progress": job["progress"]}
+    threading.Thread(target=_run_fetch, args=(source_id,),
+                     daemon=True).start()
+    return {"status": "started"}
+
+
+@app.get("/api/document/status")
+def api_document_status(source_id: str) -> dict:
+    job = _job(source_id)
+    return {"status": job["status"], "progress": job["progress"],
+            "total": job["total"], "error": job["error"]}
+
+
+@app.get("/api/document/result")
+def api_document_result(source_id: str) -> dict:
+    """β 章节重建结果：概要 + 完整章节树（勾选用）+ 文件清单（导入单位）。"""
+    slices = _load_workspace_slices(source_id)
+    restored = restore_files(slices)
+    root = build_path_tree(slices)
+
+    def count_nodes(node: dict) -> int:
+        n = 1 if node["depth"] > 0 else 0
+        return n + sum(count_nodes(c) for c in node["children"].values())
+
+    parsed_version = next((str(r.get("parsed_version")) for r in slices
+                           if r.get("parsed_version")), None)
+    return {
+        "source_id": source_id,
+        "total_slices": len(slices),
+        "parsed_version": parsed_version,
+        "rule_version": restored["rule_version"],
+        "file_count": len(restored["files"]),
+        "folder_count": len(restored["folders"]),
+        "unassigned": restored["unassigned"],
+        "nodes": count_nodes(root),
+        "tree": tree_to_dicts(root),
+        "files": restored["files"],
+    }
+
+
+@app.post("/api/document/preview")
+def api_document_preview(body: dict[str, Any]) -> dict:
+    """单文件 markdown 预览（β 还原文件，带 nid 回源标记）。"""
+    source_id = str(body.get("source_id") or "").strip()
+    file_path = str(body.get("file_path") or "").strip()
+    slices = _load_workspace_slices(source_id)
+    restored = restore_files(slices)
+    target = next((f for f in restored["files"]
+                   if f["file_path"] == file_path), None)
+    if target is None:
+        raise _err(404, f"文件不存在: {file_path}")
+    # 行过滤按 β 归属规则（与 restore_files 的分组逻辑逐字一致）：
+    # 切片剔包名后 segs[:-1] 即其所属文件路径（α 兜底时 segs[0] 即文件）
+    rows = []
+    for r in slices:
+        segs = split_path(r.get("path"))
+        if not segs:
+            continue
+        if len(segs) >= 2:
+            segs = segs[1:]
+        fp = " > ".join(segs[:-1]) if len(segs) >= 2 else segs[0]
+        if fp == file_path:
+            rows.append(r)
+    return {"file": target,
+            "markdown": render_file_markdown(rows, target["file_title"])}
+
+
+@app.post("/api/document/select")
+def api_document_select(body: dict[str, Any]) -> dict:
+    """章节勾选 → 主项目 pipeline 可消费的选择载荷（Selection 语义）。
+
+    载荷即未来 import 的 selection 参数；匹配的 β 文件清单 = 导入单位预览。
+    同时落盘 workspace/<source_id>/selection.json。
+    """
+    source_id = str(body.get("source_id") or "").strip()
+    subtrees = [str(x).strip() for x in (body.get("subtrees") or [])
+                if str(x).strip()]
+    if not source_id:
+        raise _err(422, "source_id required")
+    selection = Selection(tuple(subtrees))
+    slices = _load_workspace_slices(source_id)
+    restored = restore_files(slices)
+
+    # 匹配切片（Selection 前缀语义）→ 归并到文件
+    matched_nids = {str(r.get("nid")) for r in slices
+                    if selection.matches_path(r.get("path"))}
+    matched_files = []
+    for f in restored["files"]:
+        fsegs = f["file_path"].split(" > ")
+        file_prefix = " > ".join(fsegs)
+        # 文件或其任一祖先目录被勾选，或文件本身在子树内
+        hit = any(file_prefix == p or file_prefix.startswith(p + " > ")
+                  for p in subtrees)
+        if hit:
+            matched_files.append(f)
+    matched_slices = sum(f["slice_count"] for f in matched_files)
+    payload = {
+        "source_id": source_id,
+        "selection": selection.to_dict(),
+        "matched_file_count": len(matched_files),
+        "matched_slice_count": matched_slices,
+        "matched_nid_count": len(matched_nids),
+        "matched_files": matched_files,
+    }
+    (_ws(source_id) / "selection.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -441,12 +869,13 @@ function render(data) {
       <td>${esc(d.publish_time) || "-"}</td>
       <td class="hits">${d.slice_hits}</td>
       <td>${d.sample_titles.map(esc).join("；") || "-"}</td>
+      <td><button class="mini" onclick="enterDoc('${esc(d.source_id)}')">进入文档</button></td>
     </tr>`).join("");
   document.getElementById("tableWrap").innerHTML = `
     <table>
       <tr><th>文档名</th><th>source_id</th><th>产品线</th><th>版本</th>
-          <th>发布</th><th>命中切片</th><th>命中章节样例</th></tr>
-      ${rows || '<tr><td colspan="7">无命中</td></tr>'}
+          <th>发布</th><th>命中切片</th><th>命中章节样例</th><th>第二步</th></tr>
+      ${rows || '<tr><td colspan="8">无命中</td></tr>'}
     </table>`;
   const pages = Math.max(1, Math.ceil(data.total_documents / data.page_size));
   document.getElementById("pager").style.display = "";
@@ -462,6 +891,163 @@ function joinA(v) { return Array.isArray(v) ? v.join(" / ") : (v ?? ""); }
 // 来源站点行也可删——想搜全站时去掉即可。
 addCond("source_site", false, "support");
 addCond("doc_name", false, "");
+</script>
+
+<div class="card" id="docCard" style="display:none">
+  <div style="display:flex; justify-content:space-between; align-items:center">
+    <b id="docTitle">文档工作台</b>
+    <button class="mini" onclick="document.getElementById('docCard').style.display='none'">关闭</button>
+  </div>
+  <div class="meta" id="docMeta"></div>
+  <div id="docActions"></div>
+
+  <div id="docBody" style="display:none">
+    <div style="display:flex; gap:10px; margin-bottom:8px; align-items:center">
+      <button class="mini" onclick="toggleAll(true)">展开全部</button>
+      <button class="mini" onclick="toggleAll(false)">收起</button>
+      <span class="meta" style="margin:0">勾选父节点 = 选中整个子树（Selection 前缀语义）</span>
+      <button class="primary mini" id="selBtn" onclick="makeSelection()">生成导入选择（<span id="selCount">0</span>）</button>
+    </div>
+    <div style="display:flex; gap:14px">
+      <div id="docTree" style="flex:1; max-height:55vh; overflow:auto; font-size:13px;
+           border:1px solid #eef0f2; border-radius:6px; padding:8px"></div>
+      <div style="flex:1; max-height:55vh; overflow:auto">
+        <b style="font-size:13px">β 还原文件清单（导入单位）</b>
+        <table id="docFiles" style="margin-top:6px"></table>
+      </div>
+    </div>
+    <div id="selResult" class="meta" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<dialog id="previewDlg" style="border:1px solid #d4d7db; border-radius:8px;
+        width:70%; max-height:80vh">
+  <div style="display:flex; justify-content:space-between; align-items:center">
+    <b id="previewTitle" style="font-size:14px"></b>
+    <button class="mini" onclick="previewDlg.close()">关闭</button>
+  </div>
+  <pre id="previewBody" style="white-space:pre-wrap; max-height:65vh; overflow:auto;
+       font-size:12px; line-height:1.6; background:#f6f7f9; padding:10px;
+       border-radius:6px; margin-top:8px"></pre>
+</dialog>
+
+<script>
+let curDoc = "", selPaths = new Set(), pollTimer = null;
+
+async function enterDoc(sourceId) {
+  curDoc = sourceId;
+  selPaths = new Set();
+  clearInterval(pollTimer);
+  const card = document.getElementById("docCard");
+  card.style.display = "";
+  document.getElementById("docTitle").textContent = "文档工作台 · " + sourceId;
+  document.getElementById("docBody").style.display = "none";
+  await pollStatus(sourceId, true);
+}
+async function pollStatus(sourceId, first) {
+  let st;
+  try {
+    st = await (await fetch("/api/document/status?source_id=" + sourceId)).json();
+  } catch (e) { st = {status: "none"}; }
+  const meta = document.getElementById("docMeta");
+  const actions = document.getElementById("docActions");
+  if (st.status === "running") {
+    meta.innerHTML = '<span class="warn">全量获取中… 进度 part ' + (st.progress || "?") +
+                     "（段幂等，可中断重跑）</span>";
+    actions.innerHTML = "";
+    pollTimer = setInterval(() => pollStatus(sourceId), 2000);
+    return;
+  }
+  clearInterval(pollTimer);
+  if (st.status === "failed") {
+    meta.innerHTML = '<span class="warn">获取失败：' + esc(st.error) + "</span>";
+    actions.innerHTML = '<button class="primary mini" onclick="startFetch()">重试</button>';
+    return;
+  }
+  if (st.status === "none") {
+    meta.innerHTML = "尚未获取——点击开始全量拉取（大文档约 1-3 分钟）";
+    actions.innerHTML = '<button class="primary mini" onclick="startFetch()">开始全量获取</button>';
+    return;
+  }
+  // done
+  meta.innerHTML = "已获取，正在重建章节…";
+  actions.innerHTML = "";
+  const r = await fetch("/api/document/result?source_id=" + sourceId);
+  if (!r.ok) {
+    meta.innerHTML = '<span class="warn">重建失败：' + (await r.text()) + "</span>";
+    return;
+  }
+  renderDoc(await r.json());
+}
+async function startFetch() {
+  await fetch("/api/document/fetch", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source_id: curDoc})});
+  pollTimer = setInterval(() => pollStatus(curDoc), 2000);
+  document.getElementById("docMeta").innerHTML = "全量获取启动…";
+  document.getElementById("docActions").innerHTML = "";
+}
+function renderDoc(t) {
+  document.getElementById("docMeta").innerHTML =
+    "切片 " + t.total_slices + " · 章节节点 " + t.nodes +
+    " · β 还原文件 <b>" + t.file_count + "</b> · 目录 " + t.folder_count +
+    " · 解析版本 " + (t.parsed_version || "-") +
+    "（规则 " + t.rule_version + "）" +
+    (t.unassigned ? '<span class="warn"> · 未归属切片 ' + t.unassigned + "</span>" : "");
+  document.getElementById("docBody").style.display = "";
+  document.getElementById("docTree").innerHTML =
+    t.tree.map(n => treeNode(n, n.depth <= 2)).join("");
+  document.getElementById("docFiles").innerHTML =
+    "<tr><th>文件</th><th>目录</th><th>切片</th><th>part 范围</th><th></th></tr>" +
+    t.files.map(f =>
+      "<tr><td>" + esc(f.file_title) + "</td><td>" + esc(f.folder_path || "-") +
+      "</td><td>" + f.slice_count + "</td><td>" + f.part_min + "~" + f.part_max +
+      "</td><td><button class=\"mini\" onclick=\"previewFile('" +
+      esc(f.file_path).replace(/'/g, "\\'") + "')\">预览</button></td></tr>").join("");
+  updateSelCount();
+}
+function treeNode(n, open) {
+  const kids = n.children || [];
+  return '<details ' + (open ? "open" : "") + ' style="margin-left:' +
+    ((n.depth - 1) * 12) + 'px">' +
+    '<summary style="cursor:pointer"><input type="checkbox" onchange="onCheck(this,\'' +
+    esc(n.path).replace(/'/g, "\\'") + '\')"/> ' + esc(n.title) +
+    ' <span style="color:#6b7075">' + n.slice_count + ' 片</span></summary>' +
+    (kids.length ? kids.map(k => treeNode(k, open)).join("") : "") +
+    "</details>";
+}
+function onCheck(cb, path) {
+  if (cb.checked) selPaths.add(path); else selPaths.delete(path);
+  updateSelCount();
+}
+function updateSelCount() {
+  document.getElementById("selCount").textContent = selPaths.size;
+}
+async function makeSelection() {
+  if (!selPaths.size) { alert("先在目录树勾选章节（不勾 = 整包）"); return; }
+  const r = await fetch("/api/document/select", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source_id: curDoc, subtrees: [...selPaths]})});
+  const out = await r.json();
+  if (!r.ok) { alert(out.detail || r.status); return; }
+  document.getElementById("selResult").innerHTML =
+    "<b>导入选择已生成</b>（落盘 workspace/" + esc(curDoc) + "/selection.json，" +
+    "即主项目 pipeline 的 selection 参数）：匹配文件 <b>" + out.matched_file_count +
+    "</b> 篇 / 切片 " + out.matched_slice_count + " 条<br><code style=\"font-size:12px\">" +
+    esc(JSON.stringify(out.selection)) + "</code>";
+}
+async function previewFile(filePath) {
+  const dlg = document.getElementById("previewDlg");
+  document.getElementById("previewTitle").textContent = filePath;
+  document.getElementById("previewBody").textContent = "加载中…";
+  dlg.showModal();
+  const r = await fetch("/api/document/preview", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source_id: curDoc, file_path: filePath})});
+  const out = await r.json();
+  document.getElementById("previewBody").textContent =
+    r.ok ? out.markdown : "加载失败：" + (out.detail || r.status);
+}
 </script>
 </body>
 </html>

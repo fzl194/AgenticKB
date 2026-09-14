@@ -48,6 +48,7 @@ def _document_representation(
     *,
     document_ref: str,
     snapshot_ref: str,
+    document_facets: Mapping[str, Any] | None = None,
 ) -> RetrievalRepresentation:
     """文档级表示（24 号 §5.4 矩阵）：文件名/标题等来源事实，不做 LLM 摘要.
 
@@ -73,15 +74,30 @@ def _document_representation(
         container_ref=None,
         context_group_id=document_ref,
         ordinal=-1,
-        facets={
-            "document": document_ref,
-            "content_type": "document",
-        },
+        facets=_merge_document_facets(
+            {
+                "document": document_ref,
+                "content_type": "document",
+            },
+            document_facets,
+        ),
         provenance={
             "projector": PROJECTOR_NAME,
             "projector_version": PROJECTOR_VERSION,
         },
     )
+
+
+def _merge_document_facets(
+    base: dict[str, Any],
+    document_facets: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """47 号：文档级 facets 合并（结构键优先，见 _facets 同款语义）."""
+    if not document_facets:
+        return base
+    for key, value in document_facets.items():
+        base.setdefault(str(key), value)
+    return base
 
 
 def _breadcrumb(heading_chain: Sequence[tuple[int, str]]) -> str:
@@ -304,6 +320,7 @@ def project_representations(
         # 文档级表示始终生成（§5.4 矩阵默认 FTS/dense/returnable 全开）
         _document_representation(
             materialized, document_ref=document_ref, snapshot_ref=snapshot_ref,
+            document_facets=document_facets,
         )
     ]
     for segment in materialized:

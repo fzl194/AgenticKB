@@ -31,6 +31,11 @@ const router = createRouter({
           component: () => import('@/views/McpAccessView.vue'),
         },
         {
+          path: 'onenet',
+          name: 'onenet-admin',
+          component: () => import('@/views/onenet/OnenetAdminView.vue'),
+        },
+        {
           path: 'kb/:kbId',
           name: 'kb-detail',
           component: () => import('@/views/kb/KbDetailView.vue'),
@@ -103,6 +108,7 @@ const ADMIN_ROUTES = new Set([
   'mining-workflows', 'mining-workflow-editor',
   'paradigm', 'paradigm-edit',
   'llm', 'llm-task-detail', 'settings',
+  'onenet-admin',
 ])
 
 let domainsInitialized = false

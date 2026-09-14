@@ -1133,7 +1133,10 @@ WITH latest AS (
         - 先 ``DISTINCT ON (document_id)`` 取最新一行（**不看** selection_status），
           再过滤 ``selection_status='active'``——先滤后取会让被后续 build 标记
           ``removed`` 的文档错误回退到旧 build 的 active 行；
-        - 文档软删（``deleted_at``）视为无当前可搜索版本。
+        - 文档软删（``deleted_at``）视为无当前可搜索版本；
+        - 47 号引用：``kb_id`` 请求库除自有文档外，还包括被本库引用的一张网
+          公共库文档（``kb_document_refs``）——引用文档的 build 仍在公共库，
+          ``b.kb_id = d.kb_id`` 维持不变。
 
         返回 snapshot 身份 + link 来源版本 + build；无 → None。
         """
@@ -1151,7 +1154,10 @@ WITH latest AS (
                        WHERE bs.document_id = %s
                          AND b.status IN ('validated', 'published')
                          AND b.kb_id = d.kb_id
-                         AND d.kb_id = %s
+                         AND (d.kb_id = %s
+                              OR EXISTS (SELECT 1 FROM kb_document_refs r
+                                         WHERE r.kb_id = %s
+                                           AND r.document_id = d.id))
                          AND d.deleted_at IS NULL
                        ORDER BY bs.document_id, b.created_at DESC, b.id DESC
                    ) t
@@ -1161,7 +1167,7 @@ WITH latest AS (
                    WHERE t.selection_status = 'active'
                    ORDER BY l.linked_at DESC
                    LIMIT 1""",
-                [document_id, kb_id],
+                [document_id, kb_id, kb_id],
             )
             row = await cur.fetchone()
             return dict(row) if row else None
@@ -1367,16 +1373,19 @@ WITH latest AS (
         storage_object_id: str, source_raw_hash: str,
         directory_path: str | None = None, document_type: str | None = None,
         owner_id: str | None = None, file_size: int | None = None,
-        modified_at: str | None = None,
+        modified_at: str | None = None, metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a KB document that points at an AVAILABLE object-store object.
 
         ``storage_path`` intentionally remains NULL.  It is a legacy migration
         field and must not be populated by new uploads: object identity plus
         the first content revision are committed with the document row.
+        ``metadata``（可选，47 号 onenet 导入用）：写入 metadata_json；
+        缺省 '{}' 维持既有上传路径行为。
         """
         from .location_repository import lock_kb, assert_location_free, assert_directory_exists
         now = _utcnow()
+        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         async with self._pool.connection() as conn:
             await lock_kb(conn, kb_id)
             folder_id = await assert_directory_exists(conn, kb_id, directory_path)
@@ -1388,7 +1397,7 @@ WITH latest AS (
                       file_size, modified_at, storage_object_id, source_raw_hash,
                       content_revision, content_updated_at, folder_id)
                    VALUES
-                     (%(id)s, %(dom)s, %(k)s, %(n)s, %(t)s, '{}'::jsonb,
+                     (%(id)s, %(dom)s, %(k)s, %(n)s, %(t)s, %(meta)s::jsonb,
                       %(now)s, %(kb)s, %(dp)s, %(own)s, %(fs)s, %(ma)s,
                       %(so)s, %(hash)s, 1, %(now2)s, %(folder)s)
                    RETURNING id, domain, kb_id, document_key, document_name,
@@ -1397,7 +1406,8 @@ WITH latest AS (
                              source_raw_hash, content_revision, folder_id""",
                 {
                     "id": _new_id(), "dom": domain, "k": document_key,
-                    "n": document_name, "t": document_type, "now": now,
+                    "n": document_name, "t": document_type,
+                    "meta": meta_json, "now": now,
                     # created_at 是 TEXT（001 legacy），content_updated_at 是
                     # TIMESTAMPTZ（008）——同一参数喂两列会触发
                     # AmbiguousParameter，必须拆成两个绑定参数。
@@ -1481,6 +1491,36 @@ WITH latest AS (
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def replace_document_object(
+        self, document_id: str, *, storage_object_id: str,
+        source_raw_hash: str, file_size: int | None = None,
+    ) -> dict[str, Any] | None:
+        """活文档的内容替换（onenet 重同步用，47 号 §四-7）。
+
+        对象指针/哈希前移 + content_revision 递增——同 O5 替换合同的核心
+        语义，但不经 HTTP 上传链路（字节由导入任务直接写入对象存储）。
+        重挖掘由调用方入队（自动挖掘排队语义）。
+        """
+        now = _utcnow()
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE asset_documents
+                   SET storage_object_id = %(so)s,
+                       source_raw_hash = %(hash)s,
+                       file_size = COALESCE(%(fs)s, file_size),
+                       modified_at = %(ma)s,
+                       content_revision = content_revision + 1,
+                       content_updated_at = %(ca)s
+                   WHERE id = %(id)s AND deleted_at IS NULL
+                   RETURNING id, content_revision""",
+                {"so": storage_object_id, "hash": source_raw_hash,
+                 "fs": file_size,
+                 # modified_at TEXT / content_updated_at TIMESTAMPTZ 拆参（同上）
+                 "ma": now, "ca": now, "id": document_id},
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
     async def revive_document_from_storage(
         self, document_id: str, *, storage_object_id: str, source_raw_hash: str,
         file_size: int | None = None, modified_at: str | None = None,
@@ -1524,8 +1564,90 @@ WITH latest AS (
             row = await cur.fetchone()
             return dict(row) if row else None
 
-    async def find_document_by_key(
-        self, kb_id: str, document_key: str, *, include_deleted: bool = False,
+    # ------------------------------------------------- onenet 引用（47 号 §四-5）
+
+    async def document_in_kb_or_referenced(
+        self, kb_id: str, document_id: str,
+    ) -> bool:
+        """文档归属判定（读口径）：自有 OR 被本库引用.
+
+        kb 路由 ``document.get("kb_id") != kb_id`` 404 守卫的引用放宽版；
+        写路径（patch/replace/move/delete）**不得**改用本判定。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT 1 WHERE EXISTS (
+                       SELECT 1 FROM asset_documents d
+                       WHERE d.id = %s AND d.kb_id = %s AND d.deleted_at IS NULL)
+                    OR EXISTS (
+                       SELECT 1 FROM kb_document_refs r
+                       JOIN asset_documents d ON d.id = r.document_id
+                       WHERE r.kb_id = %s AND r.document_id = %s
+                         AND d.deleted_at IS NULL)""",
+                [document_id, kb_id, kb_id, document_id],
+            )
+            return (await cur.fetchone()) is not None
+
+    async def list_referenced_documents(self, kb_id: str) -> list[dict[str, Any]]:
+        """本库引用的一张网公共库文档（外部引用 tab / MCP list 合并用）."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT d.id, d.domain, d.document_key, d.document_name,
+                          d.directory_path, d.file_size, d.created_at,
+                          d.storage_object_id, d.source_raw_hash,
+                          d.content_revision,
+                          pk.name AS source_kb_name,
+                          r.created_at AS referenced_at
+                   FROM kb_document_refs r
+                   JOIN asset_documents d ON d.id = r.document_id
+                   JOIN knowledge_bases pk ON pk.id = d.kb_id
+                   WHERE r.kb_id = %s AND d.deleted_at IS NULL
+                   ORDER BY d.directory_path, d.document_name""",
+                [kb_id],
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def document_readable_by_user(
+        self, document_id: str, user_id: str,
+    ) -> bool:
+        """文档级读授权（47 号引用即只读授权）：属主库可见 OR 任一引用库可见."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT 1
+                   FROM asset_documents d
+                   JOIN knowledge_bases k ON k.id = d.kb_id
+                   WHERE d.id = %s AND d.deleted_at IS NULL
+                     AND k.status = 'active'
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %s AND u.site_role = 'admin')
+                          OR k.owner_id = %s
+                          OR k.visibility = 'public'
+                          OR EXISTS (SELECT 1 FROM kb_members m
+                                     WHERE m.kb_id = k.id AND m.user_id = %s))
+                   LIMIT 1""",
+                [document_id, user_id, user_id, user_id],
+            )
+            if (await cur.fetchone()) is not None:
+                return True
+            cur = await conn.execute(
+                """SELECT 1
+                   FROM kb_document_refs r
+                   JOIN knowledge_bases k ON k.id = r.kb_id
+                   JOIN asset_documents d ON d.id = r.document_id
+                   WHERE r.document_id = %s AND d.deleted_at IS NULL
+                     AND k.status = 'active'
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %s AND u.site_role = 'admin')
+                          OR k.owner_id = %s
+                          OR k.visibility = 'public'
+                          OR EXISTS (SELECT 1 FROM kb_members m
+                                     WHERE m.kb_id = k.id AND m.user_id = %s))
+                   LIMIT 1""",
+                [document_id, user_id, user_id, user_id],
+            )
+            return (await cur.fetchone()) is not None
+
+    async def find_document_by_key(        self, kb_id: str, document_key: str, *, include_deleted: bool = False,
     ) -> dict[str, Any] | None:
         """按 KB 内唯一键查身份（重传冲突预检用）。默认只找活文档。"""
         soft = "" if include_deleted else " AND deleted_at IS NULL"
@@ -1537,6 +1659,28 @@ WITH latest AS (
             )
             row = await cur.fetchone()
             return dict(row) if row else None
+
+    async def list_documents_by_key_prefix(
+        self, kb_id: str, key_prefix: str, *, limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """按 document_key 前缀列文档（47 号 onenet：导入记录详情用）。
+
+        只列活文档（软删由重同步清理路径单独处理）；key 无索引前缀扫描，
+        仅管理面小规模使用。
+        """
+        # LIKE 通配转义（安全审查 L-2）：前缀语义不受 %/_ 干扰
+        escaped = key_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, domain, kb_id, document_key, document_name,
+                          directory_path, file_size, created_at
+                   FROM asset_documents
+                   WHERE kb_id = %s AND document_key LIKE %s ESCAPE '\\'
+                     AND deleted_at IS NULL
+                   ORDER BY document_key LIMIT %s""",
+                [kb_id, escaped + "%", limit],
+            )
+            return [dict(r) for r in await cur.fetchall()]
 
     async def soft_delete_document(self, document_id: str) -> None:
         """软删文档（P08-S1）：盖 deleted_at，不触 FK CASCADE——历史 Build 的

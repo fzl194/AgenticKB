@@ -145,23 +145,40 @@ async def list_kbs(body: dict[str, Any], kbdb: KbDB = Depends(get_kb_db)) -> dic
 async def list_documents(
     body: dict[str, Any], kbdb: KbDB = Depends(get_kb_db),
 ) -> dict[str, Any]:
-    """库内文件清单（软删过滤，状态内联派生）。limit≤200，offset 分页。"""
+    """库内文件清单（软删过滤，状态内联派生）。limit≤200，offset 分页。
+
+    47 号引用：外部引用文档合并在后（referenced=true，只读语义），Agent
+    看到的是「自有 + 引用」的完整可用知识面。
+    """
     user_id = await _user_id(kbdb, str(body.get("username") or ""))
     kb_id = str(body.get("kb_id") or "")
     await _visible_kb(kbdb, user_id, kb_id)
     limit = min(int(body.get("limit") or 50), 200)
     offset = max(int(body.get("offset") or 0), 0)
     docs = await kbdb.list_documents_in_kb(kb_id=kb_id, limit=limit, offset=offset)
-    return {"documents": [
+    out = [
         {
             "id": d["id"],
             "name": d["document_name"],
             "status": d.get("status"),
             "file_size": d.get("file_size"),
             "modified_at": str(d.get("modified_at") or d.get("created_at") or ""),
+            "referenced": False,
         }
         for d in docs
-    ]}
+    ]
+    if offset == 0:
+        for d in await kbdb.list_referenced_documents(kb_id):
+            out.append({
+                "id": d["id"],
+                "name": d.get("document_name"),
+                "status": "referenced",
+                "file_size": d.get("file_size"),
+                "modified_at": str(d.get("referenced_at") or ""),
+                "referenced": True,
+                "directory_path": d.get("directory_path"),
+            })
+    return {"documents": out}
 
 
 @router.post("/begin-upload", dependencies=[Depends(_require_internal_body)])

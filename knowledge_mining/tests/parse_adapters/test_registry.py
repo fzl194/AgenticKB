@@ -73,7 +73,7 @@ def test_include_cloud_slots_false_restores_implemented_set() -> None:
     """M3.5：不含槽位时 registry = 全部已实现 parser（M2 两个 + M3 五个）."""
     registry = build_default_registry(include_cloud_slots=False)
     assert _ids(registry) == {
-        "legacy_markdown", "legacy_txt",
+        "legacy_markdown", "legacy_txt", "onenet_jsonl",
         "native_docx", "native_xlsx", "native_pptx", "native_html", "native_pdf",
         "pdf_text_layer",
     }

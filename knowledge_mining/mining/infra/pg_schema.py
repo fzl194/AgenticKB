@@ -118,6 +118,15 @@ _KB_LIFECYCLE_DDL = (
     / "schemas"
     / "011_kb_lifecycle_names_and_default_workflow.sql"
 )
+# 一张网接入（47 号，审查 H4）：导入登记面 + KB 引用表。012 依赖 knowledge_bases；
+# 016 自包含。Java 检索 mapper 无条件引用 kb_document_refs——必须进启动链，
+# 否则新环境/reset 后所有 KB 检索报 relation does not exist。
+_ONENET_IMPORTS_DDL = (
+    _REPO_ROOT / "databases" / "asset_core" / "schemas" / "016_onenet_imports.sql"
+)
+_KB_DOCUMENT_REFS_DDL = (
+    _REPO_ROOT / "databases" / "kb" / "schemas" / "012_kb_document_refs.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -217,6 +226,9 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _MCP_ACCESS_CONFIG_DDL,
         # Active KB names are owner-scoped; migrate the retired default workflow.
         _KB_LIFECYCLE_DDL,
+        # 一张网接入（链尾：016 自包含；012 仅依赖 knowledge_bases）。
+        _ONENET_IMPORTS_DDL,
+        _KB_DOCUMENT_REFS_DDL,
     )
 
 

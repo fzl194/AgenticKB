@@ -307,4 +307,4 @@ def test_default_registry_selects_backends_by_mime() -> None:
     assert pdf_slot is not None and pdf_slot.parser_id == "native_pdf"
     assert by_id["docling"].license_status != "ok"
     assert by_id["cloud_vlm"].license_status != "ok"
-    assert len(registry.all()) == 10
+    assert len(registry.all()) == 11

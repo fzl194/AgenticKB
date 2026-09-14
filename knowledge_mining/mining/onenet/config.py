@@ -28,10 +28,14 @@ _CHUNK_WIDTH_MAX = 10000  # 接口硬上限：单查询 from+size ≤ 10000
 
 @dataclass(frozen=True)
 class OnenetConfig:
-    """一张网客户端配置（不可变；凭据只在服务端进程内出现）."""
+    """一张网客户端配置（不可变；凭据只在服务端进程内出现）.
 
-    app_id: str
-    static_token: str
+    字段留空默认值是为了让 ``__post_init__`` 统一抛 ``missing_credentials``
+    （dataclass 必填约束会先抛 TypeError，丢失语义）。
+    """
+
+    app_id: str = ""
+    static_token: str = ""
     token_url: str = DEFAULT_TOKEN_URL
     search_url: str = DEFAULT_SEARCH_URL
     source_type: int = 0

@@ -82,7 +82,7 @@ class OnenetRepo:
     def __init__(self, pool: Any):
         self._pool = pool
 
-    async def _conn(self):
+    def _conn(self):
         return self._pool.connection()
 
     # --------------------------------------------------------- imports CRUD

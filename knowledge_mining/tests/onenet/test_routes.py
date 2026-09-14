@@ -194,13 +194,23 @@ def test_not_configured_returns_503(monkeypatch):
 # ---------------------------------------------------------------- search/probe/toc
 
 
-def test_search_returns_documents_with_capped_notice(monkeypatch):
+def test_search_triples_and_pagination(monkeypatch):
     c, _ = _client(monkeypatch)
-    resp = c.post("/api/onenet/search", json={"doc_name": "UDG"})
+    resp = c.post("/api/onenet/search", json={
+        "conditions": [
+            {"field": "source_site", "fuzzy": False, "content": "support"},
+            {"field": "doc_name", "fuzzy": False, "content": "UDG"},
+        ]})
     assert resp.status_code == 200
     body = resp.json()
     assert body["documents"][0]["source_id"] == "DOC1"
+    assert body["total_documents"] == 1
     assert "封顶" in body["notice"]
+    # 非法字段 422 / 空条件 422
+    assert c.post("/api/onenet/search", json={
+        "conditions": [{"field": "hack", "fuzzy": False, "content": "x"}]}
+    ).status_code == 422
+    assert c.post("/api/onenet/search", json={"conditions": []}).status_code == 422
 
 
 def test_probe_card(monkeypatch):

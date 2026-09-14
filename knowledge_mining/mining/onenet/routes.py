@@ -36,7 +36,7 @@ DEFAULT_WORKSPACE_ROOT = Path("runtime") / "onenet"
 router = APIRouter(prefix="/api/onenet", tags=["onenet"])
 refs_router = APIRouter(prefix="/api/kb/{kb_id}/onenet", tags=["onenet"])
 
-_SEARCH_FIELDS = ("doc_name", "file_name", "doc_type", "language")
+from knowledge_mining.mining.onenet.probe import SEARCH_FIELDS as _SEARCH_FIELDS
 
 #: source_id 白名单（安全审查 H-1）：source_id 会拼入导入工作区文件系统路径
 #: （workspace/domain/source_id），白名单拒绝路径分隔符/绝对段/逃逸。
@@ -109,17 +109,18 @@ async def onenet_search(
     user: dict[str, Any] = Depends(require_admin),
     request: Request = None,  # type: ignore[assignment]
 ):
-    filters = {k: body.get(k) for k in _SEARCH_FIELDS if body.get(k)}
-    if not filters:
-        raise HTTPException(422, "filters_required: 至少一个查询字段")
-    client = _client_factory(request)()
+    """第一步 · 查询发现（V1.2）：三元组透传 + 文档汇总分页。"""
     try:
-        # 同步客户端下放线程池（安全审查 H-2）：事件循环不被网络 IO 阻塞
-        rows = await asyncio.to_thread(search_documents, client, filters)
-    finally:
-        client.close()
-    capped = any(r.get("capped") for r in rows)
-    return {"documents": rows, "capped": capped,
+        out = await asyncio.to_thread(
+            search_documents,
+            _client_factory(request)(),
+            body.get("conditions") or [],
+            page=int(body.get("page") or 1),
+            page_size=int(body.get("page_size") or 20),
+        )
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return {**out,
             "notice": "fuzzy 查询命中封顶 10000，结果可能不全，只作发现手段"}
 
 

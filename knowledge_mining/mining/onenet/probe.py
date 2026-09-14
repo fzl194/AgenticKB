@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""一张网摸底（47 号 §四-6 步骤 1/2）：多字段查询 → source_id 去重 / 单源摸底卡片.
+"""一张网摸底（47 号 §四-6 / §十一 V1.2 原型验证修订）.
 
-管理面「查询/摸底」的纯组合层（不触 DB）。fuzzy 查询只作发现手段：
-单查询命中封顶 10000，结果可能不全（capped 标志如实标注）。
+第一步 · 查询发现：
+- 三元组条件透传（12 字段白名单 × 精确/模糊 × 内容，AND）；
+- 原生 searchQueryList 翻页拉满 from+size≤10000 + nid 去重守卫
+  （单键 sortField 翻页重复兜底——原型内网实证）；
+- 按 source_id 聚合为文档行（文档级字段取首条命中切片）+ 命中章节样例；
+- 文档列表分页；命中 ≥10000 封顶如实标注。
 """
 from __future__ import annotations
 
@@ -10,47 +14,78 @@ from typing import Any
 
 from knowledge_mining.mining.onenet.client import OnenetClient
 
-#: 支持的查询字段 → fuzzy 语义（实测 01_api_protocol §2.1）。
-#: 名称类走模糊发现；类型/语言走精确过滤。
-_SEARCH_FIELDS: dict[str, bool] = {
-    "doc_name": True,
-    "file_name": True,
-    "doc_type": False,
-    "language": False,
-}
+#: 查询字段白名单（47 号 §十一：用户定义 12 字段，顺序即前端下拉顺序）。
+SEARCH_FIELDS = (
+    "source_id", "nid", "url", "title", "path", "content",
+    "source_site", "file_name", "category_path", "doc_name",
+    "doc_type", "part_id",
+)
 
-#: 命中封顶阈值（total ≥ 该值时 capped=True）。
-_CAP_THRESHOLD = 10000
+#: 数字字段：模糊（分词）无意义，强制精确。
+NUMERIC_FIELDS = frozenset({"part_id"})
+
+#: 命中封顶阈值（from+size ≤ 10000 接口硬上限）。
+_MAX_SLICES = 10000
+_PAGE_SIZE = 1000
 
 
-def search_documents(
-    client: OnenetClient, filters: dict[str, str | None],
-    *, page_size: int = 1000,
-) -> list[dict[str, Any]]:
-    """按过滤条件查询文档级结果（切片按 source_id 去重）.
+def build_conditions(raw_conditions: list[dict[str, Any]]) -> list[dict]:
+    """三元组校验与规整：白名单字段、part_id 强制精确、剔空内容。"""
+    out: list[dict] = []
+    for c in raw_conditions or []:
+        field = str(c.get("field") or "").strip()
+        content = str(c.get("content") or "").strip()
+        if field not in SEARCH_FIELDS:
+            raise ValueError(
+                f"invalid_field: {field}（允许: {', '.join(SEARCH_FIELDS)}）")
+        if not content:
+            continue
+        fuzzy = bool(c.get("fuzzy")) and field not in NUMERIC_FIELDS
+        out.append({"field": field, "fuzzy": fuzzy, "content": content})
+    if not out:
+        raise ValueError("conditions_required: 至少一条有效查询条件")
+    return out
 
-    返回行：source_id / doc_name / file_name / doc_type / parsed_version /
-    publish_time / product_line / pbi / slice_hits / capped。
-    """
-    conditions = [
-        {"field": field, "fuzzy": fuzzy, "content": str(filters[field]).strip()}
-        for field, fuzzy in _SEARCH_FIELDS.items()
-        if filters.get(field)
-    ]
-    if not conditions:
-        raise ValueError("filters must include at least one of: "
-                         + ", ".join(_SEARCH_FIELDS))
-    res = client.query_native(conditions, page_num=1, page_size=page_size)
-    total = int(res.get("total") or 0)
-    capped = total >= _CAP_THRESHOLD
-    by_source: dict[str, dict[str, Any]] = {}
-    for row in res.get("searchResults") or []:
+
+def pull_hit_slices(
+    client: OnenetClient, conditions: list[dict], max_slices: int = _MAX_SLICES,
+) -> tuple[list[dict], int | None]:
+    """原生翻页拉取命中切片 + nid 去重守卫（对齐原型 pull_slices）。"""
+    slices: list[dict] = []
+    seen_nid: set[str] = set()
+    total: int | None = None
+    page = 1
+    while ((page - 1) * _PAGE_SIZE + _PAGE_SIZE <= _MAX_SLICES
+           and len(slices) < max_slices):
+        res = client.query_native(conditions, page_num=page, page_size=_PAGE_SIZE)
+        if total is None:
+            total = int(res.get("total") or 0)
+        rows = res.get("searchResults") or []
+        if not rows:
+            break
+        for row in rows:
+            nid = str(row.get("nid") or "")
+            if nid and nid in seen_nid:
+                continue  # 单键排序翻页重复守卫
+            if nid:
+                seen_nid.add(nid)
+            slices.append(row)
+        if len(rows) < _PAGE_SIZE:
+            break
+        page += 1
+    return slices[:max_slices], total
+
+
+def aggregate_documents(slices: list[dict]) -> list[dict[str, Any]]:
+    """按 source_id 聚合 → 文档行（保持命中顺序=首现顺序）。"""
+    docs: dict[str, dict[str, Any]] = {}
+    for row in slices:
         sid = str(row.get("source_id") or "").strip()
         if not sid:
             continue
-        entry = by_source.get(sid)
-        if entry is None:
-            entry = {
+        doc = docs.get(sid)
+        if doc is None:
+            doc = {
                 "source_id": sid,
                 "doc_name": row.get("doc_name"),
                 "file_name": row.get("file_name"),
@@ -58,13 +93,38 @@ def search_documents(
                 "parsed_version": row.get("parsed_version"),
                 "publish_time": row.get("publish_time"),
                 "product_line": row.get("product_line"),
-                "pbi": row.get("pbi"),
+                "language": row.get("language"),
                 "slice_hits": 0,
-                "capped": capped,
+                "sample_titles": [],
             }
-            by_source[sid] = entry
-        entry["slice_hits"] += 1
-    return list(by_source.values())
+            docs[sid] = doc
+        doc["slice_hits"] += 1
+        title = row.get("title")
+        if title and len(doc["sample_titles"]) < 3 and title not in doc["sample_titles"]:
+            doc["sample_titles"].append(title)
+    return list(docs.values())
+
+
+def search_documents(
+    client: OnenetClient, conditions: list[dict[str, Any]], *,
+    page: int = 1, page_size: int = 20,
+) -> dict[str, Any]:
+    """第一步 · 查询发现（V1.2）：三元组透传 → 拉满 → 汇总 → 文档分页。"""
+    normalized = build_conditions(conditions)
+    page = max(int(page), 1)
+    page_size = min(max(int(page_size), 1), 100)
+    slices, total = pull_hit_slices(client, normalized)
+    documents = aggregate_documents(slices)
+    start = (page - 1) * page_size
+    return {
+        "documents": documents[start:start + page_size],
+        "total_documents": len(documents),
+        "page": page,
+        "page_size": page_size,
+        "slice_total_reported": total,
+        "capped": (total or 0) >= _MAX_SLICES,
+        "slices_pulled": len(slices),
+    }
 
 
 def probe_source(client: OnenetClient, source_id: str) -> dict[str, Any]:
@@ -84,4 +144,7 @@ def probe_source(client: OnenetClient, source_id: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["probe_source", "search_documents"]
+__all__ = [
+    "NUMERIC_FIELDS", "SEARCH_FIELDS", "aggregate_documents",
+    "build_conditions", "probe_source", "pull_hit_slices", "search_documents",
+]

@@ -182,6 +182,47 @@ class FakeFolders:
         return {"id": f"folder-{path}", "path": path}
 
 
+class _RepoCursor:
+    async def fetchall(self):
+        return [{"id": "newest"}, {"id": "older"}]
+
+
+class _RepoConnection:
+    async def execute(self, query, params):
+        self.query = query
+        self.params = params
+        return _RepoCursor()
+
+
+class _RepoConnectionContext:
+    def __init__(self):
+        self.conn = _RepoConnection()
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _RepoPool:
+    def __init__(self):
+        self.context = _RepoConnectionContext()
+
+    def connection(self):
+        return self.context
+
+
+async def test_onenet_repo_list_imports_uses_pool_async_context_manager():
+    """连接池直接返回 async context manager，不应额外包成 coroutine。"""
+    pool = _RepoPool()
+
+    rows = await OnenetRepo(pool).list_imports(domain="cloud_core_network")
+
+    assert rows == [{"id": "newest"}, {"id": "older"}]
+    assert pool.context.conn.params == ["cloud_core_network"]
+
+
 async def _wait_terminal(repo, import_id, timeout=5.0):
     """轮询后台导入任务到终态（done/failed）——to_thread 调度时序不定."""
     import time as _time

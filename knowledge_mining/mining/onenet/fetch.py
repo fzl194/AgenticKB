@@ -214,16 +214,24 @@ def verify_file(data_path: Path, *, full_coverage: bool = True) -> dict[str, Any
             dup_part.add(pid)
         seen_part.add(pid)
     got_max = max(seen_part) if seen_part else 0
-    if full_coverage:
+    # part_id 语义分两类（kone_connector 实测）：HWICS/CHM 解包大文档全局唯一
+    # 连续（可查覆盖缺口）；小文档（docx/xlsx 解包）按文件内编号、跨文件重复
+    # ——dup_part 是合法数据形状（如 DOC1101700755 实测 dup_part=5183），
+    # 此时覆盖检查无意义。nid 是唯一硬主键。
+    per_file_numbering = bool(dup_part)
+    if full_coverage and not per_file_numbering:
         missing = sum(1 for p in range(1, got_max + 1) if p not in seen_part)
     else:
-        missing = 0  # 子树勾选：part 集合天然不连续（审查 H1）
-    ok = not dup_nid and not dup_part and missing == 0
+        missing = 0
+    ok = not dup_nid and missing == 0
     result = {
         "ok": ok, "dup_nid": len(dup_nid), "dup_part": len(dup_part),
         "missing_below_got_max": missing, "got_max_part_id": got_max,
         "full_coverage": full_coverage,
+        "part_id_numbering": "per_file" if per_file_numbering else "global",
     }
+    if dup_part:
+        result["dup_part_note"] = "part_id 按文件内编号（小文档形态），跨文件重复属正常"
     if not ok:
         result["detail"] = (
             f"dup_nid样例={sorted(dup_nid)[:3]} "

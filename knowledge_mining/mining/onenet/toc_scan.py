@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from knowledge_mining.mining.onenet.client import OnenetClient
-from knowledge_mining.mining.onenet.restore import build_path_tree
+from knowledge_mining.mining.onenet.restore import build_path_tree, restore_files
 
 #: 轻拉字段（实测支持 _source 投影，kone_connector fetch_source_chunk fields 参数）。
 TOC_FIELDS = ["path", "title", "part_id"]
@@ -51,6 +51,9 @@ def scan_toc(
             break
 
     root = build_path_tree(slices)
+    # V1.2：β 文件清单预览——restore_files 只依赖 path/part_id（不需要 content），
+    # 轻扫数据即可算出文件划分（导入单位预览无需先全量拉取）
+    restored = restore_files(slices)
     return {
         "source_id": source_id,
         "total_slices": total,
@@ -59,6 +62,17 @@ def scan_toc(
         "parsed_version": parsed_version,
         "nodes": _count_nodes(root),
         "tree": [c.to_dict() for c in root.children.values()],
+        "rule_version": restored.rule_version,
+        "file_count": len(restored.files),
+        "folder_count": len(restored.folders),
+        "unassigned": restored.unassigned,
+        "files": [
+            {"file_path": f.file_path, "file_title": f.file_title,
+             "heading_title": f.heading_title, "folder_path": f.folder_path,
+             "slice_count": len(f.slices), "part_min": f.part_min,
+             "part_max": f.part_max}
+            for f in restored.files
+        ],
     }
 
 

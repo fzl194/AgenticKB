@@ -142,6 +142,36 @@ def test_fetch_full_mode_still_checks_coverage(tmp_path):
     assert not (tmp_path / "slices.jsonl").exists()
 
 
+def test_verify_tolerates_per_file_part_numbering(tmp_path):
+    """per_file 编号（docx 解包，如 DOC1101700755）：part_id 跨文件重复合法，
+    覆盖检查跳过；dup_nid 仍是硬错误。"""
+    from knowledge_mining.mining.onenet.fetch import FetchVerifyError, verify_file
+    def _pf(nid, part_id, path):
+        return {"nid": nid, "part_id": part_id, "path": path,
+                "title": path.split(" > ")[-1], "content": "c",
+                "source_id": "DOC1"}
+
+    rows = [  # part_id 跨文件重复（per_file 形态），nid 全局唯一
+        _pf("fa", 1, f"{PKG} > F1 > a"), _pf("fb", 1, f"{PKG} > F2 > b"),
+        _pf("fc", 2, f"{PKG} > F1 > c"), _pf("fd", 2, f"{PKG} > F2 > d"),
+    ]
+    data = tmp_path / "per_file.jsonl"
+    data.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows),
+                    encoding="utf-8")
+    out = verify_file(data, full_coverage=True)   # 整包模式也容忍
+    assert out["ok"] is True
+    assert out["part_id_numbering"] == "per_file"
+    assert out["dup_part"] == 2
+
+    # dup_nid 仍然硬拒绝
+    bad = rows + [dict(rows[0])]
+    data2 = tmp_path / "dup_nid.jsonl"
+    data2.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in bad),
+                     encoding="utf-8")
+    with pytest.raises(FetchVerifyError, match="dup_nid"):
+        verify_file(data2)
+
+
 def test_fetch_subtree_filter(tmp_path):
     fake = FakeFetch(list(ROWS))
     out = fetch_selection(_client(fake), "DOC1", Selection(subtrees=("A",)),

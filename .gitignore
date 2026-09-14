@@ -10,6 +10,8 @@
 !config_library/**
 !databases/
 !databases/**
+!onenet_query/
+!onenet_query/**
 !data/
 !data/**
 !knowledge_mining/

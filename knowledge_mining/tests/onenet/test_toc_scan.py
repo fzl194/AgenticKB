@@ -39,11 +39,12 @@ class FakeScan:
         dsl = json.loads(body["dsl"]) if "dsl" in body else {}
         sort = json.dumps(dsl.get("sort") or {})
         if "sort" in dsl and (dsl.get("size") or 0) <= 1:
-            # part_range 探测（asc 取首条 / desc 取 part_max）
+            # part_range 探测（asc 取真实最小 / desc 取 part_max）
             if "desc" in sort:
                 row = {"part_id": self.part_max}
             else:
-                row = self.rows[0] if self.rows else {"part_id": 1}
+                part_min = min((r["part_id"] for r in self.rows), default=1)
+                row = {"part_id": part_min}
             return httpx.Response(200, json={"total": 1, "searchResults": [row]})
         if "track_total_hits" in dsl and (dsl.get("size") or 0) <= 1:
             return httpx.Response(200, json={"total": self.total, "searchResults": []})

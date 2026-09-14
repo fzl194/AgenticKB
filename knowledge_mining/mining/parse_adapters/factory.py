@@ -56,6 +56,11 @@ from knowledge_mining.mining.parse_adapters.native_pdf import (
     NATIVE_PDF_PARSER_ID,
     NativePdfParser,
 )
+from knowledge_mining.mining.parse_adapters.onenet_jsonl import (
+    ONENET_JSONL_FINGERPRINT,
+    ONENET_JSONL_PARSER_ID,
+    OnenetJsonlParser,
+)
 from knowledge_mining.mining.parse_adapters.pdf_text_layer import (
     PDF_TEXT_LAYER_PARSER_ID, PdfTextLayerParser,
 )
@@ -69,6 +74,13 @@ _PIPELINE_FACTORIES: dict[
 ] = {
     LEGACY_MARKDOWN_PARSER_ID: (LegacyMarkdownParser, LegacyLineNormalizer),
     LEGACY_TXT_PARSER_ID: (LegacyPlainTextParser, LegacyLineNormalizer),
+    # onenet 切片批次（47 号）：parser 产 path-heading/表格块，
+    # normalizer 复用行导向实现（heading level → parent 链 / table 资产）。
+    ONENET_JSONL_PARSER_ID: (
+        OnenetJsonlParser,
+        lambda: LegacyLineNormalizer(
+            parser_fingerprints={ONENET_JSONL_PARSER_ID: ONENET_JSONL_FINGERPRINT}),
+    ),
     NATIVE_DOCX_PARSER_ID: (NativeDocxParser, DocxNormalizer),
     NATIVE_XLSX_PARSER_ID: (NativeXlsxParser, XlsxNormalizer),
     NATIVE_PPTX_PARSER_ID: (NativePptxParser, PptxNormalizer),

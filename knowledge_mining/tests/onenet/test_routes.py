@@ -111,6 +111,9 @@ class FakeScanClient:
             {"path": "Pkg > D > E", "title": "E", "part_id": 3},
         ]
 
+    def close(self):
+        pass  # 路由层 finally 关闭客户端（安全审查 L-3）
+
 
 class FakeImportService:
     def __init__(self, repo):

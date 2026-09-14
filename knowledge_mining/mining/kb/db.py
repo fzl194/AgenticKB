@@ -1668,15 +1668,17 @@ WITH latest AS (
         只列活文档（软删由重同步清理路径单独处理）；key 无索引前缀扫描，
         仅管理面小规模使用。
         """
+        # LIKE 通配转义（安全审查 L-2）：前缀语义不受 %/_ 干扰
+        escaped = key_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT id, domain, kb_id, document_key, document_name,
                           directory_path, file_size, created_at
                    FROM asset_documents
-                   WHERE kb_id = %s AND document_key LIKE %s
+                   WHERE kb_id = %s AND document_key LIKE %s ESCAPE '\\'
                      AND deleted_at IS NULL
                    ORDER BY document_key LIMIT %s""",
-                [kb_id, key_prefix + "%", limit],
+                [kb_id, escaped + "%", limit],
             )
             return [dict(r) for r in await cur.fetchall()]
 

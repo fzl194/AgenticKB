@@ -58,7 +58,7 @@ class OnenetClient:
         token_url: str, search_url: str,
         source_type: int = 0, timeout: int = 300,
         transport: httpx.BaseTransport | None = None,
-        retry: int = 3,
+        retry: int = 3, verify: bool = False,
     ):
         self.app_id = app_id
         self.static_token = static_token
@@ -68,6 +68,7 @@ class OnenetClient:
         self._search_url = search_url
         self._transport = transport
         self._retry = retry
+        self._verify = verify
         self._token: str | None = None
         self._client: httpx.Client | None = None
 
@@ -76,13 +77,15 @@ class OnenetClient:
         return cls(
             app_id=cfg.app_id, static_token=cfg.static_token,
             token_url=cfg.token_url, search_url=cfg.search_url,
-            source_type=cfg.source_type, timeout=cfg.timeout, **kw,
+            source_type=cfg.source_type, timeout=cfg.timeout,
+            verify=cfg.verify_tls, **kw,
         )
 
     def _http(self) -> httpx.Client:
         if self._client is None:
             self._client = httpx.Client(
-                verify=False, timeout=self.timeout, transport=self._transport,
+                verify=self._verify, timeout=self.timeout,
+                transport=self._transport,
             )
         return self._client
 

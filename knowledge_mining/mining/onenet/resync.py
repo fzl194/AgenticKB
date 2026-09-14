@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from pathlib import Path
@@ -106,7 +107,9 @@ async def resync(
     if import_row.get("status") not in ("done", "failed"):
         raise ResyncError(f"import_busy: 当前状态 {import_row.get('status')}")
 
-    probe = probe_changes(client, import_row)
+    # 探测与拉取是同步网络 IO（分钟级）——下放主循环默认执行器（安全审查 H-2），
+    # async 回调（DB）仍留在事件循环上，不跨循环复用 async pool。
+    probe = await asyncio.to_thread(probe_changes, client, import_row)
     if not probe["changed"]:
         return {"changed": False, "signals": probe["signals"], "diff": None,
                 "updated_documents": [], "removed_documents": []}
@@ -120,8 +123,9 @@ async def resync(
     # prev（上次同步态）优先，否则取当前批次（首次重同步的原始导入态）
     prev_path = workspace / "slices.prev.jsonl"
     data_path = workspace / "slices.jsonl"
-    old_slices = (load_slices(prev_path) if prev_path.exists()
-                  else (load_slices(data_path) if data_path.exists() else []))
+    old_slices = await asyncio.to_thread(
+        lambda: (load_slices(prev_path) if prev_path.exists()
+                 else (load_slices(data_path) if data_path.exists() else [])))
 
     # 上游重解析（parsed_version 变）→ 旧段文件内容全失效，必须清段重拉；
     # 仅追加（part_max/total 变）→ 旧段幂等复用，只补新段。
@@ -132,8 +136,9 @@ async def resync(
             shutil.rmtree(parts_dir)
         prev_path.unlink(missing_ok=True)
 
-    outcome = fetch_selection(client, source_id, selection, workspace)
-    new_slices = load_slices(outcome.slices_path)
+    outcome = await asyncio.to_thread(
+        fetch_selection, client, source_id, selection, workspace)
+    new_slices = await asyncio.to_thread(load_slices, outcome.slices_path)
 
     diff = diff_slices(old_slices, new_slices)
     touched_nids = set(diff["added"]) | set(diff["removed"]) | set(diff["changed"])

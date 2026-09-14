@@ -40,6 +40,9 @@ class OnenetConfig:
     search_url: str = DEFAULT_SEARCH_URL
     source_type: int = 0
     timeout: int = 300
+    #: TLS 校验（安全审查 M-1）：内网实测端点为明文 http（校验无意义），
+    #: 默认关闭；端点切 https 时置 true 并配 CA。显式配置优于隐式 verify=False。
+    verify_tls: bool = False
     #: part_id 分段宽度（段内一次拉满；接口上限 10000）
     chunk_width: int = 10000
     #: 段内翻页每页条数

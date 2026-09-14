@@ -62,6 +62,9 @@ def _fake_client(rows=None):
         def fetch_source_chunk(self, source_id, lo, hi, page_size=1000, fields=None):
             return [r for r in rows if lo <= r["part_id"] <= hi]
 
+        def close(self):
+            pass
+
     return C()
 
 
@@ -179,6 +182,18 @@ class FakeFolders:
         return {"id": f"folder-{path}", "path": path}
 
 
+async def _wait_terminal(repo, import_id, timeout=5.0):
+    """轮询后台导入任务到终态（done/failed）——to_thread 调度时序不定."""
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        row = repo.imports.get(import_id) or {}
+        if row.get("status") in ("done", "failed"):
+            return row
+        await asyncio.sleep(0.02)
+    return repo.imports.get(import_id) or {}
+
+
 def _service(tmp_path, *, auto_miner=None, client=None):
     if client is None:
         client = _fake_client()
@@ -253,8 +268,7 @@ async def test_start_import_runs_to_done(tmp_path):
     rec = await svc.start_import(
         domain="d1", source_id="DOC1", selection=Selection(),
         actor_id="admin1", username="管理员")
-    await asyncio.sleep(0.05)  # 等后台任务
-    final = repo.imports[rec["id"]]
+    final = await _wait_terminal(repo, rec["id"])
     assert final["status"] == "done"
     # β 规则：file A（heading B、C）+ file D（heading E）= 2 个文档
     assert final["document_count"] == 2
@@ -270,7 +284,7 @@ async def test_import_document_key_idempotent_on_retry(tmp_path):
     rec1 = await svc.start_import(
         domain="d1", source_id="DOC1", selection=Selection(),
         actor_id="admin1", username="a")
-    await asyncio.sleep(0.05)
+    await _wait_terminal(repo, rec1["id"])
     n_docs = len(kbdb.docs)
     n_objects = len(svc._doc_service.stored)
     # 模拟重试：状态打回 queued 再跑（同 key 复用，不新建）
@@ -297,8 +311,7 @@ async def test_import_failure_marks_failed_with_reason(tmp_path):
     svc, repo, *_ = _service(tmp_path, client=BrokenClient())
     rec = await svc.start_import(domain="d1", source_id="BAD",
                                  selection=Selection(), actor_id="a", username="a")
-    await asyncio.sleep(0.05)
-    final = repo.imports[rec["id"]]
+    final = await _wait_terminal(repo, rec["id"])
     assert final["status"] == "failed"
     assert "无切片" in final["error"]
 
@@ -308,9 +321,9 @@ async def test_import_failure_marks_failed_with_reason(tmp_path):
 
 async def test_document_metadata_mapping_and_raw(tmp_path):
     svc, repo, _, kbdb, *_ = _service(tmp_path)
-    await svc.start_import(domain="d1", source_id="DOC1",
-                           selection=Selection(), actor_id="a", username="a")
-    await asyncio.sleep(0.05)
+    rec = await svc.start_import(domain="d1", source_id="DOC1",
+                                 selection=Selection(), actor_id="a", username="a")
+    await _wait_terminal(repo, rec["id"])
     doc = next(iter(kbdb.docs.values()))
     meta = doc["metadata"]
     assert meta["source_system"] == "onenet"
@@ -327,10 +340,10 @@ async def test_document_metadata_mapping_and_raw(tmp_path):
 
 
 async def test_document_mime_and_payload_are_jsonl(tmp_path):
-    svc, *_ = _service(tmp_path)
-    await svc.start_import(domain="d1", source_id="DOC1",
-                           selection=Selection(), actor_id="a", username="a")
-    await asyncio.sleep(0.05)
+    svc, repo, *_ = _service(tmp_path)
+    rec = await svc.start_import(domain="d1", source_id="DOC1",
+                                 selection=Selection(), actor_id="a", username="a")
+    await _wait_terminal(repo, rec["id"])
     # 落库对象 mime 由 store_source_bytes 调用方指定（ONENET_JSONL_MIME 在
     # _import_file 内硬编码），payload 为切片 JSONL
     from knowledge_mining.mining.parse_adapters.onenet_jsonl import ONENET_JSONL_MIME
@@ -341,10 +354,10 @@ async def test_document_mime_and_payload_are_jsonl(tmp_path):
 
 
 async def test_folders_created_from_upper_levels(tmp_path):
-    svc, *_ = _service(tmp_path)
-    await svc.start_import(domain="d1", source_id="DOC1",
-                           selection=Selection(), actor_id="a", username="a")
-    await asyncio.sleep(0.05)
+    svc, repo, *_ = _service(tmp_path)
+    rec = await svc.start_import(domain="d1", source_id="DOC1",
+                                 selection=Selection(), actor_id="a", username="a")
+    await _wait_terminal(repo, rec["id"])
     # 文件 A、D 均在根（folder_path=""，无上层）→ 不建目录
     assert svc._folders.paths == []
     doc_dirs = {d.get("directory_path") for d in svc._kbdb.docs.values()}
@@ -360,10 +373,10 @@ async def test_sanitized_collision_deduped_by_part_anchor(tmp_path):
         _row(1, f"{PKG} > P > {long_a} > h1"),
         _row(2, f"{PKG} > P > {long_b} > h1"),
     ]
-    svc, *_ = _service(tmp_path, client=_fake_client(rows))
-    await svc.start_import(domain="d1", source_id="DOC1",
-                           selection=Selection(), actor_id="a", username="a")
-    await asyncio.sleep(0.05)
+    svc, repo, *_ = _service(tmp_path, client=_fake_client(rows))
+    rec = await svc.start_import(domain="d1", source_id="DOC1",
+                                 selection=Selection(), actor_id="a", username="a")
+    await _wait_terminal(repo, rec["id"])
     names = sorted(d["document_name"] for d in svc._kbdb.docs.values())
     assert len(names) == 2 and len(set(names)) == 2
     assert any("__p" in n for n in names)

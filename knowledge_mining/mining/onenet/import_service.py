@@ -56,6 +56,14 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _safe_close(client: Any) -> None:
+    """关闭客户端但不让关闭失败掩盖真实错误（fake/测试客户端可无 close）。"""
+    try:
+        client.close()
+    except Exception:  # noqa: BLE001
+        logger.debug("[onenet] client close failed", exc_info=True)
+
+
 def document_key_for(source_id: str, file_path: str) -> str:
     """稳定 document_key：onenet:{source_id}:{path sha1[:16]}（47 号 §四-4）."""
     digest = hashlib.sha1(file_path.encode("utf-8")).hexdigest()[:16]
@@ -260,16 +268,20 @@ class OnenetImportService:
         selection = Selection.from_dict(record.get("selection_json") or {})
         workspace = self._workspace_root / domain / source_id
         try:
-            # ---- fetching
+            # ---- fetching（安全审查 H-2：分钟级网络 IO 下放线程池，事件循环不被占死）
             await self._repo.update_import(import_id, status="fetching", error=None)
             client = self._client_factory()
-            outcome = fetch_selection(client, source_id, selection, workspace)
-            slices = load_slices(outcome.slices_path)
+            try:
+                outcome = await asyncio.to_thread(
+                    fetch_selection, client, source_id, selection, workspace)
+            finally:
+                _safe_close(client)
+            slices = await asyncio.to_thread(load_slices, outcome.slices_path)
             fetched_max = outcome.manifest.get("fetched_max_part_id")
 
             # ---- restoring
             await self._repo.update_import(import_id, status="restoring")
-            result = restore_files(slices)
+            result = await asyncio.to_thread(restore_files, slices)
 
             # ---- importing
             await self._repo.update_import(import_id, status="importing")

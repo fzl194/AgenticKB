@@ -54,7 +54,10 @@ class Selection:
         data = data or {}
         subtrees = tuple(str(s) for s in (data.get("subtrees") or []) if str(s).strip())
         mpi = data.get("max_part_id")
-        return cls(subtrees=subtrees, max_part_id=int(mpi) if mpi else None)
+        try:
+            return cls(subtrees=subtrees, max_part_id=int(mpi) if mpi else None)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"invalid max_part_id: {mpi!r}") from e
 
     def matches(self, slice_row: dict[str, Any]) -> bool:
         """切片是否落在勾选子树内（前缀匹配按段比较；空 = 整包全收）."""

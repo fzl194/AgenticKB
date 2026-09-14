@@ -8,7 +8,9 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,21 @@ router = APIRouter(prefix="/api/onenet", tags=["onenet"])
 refs_router = APIRouter(prefix="/api/kb/{kb_id}/onenet", tags=["onenet"])
 
 _SEARCH_FIELDS = ("doc_name", "file_name", "doc_type", "language")
+
+#: source_id 白名单（安全审查 H-1）：source_id 会拼入导入工作区文件系统路径
+#: （workspace/domain/source_id），白名单拒绝路径分隔符/绝对段/逃逸。
+_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+#: 单次建引用上限（安全审查 M-2：串行校验查询的放大上限）。
+_MAX_REF_BATCH = 200
+
+
+def _validated_source_id(raw) -> str:
+    sid = str(raw or "").strip()
+    if not _SOURCE_ID_RE.match(sid):
+        raise HTTPException(
+            422, "invalid_source_id: 仅允许字母数字开头、64 位内的 [A-Za-z0-9_.-]")
+    return sid
 
 
 def _client_factory(request: Request):
@@ -96,7 +113,11 @@ async def onenet_search(
     if not filters:
         raise HTTPException(422, "filters_required: 至少一个查询字段")
     client = _client_factory(request)()
-    rows = search_documents(client, filters)
+    try:
+        # 同步客户端下放线程池（安全审查 H-2）：事件循环不被网络 IO 阻塞
+        rows = await asyncio.to_thread(search_documents, client, filters)
+    finally:
+        client.close()
     capped = any(r.get("capped") for r in rows)
     return {"documents": rows, "capped": capped,
             "notice": "fuzzy 查询命中封顶 10000，结果可能不全，只作发现手段"}
@@ -108,11 +129,12 @@ async def onenet_probe(
     user: dict[str, Any] = Depends(require_admin),
     request: Request = None,  # type: ignore[assignment]
 ):
-    source_id = str(body.get("source_id") or "").strip()
-    if not source_id:
-        raise HTTPException(422, "source_id required")
+    source_id = _validated_source_id(body.get("source_id"))
     client = _client_factory(request)()
-    return probe_source(client, source_id)
+    try:
+        return await asyncio.to_thread(probe_source, client, source_id)
+    finally:
+        client.close()
 
 
 # ------------------------------------------------------------ TOC（含缓存）
@@ -125,9 +147,7 @@ async def onenet_toc(
     request: Request = None,  # type: ignore[assignment]
 ):
     domain = require_domain(str(body.get("domain") or ""))
-    source_id = str(body.get("source_id") or "").strip()
-    if not source_id:
-        raise HTTPException(422, "source_id required")
+    source_id = _validated_source_id(body.get("source_id"))
     max_part_id = body.get("max_part_id")
 
     repo = _repo(request)
@@ -138,9 +158,15 @@ async def onenet_toc(
         return {"cached": True, **_toc_payload(cached)}
 
     try:
-        toc = scan_toc(
-            client_factory(), source_id,
-            max_part_id=int(max_part_id) if max_part_id else None)
+        mpi = int(max_part_id) if max_part_id else None
+    except (TypeError, ValueError):
+        raise HTTPException(422, "max_part_id must be an integer") from None
+    try:
+        client = client_factory()
+        try:
+            toc = await asyncio.to_thread(scan_toc, client, source_id, max_part_id=mpi)
+        finally:
+            client.close()
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     await repo.put_toc_cache(
@@ -186,10 +212,11 @@ async def onenet_start_import(
     request: Request = None,  # type: ignore[assignment]
 ):
     domain = require_domain(str(body.get("domain") or ""))
-    source_id = str(body.get("source_id") or "").strip()
-    if not source_id:
-        raise HTTPException(422, "source_id required")
-    selection = Selection.from_dict(body.get("selection") or {})
+    source_id = _validated_source_id(body.get("source_id"))
+    try:
+        selection = Selection.from_dict(body.get("selection") or {})
+    except (TypeError, ValueError):
+        raise HTTPException(422, "invalid selection") from None
     svc = _import_service(request)
     try:
         record = await svc.start_import(
@@ -255,6 +282,8 @@ async def kb_add_refs(
     document_ids = [str(d) for d in (body.get("document_ids") or []) if str(d).strip()]
     if not document_ids:
         raise HTTPException(422, "document_ids required")
+    if len(document_ids) > _MAX_REF_BATCH:
+        raise HTTPException(422, f"document_ids exceeds {_MAX_REF_BATCH} per request")
     if not await kbdb.can_write(kb_id=kb_id, user_id=str(user["id"])):
         raise HTTPException(403, "kb_write_required")
     svc = _refs_service(request)
@@ -342,6 +371,8 @@ async def onenet_resync(
         )
     except ResyncError as e:
         raise HTTPException(409, str(e)) from e
+    finally:
+        client.close()
 
 
 @router.patch("/imports/{import_id}/selection")

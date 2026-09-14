@@ -183,12 +183,33 @@ class Onenet:
             out[key] = int(res[0]["part_id"]) if res else None
         return out
 
+    def fetch_all(self, source_id: str,
+                  fields: list[str] | None = None) -> list[dict]:
+        """per_file 编号文档的全量拉取（无 range）：query term source_id +
+        稳定双键排序，from/size 翻页——part_id 跨文件重复时 range 分段会漏。"""
+        q: dict = {"query": {"bool": {"must": [
+                     {"term": {"source_id.keyword": {"value": source_id}}}]}},
+                   "track_total_hits": True,
+                   "sort": [{"part_id": "asc"}, {"nid.keyword": "asc"}]}
+        if fields:
+            q["_source"] = fields
+        out, frm, page_size = [], 0, 5000
+        while True:
+            q["from"], q["size"] = frm, page_size
+            res = self.query_dsl(q).get("searchResults") or []
+            out.extend(res)
+            frm += len(res)
+            if len(res) < page_size:
+                break
+        return out
+
     def fetch_chunk(self, source_id: str, lo: int, hi: int,
                     fields: list[str] | None = None,
                     page_size: int = 5000) -> list[dict]:
         """拉取 part_id ∈ [lo,hi] 切片（对齐 fetch_source_chunk：range 分段 +
         稳定双键排序，绕过 from+size≤10000 硬顶——大文档全量拉取的唯一路径）。
-        fields=None 拉全字段（全量获取用）；投影列表用于轻量扫描。"""
+        fields=None 拉全字段（全量获取用）；投影列表用于轻量扫描。
+        仅适用于 HWICS/CHM 全局编号文档；per_file 编号文档用 fetch_all。"""
         q = {"query": {"bool": {"must": [
                  {"term": {"source_id.keyword": {"value": source_id}}},
                  {"range": {"part_id": {"gte": lo, "lte": hi}}}]}},
@@ -440,13 +461,21 @@ def verify_slices(slices: list[dict]) -> dict:
         if pid in seen_part:
             dup_part += 1
         seen_part.add(pid)
+    # part_id 语义（kone_connector 实测）：HWICS/CHM 大文档全局唯一连续；
+    # 小文档（docx 解包，如 DOC1101700755）按文件内编号、跨文件重复——
+    # dup_part 是合法形态（实测 dup_part=5183），此时覆盖检查无意义。
+    # nid 是唯一硬主键；只有 dup_nid 与「全局编号下的缺口」是硬错误。
     got_max = max(seen_part) if seen_part else 0
-    missing = sum(1 for i in range(1, got_max + 1) if i not in seen_part)
-    ok = dup_nid == 0 and dup_part == 0 and missing == 0
-    if not ok:
+    per_file = dup_part > 0
+    missing = 0 if per_file else sum(
+        1 for i in range(1, got_max + 1) if i not in seen_part)
+    if dup_nid > 0 or missing > 0:
         raise RuntimeError(
-            f"批次校验未通过: dup_nid={dup_nid} dup_part={dup_part} missing={missing}")
-    return {"ok": True, "slices": len(slices), "part_max": got_max}
+            f"批次校验未通过: dup_nid={dup_nid} missing={missing}"
+            + (f"（dup_part={dup_part} 属文件内编号形态，已容忍）" if per_file else ""))
+    return {"ok": True, "slices": len(slices), "part_max": got_max,
+            "part_id_numbering": "per_file" if per_file else "global",
+            "dup_part_tolerated": dup_part}
 
 
 # ---------------------------------------------------------------- 获取任务（线程 + 磁盘持久）

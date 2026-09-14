@@ -76,10 +76,11 @@ def load_credentials() -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------- 一张网客户端
-# 调用逻辑逐字对齐 kone_connector/src/onenet_client.py（内网实证 2026-09-07）：
-# - _post：401→token 重取重试一次；任何请求失败重试 3 次（退避 1.5s*n）；网关 list 包装解包
-# - 查询走 DSL 模式 + 稳定双键排序 [{part_id asc},{nid.keyword asc}]——
-#   原生模式 sortField 单键翻页会重复/漏（kone_connector 实测坑，协议 §5-#4）
+# 调用逻辑对齐 kone_connector/src/onenet_client.py（内网实证 2026-09-07）：
+# - 原生 searchQueryList 模式（与 DSL 语义一致——协议实测「两种方式都可作为
+#   标准拉取入口」；三元组 {field, fuzzy, content} 即原生格式，零翻译透传）
+# - _post：401→token 重取重试一次；请求失败重试 3 次（退避 1.5s*n）；
+#   网关 list 包装解包
 
 
 class Onenet:
@@ -93,7 +94,7 @@ class Onenet:
         if proxies:
             log.info("检测到代理环境变量（已忽略，内网直连）: %s",
                      ",".join(sorted(proxies.keys())))
-        self._http = httpx.Client(verify=False, timeout=300, trust_env=False)
+        self._http = httpx.Client(verify=False, timeout=300, trust_env=False)  # 同 demo timeout=300
 
     def _get_token(self, force: bool = False) -> str:
         if self._token and not force:
@@ -110,7 +111,7 @@ class Onenet:
         return token
 
     def _post(self, body: dict, retry: int = 3) -> dict:
-        """对齐 kone_connector._post：异常/网关错误统一退避重试。"""
+        """对齐 kone_connector._post。"""
         last_err: Exception | None = None
         for attempt in range(retry):
             t0 = time.monotonic()
@@ -120,9 +121,9 @@ class Onenet:
                     headers={"Authorization": self._get_token(),
                              "Content-Type": "application/json"})
                 elapsed = (time.monotonic() - t0) * 1000
-                log.info("search from=%s size=%s -> HTTP %s (%.0fms) 命中=%s",
-                         body.get("from"), body.get("size"), res.status_code,
-                         elapsed, _conds_brief(body))
+                log.info("search page=%s size=%s -> HTTP %s (%.0fms) 条件=[%s]",
+                         body.get("pageNum"), body.get("pageSize"),
+                         res.status_code, elapsed, _conds_brief(body))
                 if res.status_code == 401 and attempt == 0:
                     self._get_token(force=True)   # token 过期重取（同 demo）
                     continue
@@ -147,46 +148,22 @@ class Onenet:
                 time.sleep(1.5 * (attempt + 1))
         raise RuntimeError(f"请求失败({retry}次): {last_err}")
 
-    def query_dsl(self, dsl: dict) -> dict:
-        raw = dsl if isinstance(dsl, str) else json.dumps(dsl, ensure_ascii=False)
-        return self._post({"dsl": raw})
+    def query_native(self, conditions: list[dict],
+                     page_num: int = 1, page_size: int = 10) -> dict:
+        """原生 searchQueryList（对齐 kone_connector.query_native 默认参）。"""
+        body: dict = {"pageNum": page_num, "pageSize": page_size,
+                      "sortField": "part_id"}
+        if conditions:
+            body["searchQueryList"] = conditions
+        return self._post(body)
 
 
 def _conds_brief(body: dict) -> str:
-    """日志里打条件摘要（不打全量 content，防刷屏）。"""
-    raw = body.get("dsl")
-    if not raw:
-        return "-"
-    try:
-        dsl = json.loads(raw) if isinstance(raw, str) else raw
-        must = dsl.get("query", {}).get("bool", {}).get("must", [])
-        parts = []
-        for c in must:
-            if "term" in c:
-                (f, v), = c["term"].items()
-                parts.append(f"{f.replace('.keyword','')}={list(v.values())[0]!r}§精确")
-            elif "match" in c:
-                (f, v), = c["match"].items()
-                parts.append(f"{f}={v!r}§模糊")
-        return ",".join(parts)[:200]
-    except Exception:
-        return "?"
-
-
-def translate_conditions(conditions: list[dict]) -> list[dict]:
-    """三元组 → DSL must（与主项目 client.query_native 的翻译一致）：
-    精确=term {field}.keyword（数字字段 part_id 用裸 term）；
-    模糊=match {field}。"""
-    must = []
-    for c in conditions:
-        field, content = c["field"], c["content"]
-        if field in NUMERIC_FIELDS:
-            must.append({"term": {field: int(content)}})
-        elif c["fuzzy"]:
-            must.append({"match": {field: content}})
-        else:
-            must.append({"term": {f"{field}.keyword": {"value": content}}})
-    return must
+    """日志里打条件摘要。"""
+    conds = body.get("searchQueryList") or []
+    return ",".join(
+        f"{c.get('field')}={c.get('content')!r}§{'模糊' if c.get('fuzzy') else '精确'}"
+        for c in conds)[:200]
 
 
 _client: Onenet | None = None
@@ -202,31 +179,38 @@ def get_client() -> Onenet:
 # ---------------------------------------------------------------- 查询 → 汇总 → 分页
 
 def pull_slices(conditions: list[dict], max_slices: int = _MAX_SLICES):
-    """DSL + 稳定双键排序翻页（对齐 kone_connector.fetch_source_chunk 实证路径）。
+    """原生 searchQueryList 翻页（pageNum 路径，from+size ≤ 10000 硬上限）。
 
-    from/size ≤ 10000（接口硬上限）；sort [part_id asc, nid.keyword asc]
-    保证翻页不重不漏。排序按 part_id 阅读序（非相关度）——相关度指示
-    由汇总后的 slice_hits 承担。
+    原生模式单键 sortField 翻页理论上可能重复（同 part_id 跨文档撞键，
+    协议 §5-#4 实测坑）——按 nid 去重兜底，重复数打日志。
+    total 无 track_total_hits（原生模式不支持），≥10000 即封顶值。
     """
     client = get_client()
-    base = {
-        "query": {"bool": {"must": translate_conditions(conditions)}},
-        "track_total_hits": True,
-        "sort": [{"part_id": "asc"}, {"nid.keyword": "asc"}],
-    }
-    slices: list[list] = []
+    slices: list[dict] = []
+    seen_nid: set[str] = set()
+    dup_dropped = 0
     total: int | None = None
-    frm = 0
-    while frm + _PAGE_SIZE <= _MAX_SLICES and len(slices) < max_slices:
-        q = {**base, "from": frm, "size": _PAGE_SIZE}
-        res = client.query_dsl(q)
+    page = 1
+    while (page - 1) * _PAGE_SIZE + _PAGE_SIZE <= _MAX_SLICES             and len(slices) < max_slices:
+        res = client.query_native(conditions, page_num=page, page_size=_PAGE_SIZE)
         if total is None:
             total = int(res.get("total") or 0)
         rows = res.get("searchResults") or []
-        slices.extend(rows)
+        if not rows:
+            break
+        for row in rows:
+            nid = str(row.get("nid") or "")
+            if nid and nid in seen_nid:
+                dup_dropped += 1
+                continue
+            if nid:
+                seen_nid.add(nid)
+            slices.append(row)
         if len(rows) < _PAGE_SIZE:
             break
-        frm += len(rows)
+        page += 1
+    if dup_dropped:
+        log.warning("翻页稳定性守卫：按 nid 去重丢弃 %s 条重复切片", dup_dropped)
     return slices[:max_slices], total
 
 

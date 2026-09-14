@@ -21,10 +21,18 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%H:%M:%S")
+log = logging.getLogger("onenet")
 
 import httpx
 import yaml
@@ -73,7 +81,7 @@ class Onenet:
     def __init__(self) -> None:
         self._app_id, self._static_token = load_credentials()
         self._token: str | None = None
-        self._http = httpx.Client(verify=False, timeout=60)
+        self._http = httpx.Client(verify=False, timeout=120)
 
     def _get_token(self, force: bool = False) -> str:
         if self._token and not force:
@@ -86,25 +94,53 @@ class Onenet:
         if not token:
             raise RuntimeError("token 获取失败: " + res.text[:200])
         self._token = token
+        log.info("token 获取成功 force=%s（值脱敏: %s...）",
+                 force, token[:10])
         return token
 
     def query_native(self, conditions: list[dict], page_num: int, page_size: int) -> dict:
-        """原生 searchQueryList 查询（401 重取 token 重试一次）。"""
+        """原生 searchQueryList 查询：401 重取 token；5xx/网络错退避重试。"""
         body = {"pageNum": page_num, "pageSize": page_size, "sortField": "part_id",
                 "searchQueryList": conditions}
-        for attempt in (0, 1):
-            res = self._http.post(
-                SEARCH_URL, json=body,
-                headers={"Authorization": self._get_token(force=attempt == 1),
-                         "Content-Type": "application/json"})
-            if res.status_code == 401 and attempt == 0:
-                continue
-            res.raise_for_status()
-            data = res.json()
-            if isinstance(data, dict) and "searchResults" in data:
-                return data
-            raise RuntimeError("异常响应: " + json.dumps(data, ensure_ascii=False)[:200])
-        raise RuntimeError("query failed after token refresh")
+        last_err: Exception | None = None
+        for attempt in range(4):
+            t0 = time.monotonic()
+            try:
+                res = self._http.post(
+                    SEARCH_URL, json=body,
+                    headers={"Authorization": self._get_token(force=attempt == 1),
+                             "Content-Type": "application/json"})
+                elapsed = (time.monotonic() - t0) * 1000
+                log.info("search page=%s size=%s -> HTTP %s (%.0fms) 条件=%s",
+                         page_num, page_size, res.status_code, elapsed,
+                         json.dumps(conditions, ensure_ascii=False))
+                if res.status_code == 401 and attempt == 0:
+                    log.warning("401：token 过期，重取后重试")
+                    continue
+                if res.status_code >= 500:
+                    # 网关超时/抖动（实测出现过 504）：退避重试
+                    last_err = RuntimeError(
+                        f"网关错误 HTTP {res.status_code}（{elapsed:.0f}ms）: "
+                        + res.text[:150])
+                    log.warning("第 %s 次尝试网关错误，退避重试: %s",
+                                attempt + 1, last_err)
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                res.raise_for_status()
+                data = res.json()
+                if isinstance(data, dict) and "searchResults" in data:
+                    return data
+                raise RuntimeError("异常响应: "
+                                   + json.dumps(data, ensure_ascii=False)[:200])
+            except RuntimeError:
+                raise
+            except Exception as e:  # 网络层异常（连接超时等）同样退避
+                elapsed = (time.monotonic() - t0) * 1000
+                last_err = e
+                log.warning("第 %s 次尝试网络异常 (%.0fms): %s",
+                            attempt + 1, elapsed, e)
+                time.sleep(2 * (attempt + 1))
+        raise RuntimeError(f"查询连续失败（已重试）: {last_err}")
 
 
 _client: Onenet | None = None
@@ -198,7 +234,17 @@ def api_search(body: dict[str, Any]) -> dict:
     page_size = min(max(int(body.get("page_size") or 20), 1), 100)
     max_slices = min(int(body.get("max_slices") or _MAX_SLICES), _MAX_SLICES)
 
-    slices, total = pull_slices(conditions, max_slices)
+    log.info("=== 查询开始 条件=%s page=%s ===",
+             json.dumps(conditions, ensure_ascii=False), page)
+    t0 = time.monotonic()
+    try:
+        slices, total = pull_slices(conditions, max_slices)
+    except Exception as e:
+        log.error("查询失败: %s", e)
+        raise _err(502, f"一张网查询失败：{e}。若为网关超时，常见原因是模糊词"
+                        "太宽（如单查 doc_type）——换精确匹配或加更具体的词。")
+    log.info("=== 查询完成 拉取 %s 条 用时 %.1fs ===",
+             len(slices), time.monotonic() - t0)
     documents = aggregate_documents(slices)
     start = (page - 1) * page_size
     rows = documents[start:start + page_size]

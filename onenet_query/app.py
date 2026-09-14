@@ -932,49 +932,57 @@ addCond("doc_name", false, "");
 </dialog>
 
 <script>
-let curDoc = "", selPaths = new Set(), pollTimer = null;
+let curDoc = "", selPaths = new Set(), pollTimer = null, treePaths = [];
 
 async function enterDoc(sourceId) {
   curDoc = sourceId;
   selPaths = new Set();
   clearInterval(pollTimer);
-  const card = document.getElementById("docCard");
-  card.style.display = "";
+  document.getElementById("docCard").style.display = "";
   document.getElementById("docTitle").textContent = "文档工作台 · " + sourceId;
   document.getElementById("docBody").style.display = "none";
-  await pollStatus(sourceId, true);
+  await pollStatus();
 }
-async function pollStatus(sourceId, first) {
+async function pollStatus() {
   let st;
   try {
-    st = await (await fetch("/api/document/status?source_id=" + sourceId)).json();
+    st = await (await fetch("/api/document/status?source_id=" + curDoc)).json();
   } catch (e) { st = {status: "none"}; }
   const meta = document.getElementById("docMeta");
   const actions = document.getElementById("docActions");
+  clearInterval(pollTimer);
   if (st.status === "running") {
     meta.innerHTML = '<span class="warn">全量获取中… 进度 part ' + (st.progress || "?") +
                      "（段幂等，可中断重跑）</span>";
     actions.innerHTML = "";
-    pollTimer = setInterval(() => pollStatus(sourceId), 2000);
+    pollTimer = setInterval(pollStatus, 2000);
     return;
   }
-  clearInterval(pollTimer);
   if (st.status === "failed") {
-    meta.innerHTML = '<span class="warn">获取失败：' + esc(st.error) + "</span>";
-    actions.innerHTML = '<button class="primary mini" onclick="startFetch()">重试</button>';
+    meta.innerHTML = '<span class="warn">获取失败：' + esc(st.error || "") + "</span>";
+    actions.innerHTML = "";
+    const btn = document.createElement("button");
+    btn.className = "primary mini";
+    btn.textContent = "重试";
+    btn.onclick = startFetch;
+    actions.appendChild(btn);
     return;
   }
   if (st.status === "none") {
     meta.innerHTML = "尚未获取——点击开始全量拉取（大文档约 1-3 分钟）";
-    actions.innerHTML = '<button class="primary mini" onclick="startFetch()">开始全量获取</button>';
+    actions.innerHTML = "";
+    const btn = document.createElement("button");
+    btn.className = "primary mini";
+    btn.textContent = "开始全量获取";
+    btn.onclick = startFetch;
+    actions.appendChild(btn);
     return;
   }
-  // done
   meta.innerHTML = "已获取，正在重建章节…";
   actions.innerHTML = "";
-  const r = await fetch("/api/document/result?source_id=" + sourceId);
+  const r = await fetch("/api/document/result?source_id=" + curDoc);
   if (!r.ok) {
-    meta.innerHTML = '<span class="warn">重建失败：' + (await r.text()) + "</span>";
+    meta.innerHTML = '<span class="warn">重建失败：' + esc(await r.text()) + "</span>";
     return;
   }
   renderDoc(await r.json());
@@ -983,9 +991,8 @@ async function startFetch() {
   await fetch("/api/document/fetch", {method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({source_id: curDoc})});
-  pollTimer = setInterval(() => pollStatus(curDoc), 2000);
-  document.getElementById("docMeta").innerHTML = "全量获取启动…";
-  document.getElementById("docActions").innerHTML = "";
+  document.getElementById("docMeta").textContent = "全量获取启动…";
+  pollTimer = setInterval(pollStatus, 2000);
 }
 function renderDoc(t) {
   document.getElementById("docMeta").innerHTML =
@@ -995,30 +1002,41 @@ function renderDoc(t) {
     "（规则 " + t.rule_version + "）" +
     (t.unassigned ? '<span class="warn"> · 未归属切片 ' + t.unassigned + "</span>" : "");
   document.getElementById("docBody").style.display = "";
+  // 章节树（勾选走事件绑定 + 索引表，路径不进 HTML 属性）
+  treePaths = [];
   document.getElementById("docTree").innerHTML =
     t.tree.map(n => treeNode(n, n.depth <= 2)).join("");
-  document.getElementById("docFiles").innerHTML =
+  document.querySelectorAll("#docTree input.tcb").forEach(cb => {
+    const path = treePaths[+cb.dataset.i];
+    cb.checked = selPaths.has(path);
+    cb.onchange = () => {
+      if (cb.checked) selPaths.add(path); else selPaths.delete(path);
+      updateSelCount();
+    };
+  });
+  // 文件清单（预览走事件绑定，索引对齐 files 顺序）
+  const ft = document.getElementById("docFiles");
+  ft.innerHTML =
     "<tr><th>文件</th><th>目录</th><th>切片</th><th>part 范围</th><th></th></tr>" +
     t.files.map(f =>
       "<tr><td>" + esc(f.file_title) + "</td><td>" + esc(f.folder_path || "-") +
       "</td><td>" + f.slice_count + "</td><td>" + f.part_min + "~" + f.part_max +
-      "</td><td><button class=\"mini\" onclick=\"previewFile('" +
-      esc(f.file_path).replace(/'/g, "\\'") + "')\">预览</button></td></tr>").join("");
+      '</td><td><button class="mini pv">预览</button></td></tr>').join("");
+  ft.querySelectorAll("button.pv").forEach((btn, i) => {
+    btn.onclick = () => previewFile(t.files[i].file_path);
+  });
   updateSelCount();
 }
 function treeNode(n, open) {
+  const idx = treePaths.push(n.path) - 1;
   const kids = n.children || [];
   return '<details ' + (open ? "open" : "") + ' style="margin-left:' +
     ((n.depth - 1) * 12) + 'px">' +
-    '<summary style="cursor:pointer"><input type="checkbox" onchange="onCheck(this,\'' +
-    esc(n.path).replace(/'/g, "\\'") + '\')"/> ' + esc(n.title) +
+    '<summary style="cursor:pointer"><input type="checkbox" class="tcb" data-i="' +
+    idx + '"/> ' + esc(n.title) +
     ' <span style="color:#6b7075">' + n.slice_count + ' 片</span></summary>' +
     (kids.length ? kids.map(k => treeNode(k, open)).join("") : "") +
     "</details>";
-}
-function onCheck(cb, path) {
-  if (cb.checked) selPaths.add(path); else selPaths.delete(path);
-  updateSelCount();
 }
 function updateSelCount() {
   document.getElementById("selCount").textContent = selPaths.size;
@@ -1033,8 +1051,8 @@ async function makeSelection() {
   document.getElementById("selResult").innerHTML =
     "<b>导入选择已生成</b>（落盘 workspace/" + esc(curDoc) + "/selection.json，" +
     "即主项目 pipeline 的 selection 参数）：匹配文件 <b>" + out.matched_file_count +
-    "</b> 篇 / 切片 " + out.matched_slice_count + " 条<br><code style=\"font-size:12px\">" +
-    esc(JSON.stringify(out.selection)) + "</code>";
+    "</b> 篇 / 切片 " + out.matched_slice_count + " 条<br>" +
+    '<code style="font-size:12px">' + esc(JSON.stringify(out.selection)) + "</code>";
 }
 async function previewFile(filePath) {
   const dlg = document.getElementById("previewDlg");

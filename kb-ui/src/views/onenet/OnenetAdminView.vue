@@ -4,33 +4,57 @@
               title="知识一张网未配置（onenet.yaml / 环境变量），功能不可用" />
 
     <el-card class="onenet-admin__step" shadow="never">
-      <template #header><b>① 查询产品文档</b>（fuzzy 命中封顶 10000，结果可能不全）</template>
-      <el-form inline @submit.prevent>
-        <el-form-item label="文档名"><el-input v-model="filters.doc_name" placeholder="如 UDG" clearable style="width: 220px" /></el-form-item>
-        <el-form-item label="文件名"><el-input v-model="filters.file_name" placeholder="如 产品文档" clearable style="width: 220px" /></el-form-item>
-        <el-form-item label="类型">
-          <el-select v-model="filters.doc_type" clearable style="width: 140px" placeholder="全部">
-            <el-option v-for="t in ['hwics', 'pdf', 'docx', 'chm', 'html']" :key="t" :label="t" :value="t" />
-          </el-select>
-        </el-form-item>
-        <el-form-item><el-button type="primary" :loading="searching" :disabled="!hasFilter" @click="doSearch">查询</el-button></el-form-item>
-      </el-form>
+      <template #header>
+        <b>① 查询产品文档</b>
+        <span class="onenet-admin__hint">（三元组条件可累加，AND 组合；命中封顶 10000，只作发现手段）</span>
+      </template>
+      <div v-for="(cond, i) in conditions" :key="i" class="onenet-admin__cond">
+        <el-select v-model="cond.field" style="width: 210px" @change="onFieldChange(cond)">
+          <el-option v-for="[f, cn] in FIELD_OPTIONS" :key="f" :value="f" :label="`${cn} ${f}`" />
+        </el-select>
+        <el-select v-model="cond.fuzzy" style="width: 90px" :disabled="cond.field === 'part_id'">
+          <el-option :value="false" label="精确" />
+          <el-option :value="true" label="模糊" />
+        </el-select>
+        <el-input v-model="cond.content" placeholder="匹配内容" style="flex: 1"
+                  @keyup.enter="doSearch(1)" />
+        <el-button size="small" @click="conditions.splice(i, 1)">删除</el-button>
+      </div>
+      <div class="onenet-admin__actions">
+        <el-button @click="addCondition">+ 添加条件</el-button>
+        <el-button type="primary" :loading="searching" @click="doSearch(1)">搜 索</el-button>
+      </div>
 
-      <el-table v-if="hits.length" :data="hits" size="small" highlight-current-row @current-change="onPickHit">
-        <el-table-column prop="doc_name" label="文档名" min-width="260" show-overflow-tooltip />
-        <el-table-column prop="source_id" label="source_id" width="160" />
-        <el-table-column prop="parsed_version" label="版本" width="110" />
-        <el-table-column prop="publish_time" label="发布" width="110" />
-        <el-table-column label="命中" width="80">
-          <template #default="{ row }">{{ row.slice_hits }} 片</template>
-        </el-table-column>
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button size="small" @click.stop="onPickHit(row)">摸底并选章</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div v-if="searchNotice" class="onenet-admin__notice">{{ searchNotice }}</div>
+      <template v-if="hits.length || searchMeta">
+        <el-table v-if="hits.length" :data="hits" size="small" highlight-current-row
+                  @current-change="onPickHit">
+          <el-table-column prop="doc_name" label="文档名" min-width="240" show-overflow-tooltip />
+          <el-table-column prop="source_id" label="source_id" width="150" />
+          <el-table-column label="产品线" width="130" show-overflow-tooltip>
+            <template #default="{ row }">{{ (row.product_line ?? []).join(' / ') || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="parsed_version" label="版本" width="100" />
+          <el-table-column prop="publish_time" label="发布" width="105" />
+          <el-table-column label="命中" width="75">
+            <template #default="{ row }">{{ row.slice_hits }} 片</template>
+          </el-table-column>
+          <el-table-column label="命中章节样例" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.sample_titles.join('；') || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="110">
+            <template #default="{ row }">
+              <el-button size="small" @click.stop="onPickHit(row)">摸底并选章</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-if="searchMeta" class="onenet-admin__notice"
+             :class="{ 'onenet-admin__warn': searchResult?.capped }">{{ searchMeta }}</div>
+        <el-pagination v-if="searchResult && searchResult.total_documents > pageSize"
+                      layout="prev, pager, next, total, sizes" :total="searchResult.total_documents"
+                      v-model:current-page="page" v-model:page-size="pageSize"
+                      :page-sizes="[20, 50, 100]" style="margin-top: 8px"
+                      @current-change="doSearch()" @size-change="doSearch(1)" />
+      </template>
     </el-card>
 
     <el-card v-if="probe" class="onenet-admin__step" shadow="never">
@@ -45,7 +69,7 @@
       </el-descriptions>
       <div class="onenet-admin__actions">
         <el-button type="primary" :loading="tocLoading" @click="loadToc(Boolean(toc))">
-          {{ toc ? '刷新章节树' : '加载章节树（轻量扫描）' }}
+          {{ toc ? '刷新章节树' : '进入文档（轻量扫描）' }}
         </el-button>
       </div>
     </el-card>
@@ -53,17 +77,43 @@
     <el-card v-if="toc" class="onenet-admin__step" shadow="never">
       <template #header>
         <b>③ 勾选章节</b>
-        <span class="onenet-admin__hint">（不勾选任何节点 = 整包导入；勾选后按节点子树过滤）</span>
+        <span class="onenet-admin__hint">
+          （{{ toc.nodes }} 节点 · β 预计 <b>{{ toc.file_count }}</b> 文件 ·
+          规则 {{ toc.rule_version }}{{ toc.cached ? ' · 已用缓存' : '' }}；
+          不勾选任何节点 = 整包导入）
+        </span>
       </template>
-      <el-tree ref="tocTreeRef" :data="toc.tree" node-key="path" show-checkbox
-               :props="{ label: 'title', children: 'children' }" default-expand-all>
-        <template #default="{ data }">
-          <span>{{ data.title }} <el-tag size="small" type="info">{{ data.slice_count }} 片</el-tag></span>
-        </template>
-      </el-tree>
+      <el-row :gutter="14">
+        <el-col :span="12">
+          <div class="onenet-admin__treewrap">
+            <!-- 大文档 5000+ 节点：默认只展开根层、层层点开（V1.2 原型教训） -->
+            <el-tree ref="tocTreeRef" :data="toc.tree" node-key="path" show-checkbox
+                     :props="{ label: 'title', children: 'children' }"
+                     :default-expanded-keys="rootKeys">
+              <template #default="{ data }">
+                <span class="onenet-admin__node">
+                  {{ data.title }}
+                  <el-tag size="small" type="info" effect="plain">{{ data.slice_count }} 片</el-tag>
+                </span>
+              </template>
+            </el-tree>
+          </div>
+        </el-col>
+        <el-col :span="12">
+          <div class="onenet-admin__treewrap">
+            <el-table :data="toc.files ?? []" size="small" height="100%">
+              <el-table-column prop="file_title" label="β 文件（导入单位）" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="folder_path" label="目录" min-width="130" show-overflow-tooltip />
+              <el-table-column prop="slice_count" label="切片" width="60" />
+              <el-table-column label="part 范围" width="110">
+                <template #default="{ row }">{{ row.part_min }}~{{ row.part_max }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-col>
+      </el-row>
       <div class="onenet-admin__actions">
-        <el-button type="primary" :loading="starting" @click="startImport">确认导入（逐文档）</el-button>
-        <span v-if="toc.cached" class="onenet-admin__hint">已用缓存章节树</span>
+        <el-button type="primary" :loading="starting" @click="startImport">确认导入（勾选子树过滤，不勾=整包）</el-button>
       </div>
     </el-card>
 
@@ -72,15 +122,15 @@
       <el-table :data="imports" size="small" v-loading="importsLoading">
         <el-table-column prop="source_id" label="source_id" width="150" />
         <el-table-column prop="doc_name" label="文档" min-width="200" show-overflow-tooltip />
-        <el-table-column label="状态" width="110">
+        <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="document_count" label="文档数" width="80" />
+        <el-table-column prop="document_count" label="文档数" width="75" />
         <el-table-column prop="total_slices" label="切片数" width="90" />
         <el-table-column prop="parsed_version_seen" label="版本" width="100" />
-        <el-table-column prop="updated_at" label="更新时间" width="170" show-overflow-tooltip />
+        <el-table-column prop="updated_at" label="更新时间" width="165" show-overflow-tooltip />
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
             <el-button size="small" :loading="resyncingId === row.id" :disabled="!canResync(row)"
@@ -108,16 +158,33 @@ import { ElMessage } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useOnenetApi } from '@/api/onenet'
-import type { OnenetDocHit, OnenetImport, OnenetImportStatus, OnenetProbe, OnenetToc } from '@/api/onenet'
+import type {
+  OnenetCondition, OnenetImport, OnenetImportStatus, OnenetProbe,
+  OnenetSearchResult, OnenetToc,
+} from '@/api/onenet'
 
 const domainStore = useDomainStore()
 const api = useOnenetApi()
 
-const filters = ref<Partial<Record<'doc_name' | 'file_name' | 'doc_type' | 'language', string>>>({})
-const hits = ref<OnenetDocHit[]>([])
-const searchNotice = ref('')
+/** 字段白名单（后端 SEARCH_FIELDS 同款，顺序一致）+ 中文标签 */
+const FIELD_OPTIONS: Array<[string, string]> = [
+  ['source_id', '文档ID'], ['nid', '切片ID'], ['url', '资源链接'], ['title', '标题'],
+  ['path', '章节目录'], ['content', '切片内容'], ['source_site', '来源站点'],
+  ['file_name', '文件名'], ['category_path', '定义标签'], ['doc_name', '文档名称'],
+  ['doc_type', '文档类型'], ['part_id', '文档顺序'],
+]
+
+// V1.2 默认预置：来源站点 support（产品文档主阵地，可删）+ 文档名称精确（主路径）
+const conditions = ref<OnenetCondition[]>([
+  { field: 'source_site', fuzzy: false, content: 'support' },
+  { field: 'doc_name', fuzzy: false, content: '' },
+])
+const hits = ref<OnenetSearchResult['documents']>([])
+const searchResult = ref<OnenetSearchResult | null>(null)
 const searching = ref(false)
 const notConfigured = ref(false)
+const page = ref(1)
+const pageSize = ref(20)
 
 const probe = ref<OnenetProbe | null>(null)
 const toc = ref<OnenetToc | null>(null)
@@ -131,16 +198,35 @@ const detail = ref<OnenetImport | null>(null)
 const resyncingId = ref('')
 const retryingId = ref('')
 
-const hasFilter = computed(() => Object.values(filters.value).some((v) => v && String(v).trim()))
+const searchMeta = computed(() => {
+  const r = searchResult.value
+  if (!r) return ''
+  const cap = r.capped ? '⚠ 命中切片 ≥10000 已封顶，仅基于前 ' + r.slices_pulled + ' 条汇总；' : ''
+  return cap + `命中切片 ${r.slice_total_reported ?? '-'} · 拉取 ${r.slices_pulled} · 去重文档 ${r.total_documents} 篇（按 source_id 汇总）`
+})
 
-async function doSearch() {
+/** 目录树默认只展开根层（懒展开，防 5000+ 节点卡死） */
+const rootKeys = computed(() => (toc.value?.tree ?? []).map((n) => n.path))
+
+function addCondition() {
+  conditions.value.push({ field: 'doc_name', fuzzy: false, content: '' })
+}
+function onFieldChange(cond: OnenetCondition) {
+  if (cond.field === 'part_id') cond.fuzzy = false
+}
+
+async function doSearch(target?: number) {
+  if (target) page.value = target
+  const conds = conditions.value.filter((c) => c.content.trim())
+  if (!conds.length) {
+    ElMessage.warning('至少填一条条件')
+    return
+  }
   searching.value = true
-  searchNotice.value = ''
   try {
-    const out = await api.search(filters.value)
-    hits.value = out.documents
-    searchNotice.value = out.capped ? '⚠ ' + out.notice : out.notice
-    if (!out.documents.length) ElMessage.info('无命中（注意 fuzzy 封顶 10000，可换更精确的关键词）')
+    searchResult.value = await api.search(conds, page.value, pageSize.value)
+    hits.value = searchResult.value.documents
+    if (!hits.value.length) ElMessage.info('无命中（注意 fuzzy 封顶 10000，可换更精确的词）')
   } catch (e: unknown) {
     handleError(e)
   } finally {
@@ -148,7 +234,7 @@ async function doSearch() {
   }
 }
 
-function onPickHit(row: OnenetDocHit | null) {
+function onPickHit(row: { source_id: string } | null) {
   if (!row) return
   probe.value = null
   toc.value = null
@@ -236,10 +322,6 @@ async function doResync(row: OnenetImport) {
   }
 }
 
-function canResync(row: OnenetImport): boolean {
-  return row.status === 'done' || row.status === 'failed'
-}
-
 async function doRetry(row: OnenetImport) {
   retryingId.value = row.id
   try {
@@ -251,6 +333,10 @@ async function doRetry(row: OnenetImport) {
   } finally {
     retryingId.value = ''
   }
+}
+
+function canResync(row: OnenetImport): boolean {
+  return row.status === 'done' || row.status === 'failed'
 }
 
 const STATUS_LABELS: Record<OnenetImportStatus, string> = {
@@ -270,8 +356,8 @@ function statusType(s: OnenetImportStatus): 'success' | 'danger' | 'warning' | '
 }
 
 function handleError(e: unknown) {
-  const detail = (e as { response?: { status?: number; data?: unknown } })?.response
-  const status = detail?.status
+  const resp = (e as { response?: { status?: number; data?: unknown } })?.response
+  const status = resp?.status
   if (status === 503) {
     notConfigured.value = true
     ElMessage.error('知识一张网未配置')
@@ -287,8 +373,13 @@ onMounted(reloadImports)
 <style scoped>
 .onenet-admin { display: flex; flex-direction: column; gap: 12px; }
 .onenet-admin__step :deep(.el-card__header) { padding: 10px 16px; }
-.onenet-admin__notice { margin-top: 8px; color: var(--el-text-color-secondary); font-size: 12px; }
+.onenet-admin__cond { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .onenet-admin__hint { color: var(--el-text-color-secondary); font-size: 12px; font-weight: normal; }
+.onenet-admin__notice { margin-top: 8px; color: var(--el-text-color-secondary); font-size: 12px; }
+.onenet-admin__warn { color: var(--el-color-warning); }
 .onenet-admin__actions { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
 .onenet-admin__detail { margin-top: 10px; }
+.onenet-admin__treewrap { height: 420px; overflow: auto; border: 1px solid var(--el-border-color-lighter);
+                          border-radius: 6px; padding: 8px; }
+.onenet-admin__node { display: inline-flex; align-items: center; gap: 6px; }
 </style>

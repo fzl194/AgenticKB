@@ -38,16 +38,25 @@ beforeEach(() => {
 })
 
 describe('onenet api client', () => {
-  it('search posts filters and unwraps documents', async () => {
+  it('search posts triples with pagination', async () => {
     state.responses['post /api/onenet/search'] = {
-      documents: [{ source_id: 'DOC1', slice_hits: 3 }], capped: true, notice: 'x',
+      documents: [{ source_id: 'DOC1', slice_hits: 3, sample_titles: [] }],
+      total_documents: 1, page: 2, page_size: 20,
+      slice_total_reported: 30, capped: true, slices_pulled: 30,
     }
     const api = useOnenetApi()
-    const out = await api.search({ doc_name: 'UDG' })
-    expect(out.documents).toHaveLength(1)
+    const out = await api.search(
+      [{ field: 'source_site', fuzzy: false, content: 'support' },
+       { field: 'doc_name', fuzzy: false, content: 'UDG' }], 2)
     expect(out.documents[0].source_id).toBe('DOC1')
     expect(out.capped).toBe(true)
-    expect(state.requests[0].body).toEqual({ doc_name: 'UDG' })
+    expect(state.requests[0].body).toEqual({
+      conditions: [
+        { field: 'source_site', fuzzy: false, content: 'support' },
+        { field: 'doc_name', fuzzy: false, content: 'UDG' },
+      ],
+      page: 2, page_size: 20,
+    })
   })
 
   it('toc posts domain + source_id', async () => {

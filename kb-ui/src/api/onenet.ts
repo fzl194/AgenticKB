@@ -6,6 +6,13 @@
  */
 import { createProxyClient, extractItems } from '@/api/proxyClient'
 
+/** 查询三元组（V1.2）：字段 × 精确/模糊 × 内容 */
+export interface OnenetCondition {
+  field: string
+  fuzzy: boolean
+  content: string
+}
+
 export interface OnenetDocHit {
   source_id: string
   doc_name: string | null
@@ -14,9 +21,20 @@ export interface OnenetDocHit {
   parsed_version: string | null
   publish_time: string | null
   product_line: string[] | null
-  pbi: string[] | null
+  language: string | null
   slice_hits: number
-  capped?: boolean
+  sample_titles: string[]
+}
+
+export interface OnenetSearchResult {
+  documents: OnenetDocHit[]
+  total_documents: number
+  page: number
+  page_size: number
+  slice_total_reported: number | null
+  capped: boolean
+  slices_pulled: number
+  notice?: string
 }
 
 export interface OnenetProbe {
@@ -43,6 +61,16 @@ export interface OnenetTocNode {
   children: OnenetTocNode[]
 }
 
+export interface OnenetTocFile {
+  file_path: string
+  file_title: string
+  heading_title: string
+  folder_path: string
+  slice_count: number
+  part_min: number
+  part_max: number
+}
+
 export interface OnenetToc {
   cached?: boolean
   source_id: string
@@ -51,6 +79,11 @@ export interface OnenetToc {
   scanned_slices?: number
   nodes?: number
   tree: OnenetTocNode[]
+  rule_version?: string
+  file_count?: number
+  folder_count?: number
+  unassigned?: number
+  files?: OnenetTocFile[]
 }
 
 export type OnenetImportStatus =
@@ -95,13 +128,12 @@ export function useOnenetApi() {
 
   return {
     // ── 管理面 ──
-    async search(filters: Partial<Record<'doc_name' | 'file_name' | 'doc_type' | 'language', string>>) {
-      const { data } = await client.post('/api/onenet/search', filters)
-      return {
-        documents: extractItems<OnenetDocHit>(data.documents),
-        capped: Boolean(data.capped),
-        notice: String(data.notice ?? ''),
-      }
+    /** 第一步 · 查询发现（V1.2）：三元组透传 + 文档汇总分页 */
+    async search(conditions: OnenetCondition[], page = 1, pageSize = 20): Promise<OnenetSearchResult> {
+      const { data } = await client.post('/api/onenet/search', {
+        conditions, page, page_size: pageSize,
+      })
+      return data
     },
     async probe(sourceId: string): Promise<OnenetProbe> {
       const { data } = await client.post('/api/onenet/probe', { source_id: sourceId })

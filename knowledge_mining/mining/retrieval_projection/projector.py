@@ -93,6 +93,7 @@ def _facets(
     document_ref: str,
     content_type: str,
     heading_chain: Sequence[tuple[int, str]],
+    document_facets: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     facets: dict[str, Any] = {
         "document": document_ref,
@@ -101,6 +102,11 @@ def _facets(
     }
     if heading_chain:
         facets["section_path"] = _breadcrumb(heading_chain)
+    if document_facets:
+        # 47 号：文档级 onenet 结构化字段（language/product_line/category...）
+        # 搬运进每个表示的 facets（检索过滤面）。键冲突时结构 facets 优先。
+        for key, value in document_facets.items():
+            facets.setdefault(str(key), value)
     return facets
 
 
@@ -117,6 +123,7 @@ def _representation_for(
     document_ref: str,
     snapshot_ref: str,
     section_index: SectionIdentityIndex,
+    document_facets: Mapping[str, Any] | None = None,
 ) -> RetrievalRepresentation | None:
     mapped = _BLOCK_TYPE_MATRIX.get(segment.block_type)
     if mapped is None:
@@ -195,6 +202,7 @@ def _representation_for(
             document_ref=document_ref,
             content_type=content_type,
             heading_chain=segment.heading_chain,
+            document_facets=document_facets,
         ),
         provenance={
             "projector": PROJECTOR_NAME,
@@ -278,8 +286,14 @@ def project_representations(
     document_ref: str,
     snapshot_ref: str,
     include_sections: bool = False,
+    document_facets: Mapping[str, Any] | None = None,
 ) -> tuple[RetrievalRepresentation, ...]:
-    """从编译切片确定性投影类型化搜索表示（纯函数）."""
+    """从编译切片确定性投影类型化搜索表示（纯函数）.
+
+    ``document_facets``（47 号）：可选文档级 facets（如 onenet 的
+    language/product_line/category），合并进全部表示的 facets——
+    检索层即可按这些维度过滤。缺省 None 行为不变。
+    """
     materialized = tuple(segments)
     # A2：章节身份一次推导——prose/table_row 的 section_ref、section 表示
     # 的 target_ref、structure 节点 ref 三方逐字一致（范围搜索前提）。
@@ -295,7 +309,7 @@ def project_representations(
     for segment in materialized:
         rep = _representation_for(
             segment, document_ref=document_ref, snapshot_ref=snapshot_ref,
-            section_index=section_index,
+            section_index=section_index, document_facets=document_facets,
         )
         if rep is not None:
             reps.append(rep)

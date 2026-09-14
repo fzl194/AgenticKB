@@ -365,4 +365,48 @@ async def onenet_update_selection(
     return {"selection": merged.to_dict()}
 
 
+@refs_router.get("/documents/{document_id}/markdown")
+async def onenet_document_markdown(
+    kb_id: str,
+    document_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """一张网逻辑文档的 markdown 预览（JSONL 对象即时还原渲染，47 号 §五）."""
+    if not await kbdb.is_visible(kb_id=kb_id, user_id=str(user["id"])):
+        raise HTTPException(404, f"KB {kb_id} not found")
+    doc = await kbdb.get_document_identity(document_id)
+    if doc is None or not await kbdb.document_in_kb_or_referenced(kb_id, document_id):
+        raise HTTPException(404, "Document not found")
+    from knowledge_mining.mining.kb.deps import get_document_service
+    from knowledge_mining.mining.onenet.restore import render_file_markdown
+
+    svc = get_document_service(request)
+    payload = await svc.read_object_bytes(
+        document_id=document_id, user_id=str(user["id"]))
+    if payload is None:
+        raise HTTPException(404, "Document has no onenet object")
+    import json as _json
+
+    slices: list[dict[str, Any]] = []
+    for line in payload.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = _json.loads(line)
+            if isinstance(row, dict):
+                slices.append(row)
+        except _json.JSONDecodeError:
+            continue
+    if not slices:
+        raise HTTPException(422, "onenet object has no parsable slices")
+    md = render_file_markdown(
+        slices, title=str(doc.get("document_name") or "").removesuffix(".jsonl"))
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
+
+
 __all__ = ["DEFAULT_WORKSPACE_ROOT", "refs_router", "router"]

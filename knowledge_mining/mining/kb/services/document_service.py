@@ -423,6 +423,36 @@ class DocumentService:
             mime=mime, etag=put_result.etag,
         )
 
+    async def read_object_bytes(
+        self, *, document_id: str, user_id: str, max_bytes: int = 20 * 1024 * 1024,
+    ) -> bytes | None:
+        """有界读取对象字节（onenet 预览渲染用；legacy 本地文档返回 None）."""
+        doc = await self._db.get_document_identity(document_id)
+        if doc is None:
+            raise NotFound(document_id)
+        await self._assert_document_read(doc, user_id)
+        if not doc.get("storage_object_id"):
+            return None
+        if self._object_store is None or self._storage_objects is None:
+            raise RuntimeError("KB object storage is not configured")
+        record = await self._storage_objects.get(doc["storage_object_id"])
+        if record is None or record.state != "AVAILABLE":
+            raise NotFound(document_id)
+        from knowledge_mining.mining.contracts.storage.types import ObjectLocation
+
+        stream = self._object_store.get_stream(ObjectLocation(
+            bucket=record.bucket, object_key=record.object_key,
+            version_id=record.object_version_id,
+        ))
+        buf = bytearray()
+        async for chunk in stream:
+            buf.extend(chunk)
+            if len(buf) > max_bytes:
+                raise UploadTooLarge(
+                    f"object exceeds preview bound {max_bytes}",
+                    limit_bytes=max_bytes)
+        return bytes(buf)
+
     async def store_source_bytes(
         self, payload: bytes, *, mime: str,
     ) -> StorageObjectRecord:

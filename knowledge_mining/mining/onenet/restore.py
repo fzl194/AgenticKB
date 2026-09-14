@@ -202,8 +202,21 @@ def render_markdown(result: RestoreResult, *, with_source_markers: bool = True) 
     return "\n".join(lines) + "\n"
 
 
+def render_file_markdown(slices: list[dict[str, Any]], *, title: str = "") -> str:
+    """单文件切片 → markdown（onenet 预览渲染；标注逻辑文档）."""
+    lines = ["<!-- 由一张网切片重建的逻辑文档（非原始文件） -->", ""]
+    heading = title or (slices[0].get("title") if slices else "") or ""
+    if heading:
+        lines.append(f"# {heading}")
+    for s in sorted(slices, key=lambda x: int(x.get("part_id") or 0)):
+        lines.append(f"<!-- nid={s.get('nid')} part_id={s.get('part_id')} -->")
+        lines.append(clean_content(s.get("content")))
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 __all__ = [
     "RULE_VERSION", "RestoredFile", "RestoreResult", "TreeNode",
-    "build_path_tree", "clean_content", "render_markdown", "restore_files",
-    "split_path",
+    "build_path_tree", "clean_content", "render_file_markdown",
+    "render_markdown", "restore_files", "split_path",
 ]

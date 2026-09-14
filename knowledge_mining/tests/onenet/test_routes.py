@@ -106,9 +106,12 @@ class FakeScanClient:
 
     def fetch_source_chunk(self, sid, lo, hi, page_size=1000, fields=None):
         return [
-            {"path": "Pkg > A > B", "title": "B", "part_id": 1},
-            {"path": "Pkg > A > B", "title": "B", "part_id": 2},
-            {"path": "Pkg > D > E", "title": "E", "part_id": 3},
+            {"path": "Pkg > A > B", "title": "B", "part_id": 1,
+             "parsed_version": "hwics_v1.0"},
+            {"path": "Pkg > A > B", "title": "B", "part_id": 2,
+             "parsed_version": "hwics_v1.0"},
+            {"path": "Pkg > D > E", "title": "E", "part_id": 3,
+             "parsed_version": "hwics_v1.0"},
         ]
 
     def close(self):

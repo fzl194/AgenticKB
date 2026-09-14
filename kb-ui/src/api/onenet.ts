@@ -129,8 +129,17 @@ export function useOnenetApi() {
       const { data } = await client.post('/api/onenet/imports', body)
       return data
     },
-    async resync(importId: string) {
-      const { data } = await client.post(`/api/onenet/imports/${importId}/resync`)
+    async updateSelection(importId: string, selection: { subtrees?: string[] }) {
+      const { data } = await client.patch(`/api/onenet/imports/${importId}/selection`, { selection })
+      return data
+    },
+    async retryImport(importId: string): Promise<OnenetImport> {
+      const { data } = await client.post(`/api/onenet/imports/${importId}/retry`)
+      return data
+    },
+    async resync(importId: string, opts: { force?: boolean } = {}) {
+      const suffix = opts.force ? '?force=1' : ''
+      const { data } = await client.post(`/api/onenet/imports/${importId}/resync${suffix}`)
       return data as {
         changed: boolean
         diff?: { added: string[]; removed: string[]; changed: string[] } | null
@@ -138,12 +147,13 @@ export function useOnenetApi() {
         removed_documents: string[]
       }
     },
-    async updateSelection(importId: string, selection: { subtrees?: string[] }) {
-      const { data } = await client.patch(`/api/onenet/imports/${importId}/selection`, { selection })
-      return data
-    },
 
     // ── 库级引用 ──
+    /** 库级导入池（审查 H8：KB 成员走本端点，不打 admin 面）。 */
+    async listKbImports(kbId: string): Promise<OnenetImport[]> {
+      const { data } = await client.get(`/api/kb/${kbId}/onenet/imports`)
+      return extractItems<OnenetImport>(data.imports ?? data)
+    },
     async listRefs(kbId: string): Promise<OnenetRef[]> {
       const { data } = await client.get(`/api/kb/${kbId}/onenet/refs`)
       return extractItems<OnenetRef>(data.refs ?? data)

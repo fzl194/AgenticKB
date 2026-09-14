@@ -57,7 +57,7 @@ def scan_toc(
         "scanned_slices": len(slices),
         "scanned_part_max": hi,
         "parsed_version": parsed_version,
-        "nodes": sum(1 for _ in root.iter_slices()) and _count_nodes(root),
+        "nodes": _count_nodes(root),
         "tree": [c.to_dict() for c in root.children.values()],
     }
 

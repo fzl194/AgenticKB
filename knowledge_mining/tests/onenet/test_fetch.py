@@ -115,6 +115,33 @@ def test_fetch_segment_idempotent_skip(tmp_path):
     assert fake.range_requests == n1  # 段全跳过，无新拉取
 
 
+def test_fetch_mid_document_subtree_no_coverage_check(tmp_path):
+    """审查 H1 回归：勾选文档中部子树（part 不从 1 起）不再因覆盖缺口失败。"""
+    fake = FakeFetch(list(ROWS))
+    out = fetch_selection(_client(fake), "DOC1", Selection(subtrees=("D",)),
+                          tmp_path, chunk_width=10, throttle_seconds=0)
+    assert out.slice_count == 2  # D>E、D>F（part 3、4——不从 1 连续）
+    assert out.manifest["verify"]["ok"] is True
+    assert out.manifest["verify"]["full_coverage"] is False
+
+
+def test_fetch_full_mode_still_checks_coverage(tmp_path):
+    """整包模式保留覆盖检查（缺片仍拒绝，不产脏数据）。"""
+    fake = FakeFetch(list(ROWS))
+    # 预置缺片段（part 1_2 只有 1 行 → part 2 缺失）
+    parts = tmp_path / "parts"
+    parts.mkdir(parents=True)
+    (parts / "part_1_2.jsonl").write_text(
+        json.dumps(_row(1, f"{PKG} > A > B")) + "\n", encoding="utf-8")
+    from knowledge_mining.mining.onenet.fetch import FetchVerifyError
+    # part_1_2 段只有 part1（part2 缺）→ 整包校验在 fetch 内即拒绝，
+    # 且 slices.jsonl 未落位（M1：校验不过不毒化既有批次）
+    with pytest.raises(FetchVerifyError, match="missing"):
+        fetch_selection(_client(fake), "DOC1", Selection(),
+                        tmp_path, chunk_width=2, throttle_seconds=0)
+    assert not (tmp_path / "slices.jsonl").exists()
+
+
 def test_fetch_subtree_filter(tmp_path):
     fake = FakeFetch(list(ROWS))
     out = fetch_selection(_client(fake), "DOC1", Selection(subtrees=("A",)),

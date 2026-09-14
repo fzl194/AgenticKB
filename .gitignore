@@ -122,3 +122,4 @@ var/
 # deploy-sync 依赖清单基线（pack 自动落盘，下次 pack 对比）
 .cmkb-sync-last/
 release_tests/eval/__pycache__/
+\n# 一张网凭据（真实 app_id/static_token，不进 git）\nmain_control_service/config/system/onenet.yaml\n

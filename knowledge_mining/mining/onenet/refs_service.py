@@ -58,10 +58,11 @@ class RefsService:
                 raise RefsError(f"kb_not_found: {kb_id}")
             domain = kb_row["domain"]
 
-            added, skipped = [], []
+            # 审查 M5：先全量校验再插入——校验失败时整批拒绝，不留半批引用
+            validated: list[str] = []
             for doc_id in document_ids:
                 cur = await conn.execute(
-                    """SELECT d.id, d.deleted_at, d.metadata_json, k.metadata_json AS kb_meta,
+                    """SELECT d.id, d.deleted_at, k.metadata_json AS kb_meta,
                               k.domain AS owner_domain
                        FROM asset_documents d
                        JOIN knowledge_bases k ON k.id = d.kb_id
@@ -69,16 +70,20 @@ class RefsService:
                     [doc_id])
                 doc = await cur.fetchone()
                 if doc is None or doc["deleted_at"] is not None:
-                    skipped.append({"document_id": doc_id, "reason": "not_found"})
-                    continue
+                    continue  # not_found：跳过（不阻断整批）
                 if str(doc["owner_domain"]) != str(domain):
                     raise RefsError(
                         f"cross_domain_reference: {doc_id} 属 {doc['owner_domain']} 域，"
                         f"目标库属 {domain} 域（引用不跨域，47 号 D7）")
-                kb_meta = _metadata_dict(doc["kb_meta"])
-                if kb_meta.get("kind") != "onenet":
+                if _metadata_dict(doc["kb_meta"]).get("kind") != "onenet":
                     raise RefsError(
                         f"not_onenet_document: {doc_id} 不属于一张网公共库")
+                validated.append(doc_id)
+
+            added, skipped = [], []
+            skipped = [{"document_id": d, "reason": "not_found"}
+                       for d in document_ids if d not in set(validated)]
+            for doc_id in validated:
                 cur = await conn.execute(
                     """INSERT INTO kb_document_refs (kb_id, document_id, created_by, created_at)
                        VALUES (%s, %s, %s, %s)
@@ -112,7 +117,8 @@ class RefsService:
             cur = await conn.execute(
                 "DELETE FROM kb_document_refs WHERE document_id = ANY(%s)",
                 [list(document_ids)])
-            return cur.rowcount() if hasattr(cur, "rowcount") else 0
+            # psycopg3 的 rowcount 是 int property（审查 H2），不是方法
+            return cur.rowcount if hasattr(cur, "rowcount") else 0
 
     async def list_refs(self, *, kb_id: str) -> list[dict[str, Any]]:
         async with self._pool.connection() as conn:

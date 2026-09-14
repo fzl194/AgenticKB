@@ -44,7 +44,7 @@
         <el-descriptions-item label="产品线">{{ (probe.product_line ?? []).join(' / ') || '-' }}</el-descriptions-item>
       </el-descriptions>
       <div class="onenet-admin__actions">
-        <el-button type="primary" :loading="tocLoading" @click="loadToc()">
+        <el-button type="primary" :loading="tocLoading" @click="loadToc(Boolean(toc))">
           {{ toc ? '刷新章节树' : '加载章节树（轻量扫描）' }}
         </el-button>
       </div>
@@ -85,6 +85,8 @@
           <template #default="{ row }">
             <el-button size="small" :loading="resyncingId === row.id" :disabled="!canResync(row)"
                        @click="doResync(row)">重同步</el-button>
+            <el-button v-if="row.status === 'failed'" size="small" type="warning" plain
+                       :loading="retryingId === row.id" @click="doRetry(row)">重试</el-button>
             <el-button size="small" @click="loadImportDetail(row)">详情</el-button>
           </template>
         </el-table-column>
@@ -127,6 +129,7 @@ const imports = ref<OnenetImport[]>([])
 const importsLoading = ref(false)
 const detail = ref<OnenetImport | null>(null)
 const resyncingId = ref('')
+const retryingId = ref('')
 
 const hasFilter = computed(() => Object.values(filters.value).some((v) => v && String(v).trim()))
 
@@ -158,11 +161,11 @@ function onPickHit(row: OnenetDocHit | null) {
   })()
 }
 
-async function loadToc() {
+async function loadToc(refresh = false) {
   if (!probe.value) return
   tocLoading.value = true
   try {
-    toc.value = await api.toc(domainStore.currentDomain, probe.value.source_id)
+    toc.value = await api.toc(domainStore.currentDomain, probe.value.source_id, { refresh })
   } catch (e) {
     handleError(e)
   } finally {
@@ -235,6 +238,19 @@ async function doResync(row: OnenetImport) {
 
 function canResync(row: OnenetImport): boolean {
   return row.status === 'done' || row.status === 'failed'
+}
+
+async function doRetry(row: OnenetImport) {
+  retryingId.value = row.id
+  try {
+    await api.retryImport(row.id)
+    ElMessage.success('已重新入队（幂等重跑，不产生重复）')
+    await reloadImports()
+  } catch (e) {
+    handleError(e)
+  } finally {
+    retryingId.value = ''
+  }
 }
 
 const STATUS_LABELS: Record<OnenetImportStatus, string> = {

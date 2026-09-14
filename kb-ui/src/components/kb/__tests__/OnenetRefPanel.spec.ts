@@ -17,7 +17,10 @@ const state = vi.hoisted(() => ({
 vi.mock('@/api/onenet', () => ({
   useOnenetApi: () => ({
     listRefs: async () => state.refs,
-    listImports: async () => state.imports,
+    // 服务端只回 done 导入（审查 H8 端点语义）
+    listKbImports: async () => state.imports
+      .filter((i: Record<string, unknown>) => i.status === 'done')
+      .map((i: Record<string, unknown>) => ({ ...i, documents: [] })),
     getImport: async (id: string) => ({ ...state.importDetail, id }),
     addRefs: async (_kb: string, ids: string[]) => ({ ...state.added, added: ids }),
     removeRefs: async (_kb: string, ids: string[]) => ({ ...state.removed, removed: ids }),

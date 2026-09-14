@@ -250,4 +250,4 @@ def test_request_failure_retries_then_raises(fake, monkeypatch):
     c.get_token()
     with pytest.raises(OnenetQueryError):
         c.query_native(page_size=1)
-    assert len(sleeps) >= 3  # 退避发生过
+    assert len(sleeps) >= 2  # 退避发生过（最后一次失败不再白等，审查 LOW）

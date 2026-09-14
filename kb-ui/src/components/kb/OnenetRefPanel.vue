@@ -62,7 +62,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useDomainStore } from '@/stores/domain'
 import { useOnenetApi } from '@/api/onenet'
 import type { OnenetImport, OnenetRef } from '@/api/onenet'
 
@@ -74,7 +73,6 @@ interface ImportDoc {
 
 const props = defineProps<{ kbId: string; canWrite?: boolean; active?: boolean }>()
 
-const domainStore = useDomainStore()
 const api = useOnenetApi()
 
 const loading = ref(false)
@@ -94,32 +92,22 @@ const canWrite = computed(() => props.canWrite !== false)
 async function reload() {
   loading.value = true
   try {
+    // 审查 H8：走库级端点（KB 成员可读），不依赖 admin 面
     const [refList, importList] = await Promise.all([
       api.listRefs(props.kbId),
-      api.listImports(domainStore.currentDomain),
+      api.listKbImports(props.kbId),
     ])
     refs.value = refList
-    imports.value = importList.filter((i) => i.status === 'done')
+    imports.value = importList
+    for (const imp of imports.value) {
+      documentsByImport[imp.id] = (imp.documents ?? []) as ImportDoc[]
+    }
   } catch (e) {
     ElMessage.error((e as Error)?.message ?? '加载失败')
   } finally {
     loading.value = false
   }
 }
-
-async function loadDocuments(importId: string) {
-  if (documentsByImport[importId]) return
-  try {
-    const detail = await api.getImport(importId)
-    documentsByImport[importId] = (detail.documents ?? []) as ImportDoc[]
-  } catch (e) {
-    ElMessage.error((e as Error)?.message ?? '产物文档加载失败')
-  }
-}
-
-watch(expanded, (names) => {
-  for (const n of names) void loadDocuments(n)
-})
 
 async function addRefs(importId: string) {
   const docs = selection[importId] ?? []

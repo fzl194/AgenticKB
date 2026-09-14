@@ -130,6 +130,8 @@ def fetch_selection(
     throttle_seconds: float = 0.3,
     verify: bool = True,
 ) -> FetchOutcome:
+    # 审查 H1：覆盖连续性只在整包模式有意义——子树勾选的 part 集合天然
+    # 不从 1 连续，强行校验会让一切中部子树导入失败。子树只校验去重。
     """拉取勾选范围到 workspace（段幂等 + 子树过滤 + 校验 + manifest）."""
     workspace.mkdir(parents=True, exist_ok=True)
     parts_dir = workspace / PARTS_DIR
@@ -160,19 +162,22 @@ def fetch_selection(
                 time.sleep(throttle_seconds)  # 温和限速
         seg_lo = seg_hi + 1
 
-    # 合并段 → slices.jsonl
+    # 合并段 → 临时文件（审查 M1：校验通过前不覆写既有批次，失败不毒化基线）
     data_path = workspace / DATA_NAME
+    tmp_path = workspace / (DATA_NAME + ".tmp")
     lines = 0
-    with data_path.open("w", encoding="utf-8") as out:
+    with tmp_path.open("w", encoding="utf-8") as out:
         for seg_path in _select_segments(parts_dir):
             for row in _iter_slice_rows(seg_path):
                 out.write(json.dumps(row, ensure_ascii=False) + "\n")
                 lines += 1
 
-    # 完整性校验
+    # 完整性校验（H1：整包模式含覆盖检查；子树模式只查去重）
     verify_result: dict[str, Any] = {"ok": None}
     if verify:
-        verify_result = verify_file(data_path)
+        full_mode = not selection.subtrees
+        verify_result = verify_file(tmp_path, full_coverage=full_mode)
+    tmp_path.replace(data_path)  # 校验通过才原子落位
 
     manifest = {
         "batch_id": f"{source_id}-{int(time.time())}",
@@ -193,8 +198,8 @@ def fetch_selection(
     return FetchOutcome(manifest=manifest, slices_path=data_path, slice_count=lines)
 
 
-def verify_file(data_path: Path) -> dict[str, Any]:
-    """完整性校验：nid 去重 / part_id 去重 / 覆盖缺口（不通过 → FetchVerifyError）."""
+def verify_file(data_path: Path, *, full_coverage: bool = True) -> dict[str, Any]:
+    """完整性校验：nid/part 去重恒查；覆盖缺口仅整包模式查（审查 H1）。"""
     dup_nid: set[str] = set()
     dup_part: set[int] = set()
     seen_nid: set[str] = set()
@@ -209,11 +214,15 @@ def verify_file(data_path: Path) -> dict[str, Any]:
             dup_part.add(pid)
         seen_part.add(pid)
     got_max = max(seen_part) if seen_part else 0
-    missing = sum(1 for p in range(1, got_max + 1) if p not in seen_part)
+    if full_coverage:
+        missing = sum(1 for p in range(1, got_max + 1) if p not in seen_part)
+    else:
+        missing = 0  # 子树勾选：part 集合天然不连续（审查 H1）
     ok = not dup_nid and not dup_part and missing == 0
     result = {
         "ok": ok, "dup_nid": len(dup_nid), "dup_part": len(dup_part),
         "missing_below_got_max": missing, "got_max_part_id": got_max,
+        "full_coverage": full_coverage,
     }
     if not ok:
         result["detail"] = (

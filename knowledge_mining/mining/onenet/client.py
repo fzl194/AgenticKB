@@ -137,8 +137,9 @@ class OnenetClient:
                     "异常响应: " + json.dumps(j, ensure_ascii=False)[:300])
             except (httpx.HTTPError, OnenetQueryError) as e:
                 last_err = e
-                # 响应形状错误同样计入退避重试（网关偶发抖动）
-                time.sleep(1.5 * (attempt + 1))
+                if attempt + 1 < self._retry:
+                    # 最后一次失败不再白等 4.5s（审查 LOW）
+                    time.sleep(1.5 * (attempt + 1))
         raise OnenetQueryError(f"请求失败({self._retry}次): {last_err}")
 
     # ---------------------------------------------------------------- 查询

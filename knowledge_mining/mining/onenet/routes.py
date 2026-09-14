@@ -151,11 +151,15 @@ async def onenet_toc(
     max_part_id = body.get("max_part_id")
 
     repo = _repo(request)
-    # parsed_version 未变 → 复用缓存（预览不重复打 ~160 请求）
+    # 缓存复用先比对 parsed_version（审查 M2：上游重解析后旧树不复活）；
+    # refresh=1 强制重扫（前端「刷新章节树」按钮）。
     client_factory = _client_factory(request)
     cached = await repo.get_toc_cache(domain, source_id)
     if cached is not None and not body.get("refresh"):
-        return {"cached": True, **_toc_payload(cached)}
+        current_version = await asyncio.to_thread(
+            lambda: client_factory().probe_source(source_id).get("parsed_version"))
+        if current_version == cached.get("parsed_version_seen"):
+            return {"cached": True, **_toc_payload(cached)}
 
     try:
         mpi = int(max_part_id) if max_part_id else None
@@ -316,6 +320,36 @@ async def kb_remove_refs(
         kb_id=kb_id, document_ids=document_ids)
 
 
+@refs_router.get("/imports")
+async def kb_onenet_imports(
+    kb_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """库级导入池（审查 H8）：KB 成员可见本域 done 导入——不再打 admin 端点。
+
+    返回行附产物文档（文件清单），供引用面板直接渲染。
+    """
+    if not await kbdb.is_visible(kb_id=kb_id, user_id=str(user["id"])):
+        raise HTTPException(404, f"KB {kb_id} not found")
+    kb = await kbdb.get_kb(kb_id)
+    domain = str(kb.get("domain") or "") if kb else ""
+    if not domain:
+        raise HTTPException(404, f"KB {kb_id} not found")
+    rows = await _repo(request).list_imports(domain=domain)
+    done = [r for r in rows if r.get("status") == "done"]
+    for r in done:
+        docs = await kbdb.list_documents_by_key_prefix(
+            r["kb_id"], f"onenet:{r['source_id']}:")
+        r["documents"] = [
+            {"id": d["id"], "document_name": d.get("document_name"),
+             "directory_path": d.get("directory_path")}
+            for d in docs
+        ]
+    return {"imports": done}
+
+
 @refs_router.get("/refs")
 async def kb_list_refs(
     kb_id: str,
@@ -352,6 +386,7 @@ async def onenet_resync(
 
     refs = RefsService(request.app.state.pg_pool)
     auto = _make_auto_miner(request)
+    import_svc = _import_service(request)
 
     async def _refs_cleanup(document_ids: list[str]) -> None:
         await refs.remove_refs_for_documents(document_ids)
@@ -362,17 +397,39 @@ async def onenet_resync(
         kb = await kbdb.get_kb(kb_id)
         await auto(kb=kb, user_id=import_row["created_by"])
 
+    async def _register_file(**kw):
+        await import_svc._import_file(**kw)  # 同导入幂等登记通道（审查 H7）
+
+    import inspect
+
+    force = bool(request.query_params.get("force")) if hasattr(request, "query_params") else False
     try:
         return await resync(
             repo=repo, kbdb=kbdb, doc_service=get_document_service(request),
             client=client, import_id=import_id,
             workspace_root=DEFAULT_WORKSPACE_ROOT,
             refs_cleanup=_refs_cleanup, reminer=_reminer,
+            register_file=_register_file, force=force,
         )
     except ResyncError as e:
         raise HTTPException(409, str(e)) from e
     finally:
         client.close()
+
+
+@router.post("/imports/{import_id}/retry", status_code=202)
+async def onenet_retry_import(
+    import_id: str,
+    user: dict[str, Any] = Depends(require_admin),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """失败重跑（审查 H6）：段文件/document_key 双层幂等，不产生重复。"""
+    svc = _import_service(request)
+    from knowledge_mining.mining.onenet.import_service import OnenetImportError
+    try:
+        return await svc.retry_import(import_id)
+    except OnenetImportError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 @router.patch("/imports/{import_id}/selection")

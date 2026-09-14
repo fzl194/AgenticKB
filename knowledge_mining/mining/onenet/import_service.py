@@ -144,20 +144,31 @@ class OnenetRepo:
     async def update_import(self, import_id: str, **fields: Any) -> None:
         if not fields:
             return
-        sets = ", ".join(f"{k} = %({k})s" for k in fields)
-        params = {**fields, "updated_at": _utcnow(), "id": import_id}
+        # jsonb 字段需 dumps + 显式 cast（审查 H3：psycopg3 不适配裸 dict）
+        params: dict[str, Any] = {**fields, "updated_at": _utcnow(), "id": import_id}
+        sets: list[str] = []
+        for k in fields:
+            if isinstance(fields[k], (dict, list)):
+                params[k] = json.dumps(fields[k], ensure_ascii=False)
+                sets.append(f"{k} = %({k})s::jsonb")
+            else:
+                sets.append(f"{k} = %({k})s")
         async with self._conn() as conn:
             await conn.execute(
-                f"UPDATE onenet_imports SET {sets}, updated_at = %(updated_at)s "
-                "WHERE id = %(id)s", params)
+                f"UPDATE onenet_imports SET {', '.join(sets)}, "
+                "updated_at = %(updated_at)s WHERE id = %(id)s", params)
 
     # --------------------------------------------------------- 公共库
 
     async def find_public_kb(self, domain: str) -> dict[str, Any] | None:
+        """按 kind=onenet 精确匹配（审查 H5：011 后名字不再域内唯一，
+        用户自建同名库不得劫持 bootstrap）；多行时确定性取最早建的。"""
         async with self._conn() as conn:
             cur = await conn.execute(
                 """SELECT * FROM knowledge_bases
-                   WHERE domain = %s AND name = %s AND status = 'active'""",
+                   WHERE domain = %s AND name = %s AND status = 'active'
+                     AND metadata_json ->> 'kind' = 'onenet'
+                   ORDER BY created_at ASC, id ASC LIMIT 1""",
                 [domain, PUBLIC_KB_NAME])
             row = await cur.fetchone()
             return dict(row) if row else None
@@ -255,6 +266,23 @@ class OnenetImportService:
         _bg_tasks.add(task)
         task.add_done_callback(_bg_tasks.discard)
         return record
+
+    async def retry_import(self, import_id: str) -> dict[str, Any]:
+        """失败重跑（审查 H6：failed 记录此前被 UNIQUE 锁死无出路）。
+
+        重置 queued 后重跑状态机——段文件/document_key 双层幂等保证不重复。
+        """
+        record = await self._repo.get_import(import_id)
+        if record is None:
+            raise OnenetImportError(f"import_not_found: {import_id}")
+        if record.get("status") != "failed":
+            raise OnenetImportError(
+                f"import_not_failed: 当前状态 {record.get('status')}")
+        await self._repo.update_import(import_id, status="queued", error=None)
+        task = asyncio.create_task(self._run_import(import_id))
+        _bg_tasks.add(task)
+        task.add_done_callback(_bg_tasks.discard)
+        return await self._repo.get_import(import_id)
 
     # ------------------------------------------------------------ 状态机
 

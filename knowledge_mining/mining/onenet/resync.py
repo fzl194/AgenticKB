@@ -96,6 +96,8 @@ async def resync(
     workspace_root: Path,
     refs_cleanup: Callable[[list[str]], Any] | None = None,
     reminer: Callable[[str], Any] | None = None,
+    register_file: Callable[..., Any] | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """重同步入口（async：DB 调用全程 await）.
 
@@ -109,8 +111,9 @@ async def resync(
 
     # 探测与拉取是同步网络 IO（分钟级）——下放主循环默认执行器（安全审查 H-2），
     # async 回调（DB）仍留在事件循环上，不跨循环复用 async pool。
+    # force（审查 H7）：selection 刚被 PATCH 扩大时绕过三信号短路，强制重放。
     probe = await asyncio.to_thread(probe_changes, client, import_row)
-    if not probe["changed"]:
+    if not probe["changed"] and not force:
         return {"changed": False, "signals": probe["signals"], "diff": None,
                 "updated_documents": [], "removed_documents": []}
 
@@ -118,6 +121,28 @@ async def resync(
     kb_id = import_row["kb_id"]
     selection = Selection.from_dict(import_row.get("selection_json") or {})
     workspace = Path(workspace_root) / import_row["domain"] / source_id
+    try:
+        return await _resync_inner(
+            repo=repo, kbdb=kbdb, doc_service=doc_service, client=client,
+            import_row=import_row, import_id=import_id, probe=probe,
+            selection=selection, workspace=workspace,
+            refs_cleanup=refs_cleanup, reminer=reminer,
+            register_file=register_file)
+    except Exception as e:
+        # 审查 M1：失败如实置 failed（docstring 承诺），已入库文档不动
+        try:
+            await repo.update_import(import_id, status="failed", error=str(e)[:2000])
+        except Exception:
+            logger.exception("[onenet] resync 失败态回写也失败: %s", import_id)
+        raise
+
+
+async def _resync_inner(
+    *, repo, kbdb, doc_service, client, import_row, import_id, probe,
+    selection, workspace, refs_cleanup, reminer, register_file,
+) -> dict[str, Any]:
+    source_id = import_row["source_id"]
+    kb_id = import_row["kb_id"]
 
     # 旧基线必须在 fetch 覆写 slices.jsonl **之前**读：
     # prev（上次同步态）优先，否则取当前批次（首次重同步的原始导入态）
@@ -129,12 +154,12 @@ async def resync(
 
     # 上游重解析（parsed_version 变）→ 旧段文件内容全失效，必须清段重拉；
     # 仅追加（part_max/total 变）→ 旧段幂等复用，只补新段。
+    # prev 基线保留到成功轮转（审查 M1：失败不毒化基线）。
     import shutil
     if probe["signals"]["parsed_version"]["changed"]:
         parts_dir = workspace / "parts"
         if parts_dir.exists():
             shutil.rmtree(parts_dir)
-        prev_path.unlink(missing_ok=True)
 
     outcome = await asyncio.to_thread(
         fetch_selection, client, source_id, selection, workspace)
@@ -174,10 +199,18 @@ async def resync(
         doc = await kbdb.find_document_by_key(kb_id, key)
         payload = _jsonl_bytes(new_file.slices)
         if doc is None:
-            # 重放 selection 扩大后的新增子树文件：走登记（同导入幂等 key）
-            raise ResyncError(
-                f"new_file_during_resync: {key}——selection 扩大产生新文件，"
-                "请先保存 selection 后重跑（本期由 import 路径补建）")
+            # 审查 H7：selection 扩大产生的新文件就地登记（幂等 key 同导入），
+            # 不再是断头路。register_file 由路由层从导入服务注入。
+            if register_file is None:
+                raise ResyncError(
+                    f"new_file_without_register: {key}——selection 扩大产生新文件"
+                    "且未注入登记通道")
+            await register_file(
+                kb_id=kb_id, domain=import_row["domain"],
+                source_id=source_id, restored=new_file,
+                actor_id=import_row["created_by"])
+            updated_documents.append(f"new:{key}")
+            continue
         storage = await doc_service.store_source_bytes(
             payload, mime="application/x-onenet+jsonl")
         await kbdb.replace_document_object(

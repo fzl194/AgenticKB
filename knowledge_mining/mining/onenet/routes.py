@@ -235,4 +235,69 @@ async def onenet_get_import(
     return record
 
 
+# ------------------------------------------------------------ KB 引用（47 号 §四-8）
+
+
+def _refs_service(request: Request):
+    from knowledge_mining.mining.onenet.refs_service import RefsService
+    return RefsService(request.app.state.pg_pool)
+
+
+@refs_router.post("/refs")
+async def kb_add_refs(
+    kb_id: str,
+    body: dict[str, Any],
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """批量建立引用（库主/editor：can_write 守卫；跨域/非公共库文档服务端拒绝）。"""
+    document_ids = [str(d) for d in (body.get("document_ids") or []) if str(d).strip()]
+    if not document_ids:
+        raise HTTPException(422, "document_ids required")
+    if not await kbdb.can_write(kb_id=kb_id, user_id=str(user["id"])):
+        raise HTTPException(403, "kb_write_required")
+    svc = _refs_service(request)
+    from knowledge_mining.mining.onenet.refs_service import RefsError
+    try:
+        return await svc.add_refs(
+            kb_id=kb_id, document_ids=document_ids, actor_id=str(user["id"]))
+    except RefsError as e:
+        msg = str(e)
+        code = msg.split(":", 1)[0]
+        status = 403 if code in (
+            "cross_domain_reference", "not_onenet_document") else 422
+        raise HTTPException(status, msg) from e
+
+
+@refs_router.delete("/refs")
+async def kb_remove_refs(
+    kb_id: str,
+    body: dict[str, Any],
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+    request: Request = None,  # type: ignore[assignment]
+):
+    document_ids = [str(d) for d in (body.get("document_ids") or []) if str(d).strip()]
+    if not document_ids:
+        raise HTTPException(422, "document_ids required")
+    if not await kbdb.can_write(kb_id=kb_id, user_id=str(user["id"])):
+        raise HTTPException(403, "kb_write_required")
+    return await _refs_service(request).remove_refs(
+        kb_id=kb_id, document_ids=document_ids)
+
+
+@refs_router.get("/refs")
+async def kb_list_refs(
+    kb_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+    request: Request = None,  # type: ignore[assignment]
+):
+    if not await kbdb.is_visible(kb_id=kb_id, user_id=str(user["id"])):
+        raise HTTPException(404, f"KB {kb_id} not found")
+    refs = await _refs_service(request).list_refs(kb_id=kb_id)
+    return {"refs": refs}
+
+
 __all__ = ["DEFAULT_WORKSPACE_ROOT", "refs_router", "router"]

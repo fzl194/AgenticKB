@@ -73,7 +73,8 @@ async def document_parse_result(
     if not await kbdb.is_visible(kb_id=kb_id, user_id=user["id"]):
         raise HTTPException(404, "Document not found")
     document = await kbdb.get_document_identity(document_id)
-    if document is None or document.get("kb_id") != kb_id:
+    # 47 号引用：读口径放宽——自有 OR 被本库引用（写路径不变，仍验 kb 归属）
+    if document is None or not await kbdb.document_in_kb_or_referenced(kb_id, document_id):
         raise HTTPException(404, "Document not found")
     service = await get_parse_result_service(request, domain=document["domain"])
     from knowledge_mining.mining.contracts.storage.errors import StorageObjectMissing

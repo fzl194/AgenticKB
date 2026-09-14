@@ -19,7 +19,7 @@
     </select>
 
     <!--
-      KB-narrowed scope resolution. Three things here are load-bearing:
+      KB-narrowed scope resolution. Four things here are load-bearing:
 
       1. b.kb_id = d.kb_id — only a build of the document's OWN kb may decide its current
          snapshot. Without it, a sibling KB's build that carried forward a stale domain-release
@@ -28,6 +28,10 @@
          let a document that a later build marked 'removed' fall back to its older 'active' row.
       3. d.domain guard — production runs all domains in one physical database, so a kb id from
          another domain must not resolve here.
+      4. Onenet reference scope (doc 47 §四-5): a document REFERENCED by any requested kb
+         (kb_document_refs) is in scope too — its build still lives in its own (public) kb,
+         so b.kb_id = d.kb_id keeps holding. Python-side KbDB.get_current_serving_snapshot
+         carries the same branch (contract: change both together).
 
       KB builds are always full-mode with no parent (assemble_build's parent lookup needs an active
       release and KB runs never publish), so each build holds only that run's documents. Picking
@@ -48,10 +52,20 @@
               AND b.kb_id = d.kb_id
               AND d.deleted_at IS NULL
               AND d.domain = #{domain}
-              AND d.kb_id IN
-              <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">
-                  #{kbId}
-              </foreach>
+              AND (
+                  d.kb_id IN
+                  <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">
+                      #{kbId}
+                  </foreach>
+                  OR EXISTS (
+                      SELECT 1 FROM kb_document_refs r
+                      WHERE r.document_id = d.id
+                        AND r.kb_id IN
+                        <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">
+                            #{kbId}
+                        </foreach>
+                  )
+              )
             ORDER BY bs.document_id, b.created_at DESC, b.id DESC
         ) t
         WHERE t.selection_status = 'active'

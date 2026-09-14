@@ -703,11 +703,25 @@ class DocumentService:
         except OSError:
             pass
 
+    async def _assert_document_read(
+        self, doc: dict[str, Any], user_id: str,
+    ) -> None:
+        """文档级读授权（47 号引用即只读授权）.
+
+        属主库可见走原路径；被任一「用户可见库」引用的文档同样放行只读
+        （下载/预览/详情）。写路径（patch/replace/move/delete）不经此判定。
+        """
+        if await self._db.is_visible(kb_id=doc["kb_id"], user_id=user_id):
+            return
+        if await self._db.document_readable_by_user(str(doc["id"]), user_id):
+            return
+        raise Forbidden(str(doc["id"]))
+
     async def get_document(self, *, document_id: str, user_id: str) -> dict[str, Any]:
         doc = await self._db.get_document_identity(document_id)
         if doc is None:
             raise NotFound(document_id)
-        await self._svc._assert_read(doc["kb_id"], user_id)
+        await self._assert_document_read(doc, user_id)
         self._fill_meta(doc)
         return doc
 
@@ -815,7 +829,7 @@ class DocumentService:
         doc = await self._db.get_document_identity(document_id)
         if doc is None:
             raise NotFound(document_id)
-        await self._svc._assert_read(doc["kb_id"], user_id)
+        await self._assert_document_read(doc, user_id)
         if not doc.get("storage_object_id"):
             return None
         if self._object_store is None or self._storage_objects is None:
@@ -847,7 +861,7 @@ class DocumentService:
         doc = await self._db.get_document_identity(document_id)
         if doc is None:
             raise NotFound(document_id)
-        await self._svc._assert_read(doc["kb_id"], user_id)
+        await self._assert_document_read(doc, user_id)
         if not doc.get("storage_object_id"):
             return None
         if self._object_store is None or self._storage_objects is None:
@@ -873,7 +887,7 @@ class DocumentService:
         doc = await self._db.get_document_identity(document_id)
         if doc is None:
             raise NotFound(document_id)
-        await self._svc._assert_read(doc["kb_id"], user_id)
+        await self._assert_document_read(doc, user_id)
         p = Path(doc["storage_path"])
         base = (self._upload_root / doc["kb_id"]).resolve()
         try:

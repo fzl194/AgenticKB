@@ -1133,7 +1133,10 @@ WITH latest AS (
         - 先 ``DISTINCT ON (document_id)`` 取最新一行（**不看** selection_status），
           再过滤 ``selection_status='active'``——先滤后取会让被后续 build 标记
           ``removed`` 的文档错误回退到旧 build 的 active 行；
-        - 文档软删（``deleted_at``）视为无当前可搜索版本。
+        - 文档软删（``deleted_at``）视为无当前可搜索版本；
+        - 47 号引用：``kb_id`` 请求库除自有文档外，还包括被本库引用的一张网
+          公共库文档（``kb_document_refs``）——引用文档的 build 仍在公共库，
+          ``b.kb_id = d.kb_id`` 维持不变。
 
         返回 snapshot 身份 + link 来源版本 + build；无 → None。
         """
@@ -1151,7 +1154,10 @@ WITH latest AS (
                        WHERE bs.document_id = %s
                          AND b.status IN ('validated', 'published')
                          AND b.kb_id = d.kb_id
-                         AND d.kb_id = %s
+                         AND (d.kb_id = %s
+                              OR EXISTS (SELECT 1 FROM kb_document_refs r
+                                         WHERE r.kb_id = %s
+                                           AND r.document_id = d.id))
                          AND d.deleted_at IS NULL
                        ORDER BY bs.document_id, b.created_at DESC, b.id DESC
                    ) t
@@ -1161,7 +1167,7 @@ WITH latest AS (
                    WHERE t.selection_status = 'active'
                    ORDER BY l.linked_at DESC
                    LIMIT 1""",
-                [document_id, kb_id],
+                [document_id, kb_id, kb_id],
             )
             row = await cur.fetchone()
             return dict(row) if row else None
@@ -1528,8 +1534,90 @@ WITH latest AS (
             row = await cur.fetchone()
             return dict(row) if row else None
 
-    async def find_document_by_key(
-        self, kb_id: str, document_key: str, *, include_deleted: bool = False,
+    # ------------------------------------------------- onenet 引用（47 号 §四-5）
+
+    async def document_in_kb_or_referenced(
+        self, kb_id: str, document_id: str,
+    ) -> bool:
+        """文档归属判定（读口径）：自有 OR 被本库引用.
+
+        kb 路由 ``document.get("kb_id") != kb_id`` 404 守卫的引用放宽版；
+        写路径（patch/replace/move/delete）**不得**改用本判定。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT 1 WHERE EXISTS (
+                       SELECT 1 FROM asset_documents d
+                       WHERE d.id = %s AND d.kb_id = %s AND d.deleted_at IS NULL)
+                    OR EXISTS (
+                       SELECT 1 FROM kb_document_refs r
+                       JOIN asset_documents d ON d.id = r.document_id
+                       WHERE r.kb_id = %s AND r.document_id = %s
+                         AND d.deleted_at IS NULL)""",
+                [document_id, kb_id, kb_id, document_id],
+            )
+            return (await cur.fetchone()) is not None
+
+    async def list_referenced_documents(self, kb_id: str) -> list[dict[str, Any]]:
+        """本库引用的一张网公共库文档（外部引用 tab / MCP list 合并用）."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT d.id, d.domain, d.document_key, d.document_name,
+                          d.directory_path, d.file_size, d.created_at,
+                          d.storage_object_id, d.source_raw_hash,
+                          d.content_revision,
+                          pk.name AS source_kb_name,
+                          r.created_at AS referenced_at
+                   FROM kb_document_refs r
+                   JOIN asset_documents d ON d.id = r.document_id
+                   JOIN knowledge_bases pk ON pk.id = d.kb_id
+                   WHERE r.kb_id = %s AND d.deleted_at IS NULL
+                   ORDER BY d.directory_path, d.document_name""",
+                [kb_id],
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def document_readable_by_user(
+        self, document_id: str, user_id: str,
+    ) -> bool:
+        """文档级读授权（47 号引用即只读授权）：属主库可见 OR 任一引用库可见."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT 1
+                   FROM asset_documents d
+                   JOIN knowledge_bases k ON k.id = d.kb_id
+                   WHERE d.id = %s AND d.deleted_at IS NULL
+                     AND k.status = 'active'
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %s AND u.site_role = 'admin')
+                          OR k.owner_id = %s
+                          OR k.visibility = 'public'
+                          OR EXISTS (SELECT 1 FROM kb_members m
+                                     WHERE m.kb_id = k.id AND m.user_id = %s))
+                   LIMIT 1""",
+                [document_id, user_id, user_id, user_id],
+            )
+            if (await cur.fetchone()) is not None:
+                return True
+            cur = await conn.execute(
+                """SELECT 1
+                   FROM kb_document_refs r
+                   JOIN knowledge_bases k ON k.id = r.kb_id
+                   JOIN asset_documents d ON d.id = r.document_id
+                   WHERE r.document_id = %s AND d.deleted_at IS NULL
+                     AND k.status = 'active'
+                     AND (EXISTS (SELECT 1 FROM kb_users u
+                                  WHERE u.id = %s AND u.site_role = 'admin')
+                          OR k.owner_id = %s
+                          OR k.visibility = 'public'
+                          OR EXISTS (SELECT 1 FROM kb_members m
+                                     WHERE m.kb_id = k.id AND m.user_id = %s))
+                   LIMIT 1""",
+                [document_id, user_id, user_id, user_id],
+            )
+            return (await cur.fetchone()) is not None
+
+    async def find_document_by_key(        self, kb_id: str, document_key: str, *, include_deleted: bool = False,
     ) -> dict[str, Any] | None:
         """按 KB 内唯一键查身份（重传冲突预检用）。默认只找活文档。"""
         soft = "" if include_deleted else " AND deleted_at IS NULL"

@@ -1367,16 +1367,19 @@ WITH latest AS (
         storage_object_id: str, source_raw_hash: str,
         directory_path: str | None = None, document_type: str | None = None,
         owner_id: str | None = None, file_size: int | None = None,
-        modified_at: str | None = None,
+        modified_at: str | None = None, metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a KB document that points at an AVAILABLE object-store object.
 
         ``storage_path`` intentionally remains NULL.  It is a legacy migration
         field and must not be populated by new uploads: object identity plus
         the first content revision are committed with the document row.
+        ``metadata``（可选，47 号 onenet 导入用）：写入 metadata_json；
+        缺省 '{}' 维持既有上传路径行为。
         """
         from .location_repository import lock_kb, assert_location_free, assert_directory_exists
         now = _utcnow()
+        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         async with self._pool.connection() as conn:
             await lock_kb(conn, kb_id)
             folder_id = await assert_directory_exists(conn, kb_id, directory_path)
@@ -1388,7 +1391,7 @@ WITH latest AS (
                       file_size, modified_at, storage_object_id, source_raw_hash,
                       content_revision, content_updated_at, folder_id)
                    VALUES
-                     (%(id)s, %(dom)s, %(k)s, %(n)s, %(t)s, '{}'::jsonb,
+                     (%(id)s, %(dom)s, %(k)s, %(n)s, %(t)s, %(meta)s::jsonb,
                       %(now)s, %(kb)s, %(dp)s, %(own)s, %(fs)s, %(ma)s,
                       %(so)s, %(hash)s, 1, %(now2)s, %(folder)s)
                    RETURNING id, domain, kb_id, document_key, document_name,
@@ -1397,7 +1400,8 @@ WITH latest AS (
                              source_raw_hash, content_revision, folder_id""",
                 {
                     "id": _new_id(), "dom": domain, "k": document_key,
-                    "n": document_name, "t": document_type, "now": now,
+                    "n": document_name, "t": document_type,
+                    "meta": meta_json, "now": now,
                     # created_at 是 TEXT（001 legacy），content_updated_at 是
                     # TIMESTAMPTZ（008）——同一参数喂两列会触发
                     # AmbiguousParameter，必须拆成两个绑定参数。

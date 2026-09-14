@@ -423,6 +423,19 @@ class DocumentService:
             mime=mime, etag=put_result.etag,
         )
 
+    async def store_source_bytes(
+        self, payload: bytes, *, mime: str,
+    ) -> StorageObjectRecord:
+        """整包字节 → source 对象（内容寻址 + 登记）。
+
+        onenet 导入等「服务端生成的字节」走这里（47 号）：复用流式路径的
+        哈希/去重/登记语义，不经过 HTTP 上传链路。
+        """
+        async def _stream() -> AsyncIterator[bytes]:
+            yield payload
+
+        return await self._store_source_stream(_stream(), mime=mime)
+
     async def _register_source_object(
         self, *, object_key: str, sha256: str, size: int,
         mime: str | None, etag: str,

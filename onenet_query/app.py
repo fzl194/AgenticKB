@@ -366,15 +366,19 @@ PAGE_HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-const FIELDS = ["source_id","nid","url","title","path","content",
-                "source_site","file_name","category_path","doc_name","doc_type","part_id"];
+const FIELDS = [
+  ["source_id","文档ID"], ["nid","切片ID"], ["url","资源链接"], ["title","标题"],
+  ["path","章节目录"], ["content","切片内容"], ["source_site","来源站点"],
+  ["file_name","文件名"], ["category_path","定义标签"], ["doc_name","文档名称"],
+  ["doc_type","文档类型"], ["part_id","文档顺序"]];
 const NUMERIC = new Set(["part_id"]);
 let curPage = 1;
 
 function addCond(field, fuzzy, content) {
   const div = document.createElement("div");
   div.className = "cond";
-  const opts = FIELDS.map(f => `<option ${f===field?"selected":""}>${f}</option>`).join("");
+  const opts = FIELDS.map(([f, cn]) =>
+      `<option value="${f}" ${f===field?"selected":""}>${cn} ${f}</option>`).join("");
   div.innerHTML = `
     <select onchange="onField(this)">${opts}</select>
     <select class="mode">
@@ -454,8 +458,10 @@ function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function joinA(v) { return Array.isArray(v) ? v.join(" / ") : (v ?? ""); }
 
+// 默认查询：来源站点 support（大部分产品文档在此）+ 文档名称精确（主路径）。
+// 来源站点行也可删——想搜全站时去掉即可。
+addCond("source_site", false, "support");
 addCond("doc_name", false, "");
-addCond("doc_type", false, "");
 </script>
 </body>
 </html>

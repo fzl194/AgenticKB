@@ -1542,6 +1542,26 @@ WITH latest AS (
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def list_documents_by_key_prefix(
+        self, kb_id: str, key_prefix: str, *, limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """按 document_key 前缀列文档（47 号 onenet：导入记录详情用）。
+
+        只列活文档（软删由重同步清理路径单独处理）；key 无索引前缀扫描，
+        仅管理面小规模使用。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, domain, kb_id, document_key, document_name,
+                          directory_path, file_size, created_at
+                   FROM asset_documents
+                   WHERE kb_id = %s AND document_key LIKE %s
+                     AND deleted_at IS NULL
+                   ORDER BY document_key LIMIT %s""",
+                [kb_id, key_prefix + "%", limit],
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
     async def soft_delete_document(self, document_id: str) -> None:
         """软删文档（P08-S1）：盖 deleted_at，不触 FK CASCADE——历史 Build 的
         selection 行完整保留（硬删会借 CASCADE 改写历史 Build，属 P0 事故面）。

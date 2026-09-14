@@ -13,7 +13,6 @@ def _segment(block_type="paragraph", text="正文内容", index=0):
         segment_index=index,
         block_type=block_type,
         raw_text=text,
-        normalized_text=text,
         token_count=8,
         element_ids=(f"e{index}",),
         heading_chain=((1, "章节一"),),

@@ -75,13 +75,18 @@ def load_credentials() -> tuple[str, str]:
         f"{here / 'onenet.yaml'} 填 app_id / static_token")
 
 
-# ---------------------------------------------------------------- 一张网客户端（精简版）
+# ---------------------------------------------------------------- 一张网客户端
+# 调用逻辑逐字对齐 kone_connector/src/onenet_client.py（内网实证 2026-09-07）：
+# - _post：401→token 重取重试一次；任何请求失败重试 3 次（退避 1.5s*n）；网关 list 包装解包
+# - 查询走 DSL 模式 + 稳定双键排序 [{part_id asc},{nid.keyword asc}]——
+#   原生模式 sortField 单键翻页会重复/漏（kone_connector 实测坑，协议 §5-#4）
+
 
 class Onenet:
     def __init__(self) -> None:
         self._app_id, self._static_token = load_credentials()
         self._token: str | None = None
-        self._http = httpx.Client(verify=False, timeout=120)
+        self._http = httpx.Client(verify=False, timeout=300)  # 同 demo timeout=300
 
     def _get_token(self, force: bool = False) -> str:
         if self._token and not force:
@@ -94,53 +99,87 @@ class Onenet:
         if not token:
             raise RuntimeError("token 获取失败: " + res.text[:200])
         self._token = token
-        log.info("token 获取成功 force=%s（值脱敏: %s...）",
-                 force, token[:10])
+        log.info("token 获取成功 force=%s（值脱敏: %s...）", force, token[:10])
         return token
 
-    def query_native(self, conditions: list[dict], page_num: int, page_size: int) -> dict:
-        """原生 searchQueryList 查询：401 重取 token；5xx/网络错退避重试。"""
-        body = {"pageNum": page_num, "pageSize": page_size, "sortField": "part_id",
-                "searchQueryList": conditions}
+    def _post(self, body: dict, retry: int = 3) -> dict:
+        """对齐 kone_connector._post：异常/网关错误统一退避重试。"""
         last_err: Exception | None = None
-        for attempt in range(4):
+        for attempt in range(retry):
             t0 = time.monotonic()
             try:
                 res = self._http.post(
                     SEARCH_URL, json=body,
-                    headers={"Authorization": self._get_token(force=attempt == 1),
+                    headers={"Authorization": self._get_token(),
                              "Content-Type": "application/json"})
                 elapsed = (time.monotonic() - t0) * 1000
-                log.info("search page=%s size=%s -> HTTP %s (%.0fms) 条件=%s",
-                         page_num, page_size, res.status_code, elapsed,
-                         json.dumps(conditions, ensure_ascii=False))
+                log.info("search from=%s size=%s -> HTTP %s (%.0fms) 命中=%s",
+                         body.get("from"), body.get("size"), res.status_code,
+                         elapsed, _conds_brief(body))
                 if res.status_code == 401 and attempt == 0:
-                    log.warning("401：token 过期，重取后重试")
+                    self._get_token(force=True)   # token 过期重取（同 demo）
                     continue
                 if res.status_code >= 500:
-                    # 网关超时/抖动（实测出现过 504）：退避重试
-                    last_err = RuntimeError(
+                    raise RuntimeError(
                         f"网关错误 HTTP {res.status_code}（{elapsed:.0f}ms）: "
                         + res.text[:150])
-                    log.warning("第 %s 次尝试网关错误，退避重试: %s",
-                                attempt + 1, last_err)
-                    time.sleep(2 * (attempt + 1))
-                    continue
                 res.raise_for_status()
                 data = res.json()
                 if isinstance(data, dict) and "searchResults" in data:
                     return data
+                # 网关 list 包装（同 demo）
+                if (isinstance(data, list) and data and isinstance(data[0], dict)
+                        and "searchResults" in data[0]):
+                    return data[0]
                 raise RuntimeError("异常响应: "
                                    + json.dumps(data, ensure_ascii=False)[:200])
-            except RuntimeError:
-                raise
-            except Exception as e:  # 网络层异常（连接超时等）同样退避
-                elapsed = (time.monotonic() - t0) * 1000
+            except Exception as e:  # noqa: BLE001 —— 同 demo：请求失败一律计退避
                 last_err = e
-                log.warning("第 %s 次尝试网络异常 (%.0fms): %s",
-                            attempt + 1, elapsed, e)
-                time.sleep(2 * (attempt + 1))
-        raise RuntimeError(f"查询连续失败（已重试）: {last_err}")
+                log.warning("第 %s 次尝试失败 (%.0fms): %s",
+                            attempt + 1, (time.monotonic() - t0) * 1000, e)
+                time.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"请求失败({retry}次): {last_err}")
+
+    def query_dsl(self, dsl: dict) -> dict:
+        raw = dsl if isinstance(dsl, str) else json.dumps(dsl, ensure_ascii=False)
+        return self._post({"dsl": raw})
+
+
+def _conds_brief(body: dict) -> str:
+    """日志里打条件摘要（不打全量 content，防刷屏）。"""
+    raw = body.get("dsl")
+    if not raw:
+        return "-"
+    try:
+        dsl = json.loads(raw) if isinstance(raw, str) else raw
+        must = dsl.get("query", {}).get("bool", {}).get("must", [])
+        parts = []
+        for c in must:
+            if "term" in c:
+                (f, v), = c["term"].items()
+                parts.append(f"{f.replace('.keyword','')}={list(v.values())[0]!r}§精确")
+            elif "match" in c:
+                (f, v), = c["match"].items()
+                parts.append(f"{f}={v!r}§模糊")
+        return ",".join(parts)[:200]
+    except Exception:
+        return "?"
+
+
+def translate_conditions(conditions: list[dict]) -> list[dict]:
+    """三元组 → DSL must（与主项目 client.query_native 的翻译一致）：
+    精确=term {field}.keyword（数字字段 part_id 用裸 term）；
+    模糊=match {field}。"""
+    must = []
+    for c in conditions:
+        field, content = c["field"], c["content"]
+        if field in NUMERIC_FIELDS:
+            must.append({"term": {field: int(content)}})
+        elif c["fuzzy"]:
+            must.append({"match": {field: content}})
+        else:
+            must.append({"term": {f"{field}.keyword": {"value": content}}})
+    return must
 
 
 _client: Onenet | None = None
@@ -156,20 +195,31 @@ def get_client() -> Onenet:
 # ---------------------------------------------------------------- 查询 → 汇总 → 分页
 
 def pull_slices(conditions: list[dict], max_slices: int = _MAX_SLICES):
-    """翻页拉取命中切片（最多 max_slices；单查询接口上限 10000）。"""
+    """DSL + 稳定双键排序翻页（对齐 kone_connector.fetch_source_chunk 实证路径）。
+
+    from/size ≤ 10000（接口硬上限）；sort [part_id asc, nid.keyword asc]
+    保证翻页不重不漏。排序按 part_id 阅读序（非相关度）——相关度指示
+    由汇总后的 slice_hits 承担。
+    """
     client = get_client()
-    slices: list[dict] = []
+    base = {
+        "query": {"bool": {"must": translate_conditions(conditions)}},
+        "track_total_hits": True,
+        "sort": [{"part_id": "asc"}, {"nid.keyword": "asc"}],
+    }
+    slices: list[list] = []
     total: int | None = None
-    page = 1
-    while len(slices) < max_slices:
-        res = client.query_native(conditions, page_num=page, page_size=_PAGE_SIZE)
+    frm = 0
+    while frm + _PAGE_SIZE <= _MAX_SLICES and len(slices) < max_slices:
+        q = {**base, "from": frm, "size": _PAGE_SIZE}
+        res = client.query_dsl(q)
         if total is None:
             total = int(res.get("total") or 0)
         rows = res.get("searchResults") or []
         slices.extend(rows)
         if len(rows) < _PAGE_SIZE:
             break
-        page += 1
+        frm += len(rows)
     return slices[:max_slices], total
 
 

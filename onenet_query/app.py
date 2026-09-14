@@ -86,7 +86,14 @@ class Onenet:
     def __init__(self) -> None:
         self._app_id, self._static_token = load_credentials()
         self._token: str | None = None
-        self._http = httpx.Client(verify=False, timeout=300)  # 同 demo timeout=300
+        # trust_env=False：忽略 HTTP(S)_PROXY 环境变量——内网 407 修复。
+        # 一张网端点是内网直连，企业代理（407 认证）不应介入。
+        proxies = {k: v for k, v in os.environ.items()
+                   if k.lower() in ("http_proxy", "https_proxy", "all_proxy")}
+        if proxies:
+            log.info("检测到代理环境变量（已忽略，内网直连）: %s",
+                     ",".join(sorted(proxies.keys())))
+        self._http = httpx.Client(verify=False, timeout=300, trust_env=False)
 
     def _get_token(self, force: bool = False) -> str:
         if self._token and not force:

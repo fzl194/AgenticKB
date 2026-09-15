@@ -118,6 +118,7 @@ $$;
 
 ALTER TABLE asset_document_snapshots ADD CONSTRAINT ck_asset_snapshot_mime_type
     CHECK (mime_type IN (
+        'application/x-onenet+jsonl',
         'text/markdown', 'text/plain', 'text/html', 'application/pdf',
         'application/msword',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

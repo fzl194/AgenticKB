@@ -1854,6 +1854,20 @@ WITH latest AS (
                 raise ValueError("folder is not empty")
             await conn.execute("DELETE FROM kb_folders WHERE id = %s", [folder_id])
 
+    async def delete_folder_subtree(self, kb_id: str, path: str) -> int:
+        """删除整个文件夹子树（含自身）——source 级删除专用（onenet A 方案）。
+
+        调用方须先确认子树内活文档清零（count_docs_under_path == 0）；
+        软删文档的 directory_path 允许悬空（读面已按 deleted_at 退出）。
+        """
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """DELETE FROM kb_folders
+                   WHERE kb_id = %s AND (path = %s OR starts_with(path, %s))""",
+                [kb_id, path, path + "/"])
+            # psycopg3 的 rowcount 是 int property（审查 H2）
+            return cur.rowcount if hasattr(cur, "rowcount") else 0
+
     async def move_document_logically(self, document_id: str, *, target_folder_id: str | None):
         from .location_repository import move_document
         async with self._pool.connection() as conn:

@@ -339,8 +339,10 @@ def test_delete_import_source_level(monkeypatch):
     c, repo = _client(monkeypatch)
     repo.imports["imp-1"] = {"id": "imp-1", "domain": "cloud_core_network",
                              "source_id": "DOC1", "kb_id": "kb-pub",
-                             "status": "done", "document_count": 2}
+                             "status": "done", "document_count": 2,
+                             "doc_name": "UDG"}
     soft: list[str] = []
+    subtree: dict[str, object] = {}
 
     class FakeKbDb2:
         async def list_documents_by_key_prefix(self, kb_id, prefix, *, limit=5000):
@@ -350,6 +352,14 @@ def test_delete_import_source_level(monkeypatch):
 
         async def soft_delete_document(self, document_id):
             soft.append(document_id)
+
+        async def count_docs_under_path(self, *, kb_id, path):
+            subtree["counted"] = path
+            return 0                       # 软删后活文档清零
+
+        async def delete_folder_subtree(self, kb_id, path):
+            subtree["deleted"] = path
+            return 7
 
     import knowledge_mining.mining.onenet.routes as r
     monkeypatch.setattr(r, "KbDB", lambda pool: FakeKbDb2())
@@ -364,8 +374,11 @@ def test_delete_import_source_level(monkeypatch):
 
     resp = c.delete("/api/onenet/imports/imp-1")
     assert resp.status_code == 200
-    assert resp.json() == {"deleted_documents": ["d1", "d2"], "removed_refs": 3}
+    assert resp.json() == {"deleted_documents": ["d1", "d2"], "removed_refs": 3,
+                           "removed_folders": 7}
     assert soft == ["d1", "d2"]
+    assert subtree["counted"] == "UDG [DOC1]"   # 顶层文档段
+    assert subtree["deleted"] == "UDG [DOC1]"
     assert "imp-1" not in repo.imports          # 记录硬删
     assert repo.deleted == ["imp-1"]
 

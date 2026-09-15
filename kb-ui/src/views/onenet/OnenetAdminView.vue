@@ -450,7 +450,8 @@ async function doDelete(row: OnenetImport) {
   try {
     const out = await api.deleteImport(row.id)
     ElMessage.success(
-      `已删除：下线文档 ${out.deleted_documents.length} 篇，清理引用 ${out.removed_refs} 处`)
+      `已删除：下线文档 ${out.deleted_documents.length} 篇，清理引用 ${out.removed_refs} 处，`
+      + `移除目录 ${out.removed_folders} 个`)
     if (detail.value?.id === row.id) detail.value = null
     await reloadImports()
   } catch (e) {

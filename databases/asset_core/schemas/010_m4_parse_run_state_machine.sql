@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS asset_document_snapshots_m4 (
     raw_content_hash        TEXT NOT NULL,
     mime_type               TEXT NOT NULL CHECK (
         mime_type IN (
+            'application/x-onenet+jsonl',
             'text/markdown', 'text/plain', 'text/html', 'application/pdf',
             'application/msword',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

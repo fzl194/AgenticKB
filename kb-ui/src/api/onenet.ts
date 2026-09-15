@@ -170,7 +170,7 @@ export function useOnenetApi() {
       return data
     },
     /** source 级删除：全部文档软删 + 引用清理 + 记录硬删（进行中 409） */
-    async deleteImport(importId: string): Promise<{ deleted_documents: string[]; removed_refs: number }> {
+    async deleteImport(importId: string): Promise<{ deleted_documents: string[]; removed_refs: number; removed_folders: number }> {
       const { data } = await client.delete(`/api/onenet/imports/${importId}`)
       return data
     },

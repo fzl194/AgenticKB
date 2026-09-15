@@ -484,8 +484,17 @@ async def onenet_delete_import(
         removed_refs = await RefsService(
             request.app.state.pg_pool).remove_refs_for_documents(doc_ids)
 
+    # 目录子树清理：顶层段「文档名 [source_id]」专属本 source（名字带唯一标识），
+    # 活文档清零后整树删除（软删文档的 directory_path 悬空无害——读面已退出）。
+    from knowledge_mining.mining.onenet.restore import top_folder_segment
+    top = top_folder_segment(row.get("doc_name"), row["source_id"])
+    removed_folders = 0
+    if await kbdb.count_docs_under_path(kb_id=row["kb_id"], path=top) == 0:
+        removed_folders = await kbdb.delete_folder_subtree(row["kb_id"], top)
+
     await repo.delete_import(import_id)
-    return {"deleted_documents": doc_ids, "removed_refs": removed_refs}
+    return {"deleted_documents": doc_ids, "removed_refs": removed_refs,
+            "removed_folders": removed_folders}
 
 
 @router.patch("/imports/{import_id}/selection")

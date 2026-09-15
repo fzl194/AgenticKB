@@ -28,6 +28,10 @@ RULE_VERSION = "beta-1"
 #: 表格预测标记（content 内管道表格块边界）。
 TBL_RE = re.compile(r"\[tbl_predict_(?:start|end)\]")
 
+#: 目录段危险字符（与 sanitize_filename 同类：路径分隔符/Windows 非法/控制符）。
+#: 章节名混入这些字符会让 ensure_folder_path 拒绝（\、换行）或长出假层级（/）。
+_FOLDER_UNSAFE_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
 
 def clean_content(content: str | None) -> str:
     """剥离 [tbl_predict_*] 标记（保留管道表格文本）."""
@@ -37,6 +41,29 @@ def clean_content(content: str | None) -> str:
 def split_path(path: str | None) -> list[str]:
     """path → 段列表（剔空段）；返回 [包名, L1, ..., 叶子]."""
     return [p.strip() for p in (path or "").split(">") if p.strip()]
+
+
+def sanitize_folder_segment(name: str, *, max_len: int = 120) -> str:
+    """目录段清洗（V1.3）：危险字符替换为 ``_``，防炸导入/假层级。
+
+    仅用于 KB 落位目录链；file_path/树路径（selection 匹配键）保持上游原样。
+    极端撞名（上游 ``A/B`` 与 ``A_B`` 清洗后同段）可接受——落位显示层语义。
+    """
+    cleaned = _FOLDER_UNSAFE_RE.sub("_", (name or "").strip()).strip(". ")
+    return (cleaned or "_")[:max_len]
+
+
+def top_folder_segment(doc_name: str | None, source_id: str) -> str:
+    """KB 顶层目录段（V1.3 落位规则）：``文档名 [source_id]``.
+
+    包名首段剔除后目录树缺文档级分区，跨产品文档同名章节会混层；
+    顶层补文档名 + 唯一标识，人能看懂、机器永不混。doc_name 缺失时
+    退化为纯 source_id。
+    """
+    name = sanitize_folder_segment(doc_name or "")
+    if not name or name == "_":
+        return source_id
+    return f"{name} [{source_id}]"
 
 
 # ---------------------------------------------------------------- 路径树
@@ -169,13 +196,13 @@ def restore_files(slices: Iterable[dict[str, Any]]) -> RestoreResult:
     for file_path, file_slices in by_file.items():
         file_segs = file_path.split(" > ")
         for i in range(1, len(file_segs)):
-            folders.add("/".join(file_segs[:i]))
+            folders.add(sanitize_folder_path(file_segs[:i]))
         parts = [int(s.get("part_id") or 0) for s in file_slices]
         files.append(RestoredFile(
             file_path=file_path,
             file_title=file_segs[-1],
             heading_title=headings[file_path],
-            folder_path="/".join(file_segs[:-1]),
+            folder_path=sanitize_folder_path(file_segs[:-1]),
             slices=tuple(file_slices),  # 已按 part_id 升序（外层排序）
             part_min=min(parts), part_max=max(parts),
         ))
@@ -215,8 +242,14 @@ def render_file_markdown(slices: list[dict[str, Any]], *, title: str = "") -> st
     return "\n".join(lines) + "\n"
 
 
+def sanitize_folder_path(segs: list[str]) -> str:
+    """段列表 → 清洗后的 "/" 目录链（空列表 → ""，即 KB 根）."""
+    return "/".join(sanitize_folder_segment(s) for s in segs)
+
+
 __all__ = [
     "RULE_VERSION", "RestoredFile", "RestoreResult", "TreeNode",
     "build_path_tree", "clean_content", "render_file_markdown",
-    "render_markdown", "restore_files", "split_path",
+    "render_markdown", "restore_files", "sanitize_folder_path",
+    "sanitize_folder_segment", "split_path", "top_folder_segment",
 ]

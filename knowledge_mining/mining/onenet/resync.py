@@ -208,7 +208,9 @@ async def _resync_inner(
             await register_file(
                 kb_id=kb_id, domain=import_row["domain"],
                 source_id=source_id, restored=new_file,
-                actor_id=import_row["created_by"])
+                actor_id=import_row["created_by"],
+                doc_name=((new_slices[0].get("doc_name") if new_slices else None)
+                          or import_row.get("doc_name")))
             updated_documents.append(f"new:{key}")
             continue
         storage = await doc_service.store_source_bytes(

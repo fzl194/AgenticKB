@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from knowledge_mining.mining.onenet.fetch import Selection, fetch_selection, load_slices
-from knowledge_mining.mining.onenet.restore import RULE_VERSION, restore_files
+from knowledge_mining.mining.onenet.restore import (
+    RULE_VERSION, restore_files, top_folder_segment,
+)
 from knowledge_mining.mining.parse_adapters.onenet_jsonl import ONENET_JSONL_MIME
 
 logger = logging.getLogger(__name__)
@@ -313,10 +315,13 @@ class OnenetImportService:
 
             # ---- importing
             await self._repo.update_import(import_id, status="importing")
+            doc_name = ((slices[0].get("doc_name") if slices else None)
+                        or record.get("doc_name"))
             doc_ids = [
                 await self._import_file(
                     kb_id=kb_id, domain=domain, source_id=source_id,
                     restored=f, actor_id=record["created_by"],
+                    doc_name=doc_name,
                 )
                 for f in result.files
             ]
@@ -350,9 +355,13 @@ class OnenetImportService:
 
     async def _import_file(
         self, *, kb_id: str, domain: str, source_id: str,
-        restored: Any, actor_id: str,
+        restored: Any, actor_id: str, doc_name: str | None = None,
     ) -> str:
-        """一个还原文件 → 对象 + Document（document_key 幂等）."""
+        """一个还原文件 → 对象 + Document（document_key 幂等）.
+
+        V1.3 落位：目录链 = ``文档名 [source_id]`` 顶层段 + 清洗后的章节链——
+        跨产品文档永不混层，重复导入不同目录在 KB 树上累积生长。
+        """
         key = document_key_for(source_id, restored.file_path)
         existing = await self._kbdb.find_document_by_key(
             kb_id, key, include_deleted=True)
@@ -362,13 +371,16 @@ class OnenetImportService:
             raise OnenetImportError(
                 f"document_key 已被软删文档持有（先恢复或清理再导入）: {key}")
 
-        # 目录链（文件之上层级）
-        if restored.folder_path:
+        # 目录链：顶层文档段 + 章节链（顶层恒存在，根文件也有专属抽屉）
+        directory = "/".join(
+            p for p in (top_folder_segment(doc_name, source_id),
+                        restored.folder_path) if p)
+        if directory:
             await self._folders.ensure_folder_path(
-                kb_id=kb_id, path=restored.folder_path, user_id=actor_id)
+                kb_id=kb_id, path=directory, user_id=actor_id)
 
         filename = await self._dedupe_filename(
-            kb_id=kb_id, directory=restored.folder_path or None,
+            kb_id=kb_id, directory=directory or None,
             base=sanitize_filename(restored.file_title), part_min=restored.part_min)
         payload = _jsonl_bytes(restored.slices)
         storage_object = await self._doc_service.store_source_bytes(
@@ -380,7 +392,7 @@ class OnenetImportService:
             document_name=filename,
             storage_object_id=storage_object.id,
             source_raw_hash=storage_object.sha256,
-            directory_path=restored.folder_path or None,
+            directory_path=directory or None,
             document_type="reference",
             owner_id=actor_id, file_size=storage_object.size,
             modified_at=_utcnow(), metadata=meta,

@@ -71,13 +71,17 @@
         <el-button type="primary" :loading="tocLoading" @click="loadToc(Boolean(toc))">
           {{ toc ? '刷新章节树' : '进入文档（轻量扫描）' }}
         </el-button>
+        <span v-if="!toc" class="onenet-admin__hint">首次扫描约 1-3 分钟（逐箱拉目录），之后走缓存秒回</span>
       </div>
     </el-card>
 
     <el-card v-if="toc" class="onenet-admin__step" shadow="never">
       <template #header>
         <b>③ 勾选章节</b>
-        <span class="onenet-admin__hint">
+        <span v-if="editing" class="onenet-admin__hint">
+          （从记录继续：已勾选 = 当前导入范围，新勾选章节将合并并重同步落库）
+        </span>
+        <span v-else class="onenet-admin__hint">
           （{{ toc.nodes }} 节点 · β 预计 <b>{{ toc.file_count }}</b> 文件 ·
           规则 {{ toc.rule_version }}{{ toc.cached ? ' · 已用缓存' : '' }}；
           不勾选任何节点 = 整包导入）
@@ -100,8 +104,9 @@
           </div>
         </el-col>
         <el-col :span="12">
-          <div class="onenet-admin__treewrap">
-            <el-table :data="toc.files ?? []" size="small" height="100%">
+          <!-- V1.3：文件清单前端分页（千级文件全量渲染会卡死浏览器） -->
+          <div class="onenet-admin__treewrap onenet-admin__treewrap--col">
+            <el-table :data="pagedFiles" size="small">
               <el-table-column prop="file_title" label="β 文件（导入单位）" min-width="150" show-overflow-tooltip />
               <el-table-column prop="folder_path" label="目录" min-width="130" show-overflow-tooltip />
               <el-table-column prop="slice_count" label="切片" width="60" />
@@ -109,11 +114,19 @@
                 <template #default="{ row }">{{ row.part_min }}~{{ row.part_max }}</template>
               </el-table-column>
             </el-table>
+            <el-pagination v-if="(toc.files?.length ?? 0) > filesPageSize" small
+                           layout="total, sizes, prev, pager, next"
+                           :total="toc.files?.length ?? 0"
+                           v-model:current-page="filesPage" v-model:page-size="filesPageSize"
+                           :page-sizes="[50, 100, 200]" />
           </div>
         </el-col>
       </el-row>
       <div class="onenet-admin__actions">
-        <el-button type="primary" :loading="starting" @click="startImport">确认导入（勾选子树过滤，不勾=整包）</el-button>
+        <el-button v-if="editing" :loading="starting" @click="exitEditing">退出继续模式</el-button>
+        <el-button type="primary" :loading="starting" @click="confirmSelection">
+          {{ editing ? '合并勾选并重同步' : '确认导入（勾选子树过滤，不勾=整包）' }}
+        </el-button>
       </div>
     </el-card>
 
@@ -131,8 +144,10 @@
         <el-table-column prop="total_slices" label="切片数" width="90" />
         <el-table-column prop="parsed_version_seen" label="版本" width="100" />
         <el-table-column prop="updated_at" label="更新时间" width="165" show-overflow-tooltip />
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
+            <el-button v-if="canResync(row)" size="small" type="primary" plain
+                       @click="continueFromRecord(row)">继续勾选</el-button>
             <el-button size="small" :loading="resyncingId === row.id" :disabled="!canResync(row)"
                        @click="doResync(row)">重同步</el-button>
             <el-button v-if="row.status === 'failed'" size="small" type="warning" plain
@@ -153,14 +168,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useOnenetApi } from '@/api/onenet'
 import type {
   OnenetCondition, OnenetImport, OnenetImportStatus, OnenetProbe,
-  OnenetSearchResult, OnenetToc,
+  OnenetSearchResult, OnenetToc, OnenetTocFile,
 } from '@/api/onenet'
 
 const domainStore = useDomainStore()
@@ -191,6 +206,18 @@ const toc = ref<OnenetToc | null>(null)
 const tocLoading = ref(false)
 const tocTreeRef = ref<InstanceType<typeof ElTree> | null>(null)
 const starting = ref(false)
+
+// V1.3 · 文件清单分页（千级文件全量渲染卡死浏览器）
+const filesPage = ref(1)
+const filesPageSize = ref(50)
+const pagedFiles = computed<OnenetTocFile[]>(() => {
+  const files = toc.value?.files ?? []
+  const start = (filesPage.value - 1) * filesPageSize.value
+  return files.slice(start, start + filesPageSize.value)
+})
+
+// V1.3 · 从记录继续：编辑已导入 source 的勾选范围（合并 + 重同步）
+const editing = ref<OnenetImport | null>(null)
 
 const imports = ref<OnenetImport[]>([])
 const importsLoading = ref(false)
@@ -236,6 +263,7 @@ async function doSearch(target?: number) {
 
 function onPickHit(row: { source_id: string } | null) {
   if (!row) return
+  editing.value = null
   probe.value = null
   toc.value = null
   void (async () => {
@@ -252,6 +280,12 @@ async function loadToc(refresh = false) {
   tocLoading.value = true
   try {
     toc.value = await api.toc(domainStore.currentDomain, probe.value.source_id, { refresh })
+    filesPage.value = 1
+    if (editing.value) {
+      // 回显当前导入范围（树数据已全量在内存，collapsed 不影响 setCheckedKeys）
+      await nextTick()
+      tocTreeRef.value?.setCheckedKeys(editing.value.selection_json?.subtrees ?? [])
+    }
   } catch (e) {
     handleError(e)
   } finally {
@@ -259,10 +293,41 @@ async function loadToc(refresh = false) {
   }
 }
 
+/** 从记录继续：拉缓存树 + 回显已勾选，新勾选走「合并 + 重同步」 */
+async function continueFromRecord(row: OnenetImport) {
+  editing.value = row
+  detail.value = null
+  probe.value = {
+    source_id: row.source_id,
+    total_slices: row.total_slices ?? 0,
+    part_id: { min: null, max: null },
+    doc_name: row.doc_name,
+    file_name: null, doc_type: null, parsed_version: row.parsed_version_seen,
+    publish_time: null, product_line: null, pbi: null,
+  }
+  toc.value = null
+  await loadToc(false)
+  if (!toc.value) editing.value = null
+}
+
+function exitEditing() {
+  editing.value = null
+  toc.value = null
+  probe.value = null
+}
+
+/** ③ 确认按钮：新导入 / 从记录继续（合并+重同步）两路分派 */
+async function confirmSelection() {
+  if (editing.value) {
+    await mergeAndResync()
+    return
+  }
+  await startImport()
+}
+
 async function startImport() {
   if (!probe.value) return
-  const checked = (tocTreeRef.value?.getCheckedNodes(false, true) ?? []) as Array<{ path?: string }>
-  const subtrees = checked.map((n) => n.path).filter((p): p is string => Boolean(p))
+  const subtrees = checkedSubtreePaths()
   starting.value = true
   try {
     await api.startImport({
@@ -280,6 +345,37 @@ async function startImport() {
   } finally {
     starting.value = false
   }
+}
+
+async function mergeAndResync() {
+  const row = editing.value
+  if (!row) return
+  const subtrees = checkedSubtreePaths()
+  starting.value = true
+  try {
+    // PATCH 为合并语义（服务端 union）；发全量勾选 = 旧范围 + 新增
+    await api.updateSelection(row.id, { subtrees })
+    const out = await api.resync(row.id)
+    if (out.changed) {
+      ElMessage.success(
+        `已合并并同步：${out.diff?.added.length ?? 0} 新增 / ${out.diff?.changed.length ?? 0} 变更，`
+        + `更新文档 ${out.updated_documents.length} 篇，下线 ${out.removed_documents.length} 篇`,
+      )
+    } else {
+      ElMessage.info('勾选范围已合并；上游内容无其他变化')
+    }
+    exitEditing()
+    await reloadImports()
+  } catch (e) {
+    handleError(e)
+  } finally {
+    starting.value = false
+  }
+}
+
+function checkedSubtreePaths(): string[] {
+  const checked = (tocTreeRef.value?.getCheckedNodes(false, true) ?? []) as Array<{ path?: string }>
+  return checked.map((n) => n.path).filter((p): p is string => Boolean(p))
 }
 
 async function reloadImports() {
@@ -381,5 +477,7 @@ onMounted(reloadImports)
 .onenet-admin__detail { margin-top: 10px; }
 .onenet-admin__treewrap { height: 420px; overflow: auto; border: 1px solid var(--el-border-color-lighter);
                           border-radius: 6px; padding: 8px; }
+.onenet-admin__treewrap--col { display: flex; flex-direction: column; gap: 6px; }
+.onenet-admin__treewrap--col :deep(.el-table) { flex: 1; overflow: auto; }
 .onenet-admin__node { display: inline-flex; align-items: center; gap: 6px; }
 </style>

@@ -172,3 +172,32 @@ def test_render_without_source_markers():
     md = render_markdown(restore_files(slices), with_source_markers=False)
     assert "nid=" not in md
     assert "正文" in md
+
+
+def test_sanitize_folder_segment_and_top_segment():
+    from knowledge_mining.mining.onenet.restore import (
+        sanitize_folder_segment, top_folder_segment,
+    )
+    bs = chr(92)  # 反斜杠用 chr(92) 构造——免受任何转义层改写
+    # 分隔符/Windows 非法/控制符 → _；首尾点空格剔除；空段退 _
+    assert sanitize_folder_segment("备份/恢复") == "备份_恢复"
+    assert sanitize_folder_segment(
+        "a" + bs + "b:c*d?e" + chr(34) + "f|g") == "a_b_c_d_e_f_g"
+    assert sanitize_folder_segment("  ..x.. ") == "x"
+    assert sanitize_folder_segment("") == "_"
+    assert len(sanitize_folder_segment("长" * 200)) == 120
+    # 顶层段：文档名 [source_id]；缺失退纯 source_id
+    assert top_folder_segment("UDG 手册", "DOC1") == "UDG 手册 [DOC1]"
+    assert top_folder_segment(None, "DOC1") == "DOC1"
+    assert top_folder_segment("A/B", "DOC1") == "A_B [DOC1]"
+
+
+def test_restore_folder_path_sanitized_but_file_path_raw():
+    """V1.3：folder_path 清洗（防假层级/炸导入），file_path 保持上游原样（key 锚）."""
+    bs = chr(92)
+    path = PKG + " > 备份/恢复 > 场景A" + bs + "B > h"
+    slices = [{"nid": "d1", "part_id": 1, "path": path, "content": "c"}]
+    result = restore_files(slices)
+    f = result.files[0]
+    assert f.folder_path == "备份_恢复"
+    assert f.file_path == "备份/恢复 > 场景A" + bs + "B"  # document_key 哈希锚不动

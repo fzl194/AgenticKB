@@ -19,7 +19,8 @@ FIXTURE = Path(__file__).parent / "fixtures" / "udg_sample_32.json"
 def _sample_rows() -> list[dict]:
     rows = json.loads(FIXTURE.read_text(encoding="utf-8"))
     return [{"path": r["path"], "title": r["title"],
-             "part_id": r["part_id"]} for r in rows]
+             "part_id": r["part_id"], "doc_name": r.get("doc_name")}
+            for r in rows]
 
 
 class FakeScan:
@@ -87,6 +88,19 @@ def test_scan_subset_max_part_id():
     assert out["scanned_slices"] == 2
     assert out["scanned_part_max"] == 12295
     assert out["total_slices"] == 32  # 摸底仍是全量
+
+
+def test_scan_files_preview_prefixed_with_top_doc_segment():
+    """V1.3：文件预览 folder_path 带顶层文档段——向导看到的目录=将来落库的目录."""
+    rows = _sample_rows()
+    fake = FakeScan(rows, total=32, part_max=12325)
+    out = scan_toc(_client(fake), "DOC1101733708")
+    top = "UDG 20.18.0 产品文档 01（虚机容器） [DOC1101733708]"
+    assert out["files"] and all(
+        f["folder_path"] == top or f["folder_path"].startswith(top + "/")
+        for f in out["files"])
+    # 树路径不带头顶段（selection 匹配键 = 剔包名上游段）
+    assert all(not n["path"].startswith(top) for n in out["tree"])
 
 
 def test_scan_empty_source_raises():

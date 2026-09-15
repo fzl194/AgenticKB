@@ -399,10 +399,46 @@ async def test_folders_created_from_upper_levels(tmp_path):
     rec = await svc.start_import(domain="d1", source_id="DOC1",
                                  selection=Selection(), actor_id="a", username="a")
     await _wait_terminal(repo, rec["id"])
-    # 文件 A、D 均在根（folder_path=""，无上层）→ 不建目录
-    assert svc._folders.paths == []
+    # V1.3 落位：文件 A、D 无上层章节 → 落顶层文档抽屉「UDG 手册 [DOC1]」
+    assert svc._folders.paths == ["UDG 手册 [DOC1]", "UDG 手册 [DOC1]"]
     doc_dirs = {d.get("directory_path") for d in svc._kbdb.docs.values()}
-    assert doc_dirs == {None}
+    assert doc_dirs == {"UDG 手册 [DOC1]"}
+
+
+async def test_placement_top_segment_and_chapter_chain(tmp_path):
+    """V1.3：顶层=文档名[source_id]，章节链按 β 目录镜像；doc_name 缺失退化纯 source_id."""
+    rows = [_row(1, f"{PKG} > 02 特性配置 > QoS > display命令"),
+            _row(2, f"{PKG} > 02 特性配置 > QoS > reset qos命令"),
+            _row(3, f"{PKG} > 01 命令参考 > 常用命令 > aaa")]
+    svc, repo, *_ = _service(tmp_path, client=_fake_client(rows))
+    rec = await svc.start_import(domain="d1", source_id="DOC1",
+                                 selection=Selection(), actor_id="a", username="a")
+    await _wait_terminal(repo, rec["id"])
+    dirs = sorted(d.get("directory_path") for d in svc._kbdb.docs.values())
+    assert dirs == ["UDG 手册 [DOC1]/01 命令参考", "UDG 手册 [DOC1]/02 特性配置"]
+    assert set(svc._folders.paths) == {
+        "UDG 手册 [DOC1]/01 命令参考", "UDG 手册 [DOC1]/02 特性配置"}
+
+    # doc_name 缺失 → 顶层退化为纯 source_id
+    rows2 = [{k: v for k, v in r.items() if k != "doc_name"} for r in rows]
+    svc2, repo2, *_ = _service(tmp_path, client=_fake_client(rows2))
+    rec2 = await svc2.start_import(domain="d2", source_id="DOC1",
+                                   selection=Selection(), actor_id="a", username="a")
+    await _wait_terminal(repo2, rec2["id"])
+    assert "DOC1/02 特性配置" in {
+        d.get("directory_path") for d in svc2._kbdb.docs.values()}
+
+
+async def test_placement_sanitizes_dangerous_folder_segments(tmp_path):
+    """章节名带 / 或反斜杠：不再假层级/炸导入，清洗为 _ 后落位。"""
+    rows = [_row(1, f"{PKG} > 备份/恢复 > 场景A\\B > h1"),
+            _row(2, f"{PKG} > 备份/恢复 > 场景A\\B > h2")]
+    svc, repo, *_ = _service(tmp_path, client=_fake_client(rows))
+    rec = await svc.start_import(domain="d1", source_id="DOC1",
+                                 selection=Selection(), actor_id="a", username="a")
+    final = await _wait_terminal(repo, rec["id"])
+    assert final["status"] == "done"
+    assert svc._folders.paths == ["UDG 手册 [DOC1]/备份_恢复"]
 
 
 async def test_sanitized_collision_deduped_by_part_anchor(tmp_path):

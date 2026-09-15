@@ -67,10 +67,8 @@ def _repo(request: Request) -> OnenetRepo:
     return OnenetRepo(request.app.state.pg_pool)
 
 
-def _import_service(request: Request) -> OnenetImportService:
-    from knowledge_mining.mining.kb.deps import (
-        get_document_service, get_folder_service, get_kb_service,
-    )
+async def _import_service(request: Request) -> OnenetImportService:
+    from knowledge_mining.mining.kb.deps import get_document_service
     from knowledge_mining.mining.kb.services.folder_service import FolderService
     from knowledge_mining.mining.kb.services.kb_service import KbService
 
@@ -79,7 +77,9 @@ def _import_service(request: Request) -> OnenetImportService:
         repo=_repo(request),
         kbdb=kbdb,
         kb_service=KbService(kbdb),
-        doc_service=get_document_service(request),
+        # get_document_service 是 async def（FastAPI 依赖）——必须 await，
+        # 裸协程注入会让首个 store_source_bytes 调用炸 AttributeError（内网实测）。
+        doc_service=await get_document_service(request),
         folder_service=FolderService(kbdb),
         client_factory=_client_factory(request),
         workspace_root=DEFAULT_WORKSPACE_ROOT,
@@ -240,7 +240,7 @@ async def onenet_start_import(
         selection = Selection.from_dict(body.get("selection") or {})
     except (TypeError, ValueError):
         raise HTTPException(422, "invalid selection") from None
-    svc = _import_service(request)
+    svc = await _import_service(request)
     try:
         record = await svc.start_import(
             domain=domain, source_id=source_id, selection=selection,
@@ -405,7 +405,7 @@ async def onenet_resync(
 
     refs = RefsService(request.app.state.pg_pool)
     auto = _make_auto_miner(request)
-    import_svc = _import_service(request)
+    import_svc = await _import_service(request)
 
     async def _refs_cleanup(document_ids: list[str]) -> None:
         await refs.remove_refs_for_documents(document_ids)
@@ -424,7 +424,8 @@ async def onenet_resync(
     force = bool(request.query_params.get("force")) if hasattr(request, "query_params") else False
     try:
         return await resync(
-            repo=repo, kbdb=kbdb, doc_service=get_document_service(request),
+            repo=repo, kbdb=kbdb,
+            doc_service=await get_document_service(request),
             client=client, import_id=import_id,
             workspace_root=DEFAULT_WORKSPACE_ROOT,
             refs_cleanup=_refs_cleanup, reminer=_reminer,
@@ -443,7 +444,7 @@ async def onenet_retry_import(
     request: Request = None,  # type: ignore[assignment]
 ):
     """失败重跑（审查 H6）：段文件/document_key 双层幂等，不产生重复。"""
-    svc = _import_service(request)
+    svc = await _import_service(request)
     from knowledge_mining.mining.onenet.import_service import OnenetImportError
     try:
         return await svc.retry_import(import_id)
@@ -489,7 +490,7 @@ async def onenet_document_markdown(
     from knowledge_mining.mining.kb.deps import get_document_service
     from knowledge_mining.mining.onenet.restore import render_file_markdown
 
-    svc = get_document_service(request)
+    svc = await get_document_service(request)
     payload = await svc.read_object_bytes(
         document_id=document_id, user_id=str(user["id"]))
     if payload is None:

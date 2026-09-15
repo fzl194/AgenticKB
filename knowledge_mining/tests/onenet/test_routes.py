@@ -159,9 +159,10 @@ def _client(monkeypatch, *, configured=True):
         monkeypatch.setattr(
             onenet_routes, "_client_factory",
             lambda request: (lambda: FakeScanClient()))
+        async def fake_import_service(request):
+            return FakeImportService(repo)
         monkeypatch.setattr(
-            onenet_routes, "_import_service",
-            lambda request: FakeImportService(repo))
+            onenet_routes, "_import_service", fake_import_service)
 
     # KbDB.list_documents_by_key_prefix 打桩（详情端点用）
     class FakeKbDb:
@@ -173,6 +174,32 @@ def _client(monkeypatch, *, configured=True):
     monkeypatch.setattr(r, "KbDB", lambda pool: FakeKbDb())
 
     return TestClient(app), repo
+
+
+# ---------------------------------------------------------------- 装配回归
+
+
+def test_import_service_wiring_awaits_document_service(monkeypatch):
+    """内网实测 bug 回归：get_document_service 是 async def，routes 装配时
+    必须 await——裸协程注入会让首个 store_source_bytes 炸 AttributeError。"""
+    import asyncio
+    from types import SimpleNamespace as NS
+
+    import knowledge_mining.mining.kb.deps as deps
+    import knowledge_mining.mining.onenet.routes as r
+
+    sentinel = NS(name="real-doc-service")
+    async def fake_get_document_service(request):
+        return sentinel
+    monkeypatch.setattr(deps, "get_document_service", fake_get_document_service)
+
+    async def call():
+        request = NS(app=NS(state=NS(pg_pool=None)))
+        return await r._import_service(request)
+
+    svc = asyncio.run(call())
+    assert svc._doc_service is sentinel          # 未 await 时这里是 coroutine
+    assert not asyncio.iscoroutine(svc._doc_service)
 
 
 # ---------------------------------------------------------------- 守卫/配置

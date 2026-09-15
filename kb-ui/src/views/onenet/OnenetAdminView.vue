@@ -353,9 +353,10 @@ async function mergeAndResync() {
   const subtrees = checkedSubtreePaths()
   starting.value = true
   try {
-    // PATCH 为合并语义（服务端 union）；发全量勾选 = 旧范围 + 新增
+    // PATCH 为合并语义（服务端 union）；发全量勾选 = 旧范围 + 新增。
+    // resync 必须 force：三信号未变时短路返回，勾选扩大的新文件拉不到。
     await api.updateSelection(row.id, { subtrees })
-    const out = await api.resync(row.id)
+    const out = await api.resync(row.id, { force: true })
     if (out.changed) {
       ElMessage.success(
         `已合并并同步：${out.diff?.added.length ?? 0} 新增 / ${out.diff?.changed.length ?? 0} 变更，`

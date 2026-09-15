@@ -7,13 +7,17 @@
 - ``title`` 恒等于 ``path[-1]``；``url`` 为包级不能区分文件；
 - ``part_id`` 全局阅读序：文件内切片升序拼接、文件间按 min(part_id) 排序。
 
-规则 β（rule_version=beta-1，相对规则，免疫层级不齐）：
+规则 β（rule_version=beta-2，相对规则，免疫层级不齐）：
+- **path 原样参与建树/落位，不剔任何段**（beta-2 修订，内网实测：path[0]
+  语义随 source 而异——HWICS 包根是技术包名，产品文档附件/普通文档的
+  path[0] 是附件名或章节名（即导入单位本身）。猜「什么算包名」必引新 bug，
+  统一不剔最保险；HWICS 包仅在顶层文档目录下多一层包名目录，无害）；
 - 文件 = 切片 path[-2] 节点（完整路径），path[-1] 为文件内直属标题；
-- 规则 α 兜底：剔除包名后仅剩一段（path=Pkg > X）→ X 自身即文件；
+- 规则 α 兜底：path 仅一段（path=X）→ X 自身即文件（根级孤页）；
 - 文件内容 = 归属该文件的切片按 part_id 升序；
 - 文件排序 = min(part_id) 升序；文件之上层级 = 目录（"/" 连接）。
 
-边界归并（更深层标题向上归并）留作 beta-2：beta-1 在真实 HWICS 数据上
+边界归并（更深层标题向上归并）留作 beta-3：beta 系在真实 HWICS 数据上
 每个 path 节点本身即页面，纯 β 分组即成立（样例回归见 test_restore.py）。
 """
 from __future__ import annotations
@@ -23,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 #: 还原规则版本（47 号：rule_version 版本化，规则不对调参数不改正代码）。
-RULE_VERSION = "beta-1"
+RULE_VERSION = "beta-2"
 
 #: 表格预测标记（content 内管道表格块边界）。
 TBL_RE = re.compile(r"\[tbl_predict_(?:start|end)\]")
@@ -74,7 +78,7 @@ class TreeNode:
     """path 树节点（toc_scan 与 restore 共用）."""
 
     title: str
-    path: str                      # 剔除包名后的 " > " 连接路径
+    path: str                      # 原样 " > " 连接路径（不剔段）
     depth: int                     # 1 起
     children: dict[str, "TreeNode"] = field(default_factory=dict)
     slices: list[dict[str, Any]] = field(default_factory=list)  # path 恰好终止于此的切片
@@ -118,12 +122,10 @@ class TreeNode:
 
 
 def build_path_tree(slices: Iterable[dict[str, Any]]) -> TreeNode:
-    """按 path 建树（剔除包名首段；切片挂在其完整 path 的叶子节点）."""
+    """按 path 建树（原样、不剔段；切片挂在其完整 path 的叶子节点）."""
     root = TreeNode(title="__ROOT__", path="", depth=0)
     for s in slices:
         segs = split_path(s.get("path"))
-        if len(segs) >= 2:
-            segs = segs[1:]  # 剔除包名
         if not segs:
             continue
         node = root
@@ -146,7 +148,7 @@ def build_path_tree(slices: Iterable[dict[str, Any]]) -> TreeNode:
 class RestoredFile:
     """还原出的一个「HTML 文件」（逻辑文档单元）."""
 
-    file_path: str            # 文件节点的完整 path（" > " 连接，已剔包名）
+    file_path: str            # 文件节点的完整 path（" > " 连接，原样不剔段）
     file_title: str           # 文件节点末段名
     heading_title: str        # 首切片直属标题（path[-1]）
     folder_path: str          # 文件之上层级 "/" 连接（"" = 根目录）
@@ -181,12 +183,10 @@ def restore_files(slices: Iterable[dict[str, Any]]) -> RestoreResult:
             unassigned += 1
             continue
         if len(segs) >= 2:
-            segs = segs[1:]             # 剔除包名
-        if len(segs) >= 2:
             file_path = " > ".join(segs[:-1])
             heading = segs[-1]
         else:
-            file_path = segs[0]         # α 兜底：自身即文件
+            file_path = segs[0]         # α 兜底：自身即文件（根级孤页）
             heading = segs[0]
         by_file.setdefault(file_path, []).append(s)
         headings.setdefault(file_path, heading)

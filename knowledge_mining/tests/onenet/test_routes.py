@@ -240,6 +240,24 @@ def test_toc_scan_then_cache(monkeypatch):
     assert resp3.json()["cached"] is True
 
 
+def test_toc_stale_rule_version_not_reused(monkeypatch):
+    """beta-2 守卫：缓存树是旧还原规则（rule_version 不匹配）时必须重扫，
+    旧树不得复活。"""
+    c, repo = _client(monkeypatch)
+    # 旧规则（beta-1）缓存：toc_json 带过期 rule_version
+    repo.toc[("cloud_core_network", "DOC1")] = {
+        "source_id": "DOC1", "parsed_version_seen": "v1",
+        "toc_json": {"rule_version": "beta-1", "tree": [], "files": []},
+        "scanned_at": "2026-09-14T00:00:00Z",
+    }
+    resp = c.post("/api/onenet/toc", json={
+        "domain": "cloud_core_network", "source_id": "DOC1"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cached"] is False            # 旧规则 → 重扫
+    assert body["rule_version"] == "beta-2"   # 新树落新规则并覆盖缓存
+
+
 def test_toc_missing_source_404(monkeypatch):
     c, _ = _client(monkeypatch)
     monkeypatch.setattr(

@@ -40,12 +40,13 @@ def test_blocks_headings_only_on_new_path_levels():
     ]), mime=ONENET_JSONL_MIME)
     kinds = [(b.block_type, b.text, b.level) for b in art.blocks]
     assert kinds == [
-        ("heading", "L1", 1),
-        ("heading", "L2", 2),
-        ("heading", "叶A", 3),
+        ("heading", "Pkg.hwics", 1),   # beta-2：包段原样进标题链
+        ("heading", "L1", 2),
+        ("heading", "L2", 3),
+        ("heading", "叶A", 4),
         ("paragraph", "第一段", None),
         ("paragraph", "第二段", None),
-        ("heading", "子节", 4),
+        ("heading", "子节", 5),
         ("paragraph", "第三段", None),
     ]
 
@@ -59,8 +60,8 @@ def test_blocks_table_extraction_with_structure():
     ]), mime=ONENET_JSONL_MIME)
     blocks = art.blocks
     assert [b.block_type for b in blocks] == [
-        "heading", "heading", "paragraph", "table", "paragraph"]
-    tbl = blocks[3]
+        "heading", "heading", "heading", "paragraph", "table", "paragraph"]
+    tbl = blocks[4]                    # beta-2：多一层包段 heading
     assert tbl.structure["columns"] == ["项目", "说明"]
     assert tbl.structure["rows"] == [
         {"项目": "MTU", "说明": "1500"},
@@ -147,9 +148,9 @@ def test_normalizer_deep_heading_chain_10_levels():
                   mime=ONENET_JSONL_MIME)
     doc = _normalize(art)
     headings = [e for e in doc.elements if e.element_type == "heading"]
-    assert len(headings) == 10
+    assert len(headings) == 11          # beta-2：包段 + L1..L10
     levels = sorted(h.style.get("level") for h in headings)
-    assert levels == list(range(1, 11))
+    assert levels == list(range(1, 12))
 
 
 # ------------------------------------------------------------- registry 路由

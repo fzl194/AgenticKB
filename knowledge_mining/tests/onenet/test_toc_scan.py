@@ -69,15 +69,15 @@ def test_scan_builds_tree_with_counts_and_projection():
     out = scan_toc(_client(fake), "DOC1")
     assert out["total_slices"] == 32
     assert out["scanned_slices"] == 32
-    assert out["nodes"] == 41  # 32 切片去重后的 path 节点数（独立脚本固化）
+    assert out["nodes"] == 42  # 32 切片去重后 path 节点数 + 包段（beta-2 不剔）
     # 三字段投影
     for body in fake.requests:
         dsl = json.loads(body["dsl"])
         if "sort" in dsl and dsl.get("_source"):
             assert dsl["_source"] == TOC_FIELDS
-    # 树：顶层 = 特性部署，聚合切片数
+    # 树：顶层 = 包段（beta-2 原样保留），聚合全部切片
     top = out["tree"][0]
-    assert top["title"] == "特性部署"
+    assert top["title"] == "UDG 20.18.0 产品文档 01（虚机容器）.hwics"
     assert top["slice_count"] == 32
 
 

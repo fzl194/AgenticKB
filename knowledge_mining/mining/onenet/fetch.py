@@ -33,7 +33,7 @@ class FetchVerifyError(RuntimeError):
 class Selection:
     """导入勾选范围（47 号：持久化于 onenet_imports.selection_json）."""
 
-    subtrees: tuple[str, ...] = ()    # path 前缀（" > " 连接，不含包名）；空 = 整包
+    subtrees: tuple[str, ...] = ()    # path 前缀（" > " 连接，原样含首段）；空 = 整包
     max_part_id: int | None = None    # 子集抽查
 
     def to_dict(self) -> dict[str, Any]:
@@ -60,13 +60,13 @@ class Selection:
             raise ValueError(f"invalid max_part_id: {mpi!r}") from e
 
     def matches(self, slice_row: dict[str, Any]) -> bool:
-        """切片是否落在勾选子树内（前缀匹配按段比较；空 = 整包全收）."""
+        """切片是否落在勾选子树内（前缀匹配按段比较；空 = 整包全收）.
+
+        path 原样比较、不剔段（beta-2）：子树路径 = 章节树节点 path 的全量段。
+        """
         if not self.subtrees:
             return True
-        segs = split_path(slice_row.get("path"))
-        if len(segs) >= 2:
-            segs = segs[1:]  # 剔包名
-        node_path = segs  # 前缀比较含叶子
+        node_path = split_path(slice_row.get("path"))  # 前缀比较含叶子
         for prefix in self.subtrees:
             psegs = split_path(prefix)
             if node_path[:len(psegs)] == psegs:

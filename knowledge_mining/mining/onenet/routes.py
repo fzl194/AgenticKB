@@ -22,6 +22,7 @@ from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.deps import get_kb_db
 from knowledge_mining.mining.onenet.config import resolve_config
 from knowledge_mining.mining.onenet.fetch import Selection
+from knowledge_mining.mining.onenet.restore import RULE_VERSION
 from knowledge_mining.mining.onenet.import_service import (
     OnenetImportError, OnenetImportService, OnenetRepo,
 )
@@ -153,14 +154,16 @@ async def onenet_toc(
 
     repo = _repo(request)
     # 缓存复用先比对 parsed_version（审查 M2：上游重解析后旧树不复活）；
+    # 再比对 rule_version（beta-2：还原规则变版后旧树必须重扫，不复活）；
     # refresh=1 强制重扫（前端「刷新章节树」按钮）。
     client_factory = _client_factory(request)
     cached = await repo.get_toc_cache(domain, source_id)
     if cached is not None and not body.get("refresh"):
-        current_version = await asyncio.to_thread(
-            lambda: client_factory().probe_source(source_id).get("parsed_version"))
-        if current_version == cached.get("parsed_version_seen"):
-            return {"cached": True, **_toc_payload(cached)}
+        if _cached_rule_version(cached) == RULE_VERSION:
+            current_version = await asyncio.to_thread(
+                lambda: client_factory().probe_source(source_id).get("parsed_version"))
+            if current_version == cached.get("parsed_version_seen"):
+                return {"cached": True, **_toc_payload(cached)}
 
     try:
         mpi = int(max_part_id) if max_part_id else None
@@ -205,6 +208,21 @@ def _toc_payload(cached: dict[str, Any]) -> dict[str, Any]:
         "scanned_at": cached.get("scanned_at"),
         **(toc or {}),
     }
+
+
+def _cached_rule_version(cached: dict[str, Any]) -> str | None:
+    """缓存树当时的还原规则版本（无/解析失败 → None，视为不匹配）."""
+    import json as _json
+
+    toc = cached.get("toc_json")
+    if isinstance(toc, str):
+        try:
+            toc = _json.loads(toc)
+        except ValueError:
+            return None
+    if isinstance(toc, dict):
+        return toc.get("rule_version")
+    return None
 
 
 # ------------------------------------------------------------ 导入记录

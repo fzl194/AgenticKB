@@ -71,11 +71,13 @@ ROWS = (
 
 
 def test_selection_prefix_match_by_segments():
-    sel = Selection(subtrees=("A",))
+    # beta-2：子树路径原样含包段（= 章节树节点 path 全量段）
+    sel = Selection(subtrees=(f"{PKG} > A",))
     assert sel.matches(_row(1, f"{PKG} > A > B"))
     assert sel.matches(_row(9, f"{PKG} > A > X > Y"))       # 深层后代
     assert not sel.matches(_row(3, f"{PKG} > AB > E"))      # 段前缀，非字符串前缀
     assert not sel.matches(_row(3, f"{PKG} > D > E"))
+    assert not sel.matches(_row(1, "A > B"))                # 缺包段：不匹配
     assert Selection().matches(_row(1, f"{PKG} > A > B"))   # 空 = 整包
 
 
@@ -118,7 +120,7 @@ def test_fetch_segment_idempotent_skip(tmp_path):
 def test_fetch_mid_document_subtree_no_coverage_check(tmp_path):
     """审查 H1 回归：勾选文档中部子树（part 不从 1 起）不再因覆盖缺口失败。"""
     fake = FakeFetch(list(ROWS))
-    out = fetch_selection(_client(fake), "DOC1", Selection(subtrees=("D",)),
+    out = fetch_selection(_client(fake), "DOC1", Selection(subtrees=(f"{PKG} > D",)),
                           tmp_path, chunk_width=10, throttle_seconds=0)
     assert out.slice_count == 2  # D>E、D>F（part 3、4——不从 1 连续）
     assert out.manifest["verify"]["ok"] is True
@@ -174,7 +176,7 @@ def test_verify_tolerates_per_file_part_numbering(tmp_path):
 
 def test_fetch_subtree_filter(tmp_path):
     fake = FakeFetch(list(ROWS))
-    out = fetch_selection(_client(fake), "DOC1", Selection(subtrees=("A",)),
+    out = fetch_selection(_client(fake), "DOC1", Selection(subtrees=(f"{PKG} > A",)),
                           tmp_path, chunk_width=10, throttle_seconds=0)
     assert out.slice_count == 2
     paths = {r["path"] for r in load_slices(out.slices_path)}

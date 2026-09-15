@@ -33,7 +33,8 @@ from knowledge_mining.mining.contracts.parser_adapter import (
 from knowledge_mining.mining.onenet.restore import clean_content, split_path
 
 ONENET_JSONL_PARSER_ID = "onenet_jsonl"
-ONENET_JSONL_VERSION = "1.0.0"
+#: beta-2（1.1.0）：path 原样出标题链（不再剔首段）——指纹变化触发新快照重挖。
+ONENET_JSONL_VERSION = "1.1.0"
 #: 规则常量进指纹：β 还原规则或块产出规则变化 → 指纹变化 → 新快照。
 ONENET_JSONL_FINGERPRINT = (
     f"{ONENET_JSONL_PARSER_ID}@{ONENET_JSONL_VERSION}"
@@ -124,10 +125,8 @@ class OnenetJsonlParser:
             if part_id is not None:
                 native_ref["part_id"] = int(part_id)
 
-            # 1) path 层级 → heading（仅新进入层级时产出）
+            # 1) path 层级 → heading（仅新进入层级时产出；原样不剔段，beta-2）
             segs = split_path(row.get("path"))
-            if len(segs) >= 2:
-                segs = segs[1:]  # 剔包名
             if segs and segs != last_heading_segs:
                 common = 0
                 for a, b in zip(last_heading_segs, segs):

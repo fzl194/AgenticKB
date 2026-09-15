@@ -189,10 +189,10 @@ async def test_resync_content_change_updates_affected_file(tmp_path):
     await _bootstrap_workspace(ws, old_rows)
     from knowledge_mining.mining.onenet.import_service import document_key_for
     kbdb = FakeKbDb2()
-    for fpath in ("A", "D"):  # 两个还原文件（β：A 含 B/C 标题，D 含 E）
+    # 两个还原文件（β：A 含 B/C 标题，D 含 E；file_path 原样含包段，beta-2）
+    for fpath, doc_id in ((f"{PKG} > A", "doc-A"), (f"{PKG} > D", "doc-D")):
         kbdb.docs[document_key_for("DOC1", fpath)] = {
-            "id": f"doc-{fpath}", "deleted_at": None}
-    # D 文件也登记（上面循环登记 A、D）
+            "id": doc_id, "deleted_at": None}
 
     # 上游 v2 重解析：n2 内容变更（同版本下段复用会掩蔽原地改——设计上内容
     # 变更只随 parsed_version 升级同步，47 号 §四-7）
@@ -220,8 +220,8 @@ async def test_resync_removed_file_soft_deletes_and_cleans_refs(tmp_path):
     await _bootstrap_workspace(ws, old_rows)
     from knowledge_mining.mining.onenet.import_service import document_key_for
     kbdb = FakeKbDb2()
-    kbdb.docs[document_key_for("DOC1", "A")] = {"id": "doc-A", "deleted_at": None}
-    kbdb.docs[document_key_for("DOC1", "D")] = {"id": "doc-D", "deleted_at": None}
+    kbdb.docs[document_key_for("DOC1", f"{PKG} > A")] = {"id": "doc-A", "deleted_at": None}
+    kbdb.docs[document_key_for("DOC1", f"{PKG} > D")] = {"id": "doc-D", "deleted_at": None}
 
     new_rows = [_row(1, f"{PKG} > A > B")]  # D 子树消失（v2 重解析）
     client = FakeFetchClient(new_rows, total=1, part_max=1)
@@ -261,7 +261,7 @@ async def test_resync_version_change_clears_stale_segments(tmp_path):
     client.probe_source = lambda sid: {"parsed_version": "v2"}
     from knowledge_mining.mining.onenet.import_service import document_key_for
     kbdb = FakeKbDb2()
-    kbdb.docs[document_key_for("DOC1", "A")] = {"id": "doc-A", "deleted_at": None}
+    kbdb.docs[document_key_for("DOC1", f"{PKG} > A")] = {"id": "doc-A", "deleted_at": None}
     repo = FakeRepo2(_import_row())
     docsvc = FakeDocSvc2()
     out = await resync(repo=repo, kbdb=kbdb, doc_service=docsvc, client=client,

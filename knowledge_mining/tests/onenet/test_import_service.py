@@ -370,7 +370,7 @@ async def test_document_metadata_mapping_and_raw(tmp_path):
     assert meta["source_system"] == "onenet"
     assert meta["logical"] is True
     assert meta["source_id"] == "DOC1"
-    assert meta["rule_version"] == "beta-1"
+    assert meta["rule_version"] == "beta-2"
     assert meta["onenet"]["url"] == "https://support/x"
     assert meta["onenet"]["public_level"] == "C"
     assert meta["onenet"]["product_line"] == ["云核心网"]
@@ -399,10 +399,11 @@ async def test_folders_created_from_upper_levels(tmp_path):
     rec = await svc.start_import(domain="d1", source_id="DOC1",
                                  selection=Selection(), actor_id="a", username="a")
     await _wait_terminal(repo, rec["id"])
-    # V1.3 落位：文件 A、D 无上层章节 → 落顶层文档抽屉「UDG 手册 [DOC1]」
-    assert svc._folders.paths == ["UDG 手册 [DOC1]", "UDG 手册 [DOC1]"]
+    # V1.3+beta-2 落位：file=Pkg.hwics>A（原样含包段），目录=顶层抽屉+包段
+    both = f"UDG 手册 [DOC1]/{PKG}"
+    assert svc._folders.paths == [both, both]
     doc_dirs = {d.get("directory_path") for d in svc._kbdb.docs.values()}
-    assert doc_dirs == {"UDG 手册 [DOC1]"}
+    assert doc_dirs == {both}
 
 
 async def test_placement_top_segment_and_chapter_chain(tmp_path):
@@ -415,9 +416,11 @@ async def test_placement_top_segment_and_chapter_chain(tmp_path):
                                  selection=Selection(), actor_id="a", username="a")
     await _wait_terminal(repo, rec["id"])
     dirs = sorted(d.get("directory_path") for d in svc._kbdb.docs.values())
-    assert dirs == ["UDG 手册 [DOC1]/01 命令参考", "UDG 手册 [DOC1]/02 特性配置"]
+    assert dirs == [f"UDG 手册 [DOC1]/{PKG}/01 命令参考",
+                    f"UDG 手册 [DOC1]/{PKG}/02 特性配置"]
     assert set(svc._folders.paths) == {
-        "UDG 手册 [DOC1]/01 命令参考", "UDG 手册 [DOC1]/02 特性配置"}
+        f"UDG 手册 [DOC1]/{PKG}/01 命令参考",
+        f"UDG 手册 [DOC1]/{PKG}/02 特性配置"}
 
     # doc_name 缺失 → 顶层退化为纯 source_id
     rows2 = [{k: v for k, v in r.items() if k != "doc_name"} for r in rows]
@@ -425,7 +428,7 @@ async def test_placement_top_segment_and_chapter_chain(tmp_path):
     rec2 = await svc2.start_import(domain="d2", source_id="DOC1",
                                    selection=Selection(), actor_id="a", username="a")
     await _wait_terminal(repo2, rec2["id"])
-    assert "DOC1/02 特性配置" in {
+    assert f"DOC1/{PKG}/02 特性配置" in {
         d.get("directory_path") for d in svc2._kbdb.docs.values()}
 
 
@@ -438,7 +441,7 @@ async def test_placement_sanitizes_dangerous_folder_segments(tmp_path):
                                  selection=Selection(), actor_id="a", username="a")
     final = await _wait_terminal(repo, rec["id"])
     assert final["status"] == "done"
-    assert svc._folders.paths == ["UDG 手册 [DOC1]/备份_恢复"]
+    assert svc._folders.paths == [f"UDG 手册 [DOC1]/{PKG}/备份_恢复"]
 
 
 async def test_sanitized_collision_deduped_by_part_anchor(tmp_path):

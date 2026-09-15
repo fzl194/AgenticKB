@@ -144,7 +144,7 @@
         <el-table-column prop="total_slices" label="切片数" width="90" />
         <el-table-column prop="parsed_version_seen" label="版本" width="100" />
         <el-table-column prop="updated_at" label="更新时间" width="165" show-overflow-tooltip />
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <el-button v-if="canResync(row)" size="small" type="primary" plain
                        @click="continueFromRecord(row)">继续勾选</el-button>
@@ -152,6 +152,8 @@
                        @click="doResync(row)">重同步</el-button>
             <el-button v-if="row.status === 'failed'" size="small" type="warning" plain
                        :loading="retryingId === row.id" @click="doRetry(row)">重试</el-button>
+            <el-button v-if="canResync(row)" size="small" type="danger" plain
+                       :loading="deletingId === row.id" @click="doDelete(row)">删除</el-button>
             <el-button size="small" @click="loadImportDetail(row)">详情</el-button>
           </template>
         </el-table-column>
@@ -169,7 +171,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useOnenetApi } from '@/api/onenet'
@@ -224,6 +226,7 @@ const importsLoading = ref(false)
 const detail = ref<OnenetImport | null>(null)
 const resyncingId = ref('')
 const retryingId = ref('')
+const deletingId = ref('')
 
 const searchMeta = computed(() => {
   const r = searchResult.value
@@ -429,6 +432,31 @@ async function doRetry(row: OnenetImport) {
     handleError(e)
   } finally {
     retryingId.value = ''
+  }
+}
+
+/** source 级删除：整本产品文档下线 + 引用清理 + 记录移除（不可恢复，二次确认） */
+async function doDelete(row: OnenetImport) {
+  try {
+    await ElMessageBox.confirm(
+      `将删除「${row.doc_name ?? row.source_id}」的全部已导入文档`
+      + `（${row.document_count ?? '?'} 篇），业务库引用同步清理，操作不可恢复。`,
+      '删除导入', { type: 'warning', confirmButtonText: '删 除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  deletingId.value = row.id
+  try {
+    const out = await api.deleteImport(row.id)
+    ElMessage.success(
+      `已删除：下线文档 ${out.deleted_documents.length} 篇，清理引用 ${out.removed_refs} 处`)
+    if (detail.value?.id === row.id) detail.value = null
+    await reloadImports()
+  } catch (e) {
+    handleError(e)
+  } finally {
+    deletingId.value = ''
   }
 }
 

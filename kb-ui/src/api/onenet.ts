@@ -169,6 +169,11 @@ export function useOnenetApi() {
       const { data } = await client.post(`/api/onenet/imports/${importId}/retry`)
       return data
     },
+    /** source 级删除：全部文档软删 + 引用清理 + 记录硬删（进行中 409） */
+    async deleteImport(importId: string): Promise<{ deleted_documents: string[]; removed_refs: number }> {
+      const { data } = await client.delete(`/api/onenet/imports/${importId}`)
+      return data
+    },
     async resync(importId: string, opts: { force?: boolean } = {}) {
       const suffix = opts.force ? '?force=1' : ''
       const { data } = await client.post(`/api/onenet/imports/${importId}/resync${suffix}`)

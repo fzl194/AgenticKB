@@ -143,6 +143,16 @@ class OnenetRepo:
                 [domain])
             return [dict(r) for r in await cur.fetchall()]
 
+    async def delete_import(self, import_id: str) -> None:
+        """硬删导入记录行（source 级删除，2026-09-15 定稿）.
+
+        文档软删/引用清理由路由层先行完成；toc 缓存与拉取工作区保留
+        （同 source 重导复用加速，上游/规则变化各自有失效机制）。
+        """
+        async with self._conn() as conn:
+            await conn.execute(
+                "DELETE FROM onenet_imports WHERE id = %s", [import_id])
+
     async def update_import(self, import_id: str, **fields: Any) -> None:
         if not fields:
             return

@@ -452,6 +452,42 @@ async def onenet_retry_import(
         raise HTTPException(409, str(e)) from e
 
 
+@router.delete("/imports/{import_id}")
+async def onenet_delete_import(
+    import_id: str,
+    user: dict[str, Any] = Depends(require_admin),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """source 级删除（A 方案定稿 2026-09-15）：该导入全部文档软删 +
+    引用清理 + 导入记录硬删。进行中（非 done/failed）拒绝。
+
+    公共库/目录文件夹/toc 缓存/拉取工作区保留——同 source 重导即复用加速。
+    """
+    repo = _repo(request)
+    row = await repo.get_import(import_id)
+    if row is None:
+        raise HTTPException(404, "import not found")
+    if row.get("status") not in ("done", "failed"):
+        raise HTTPException(409, f"import_busy: {row.get('status')}")
+
+    kbdb = KbDB(request.app.state.pg_pool)
+    docs = await kbdb.list_documents_by_key_prefix(
+        row["kb_id"], f"onenet:{row['source_id']}:")
+    doc_ids = [str(d["id"]) for d in docs]
+    for d in docs:
+        if d.get("deleted_at") is None:
+            await kbdb.soft_delete_document(d["id"])
+
+    from knowledge_mining.mining.onenet.refs_service import RefsService
+    removed_refs = 0
+    if doc_ids:
+        removed_refs = await RefsService(
+            request.app.state.pg_pool).remove_refs_for_documents(doc_ids)
+
+    await repo.delete_import(import_id)
+    return {"deleted_documents": doc_ids, "removed_refs": removed_refs}
+
+
 @router.patch("/imports/{import_id}/selection")
 async def onenet_update_selection(
     import_id: str,

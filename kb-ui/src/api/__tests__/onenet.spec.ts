@@ -99,6 +99,16 @@ describe('onenet api client', () => {
     expect(req?.config.data).toEqual({ document_ids: ['d1'] })
   })
 
+  it('deleteImport removes source-level import', async () => {
+    state.responses['delete /api/onenet/imports/imp1'] = { deleted_documents: ['d1', 'd2'], removed_refs: 3 }
+    const api = useOnenetApi()
+    const out = await api.deleteImport('imp1')
+    expect(out.deleted_documents).toEqual(['d1', 'd2'])
+    expect(out.removed_refs).toBe(3)
+    const req = state.requests.find((r) => r.url === '/api/onenet/imports/imp1')
+    expect(req?.method).toBe('delete')
+  })
+
   it('markdown url + text fetch', async () => {
     state.responses['get /api/kb/kb1/onenet/documents/d1/markdown'] = '# 标题'
     const api = useOnenetApi()

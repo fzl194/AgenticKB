@@ -32,6 +32,7 @@ CFG = OnenetConfig(app_id="a", static_token="s")
 class FakeRepo:
     def __init__(self):
         self.imports: dict[str, dict] = {}
+        self.deleted: list[str] = []
         self.toc: dict[tuple, dict] = {}
 
     async def get_toc_cache(self, domain, source_id):
@@ -73,6 +74,10 @@ class FakeRepo:
         row = {"id": "imp-1", "status": "queued", **kw}
         self.imports[row["id"]] = row
         return dict(row)
+
+    async def delete_import(self, import_id):
+        self.imports.pop(import_id, None)
+        self.deleted.append(import_id)
 
     async def update_import(self, import_id, **fields):
         self.imports[import_id].update(fields)
@@ -326,3 +331,54 @@ def test_list_and_detail_imports(monkeypatch):
     assert body["documents"][0]["document_name"] == "A.jsonl"
 
     assert c.get("/api/onenet/imports/nope").status_code == 404
+
+# ---------------------------------------------------------------- 删除（source 级）
+
+
+def test_delete_import_source_level(monkeypatch):
+    c, repo = _client(monkeypatch)
+    repo.imports["imp-1"] = {"id": "imp-1", "domain": "cloud_core_network",
+                             "source_id": "DOC1", "kb_id": "kb-pub",
+                             "status": "done", "document_count": 2}
+    soft: list[str] = []
+
+    class FakeKbDb2:
+        async def list_documents_by_key_prefix(self, kb_id, prefix, *, limit=5000):
+            assert prefix == "onenet:DOC1:"
+            return [{"id": "d1", "deleted_at": None},
+                    {"id": "d2", "deleted_at": None}]
+
+        async def soft_delete_document(self, document_id):
+            soft.append(document_id)
+
+    import knowledge_mining.mining.onenet.routes as r
+    monkeypatch.setattr(r, "KbDB", lambda pool: FakeKbDb2())
+
+    import knowledge_mining.mining.onenet.refs_service as refs_svc
+
+    class FakeRefs:
+        async def remove_refs_for_documents(self, document_ids):
+            assert document_ids == ["d1", "d2"]
+            return 3
+    monkeypatch.setattr(refs_svc, "RefsService", lambda pool: FakeRefs())
+
+    resp = c.delete("/api/onenet/imports/imp-1")
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted_documents": ["d1", "d2"], "removed_refs": 3}
+    assert soft == ["d1", "d2"]
+    assert "imp-1" not in repo.imports          # 记录硬删
+    assert repo.deleted == ["imp-1"]
+
+
+def test_delete_import_busy_rejected(monkeypatch):
+    c, repo = _client(monkeypatch)
+    repo.imports["imp-1"] = {"id": "imp-1", "status": "fetching"}
+    resp = c.delete("/api/onenet/imports/imp-1")
+    assert resp.status_code == 409
+    assert "import_busy" in resp.json()["detail"]
+    assert "imp-1" in repo.imports               # 不动
+
+
+def test_delete_import_not_found(monkeypatch):
+    c, _ = _client(monkeypatch)
+    assert c.delete("/api/onenet/imports/nope").status_code == 404

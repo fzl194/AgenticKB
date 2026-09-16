@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -89,12 +90,31 @@ class PurgeError(RuntimeError):
 _ACTIVE_RUN_STATES = ("queued", "running")
 
 
-class PurgeService:
-    """统一硬删管线（依赖注入 pool + object_store，可测）."""
+#: 批量回收分块大小（语句数 O(块数×表数) 而非 O(行数)；块间让路 autovacuum）.
+_CHUNK = 2000
+#: MinIO 字节删除并发（对象存储侧限流，避免打满连接）.
+_OBJECT_CONCURRENCY = 8
 
-    def __init__(self, pool: Any, object_store: Any = None):
+
+class PurgeService:
+    """统一硬删管线（依赖注入 pool + object_store，可测）.
+
+    ``progress``：可选异步回调 ``(phase: str, **counts)``——任务执行器用它
+    落进度表；None 时零开销。批量回收按 ``_CHUNK`` 分块，每块后回报。
+    """
+
+    def __init__(self, pool: Any, object_store: Any = None,
+                 progress: Any = None):
         self._pool = pool
         self._object_store = object_store
+        self._progress = progress
+
+    async def _report(self, phase: str, **counts: int) -> None:
+        if self._progress is not None:
+            try:
+                await self._progress(phase, **counts)
+            except Exception:  # noqa: BLE001 - 进度回报失败不阻断删除
+                logger.warning("[purge] progress report failed", exc_info=True)
 
     def _conn(self):
         return self._pool.connection()
@@ -193,10 +213,13 @@ class PurgeService:
                 "DELETE FROM asset_documents WHERE id = ANY(%s) AND kb_id = %s",
                 [doc_ids, kb_id])
 
-        # 5) 快照回收（出连接后逐个查剩余引用；独占才删）
+        await self._report("documents", documents=len(doc_ids),
+                           snapshots_total=len(snapshot_ids))
+        # 5) 快照回收（集合判定独占 + 分块批删）
         snap_summary = await self._reclaim_snapshots_if_orphaned(snapshot_ids)
         # 6) MinIO 对象回收（源对象 + 被回收快照的 IR 对象）
         objects = source_objects | snap_summary.pop("_ir_objects")
+        await self._report("objects", objects_total=len(objects))
         obj_summary = await self._reclaim_objects_if_orphaned(objects)
 
         summary = self._summary()
@@ -244,8 +267,26 @@ class PurgeService:
                 "DELETE FROM asset_storage_quotas WHERE kb_id = %s", [kb_id])
             await conn.execute(
                 "DELETE FROM asset_upload_sessions WHERE kb_id = %s", [kb_id])
+            # 一张网公共库连带清理（2026-09-16 用户定稿）：导入记录之外，
+            # toc 缓存与拉取工作区一并清——库都删了，重导加速的缓存无意义。
+            cur = await conn.execute(
+                "SELECT source_id FROM onenet_imports WHERE kb_id = %s", [kb_id])
+            source_ids = [r["source_id"] for r in await cur.fetchall()]
+            cur = await conn.execute(
+                "SELECT domain FROM knowledge_bases WHERE id = %s", [kb_id])
+            kb_domain = (await cur.fetchone())["domain"]
             await conn.execute(
                 "DELETE FROM onenet_imports WHERE kb_id = %s", [kb_id])
+            if source_ids:
+                await conn.execute(
+                    """DELETE FROM onenet_toc_cache
+                       WHERE domain = %s AND source_id = ANY(%s)""",
+                    [kb_domain, source_ids])
+                import shutil
+                for sid in source_ids:
+                    shutil.rmtree(
+                        Path("runtime") / "onenet" / kb_domain / sid,
+                        ignore_errors=True)
             await conn.execute(
                 """DELETE FROM asset_file_audit_events
                    WHERE kb_id = %s AND document_id IS NULL""", [kb_id])
@@ -254,7 +295,10 @@ class PurgeService:
             if await cur.fetchone() is None:
                 raise PurgeError(f"kb_delete_failed: {kb_id}")
         summary["purged_kb"] = kb_id
-        logger.info("[purge] kb=%s documents=%s", kb_id, len(doc_ids))
+        await self._report("finalize", documents=len(doc_ids))
+        logger.info("[purge] kb=%s documents=%s snapshots=%s objects=%s",
+                    kb_id, len(doc_ids), summary["reclaimed_snapshots"],
+                    summary["reclaimed_objects"])
         return summary
 
     # ------------------------------------------------------------ 文件夹级联
@@ -304,109 +348,154 @@ class PurgeService:
     async def _reclaim_snapshots_if_orphaned(
         self, snapshot_ids: list[str],
     ) -> dict[str, Any]:
-        """逐个检查快照剩余引用（links + build 选片），独占才物理回收."""
+        """集合化快照回收（2026-09-16 批量改写）.
+
+        一次查询算出独占集（无 links + 无 build 选片引用），分块批删：
+        v2 十六表各一条 ANY 批删 + 快照行条件批删（NOT EXISTS 守卫）。
+        语句量 O(块数×18)，2 万快照从 ~36 万条降到 ~200 条。
+        """
         out: dict[str, Any] = {
             "reclaimed_snapshots": 0, "skipped_shared_snapshots": [],
             "_ir_objects": set(),
         }
-        for sid in snapshot_ids:
+        if not snapshot_ids:
+            return out
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """SELECT s.id, s.parse_ir_storage_object_id
+                   FROM asset_document_snapshots s
+                   WHERE s.id = ANY(%s)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM asset_document_snapshot_links l
+                          WHERE l.document_snapshot_id = s.id)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM asset_build_document_snapshots b
+                          WHERE b.document_snapshot_id = s.id)""",
+                [snapshot_ids])
+            orphaned = [(r["id"], r["parse_ir_storage_object_id"])
+                        for r in await cur.fetchall()]
+        orphan_ids = {sid for sid, _ in orphaned}
+        out["skipped_shared_snapshots"] = [
+            sid for sid in snapshot_ids if sid not in orphan_ids]
+
+        reclaimed = 0
+        rows = list(orphaned)
+        for i in range(0, len(rows), _CHUNK):
+            chunk = rows[i:i + _CHUNK]
+            ids = [sid for sid, _ in chunk]
             async with self._conn() as conn:
-                cur = await conn.execute(
-                    """SELECT
-                         (SELECT COUNT(*) FROM asset_document_snapshot_links
-                           WHERE document_snapshot_id = %s) AS links,
-                         (SELECT COUNT(*) FROM asset_build_document_snapshots
-                           WHERE document_snapshot_id = %s) AS builds,
-                         parse_ir_storage_object_id
-                       FROM asset_document_snapshots WHERE id = %s""",
-                    [sid, sid, sid])
-                row = await cur.fetchone()
-                if row is None:
-                    continue
-                row = dict(row)
-                if row["links"] or row["builds"]:
-                    out["skipped_shared_snapshots"].append(sid)
-                    continue
-                if row.get("parse_ir_storage_object_id"):
-                    out["_ir_objects"].add(row["parse_ir_storage_object_id"])
-                if not await self._delete_snapshot_rows(conn, sid):
-                    out["skipped_shared_snapshots"].append(sid)
-                    if row.get("parse_ir_storage_object_id"):
-                        out["_ir_objects"].discard(row["parse_ir_storage_object_id"])
-                    continue
-            out["reclaimed_snapshots"] += 1
+                deleted_ids = await self._delete_snapshot_rows(conn, ids)
+            out["_ir_objects"].update(
+                ir for sid, ir in chunk if sid in deleted_ids and ir)
+            reclaimed += len(deleted_ids)
+            await self._report(
+                "snapshots", snapshots_total=len(orphaned),
+                snapshots_reclaimed=reclaimed)
+            await asyncio.sleep(0.05)          # 块间让路
+        out["reclaimed_snapshots"] = reclaimed
         return out
 
     @staticmethod
-    async def _delete_snapshot_rows(conn: Any, snapshot_id: str) -> bool:
-        """v2 八族手动删 + 快照行条件删（v1/段落/本体证据随 CASCADE）.
+    async def _delete_snapshot_rows(conn: Any, snapshot_ids: list[str]) -> set:
+        """v2 十六族批删 + 快照行条件批删（v1/段落/本体证据随 CASCADE）.
 
-        行删除带 NOT EXISTS 引用守卫（并发新引用的窄竞态收口）：命中新引用
-        时 DELETE 影响 0 行，返回 False 由调用方按共享跳过。
+        行删除带 NOT EXISTS 引用守卫（并发新引用的窄竞态收口）：守卫拦下的
+        id 不在返回集里，由调用方按共享跳过（其 IR 对象也不回收）。
         """
         for table in _V2_SNAPSHOT_TABLES:
             await conn.execute(
-                f"DELETE FROM {table} WHERE snapshot_id = %s", [snapshot_id])
+                f"DELETE FROM {table} WHERE snapshot_id = ANY(%s)", [snapshot_ids])
         cur = await conn.execute(
-            """DELETE FROM asset_document_snapshots s WHERE s.id = %s
+            """DELETE FROM asset_document_snapshots s WHERE s.id = ANY(%s)
                  AND NOT EXISTS (
-                     SELECT 1 FROM asset_document_snapshot_links
-                      WHERE document_snapshot_id = s.id)
+                     SELECT 1 FROM asset_document_snapshot_links l
+                      WHERE l.document_snapshot_id = s.id)
                  AND NOT EXISTS (
-                     SELECT 1 FROM asset_build_document_snapshots
-                      WHERE document_snapshot_id = s.id)
+                     SELECT 1 FROM asset_build_document_snapshots b
+                      WHERE b.document_snapshot_id = s.id)
                  RETURNING s.id""",
-            [snapshot_id])
-        return await cur.fetchone() is not None
+            [snapshot_ids])
+        return {r["id"] for r in await cur.fetchall()}
 
     # ------------------------------------------------------------ 对象回收
 
     async def _reclaim_objects_if_orphaned(
         self, object_ids: set[str],
     ) -> dict[str, Any]:
+        """集合化对象回收（2026-09-16 批量改写）.
+
+        一次查询判无主集（五处活引用全空）→ 取定位 → 并发删 MinIO 字节
+        （信号量限流；失败者保留登记行供重试）→ 一条 ANY 批删登记行。
+        先字节后行：字节失败时行仍在，下次清理可重试。
+        """
         out = {"reclaimed_objects": 0, "skipped_shared_objects": []}
-        for oid in object_ids:
-            if not oid:
-                continue
+        ids = [o for o in object_ids if o]
+        if not ids:
+            return out
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """SELECT c.oid FROM unnest(%s::text[]) AS c(oid)
+                   WHERE NOT EXISTS (SELECT 1 FROM asset_documents
+                                      WHERE storage_object_id = c.oid)
+                     AND NOT EXISTS (SELECT 1 FROM asset_document_snapshots
+                                      WHERE parse_ir_storage_object_id = c.oid)
+                     AND NOT EXISTS (SELECT 1 FROM asset_document_snapshot_links
+                                      WHERE source_storage_object_id = c.oid)
+                     AND NOT EXISTS (SELECT 1 FROM asset_parse_runs
+                                      WHERE source_storage_object_id = c.oid
+                                         OR parse_ir_storage_object_id = c.oid)
+                     AND NOT EXISTS (SELECT 1 FROM asset_upload_sessions
+                                      WHERE committed_storage_object_id = c.oid)""",
+                [ids])
+            free_ids = [r["oid"] for r in await cur.fetchall()]
+        out["skipped_shared_objects"] = [o for o in ids if o not in set(free_ids)]
+        if not free_ids:
+            return out
+
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """SELECT id, bucket, object_key, object_version_id
+                   FROM asset_storage_objects WHERE id = ANY(%s)""",
+                [free_ids])
+            locations = {r["id"]: dict(r) for r in await cur.fetchall()}
+
+        # 并发删字节（无 object_store 的测试路径直接跳过字节）
+        bytes_failed: set[str] = set()
+        if self._object_store is not None:
+            from knowledge_mining.mining.contracts.storage.types import (
+                ObjectLocation,
+            )
+            sem = asyncio.Semaphore(_OBJECT_CONCURRENCY)
+
+            async def _del_bytes(oid: str) -> None:
+                loc = locations.get(oid)
+                if loc is None:
+                    return
+                async with sem:
+                    try:
+                        await asyncio.to_thread(
+                            self._object_store.delete,
+                            ObjectLocation(
+                                bucket=loc["bucket"],
+                                object_key=loc["object_key"],
+                                version_id=loc.get("object_version_id"),
+                            ))
+                    except Exception:  # noqa: BLE001 - 字节失败留行可重试
+                        bytes_failed.add(oid)
+                        logger.warning("[purge] object bytes delete failed: %s",
+                                       loc.get("object_key"), exc_info=True)
+            await asyncio.gather(*(_del_bytes(o) for o in free_ids))
+
+        row_ids = [o for o in free_ids if o not in bytes_failed]
+        if row_ids:
             async with self._conn() as conn:
-                cur = await conn.execute(_OBJECT_REF_SQL, {"oid": oid})
-                refs = dict(await cur.fetchone())
-                if any(refs.values()):
-                    out["skipped_shared_objects"].append(oid)
-                    continue
-                cur = await conn.execute(
-                    """SELECT provider, bucket, object_key, object_version_id
-                       FROM asset_storage_objects WHERE id = %s""", [oid])
-                row = await cur.fetchone()
-                if row is None:
-                    continue
-                loc = dict(row)
-            # 先删字节后删行（审查 L-2）：字节失败时登记行仍在、后续可重试；
-            # 行先删则失败即成无行孤儿，永无清理方。
-            bytes_deleted = True
-            if self._object_store is not None:
-                try:
-                    from knowledge_mining.mining.contracts.storage.types import (
-                        ObjectLocation,
-                    )
-                    await asyncio.to_thread(
-                        self._object_store.delete,
-                        ObjectLocation(
-                            bucket=loc["bucket"], object_key=loc["object_key"],
-                            version_id=loc.get("object_version_id"),
-                        ),
-                    )
-                except Exception:  # noqa: BLE001 - 字节回收失败不阻断管线
-                    bytes_deleted = False
-                    logger.warning("[purge] object bytes delete failed: %s",
-                                   loc.get("object_key"), exc_info=True)
-            if bytes_deleted:
-                async with self._conn() as conn:
-                    await conn.execute(
-                        "DELETE FROM asset_storage_objects WHERE id = %s", [oid])
-                out["reclaimed_objects"] += 1
-            else:
-                out["skipped_shared_objects"].append(oid)
+                await conn.execute(
+                    "DELETE FROM asset_storage_objects WHERE id = ANY(%s)",
+                    [row_ids])
+        out["reclaimed_objects"] = len(row_ids)
+        out["skipped_shared_objects"].extend(bytes_failed)
+        await self._report("objects", objects_total=len(ids),
+                           objects_reclaimed=out["reclaimed_objects"])
         return out
 
     # ------------------------------------------------------------ GC 轨道
@@ -488,7 +577,7 @@ class PurgeService:
                 await conn.execute(
                     """DELETE FROM asset_build_document_snapshots
                        WHERE document_snapshot_id = %s""", [sid])
-                await self._delete_snapshot_rows(conn, sid)
+                await self._delete_snapshot_rows(conn, [sid])
             if row.get("parse_ir_storage_object_id"):
                 ir_objects.add(row["parse_ir_storage_object_id"])
             reclaimed += 1

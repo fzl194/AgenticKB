@@ -75,6 +75,24 @@
         </div>
       </div>
 
+      <!-- 删除中的知识库（后台任务进度；owner/admin 可见） -->
+      <div v-if="runningPurgeTasks.length" class="kb-purging">
+        <div v-for="t in runningPurgeTasks" :key="t.id" class="kb-purging__row">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span class="kb-purging__name">{{ t.kb_name }}</span>
+          <span class="kb-purging__phase">{{ purgePhaseLabel(t) }}</span>
+          <el-progress v-if="purgePercent(t) !== null" :percentage="purgePercent(t) ?? 0"
+                       style="width: 180px" :stroke-width="8" />
+          <span class="kb-purging__meta">{{ purgeProgressText(t) }}</span>
+        </div>
+      </div>
+      <!-- 删除失败的任务（可重删） -->
+      <el-alert v-if="failedPurgeTasks.length" type="error" :closable="false">
+        <div v-for="t in failedPurgeTasks" :key="t.id">
+          「{{ t.kb_name }}」删除失败：{{ t.error ?? '未知原因' }}——可重新发起删除
+        </div>
+      </el-alert>
+
       <!-- site-admin：已删除库（软删时代存量）的彻底清理入口 -->
       <el-collapse v-if="authStore.siteRole === 'admin' && deletedKbs.length" class="kb-deleted">
         <el-collapse-item :title="`已删除的知识库（${deletedKbs.length}）——软删时代存量清理`">
@@ -103,14 +121,14 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Collection, Cpu, Document, MoreFilled, Plus, Refresh } from '@element-plus/icons-vue'
+import { Collection, Cpu, Document, Loading, MoreFilled, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useAuthStore } from '@/stores/auth'
 import { useKbApi } from '@/api/kb'
-import type { DeletedKbRow } from '@/types/kb'
+import type { DeletedKbRow, KbPurgeTask } from '@/types/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import KbCreateDialog from '@/components/kb/KbCreateDialog.vue'
@@ -135,6 +153,64 @@ function canWrite(kb: KbSummary): boolean {
 const authStore = useAuthStore()
 const deletedKbs = ref<DeletedKbRow[]>([])
 const purgingId = ref('')
+const purgeTasks = ref<KbPurgeTask[]>([])
+let purgeTimer: ReturnType<typeof setInterval> | null = null
+
+const runningPurgeTasks = computed(() =>
+  purgeTasks.value.filter((t) => t.status === 'queued' || t.status === 'running'))
+const failedPurgeTasks = computed(() =>
+  purgeTasks.value.filter((t) => t.status === 'failed'))
+
+function purgePhaseLabel(t: KbPurgeTask): string {
+  const labels: Record<string, string> = {
+    queued: '排队中', prepare: '准备', documents: '删除文档',
+    snapshots: '回收知识快照', objects: '回收存储对象', finalize: '收尾',
+  }
+  return labels[t.phase] ?? t.phase
+}
+
+/** 快照阶段有 total/reclaimed 可算百分比；其余阶段显示计数 */
+function purgePercent(t: KbPurgeTask): number | null {
+  if (t.phase === 'snapshots' && t.progress.snapshots_total > 0) {
+    return Math.min(99, Math.round(
+      (t.progress.snapshots_reclaimed ?? 0) / t.progress.snapshots_total * 100))
+  }
+  return null
+}
+
+function purgeProgressText(t: KbPurgeTask): string {
+  const p = t.progress ?? {}
+  if (t.phase === 'snapshots') {
+    return `${p.snapshots_reclaimed ?? 0}/${p.snapshots_total ?? '?'} 快照`
+  }
+  if (t.phase === 'objects') {
+    return `${p.objects_reclaimed ?? 0}/${p.objects_total ?? '?'} 对象`
+  }
+  if (t.phase === 'finalize') return '完成中'
+  return ''
+}
+
+async function pollPurgeTasks() {
+  const domain = domainStore.currentDomain
+  if (!domain) return
+  try {
+    purgeTasks.value = await kbApi.purgeTasks(domain)
+    if (purgeTasks.value.some((t) => t.status === 'done')
+        && runningPurgeTasks.value.length === 0) {
+      await load()
+    }
+  } catch { /* 轮询失败静默 */ }
+}
+
+function startPurgePolling() {
+  if (purgeTimer) return
+  purgeTimer = setInterval(() => {
+    if (!runningPurgeTasks.value.length) return   // 无进行中任务不拉
+    void pollPurgeTasks()
+  }, 5000)
+}
+
+onUnmounted(() => { if (purgeTimer) clearInterval(purgeTimer) })
 
 async function load() {
   const domain = domainStore.currentDomain
@@ -147,6 +223,11 @@ async function load() {
       const deleted = await kbApi.listDeletedKbs(domain)
       if (generation === loadGeneration) deletedKbs.value = deleted
     } catch { if (generation === loadGeneration) deletedKbs.value = [] }
+  }
+  if (generation === loadGeneration) {
+    try { purgeTasks.value = await kbApi.purgeTasks(domain) }
+    catch { purgeTasks.value = [] }
+    if (runningPurgeTasks.value.length) startPurgePolling()
   }
   try {
     const result = await kbApi.listKbs(domain)
@@ -214,8 +295,9 @@ async function remove(kb: KbSummary) {
     name = value.trim()
   } catch { return }
   try {
-    const out = await kbApi.deleteKb(kb.id, name)
-    ElMessage.success(`已永久删除（下线文档 ${out.deleted_documents} 篇）`)
+    await kbApi.deleteKb(kb.id, name)
+    ElMessage.success('已开始后台删除：库即刻停用（成员不可见），进度见列表下方')
+    startPurgePolling()
     await load()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
@@ -236,8 +318,9 @@ async function removeDeleted(dkb: DeletedKbRow) {
   } catch { return }
   purgingId.value = dkb.id
   try {
-    const out = await kbApi.deleteKb(dkb.id, name)
-    ElMessage.success(`已彻底清除（下线文档 ${out.deleted_documents} 篇）`)
+    await kbApi.deleteKb(dkb.id, name)
+    ElMessage.success('已开始后台彻底清除，进度见列表下方')
+    startPurgePolling()
     await load()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
   finally { purgingId.value = '' }
@@ -327,3 +410,14 @@ watch(() => domainStore.currentDomain, load)
   display: flex; align-items: center; gap: 8px; margin-top: 2px;
 }
 </style>
+
+.kb-purging { display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 14px; border: 1px dashed var(--el-color-warning);
+  border-radius: 8px; background: var(--el-color-warning-light-9); }
+.kb-purging__row { display: flex; align-items: center; gap: 10px; }
+.kb-purging__name { font-weight: 600; }
+.kb-purging__phase { color: var(--el-color-warning); font-size: 13px; }
+.kb-purging__meta { color: var(--el-text-color-secondary); font-size: 12px; }
+.kb-deleted__row { display: flex; align-items: center; gap: 10px; }
+.kb-deleted__name { font-weight: 500; }
+.kb-deleted__meta { color: var(--el-text-color-secondary); font-size: 12px; flex: 1; }

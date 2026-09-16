@@ -385,3 +385,19 @@ export interface DeletedKbRow {
   created_at: string
   updated_at: string
 }
+
+
+/** KB 删除任务（后台硬删 + 进度轮询；2026-09-16 二期） */
+export interface KbPurgeTask {
+  id: string
+  kb_id: string
+  kb_name: string
+  domain: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  phase: string
+  progress: Record<string, number>
+  requested_by: string
+  error: string | null
+  created_at: string
+  updated_at: string
+}

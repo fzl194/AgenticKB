@@ -131,6 +131,10 @@ _KB_DOCUMENT_REFS_DDL = (
 _SNAPSHOT_DEPRECATION_DDL = (
     _REPO_ROOT / "databases" / "asset_core" / "schemas" / "017_snapshot_deprecation.sql"
 )
+# KB 硬删任务化（013）：status 加 deleting + kb_purge_tasks 进度表。
+_KB_PURGE_TASKS_DDL = (
+    _REPO_ROOT / "databases" / "kb" / "schemas" / "013_kb_purge_tasks.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -234,6 +238,7 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _ONENET_IMPORTS_DDL,
         _KB_DOCUMENT_REFS_DDL,
         _SNAPSHOT_DEPRECATION_DDL,
+        _KB_PURGE_TASKS_DDL,
     )
 
 

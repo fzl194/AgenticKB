@@ -120,6 +120,58 @@ class FakeDocService:
     _svc = _Svc()
 
 
+class FakeTaskRepo:
+    tasks: list[dict] = []
+
+    def __init__(self, pool=None):
+        pass
+
+    async def get_active_task(self, kb_id):
+        for t in reversed(FakeTaskRepo.tasks):
+            if t["kb_id"] == kb_id and t["status"] in ("queued", "running"):
+                return t
+        return None
+
+    async def list_tasks(self, *, domain):
+        out = []
+        for t in FakeTaskRepo.tasks:
+            row = dict(t)
+            row["progress"] = row.get("progress_json", {})
+            out.append(row)
+        return out
+
+
+def _fake_start_purge_task(**kw):
+    import asyncio
+
+    async def _noop_progress(phase, **counts):
+        pass
+
+    row = {"id": f"task-{len(FakeTaskRepo.tasks) + 1}", "kb_id": kw["kb_id"],
+           "kb_name": kw["kb_name"], "domain": kw["domain"],
+           "status": "queued", "phase": "queued", "progress_json": {},
+           "requested_by": kw["requested_by"], "error": None,
+           "created_at": "t", "updated_at": "t"}
+    FakeTaskRepo.tasks.append(row)
+    fut = asyncio.get_event_loop().create_future()
+    fut.set_result(None)
+    return _async_return(row)
+
+
+class _AsyncReturn:
+    def __init__(self, value):
+        self._value = value
+
+    def __await__(self):
+        if False:
+            yield
+        return self._value
+
+
+def _async_return(value):
+    return _AsyncReturn(value)
+
+
 def _client(user: dict):
     app = FastAPI()
     app.include_router(kb_routes.router)
@@ -127,6 +179,13 @@ def _client(user: dict):
     app.include_router(doc_routes.router)
     purge = FakePurge()
     kbdb = FakeKbDb()
+
+    # 删除任务模块桩（路由函数内 import，打模块属性即生效）
+    import knowledge_mining.mining.kb.services.purge_tasks as pt
+    pt.PurgeTaskRepo = FakeTaskRepo
+    pt.start_purge_task = _fake_start_purge_task
+    FakeTaskRepo.tasks = []
+    app.state.pg_pool = None          # 路由仅经桩访问，占位即可
 
     async def _user():
         return user
@@ -163,22 +222,29 @@ def test_kb_delete_requires_confirm_name():
     assert purge.calls == []
 
 
-def test_kb_delete_hard_purges_on_name_match():
+def test_kb_delete_schedules_background_task():
+    """2026-09-16 二期：确认后秒级禁用+入队（202），不再同步跑管线."""
     c, purge, _ = _client(OWNER)
     resp = c.request("DELETE", "/api/kb/kb-1", json={"confirm_name": "交付局知识库"})
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     body = resp.json()
-    assert body["ok"] is True
-    assert body["deleted_documents"] == 2            # 数量，非 id 清单
-    assert purge.calls == [("purge_kb", ("kb-1",), {})]
+    assert body["ok"] is True and body["task_id"] and body["status"] == "queued"
+    assert purge.calls == []                         # 管线不在请求内跑
+    assert FakeTaskRepo.tasks and FakeTaskRepo.tasks[0]["kb_id"] == "kb-1"
+
+    # 幂等：同库再删 → 返回既有任务，不重复入队
+    resp2 = c.request("DELETE", "/api/kb/kb-1", json={"confirm_name": "交付局知识库"})
+    assert resp2.status_code == 202
+    assert resp2.json()["already_started"] is True
+    assert len(FakeTaskRepo.tasks) == 1
 
 
 def test_kb_delete_accepts_soft_deleted_kb_for_cleanup():
-    """软删态库可彻底删除（内网存量善后入口）."""
+    """软删态库可彻底删除（内网存量善后入口）——同走后台任务."""
     c, purge, _ = _client(OWNER)
     resp = c.request("DELETE", "/api/kb/kb-old", json={"confirm_name": "旧公共库"})
-    assert resp.status_code == 200
-    assert purge.calls == [("purge_kb", ("kb-old",), {})]
+    assert resp.status_code == 202
+    assert FakeTaskRepo.tasks and FakeTaskRepo.tasks[0]["kb_id"] == "kb-old"
 
 
 def test_kb_delete_404_for_non_owner():
@@ -292,13 +358,14 @@ def test_folder_delete_large_scope_requires_confirm_name():
 
 
 def test_purge_busy_run_rejected_409(monkeypatch):
-    """在途挖掘 Run 门禁（审查 M-2）：kb_busy → 409，不删分毫."""
+    """在途挖掘 Run 门禁（审查 M-2）：kb_busy → 409，不删分毫、不入队."""
     c, purge, _ = _client(OWNER)
     purge.busy = True
     resp = c.request("DELETE", "/api/kb/kb-1", json={"confirm_name": "交付局知识库"})
     assert resp.status_code == 409
     assert "kb_busy" in resp.json()["detail"]
     assert purge.calls == []
+    assert FakeTaskRepo.tasks == []
     resp = c.post("/api/kb/kb-1/documents/purge", json={"document_ids": ["d1"]})
     assert resp.status_code == 409
     assert purge.calls == []
@@ -311,3 +378,32 @@ def test_documents_purge_long_id_rejected_by_schema():
                   json={"document_ids": ["x" * 65]}).status_code == 422
     assert c.post("/api/kb/kb-1/documents/purge",
                   json={"document_ids": [f"d{i}" for i in range(5001)]}).status_code == 422
+
+
+def test_purge_tasks_endpoint_visibility():
+    """进度端点：admin 看全域；普通成员只看自己发起的."""
+    # 先建全部 client（_client 会清空 tasks），再注入数据
+    c_admin, _, _ = _client(ADMIN)
+    c_owner, _, _ = _client(OWNER)
+    c_viewer, _, _ = _client(VIEWER)
+    t1 = {"id": "t1", "kb_id": "kb-1", "kb_name": "A", "domain": "d1",
+          "status": "running", "phase": "snapshots",
+          "progress_json": {"snapshots_total": 10, "snapshots_reclaimed": 3},
+          "requested_by": "u-owner", "error": None,
+          "created_at": "t", "updated_at": "t"}
+    t2 = {"id": "t2", "kb_id": "kb-2", "kb_name": "B", "domain": "d1",
+          "status": "done", "phase": "finalize", "progress_json": {},
+          "requested_by": "u-other", "error": None,
+          "created_at": "t", "updated_at": "t"}
+
+    FakeTaskRepo.tasks = [t1, t2]
+    resp = c_admin.get("/api/kb/purge-tasks", params={"domain": "d1"})
+    assert resp.status_code == 200
+    assert len(resp.json()["tasks"]) == 2            # admin 全量
+
+    FakeTaskRepo.tasks = [t1]
+    resp = c_owner.get("/api/kb/purge-tasks", params={"domain": "d1"})
+    assert [t["id"] for t in resp.json()["tasks"]] == ["t1"]
+
+    resp = c_viewer.get("/api/kb/purge-tasks", params={"domain": "d1"})
+    assert resp.json()["tasks"] == []                # 非发起人看不到

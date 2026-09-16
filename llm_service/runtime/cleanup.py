@@ -13,9 +13,10 @@ Invariants:
   - Each batch is one short transaction (db.run commits per connection-exit);
     the loops MUST stay outside db.run or batching degrades to one giant txn.
 
-Timing: the control-plane reverse proxy enforces read=300s, so real deletes
-run under a 240s budget and return truncated=true (+ remaining counts) when
-the budget runs out — the admin re-invokes to continue (idempotent).
+Timing: the control-plane reverse proxy enforces read=300s and the frontend
+axios timeout is 290s. Real deletes run under a 90s budget and return
+truncated=true (+ remaining counts) — the frontend auto-continues in a loop
+(cumulative progress) instead of one long request that would time out.
 """
 from __future__ import annotations
 
@@ -31,7 +32,8 @@ logger = logging.getLogger(__name__)
 BATCH_TASKS = 1000        # parent tasks per batch (~6-8 child rows each)
 BATCH_MODEL_CALLS = 5000  # model_calls rows are lightweight, batch bigger
 BATCH_SLEEP_S = 0.1       # yield between batches: autovacuum / WAL / worker
-TIME_BUDGET_S = 240.0     # proxy read timeout is 300s; keep 60s for recount
+TIME_BUDGET_S = 90.0      # 内网实测：远程 PG 下 240s 预算+recount 会贴到
+                           # 前端 290s 超时；降预算+前端自动续跑补量（每请求远低于超时）
 MAX_BATCHES = 500         # hard cap: 500 batches ≈ 500k tasks, loop backstop
 
 # Terminal statuses only. 'failed' is included deliberately: the sync path

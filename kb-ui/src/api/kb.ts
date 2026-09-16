@@ -9,7 +9,7 @@ import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 import type { ParseResult } from '@/api/mining'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
-  DeletedKbRow,
+  DeletedKbRow, KbPurgeTask,
   KbOverview, KbRunRecord, KbStats, KbSummary, KbUpdateBody, KbUserCandidate,
   McpAccessRotateResult, McpAccessStatus,
   DocumentKnowledge,
@@ -83,10 +83,15 @@ export function useKbApi() {
       return extractOne<KbDetail>(data)
     },
 
-    /** 整库硬删（2026-09-16 删除体系）：输入库全名确认；全套数据物理删除 */
-    async deleteKb(kbId: string, confirmName: string): Promise<{ ok: boolean; deleted_documents: number }> {
+    /** 整库删除（二期：秒级禁用 + 后台硬删 + 进度轮询）——202 返回任务 id */
+    async deleteKb(kbId: string, confirmName: string): Promise<{ ok: boolean; task_id: string; status: string; phase: string; already_started?: boolean }> {
       const { data } = await client.delete(`/api/kb/${kbId}`, { data: { confirm_name: confirmName } })
       return data
+    },
+    /** 删除任务进度（site-admin 全域 / 库主自己发起的；前端 5s 轮询） */
+    async purgeTasks(domain: string): Promise<KbPurgeTask[]> {
+      const { data } = await client.get('/api/kb/purge-tasks', { params: { domain } })
+      return extractItems<KbPurgeTask>(data.tasks ?? data)
     },
     /** site-admin：已删库清单（存量善后）——行只含身份字段（DeletedKbRow） */
     async listDeletedKbs(domain: string): Promise<DeletedKbRow[]> {

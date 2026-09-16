@@ -126,8 +126,8 @@ async function confirmDelete() {
   }
   deleting.value = true
   try {
-    const out = await kbApi.deleteKb(props.kb.id, name)
-    ElMessage.success(`已永久删除（下线文档 ${out.deleted_documents} 篇）`)
+    await kbApi.deleteKb(props.kb.id, name)
+    ElMessage.success('已开始后台删除：库即刻停用，可在知识库列表查看进度')
     emit('deleted')
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))

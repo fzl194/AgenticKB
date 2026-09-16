@@ -155,6 +155,19 @@ async def lifespan(app: FastAPI):
     gc_task = asyncio.create_task(_snapshot_gc_loop())
     app.state.snapshot_gc_task = gc_task
 
+    # 删除任务重启恢复（2026-09-16 二期）：queued/running 的后台硬删重新
+    # 入队——管线幂等，半途状态重跑干净。
+    try:
+        from knowledge_mining.mining.kb.services.purge_tasks import (
+            recover_purge_tasks,
+        )
+        recovered = await recover_purge_tasks(pool, app.state.object_store)
+        if recovered:
+            logger.info("[purge-task] recovered %s task(s) at startup",
+                        recovered)
+    except Exception:  # noqa: BLE001 - 恢复失败不阻断启动
+        logger.warning("[purge-task] startup recovery failed", exc_info=True)
+
     # Domain-specific async/sync pools are opened lazily by API dependencies.
     app.state.domain_pools = DomainPoolManager(cfg)
     app.state.domain_run_dispatcher = build_domain_run_dispatcher(

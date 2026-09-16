@@ -650,15 +650,35 @@ async function runCleanupEstimate() {
   }
 }
 
+const cleanupCumulative = ref<Record<string, number> | null>(null)
+
+/**
+ * 执行清理（自动续跑，2026-09-16）：单次请求远低于前端超时（后端 90s
+ * 预算 + 截断返回），这里自动循环续跑到 remaining=0 或失败——累计进度
+ * 并入 cleanupCumulative，几十万行也不再"卡死/失败"。
+ */
 async function runCleanupDelete() {
   cleanupPhase.value = 'executing'
+  cleanupCumulative.value = null
   try {
-    cleanupDoneResult.value = await llmApi.cleanupTasks(cleanupParams({ dry_run: false }))
+    for (;;) {
+      const r = await llmApi.cleanupTasks(cleanupParams({ dry_run: false }))
+      if (cleanupCumulative.value === null) cleanupCumulative.value = {}
+      for (const [k, v] of Object.entries(r.deleted ?? {})) {
+        cleanupCumulative.value[k] = (cleanupCumulative.value[k] ?? 0) + v
+      }
+      if (!r.truncated) break
+    }
+    cleanupDoneResult.value = {
+      ...(cleanupDoneResult.value ?? {}),
+      deleted: cleanupCumulative.value ?? {},
+      truncated: false,
+    } as typeof cleanupDoneResult.value
     cleanupPhase.value = 'done'
     await Promise.all([loadStats(true), loadTasks(true)])
   } catch (e) {
     cleanupPhase.value = cleanupEstimate.value ? 'preview' : 'config'
-    ElMessage.error(`清理执行失败：${e instanceof Error ? e.message : String(e)}`)
+    ElMessage.error(`清理执行失败：${e instanceof Error ? e.message : String(e)}（已删部分不回滚，可重试继续）`)
   }
 }
 

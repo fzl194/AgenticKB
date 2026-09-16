@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from knowledge_mining.mining.kb.auth import current_user, require_admin
@@ -100,6 +100,25 @@ async def list_kbs(
         raise _map_error(exc) from None
 
 
+@router.get("/purge-tasks")
+async def list_purge_tasks(
+    domain: str = Query(...),
+    user: dict[str, Any] = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+    request: Request = None,  # type: ignore[assignment]
+):
+    """删除任务进度（前端轮询渲染）。site-admin 看全域；库主看自己发起的."""
+    from knowledge_mining.mining.kb.services.purge_tasks import PurgeTaskRepo
+    if user.get("site_role") == "admin":
+        rows = await PurgeTaskRepo(request.app.state.pg_pool).list_tasks(
+            domain=domain)
+        return {"tasks": rows}
+    rows = await PurgeTaskRepo(request.app.state.pg_pool).list_tasks(
+        domain=domain)
+    mine = [r for r in rows if r.get("requested_by") == str(user.get("id"))]
+    return {"tasks": mine}
+
+
 @router.get("/{kb_id}")
 async def get_kb(
     kb_id: str,
@@ -135,7 +154,7 @@ class KbDeleteConfirm(BaseModel):
     confirm_name: str
 
 
-@router.delete("/{kb_id}")
+@router.delete("/{kb_id}", status_code=202)
 async def delete_kb(
     kb_id: str,
     body: KbDeleteConfirm | None = None,
@@ -143,12 +162,18 @@ async def delete_kb(
     svc: KbService = Depends(get_kb_service),
     kbdb: KbDB = Depends(get_kb_db),
     purge: Any = Depends(get_purge_service),
+    request: Request = None,  # type: ignore[assignment]
 ):
-    """整库硬删（软删退役）：全套文档/挖掘历史/快照独占回收/对象回收。
+    """整库删除（2026-09-16 二期：秒级禁用 + 后台硬删 + 进度轮询）.
 
-    权限沿用生命周期管理（owner/site-admin）；软删态库也接受——存量善后。
+    确认后立即置 status='deleting'（读写全退、检索自动退出——成员侧即刻
+    不可见）并返回 202 + 任务 id；管线在后台执行，进度见
+    ``GET /api/kb/purge-tasks``。软删态库同样接受（存量善后）。
     """
     from knowledge_mining.mining.kb.services.purge_service import PurgeError
+    from knowledge_mining.mining.kb.services.purge_tasks import (
+        PurgeTaskRepo, start_purge_task,
+    )
     kb = await kbdb.get_kb(kb_id, include_deleted=True)
     if kb is None or not await kbdb.can_restore(kb_id=kb_id, user_id=user["id"]):
         # 不向非属主泄露已删私有库的存在
@@ -156,18 +181,28 @@ async def delete_kb(
     confirm = (body.confirm_name if body else "") or ""
     if confirm != kb.get("name"):
         raise HTTPException(422, "confirm_name_mismatch: 需输入库全名确认")
+
+    repo = PurgeTaskRepo(request.app.state.pg_pool)
+    active = await repo.get_active_task(kb_id)
+    if active is not None:
+        # 幂等：已有进行中的删除任务，直接返回它（不重复入队）
+        return {"ok": True, "task_id": active["id"],
+                "status": active["status"], "phase": active["phase"],
+                "already_started": True}
     try:
-        summary = await purge.purge_kb(kb_id)
+        await purge.assert_kb_idle(kb_id)
     except PurgeError as exc:
         raise HTTPException(409, str(exc)) from exc
     import logging
     logging.getLogger("kb.purge").info(
-        "[purge] kb=%s actor=%s docs=%s snapshots=%s objects=%s",
-        kb_id, user.get("id"), len(summary.get("deleted_documents") or []),
-        summary.get("reclaimed_snapshots"), summary.get("reclaimed_objects"))
-    return {"ok": True, **{k: v for k, v in summary.items()
-                           if k != "deleted_documents"},
-            "deleted_documents": len(summary.get("deleted_documents") or [])}
+        "[purge] kb=%s actor=%s scheduled (background)", kb_id, user.get("id"))
+    task = await start_purge_task(
+        pool=request.app.state.pg_pool,
+        object_store=getattr(request.app.state, "object_store", None),
+        kb_id=kb_id, kb_name=kb.get("name") or "", domain=kb.get("domain") or "",
+        requested_by=str(user.get("id")))
+    return {"ok": True, "task_id": task["id"], "status": "queued",
+            "phase": "queued"}
 
 
 @router.post("/{kb_id}/restore")

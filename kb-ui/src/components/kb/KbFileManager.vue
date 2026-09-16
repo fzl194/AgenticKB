@@ -439,13 +439,23 @@ async function renameFolder(f: KbFolder) {
   catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
 async function deleteFolder(f: KbFolder) {
+  // 级联删除确认：先取预览计数（子文件夹 + 树下文档，含挖掘内容）
+  let preview: { folders: number; documents: number }
+  try { preview = await kbApi.folderDeletePreview(props.kbId, f.id) }
+  catch (e) { ElMessage.error(await apiErrorDetail(e)); return }
   try {
-    await ElMessageBox.confirm(`确定删除文件夹「${f.name}」？仅空文件夹可删。`, '删除文件夹', {
-      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
-    })
+    await ElMessageBox.confirm(
+      `将永久删除文件夹「${f.name}」及 ${preview.folders} 个子文件夹、`
+      + `${preview.documents} 篇文档（含全部挖掘内容），不可恢复。`,
+      '级联删除文件夹',
+      { type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消' },
+    )
   } catch { return }
-  try { await kbApi.deleteFolder(props.kbId, f.id); ElMessage.success('已删除'); await loadFolders() }
-  catch (e) { ElMessage.error(await apiErrorDetail(e)) }
+  try {
+    await kbApi.deleteFolder(props.kbId, f.id)
+    ElMessage.success(`已删除（${preview.documents} 篇文档）`)
+    await loadFolders(); await loadFiles()
+  } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
 
 // ── 文件操作 ──
@@ -512,9 +522,9 @@ async function download(file: KbDocument) {
 async function deleteFile(file: KbDocument) {
   try {
     await ElMessageBox.confirm(
-      `确定删除文件「${file.document_name}」？磁盘文件与库内记录一并删除。`,
-      '删除文件',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+      `将永久删除文件「${file.document_name}」及其全部挖掘内容，不可恢复。`,
+      '永久删除文件',
+      { type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消' },
     )
   } catch { return }
   try {
@@ -550,23 +560,23 @@ async function batchDelete() {
   if (!ids.length) return
   try {
     await ElMessageBox.confirm(
-      `确定删除选中的 ${ids.length} 个文件？磁盘文件与库内记录一并删除。`,
-      '批量删除',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+      `将永久删除选中的 ${ids.length} 个文件及其全部挖掘内容，不可恢复。`,
+      '批量永久删除',
+      { type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消' },
     )
   } catch {
     return
   }
-  let ok = 0
-  for (const id of ids) {
-    try {
-      await kbApi.deleteDocument(props.kbId, id)
-      ok += 1
-    } catch {
-      /* 单个失败继续删其余 */
-    }
+  // 统一硬删管线批量端点（替代逐个删除循环）
+  try {
+    await kbApi.purgeDocuments(props.kbId, ids)
+  } catch (e) {
+    ElMessage.error(await apiErrorDetail(e))
+    return
   }
-  // 文件删完后尝试删选中的文件夹壳（仅空文件夹可删；深路径优先）
+  // 壳清理门控（审查 HIGH-3）：deleteFolder 已是级联硬删——仅当预览确认
+  // 该文件夹树下文档清零才删壳，绝不经此路径顺带删任何文档（含勾选后
+  // 反选/新上传的）。要删非空文件夹请走文件夹删除入口（有计数确认框）。
   let foldersDeleted = 0
   const folderShells = selectedFolderIds.value
     .map((id) => folders.value.find((f) => f.id === id))
@@ -574,17 +584,17 @@ async function batchDelete() {
     .sort((a, b) => b.path.length - a.path.length)
   for (const f of folderShells) {
     try {
+      const preview = await kbApi.folderDeletePreview(props.kbId, f.id)
+      if (preview.documents > 0) continue
       await kbApi.deleteFolder(props.kbId, f.id)
       foldersDeleted += 1
     } catch {
-      /* 非空/失败不阻断 */
+      /* 预览/删除失败不阻断 */
     }
   }
-  // 部分或全部失败不得伪装成功（全失败时 success toast 会误导重复操作）
-  const folderNote = folderShells.length
-    ? `，删除 ${foldersDeleted}/${folderShells.length} 个文件夹` : ''
-  if (ok === ids.length) ElMessage.success(`已删除 ${ok}/${ids.length} 个文件${folderNote}`)
-  else ElMessage.warning(`已删除 ${ok}/${ids.length} 个文件${folderNote}，${ids.length - ok} 个失败——请刷新后重试`)
+  const folderNote = foldersDeleted
+    ? `，清理空文件夹 ${foldersDeleted} 个` : ''
+  ElMessage.success(`已永久删除 ${ids.length} 个文件${folderNote}`)
   clearSelection()
   await reload()
 }

@@ -458,11 +458,14 @@ async def onenet_delete_import(
     user: dict[str, Any] = Depends(require_admin),
     request: Request = None,  # type: ignore[assignment]
 ):
-    """source 级删除（A 方案定稿 2026-09-15）：该导入全部文档软删 +
-    引用清理 + 导入记录硬删。进行中（非 done/failed）拒绝。
+    """source 级删除（2026-09-16 切统一硬删管线）：该导入全部文档硬删（含
+    挖掘产物/独占快照/对象回收）+ 引用清理 + 目录子树 + 导入记录硬删。
+    进行中（非 done/failed）拒绝。
 
-    公共库/目录文件夹/toc 缓存/拉取工作区保留——同 source 重导即复用加速。
+    toc 缓存/拉取工作区保留——同 source 重导即复用加速。
     """
+    from knowledge_mining.mining.kb.services.purge_service import PurgeService
+
     repo = _repo(request)
     row = await repo.get_import(import_id)
     if row is None:
@@ -471,19 +474,16 @@ async def onenet_delete_import(
         raise HTTPException(409, f"import_busy: {row.get('status')}")
 
     kbdb = KbDB(request.app.state.pg_pool)
-    # 全量批量软删（2026-09-16 事故：prefix 列表带 LIMIT 5000，2W 文档只删了
-    # 前 5000——单语句 UPDATE 全量覆盖，无上限）
-    doc_ids = await kbdb.soft_delete_documents_by_key_prefix(
+    # key 前缀全量取文档 id（含软删态——1.1.5 前软删的存量也要清干净）
+    doc_ids = await kbdb.list_document_ids_by_key_prefix(
         row["kb_id"], f"onenet:{row['source_id']}:")
 
-    from knowledge_mining.mining.onenet.refs_service import RefsService
-    removed_refs = 0
-    if doc_ids:
-        removed_refs = await RefsService(
-            request.app.state.pg_pool).remove_refs_for_documents(doc_ids)
+    purge = PurgeService(request.app.state.pg_pool,
+                         getattr(request.app.state, "object_store", None))
+    summary = (await purge.purge_documents(row["kb_id"], doc_ids)
+               if doc_ids else purge.empty_summary())
 
-    # 目录子树清理：顶层段「文档名 [source_id]」专属本 source（名字带唯一标识），
-    # 活文档清零后整树删除（软删文档的 directory_path 悬空无害——读面已退出）。
+    # 目录子树清理：顶层段「文档名 [source_id]」专属本 source（名字带唯一标识）
     from knowledge_mining.mining.onenet.restore import top_folder_segment
     top = top_folder_segment(row.get("doc_name"), row["source_id"])
     removed_folders = 0
@@ -491,7 +491,9 @@ async def onenet_delete_import(
         removed_folders = await kbdb.delete_folder_subtree(row["kb_id"], top)
 
     await repo.delete_import(import_id)
-    return {"deleted_documents": doc_ids, "removed_refs": removed_refs,
+    return {"deleted_documents": doc_ids,
+            "reclaimed_snapshots": summary["reclaimed_snapshots"],
+            "reclaimed_objects": summary["reclaimed_objects"],
             "removed_folders": removed_folders}
 
 

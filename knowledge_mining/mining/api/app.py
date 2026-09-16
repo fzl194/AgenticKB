@@ -5,7 +5,8 @@ Start:
     # or
     uvicorn knowledge_mining.mining.api.app:create_app --host 0.0.0.0 --port 8901 --factory
 """
-from __future__ import annotations
+from __future__ import asyncio
+import annotations
 
 import logging
 from contextlib import asynccontextmanager
@@ -136,6 +137,24 @@ async def lifespan(app: FastAPI):
         )
     await app.state.workflow_service.ensure_workflow_library()
 
+    # 快照废弃轨道（2026-09-16 删除体系）：每日一轮 DEPRECATED 标记 + 满期回收。
+    # 首轮启动即跑（存量僵尸清理），之后每 24h 一轮；失败只记日志不影响服务。
+    async def _snapshot_gc_loop() -> None:
+        from knowledge_mining.mining.kb.services.purge_service import PurgeService
+        while True:
+            try:
+                svc = PurgeService(pool, app.state.object_store)
+                marked = await svc.deprecate_superseded_snapshots()
+                reclaimed = await svc.reclaim_deprecated_snapshots()
+                if marked["deprecated"] or reclaimed["reclaimed"]:
+                    logger.info("[gc] daily: %s", {**marked, **reclaimed})
+            except Exception:  # noqa: BLE001
+                logger.warning("[gc] snapshot gc round failed", exc_info=True)
+            await asyncio.sleep(24 * 3600)
+
+    gc_task = asyncio.create_task(_snapshot_gc_loop())
+    app.state.snapshot_gc_task = gc_task
+
     # Domain-specific async/sync pools are opened lazily by API dependencies.
     app.state.domain_pools = DomainPoolManager(cfg)
     app.state.domain_run_dispatcher = build_domain_run_dispatcher(
@@ -207,6 +226,9 @@ async def lifespan(app: FastAPI):
     logger.info("Mining API started — PostgreSQL %s:%d/%s", cfg.pg_host, cfg.pg_port, cfg.pg_dbname)
 
     yield
+
+    gc_task.cancel()
+    await asyncio.gather(gc_task, return_exceptions=True)
 
     app.state.domain_run_dispatcher.close()
     await app.state.domain_pools.close()

@@ -109,18 +109,25 @@ async function save() {
 }
 
 async function confirmDelete() {
+  // 硬删确认：输入库全名（2026-09-16 删除体系——永久删除，不可恢复）
+  let name = ''
   try {
-    await ElMessageBox.confirm(
-      `确定删除知识库「${props.kb.name}」？删除后原名称可重新使用，历史数据仍保留。`,
-      '删除知识库',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    const { value } = await ElMessageBox.prompt(
+      `此操作将永久删除知识库「${props.kb.name}」及其全部文档、挖掘知识与历史记录，不可恢复。请输入库全名确认：`,
+      '永久删除知识库',
+      {
+        type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消',
+        inputValidator: (v) => v?.trim() === props.kb.name || '名称不一致',
+      },
     )
+    name = value.trim()
   } catch {
     return // 用户取消
   }
   deleting.value = true
   try {
-    await kbApi.deleteKb(props.kb.id)
+    const out = await kbApi.deleteKb(props.kb.id, name)
+    ElMessage.success(`已永久删除（下线文档 ${out.deleted_documents} 篇）`)
     emit('deleted')
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))

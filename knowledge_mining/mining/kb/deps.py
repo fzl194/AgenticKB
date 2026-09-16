@@ -38,3 +38,10 @@ async def get_folder_service(request: Request):
 async def get_user_service(request: Request) -> UserService:
     from knowledge_mining.mining.kb.services.user_service import UserService
     return UserService(KbDB(request.app.state.pg_pool))
+
+
+def get_purge_service(request: Request) -> "Any":
+    """统一硬删管线（2026-09-16 删除体系：pool + 对象存储注入）."""
+    from knowledge_mining.mining.kb.services.purge_service import PurgeService
+    return PurgeService(request.app.state.pg_pool,
+                        getattr(request.app.state, "object_store", None))

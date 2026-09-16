@@ -9,9 +9,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from knowledge_mining.mining.kb.auth import current_user
+from knowledge_mining.mining.kb.auth import current_user, require_admin
 from knowledge_mining.mining.kb.db import KbDB
-from knowledge_mining.mining.kb.deps import get_kb_db, get_kb_service
+from knowledge_mining.mining.kb.deps import (
+    get_kb_db, get_kb_service, get_purge_service,
+)
 from knowledge_mining.mining.kb.services.kb_service import (
     Duplicate, Forbidden, InvalidDomain, InvalidName, InvalidVisibility,
     KbService, NotFound,
@@ -82,10 +84,17 @@ async def create_kb(
 @router.get("")
 async def list_kbs(
     domain: str = Query(...),
+    include_deleted: bool = Query(False),
     user: dict[str, Any] = Depends(current_user),
     svc: KbService = Depends(get_kb_service),
+    kbdb: KbDB = Depends(get_kb_db),
 ):
     try:
+        if include_deleted:
+            # 已删库清单（site-admin 专属）：软删时代的存量善后入口
+            if user.get("site_role") != "admin":
+                raise HTTPException(403, "site_admin_required")
+            return await kbdb.list_deleted_kbs(domain=domain)
         return await svc.list_visible(user_id=user["id"], domain=domain)
     except InvalidDomain as exc:
         raise _map_error(exc) from None
@@ -121,16 +130,44 @@ async def update_kb(
         raise _map_error(exc) from None
 
 
+class KbDeleteConfirm(BaseModel):
+    """整库硬删确认（2026-09-16 删除体系：输入库全名，GitHub 风格门槛）."""
+    confirm_name: str
+
+
 @router.delete("/{kb_id}")
 async def delete_kb(
     kb_id: str,
+    body: KbDeleteConfirm | None = None,
     user: dict[str, Any] = Depends(current_user),
     svc: KbService = Depends(get_kb_service),
+    kbdb: KbDB = Depends(get_kb_db),
+    purge: Any = Depends(get_purge_service),
 ):
+    """整库硬删（软删退役）：全套文档/挖掘历史/快照独占回收/对象回收。
+
+    权限沿用生命周期管理（owner/site-admin）；软删态库也接受——存量善后。
+    """
+    from knowledge_mining.mining.kb.services.purge_service import PurgeError
+    kb = await kbdb.get_kb(kb_id, include_deleted=True)
+    if kb is None or not await kbdb.can_restore(kb_id=kb_id, user_id=user["id"]):
+        # 不向非属主泄露已删私有库的存在
+        raise HTTPException(404, f"KB {kb_id} not found")
+    confirm = (body.confirm_name if body else "") or ""
+    if confirm != kb.get("name"):
+        raise HTTPException(422, "confirm_name_mismatch: 需输入库全名确认")
     try:
-        return await svc.soft_delete(kb_id=kb_id, actor_id=user["id"])
-    except (NotFound, Forbidden) as exc:
-        raise _map_error(exc) from None
+        summary = await purge.purge_kb(kb_id)
+    except PurgeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    import logging
+    logging.getLogger("kb.purge").info(
+        "[purge] kb=%s actor=%s docs=%s snapshots=%s objects=%s",
+        kb_id, user.get("id"), len(summary.get("deleted_documents") or []),
+        summary.get("reclaimed_snapshots"), summary.get("reclaimed_objects"))
+    return {"ok": True, **{k: v for k, v in summary.items()
+                           if k != "deleted_documents"},
+            "deleted_documents": len(summary.get("deleted_documents") or [])}
 
 
 @router.post("/{kb_id}/restore")
@@ -234,3 +271,16 @@ async def remove_member(
         return {"ok": True}
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
+
+
+# ---------------------------------------------------------------- 快照 GC
+
+@router.post("/snapshots/gc")
+async def snapshot_gc(
+    user: dict[str, Any] = Depends(require_admin),
+    purge: Any = Depends(get_purge_service),
+):
+    """快照废弃轨道手动触发（每日后台自动跑；管理员可强制）."""
+    marked = await purge.deprecate_superseded_snapshots()
+    reclaimed = await purge.reclaim_deprecated_snapshots()
+    return {**marked, **reclaimed}

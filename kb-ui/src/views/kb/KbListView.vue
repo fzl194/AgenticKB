@@ -75,6 +75,19 @@
         </div>
       </div>
 
+      <!-- site-admin：已删除库（软删时代存量）的彻底清理入口 -->
+      <el-collapse v-if="authStore.siteRole === 'admin' && deletedKbs.length" class="kb-deleted">
+        <el-collapse-item :title="`已删除的知识库（${deletedKbs.length}）——软删时代存量清理`">
+          <div v-for="dkb in deletedKbs" :key="dkb.id" class="kb-deleted__row">
+            <span class="kb-deleted__name">{{ dkb.name }}</span>
+            <span class="kb-deleted__meta">删除于 {{ formatDate(dkb.deleted_at ?? '') }}</span>
+            <el-button size="small" type="danger" plain
+                       :loading="purgingId === dkb.id"
+                       @click="removeDeleted(dkb)">彻底删除</el-button>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+
       <EmptyState
         v-if="!loading && !loadError && !kbs.length"
         text="当前域还没有知识库，点击右上角「新建知识库」开始"
@@ -95,7 +108,9 @@ import { useRouter } from 'vue-router'
 import { Collection, Cpu, Document, MoreFilled, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
+import { useAuthStore } from '@/stores/auth'
 import { useKbApi } from '@/api/kb'
+import type { DeletedKbRow } from '@/types/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import KbCreateDialog from '@/components/kb/KbCreateDialog.vue'
@@ -117,12 +132,22 @@ function canWrite(kb: KbSummary): boolean {
   return kb.my_role === 'owner' || kb.my_role === 'editor' || kb.my_role === 'admin'
 }
 
+const authStore = useAuthStore()
+const deletedKbs = ref<DeletedKbRow[]>([])
+const purgingId = ref('')
+
 async function load() {
   const domain = domainStore.currentDomain
   if (!domain) return
   const generation = ++loadGeneration
   loading.value = true
   loadError.value = ''
+  if (authStore.siteRole === 'admin') {
+    try {
+      const deleted = await kbApi.listDeletedKbs(domain)
+      if (generation === loadGeneration) deletedKbs.value = deleted
+    } catch { if (generation === loadGeneration) deletedKbs.value = [] }
+  }
   try {
     const result = await kbApi.listKbs(domain)
     if (generation !== loadGeneration || domain !== domainStore.currentDomain) return
@@ -174,18 +199,48 @@ async function rename(kb: KbSummary) {
 }
 
 async function remove(kb: KbSummary) {
+  // 硬删确认：输入库全名（GitHub 风格——整库不可逆操作的最高门槛）
+  let name = ''
   try {
-    await ElMessageBox.confirm(
-      `确定删除知识库「${kb.name}」？软删除后对所有人不可见，历史数据保留，原名称可重新使用。`,
-      '删除知识库',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    const { value } = await ElMessageBox.prompt(
+      `此操作将永久删除知识库「${kb.name}」及其全部文档、挖掘知识与历史记录，不可恢复。请输入库全名确认：`,
+      '永久删除知识库',
+      {
+        type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+        inputValidator: (v) => v?.trim() === kb.name || '名称不一致',
+      },
     )
+    name = value.trim()
   } catch { return }
   try {
-    await kbApi.deleteKb(kb.id)
-    ElMessage.success('已删除')
+    const out = await kbApi.deleteKb(kb.id, name)
+    ElMessage.success(`已永久删除（下线文档 ${out.deleted_documents} 篇）`)
     await load()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
+}
+
+/** 已删库（软删态存量）彻底清理：同样要求输入库全名 */
+async function removeDeleted(dkb: DeletedKbRow) {
+  let name = ''
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `将彻底清除「${dkb.name}」的全部残留数据（文档/知识/存储），不可恢复。请输入库全名确认：`,
+      '彻底删除',
+      {
+        type: 'warning', confirmButtonText: '彻底删除', cancelButtonText: '取消',
+        inputValidator: (v) => v?.trim() === dkb.name || '名称不一致',
+      },
+    )
+    name = value.trim()
+  } catch { return }
+  purgingId.value = dkb.id
+  try {
+    const out = await kbApi.deleteKb(dkb.id, name)
+    ElMessage.success(`已彻底清除（下线文档 ${out.deleted_documents} 篇）`)
+    await load()
+  } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
+  finally { purgingId.value = '' }
 }
 
 function formatDate(t: string): string {

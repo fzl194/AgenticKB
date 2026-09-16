@@ -127,14 +127,30 @@ class PgSnapshotRepository:
             # 文档的 link（同内容不同文档共享指纹场景，CRITICAL-1）。
             cur = await conn.execute(
                 """SELECT * FROM asset_document_snapshots
-                   WHERE domain = %s AND snapshot_fingerprint = %s""",
+                   WHERE domain = %s AND snapshot_fingerprint = %s
+                   FOR UPDATE""",
                 [snapshot.domain, snapshot.snapshot_fingerprint],
             )
             row = await cur.fetchone()
             assert row is not None, (
                 "conflict on fingerprint must imply an existing row"
             )
-            existing_row = _snapshot_from_row(dict(row))
+            existing_row = dict(row)
+            # GC 轨道复活（2026-09-16 删除体系）：指纹命中的行若已被标 DEPRECATED
+            # （换范式后 7 天缓冲内切回），直接复活 READY——同指纹即同内容，
+            # 重挖纯浪费 LLM 钱。lifecycle 单向约束只约束 mark_lifecycle 原语，
+            # 复活是「内容确定性等价」的显式回滚。
+            if existing_row.get("lifecycle_status") == "DEPRECATED":
+                cur = await conn.execute(
+                    """UPDATE asset_document_snapshots
+                          SET lifecycle_status = 'READY', deprecated_at = NULL
+                        WHERE id = %s RETURNING *""",
+                    [existing_row["id"]],
+                )
+                row = await cur.fetchone()
+                assert row is not None
+                existing_row = dict(row)
+            existing_row = _snapshot_from_row(existing_row)
             # link 必须指向既有快照（service 层构造时用的是新 snapshot.id）。
             await self._insert_link(
                 conn,

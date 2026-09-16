@@ -42,6 +42,8 @@ export interface KbSummary {
   created_at: string
   my_role: KbMyRole
   document_count: number
+  /** 软删态（仅 site-admin 已删库清单返回）；2026-09-16 删除体系存量善后用 */
+  deleted_at?: string | null
 }
 
 export interface KbDetail {
@@ -368,4 +370,18 @@ export interface McpAccessRotateResult {
   key: string
   key_prefix: string
   rotated_at: string
+}
+
+
+/** site-admin 已删库清单行（list_deleted_kbs 只含身份字段，勿当 KbSummary 用） */
+export interface DeletedKbRow {
+  id: string
+  domain: string
+  name: string
+  owner_id: string
+  visibility: string
+  status: string
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
 }

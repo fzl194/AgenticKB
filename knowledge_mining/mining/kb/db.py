@@ -924,6 +924,18 @@ WITH latest AS (
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def list_deleted_kbs(self, *, domain: str) -> list[dict[str, Any]]:
+        """域内全部软删库（site-admin 清理入口用；2026-09-16 存量善后）."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, domain, name, owner_id, visibility, status,
+                          deleted_at, created_at, updated_at
+                   FROM knowledge_bases
+                   WHERE domain = %s AND status = 'deleted'
+                   ORDER BY deleted_at DESC""",
+                [domain])
+            return [dict(r) for r in await cur.fetchall()]
+
     async def soft_delete(self, kb_id: str) -> dict[str, Any] | None:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
@@ -1692,6 +1704,19 @@ WITH latest AS (
                 "UPDATE asset_documents SET deleted_at = %s WHERE id = %s",
                 [datetime.now(timezone.utc).isoformat(), document_id],
             )
+
+    async def list_document_ids_by_key_prefix(
+        self, kb_id: str, key_prefix: str,
+    ) -> list[str]:
+        """按 document_key 前缀全量取文档 id（含软删态——硬删清理用，无 LIMIT）."""
+        escaped = (key_prefix.replace(chr(92), chr(92) * 2)
+                   .replace("%", chr(92) + "%").replace("_", chr(92) + "_"))
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                r"""SELECT id FROM asset_documents WHERE kb_id = %s
+                     AND document_key LIKE %s ESCAPE '\'""",
+                [kb_id, escaped + "%"])
+            return [r["id"] for r in await cur.fetchall()]
 
     async def soft_delete_documents_by_key_prefix(
         self, kb_id: str, key_prefix: str,

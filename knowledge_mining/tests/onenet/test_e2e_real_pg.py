@@ -37,23 +37,9 @@ pytestmark = [
 ]
 
 
-_DDL_APPLIED = False
-
-
-async def _apply_production_ddl() -> None:
-    """把生产 DDL 链（pg_schema 同款清单）原样铺进测试库（会话级一次：
-    个别 trigger 语句非幂等，重铺会 DuplicateObject）。"""
-    global _DDL_APPLIED
-    if _DDL_APPLIED:
-        return
-    from knowledge_mining.mining.infra.pg_schema import domain_schema_paths
-
-    import psycopg
-
-    async with await psycopg.AsyncConnection.connect(DSN, autocommit=True) as conn:
-        for ddl_path in domain_schema_paths():
-            await conn.execute(ddl_path.read_text(encoding="utf-8"))
-    _DDL_APPLIED = True
+from knowledge_mining.tests.onenet._e2e_ddl import (
+    ensure_ddl as _apply_production_ddl,
+)
 
 
 async def _now() -> str:
@@ -81,7 +67,8 @@ async def test_snapshot_mime_whitelist_accepts_onenet():
                       mime_type, created_at)
                    VALUES (%(id)s, %(domain)s, %(normalized_content_hash)s,
                            %(raw_content_hash)s,
-                           'application/x-onenet+jsonl', %(created_at)s)""",
+                           'application/x-onenet+jsonl', %(created_at)s)
+                   ON CONFLICT (id) DO NOTHING""",
                 {"id": "snap-onenet-ok", **base})
         # ② 白名单语义仍在：乱 MIME 仍拒绝
         with pytest.raises(CheckViolation):
@@ -114,13 +101,15 @@ async def test_delete_folder_subtree_real_sql():
         async with pool.connection() as conn:
             await conn.execute(
                 """INSERT INTO kb_users (id, username, site_role, created_at)
-                   VALUES ('u-e2e', 'e2e-admin', 'admin', %s)""",
+                   VALUES ('u-e2e', 'e2e-admin', 'admin', %s)
+                   ON CONFLICT (id) DO NOTHING""",
                 [await _now()])
             await conn.execute(
                 """INSERT INTO knowledge_bases (id, domain, name, owner_id,
                      visibility, status, created_at, updated_at)
                    VALUES (%s, 'IP', '一张网产品文档', 'u-e2e',
-                           'private', 'active', %s, %s)""",
+                           'private', 'active', %s, %s)
+                   ON CONFLICT (id) DO NOTHING""",
                 [kb_id, await _now(), await _now()])
             # 目录树：顶层 + 章节 + 深层（+ 一个不属于本 source 的兄弟顶层）
             for i, path in enumerate([
@@ -128,7 +117,8 @@ async def test_delete_folder_subtree_real_sql():
                     "别的文档 [DOC9999999999]"]):
                 await conn.execute(
                     """INSERT INTO kb_folders (id, kb_id, name, path, created_at)
-                       VALUES (%s, %s, %s, %s, %s)""",
+                       VALUES (%s, %s, %s, %s, %s)
+                       ON CONFLICT (id) DO NOTHING""",
                     [f"f{i}", kb_id, path.split("/")[-1], path, await _now()])
             # 两篇文档：一篇软删（本 source 删除后的形态）、一篇顶层外
             await conn.execute(
@@ -136,10 +126,14 @@ async def test_delete_folder_subtree_real_sql():
                      (id, domain, kb_id, document_key, document_name,
                       directory_path, created_at)
                    VALUES ('d1', 'IP', %s, 'onenet:DOC1100938722:x1',
-                           'QoS.jsonl', %s, %s)""",
+                           'QoS.jsonl', %s, %s)
+                   ON CONFLICT (id) DO NOTHING""",
                 [kb_id, f"{top}/02 特性配置", await _now()])
             # 软删走生产同款批量前缀方法（2026-09-16 事故回归）
 
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE asset_documents SET deleted_at = NULL WHERE id = 'd1'")
         kbdb = KbDB(pool)
         deleted_ids = await kbdb.soft_delete_documents_by_key_prefix(
             kb_id, "onenet:DOC1100938722:")

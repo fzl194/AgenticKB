@@ -9,6 +9,7 @@ import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 import type { ParseResult } from '@/api/mining'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
+  DeletedKbRow,
   KbOverview, KbRunRecord, KbStats, KbSummary, KbUpdateBody, KbUserCandidate,
   McpAccessRotateResult, McpAccessStatus,
   DocumentKnowledge,
@@ -82,8 +83,15 @@ export function useKbApi() {
       return extractOne<KbDetail>(data)
     },
 
-    async deleteKb(kbId: string): Promise<void> {
-      await client.delete(`/api/kb/${kbId}`)
+    /** 整库硬删（2026-09-16 删除体系）：输入库全名确认；全套数据物理删除 */
+    async deleteKb(kbId: string, confirmName: string): Promise<{ ok: boolean; deleted_documents: number }> {
+      const { data } = await client.delete(`/api/kb/${kbId}`, { data: { confirm_name: confirmName } })
+      return data
+    },
+    /** site-admin：已删库清单（存量善后）——行只含身份字段（DeletedKbRow） */
+    async listDeletedKbs(domain: string): Promise<DeletedKbRow[]> {
+      const { data } = await client.get('/api/kb', { params: { domain, include_deleted: true } })
+      return extractItems<DeletedKbRow>(data)
     },
 
     // ── MCP 接入（阶段 A：一人一钥 + 开放库清单）──
@@ -165,6 +173,11 @@ export function useKbApi() {
       return extractOne<KbFolder>(data)
     },
 
+    /** 文件夹级联删除预览（确认框计数） */
+    async folderDeletePreview(kbId: string, folderId: string): Promise<{ folders: number; documents: number }> {
+      const { data } = await client.get(`/api/kb/${kbId}/folders/${folderId}/delete-preview`)
+      return data
+    },
     async deleteFolder(kbId: string, folderId: string): Promise<void> {
       await client.delete(`/api/kb/${kbId}/folders/${folderId}`)
     },
@@ -292,6 +305,11 @@ export function useKbApi() {
       return (data as { url: string }).url
     },
 
+    /** 批量硬删（统一管线：知识产物/独占快照/对象回收） */
+    async purgeDocuments(kbId: string, documentIds: string[]): Promise<{ deleted_documents: number }> {
+      const { data } = await client.post(`/api/kb/${kbId}/documents/purge`, { document_ids: documentIds })
+      return data
+    },
     async deleteDocument(kbId: string, docId: string): Promise<void> {
       await client.delete(`/api/kb/${kbId}/documents/${docId}`)
     },

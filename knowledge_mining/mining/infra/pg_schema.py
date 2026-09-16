@@ -127,6 +127,10 @@ _ONENET_IMPORTS_DDL = (
 _KB_DOCUMENT_REFS_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "012_kb_document_refs.sql"
 )
+# 快照废弃轨道（017）：deprecated_at + lifecycle 索引——GC（7 天回收）判定列。
+_SNAPSHOT_DEPRECATION_DDL = (
+    _REPO_ROOT / "databases" / "asset_core" / "schemas" / "017_snapshot_deprecation.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -229,6 +233,7 @@ def domain_schema_paths() -> tuple[Path, ...]:
         # 一张网接入（链尾：016 自包含；012 仅依赖 knowledge_bases）。
         _ONENET_IMPORTS_DDL,
         _KB_DOCUMENT_REFS_DDL,
+        _SNAPSHOT_DEPRECATION_DDL,
     )
 
 

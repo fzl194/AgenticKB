@@ -10,13 +10,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from psycopg.errors import UniqueViolation
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StringConstraints
+from typing import Annotated
 
 from knowledge_mining.mining.infra.upload_config import UploadConfig
 from knowledge_mining.mining.api.deps import get_parse_result_service
 from knowledge_mining.mining.kb.auth import current_user
 from knowledge_mining.mining.kb.db import KbDB
-from knowledge_mining.mining.kb.deps import get_document_service, get_folder_service, get_kb_db
+from knowledge_mining.mining.kb.deps import (
+    get_document_service, get_folder_service, get_kb_db, get_purge_service,
+)
 from knowledge_mining.mining.kb.routes.kbs import _map_error
 from knowledge_mining.mining.kb.services.document_service import (
     ContentRevisionConflict, DocumentService, UploadTooLarge,
@@ -338,13 +341,58 @@ async def delete_document(
     document_id: str,
     user: dict[str, Any] = Depends(current_user),
     svc: DocumentService = Depends(get_document_service),
+    purge: Any = Depends(get_purge_service),
 ):
-    """软删 KB 文档（P08-S1）：盖 deleted_at，历史 Build 不被改写；restore 可恢复。"""
+    """硬删 KB 文档（2026-09-16 删除体系：软删退役）——走统一管线.
+
+    权限沿用写门槛（owner/editor）；软删态文档同样接受（存量清理）。
+    """
+    from knowledge_mining.mining.kb.services.purge_service import PurgeError
     try:
-        await svc.delete(document_id=document_id, user_id=user["id"])
-        return {"ok": True}
+        await svc._svc._assert_write(kb_id, user["id"])  # noqa: SLF001
+        summary = await purge.purge_documents(kb_id, [document_id])
+        if not summary["deleted_documents"]:
+            raise NotFound(document_id)
+        return {"ok": True, "reclaimed_snapshots": summary["reclaimed_snapshots"],
+                "reclaimed_objects": summary["reclaimed_objects"]}
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
+    except PurgeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+class DocPurgeBatch(BaseModel):
+    """批量硬删入参（审查 M-3：解析期即收紧，防长串/巨表内存尖峰）."""
+    document_ids: list[Annotated[str, StringConstraints(max_length=64)]] = \
+        Field(max_length=5000)
+
+
+@router.post("/purge")
+async def purge_documents_batch(
+    kb_id: str,
+    body: DocPurgeBatch,
+    user: dict[str, Any] = Depends(current_user),
+    svc: DocumentService = Depends(get_document_service),
+    purge: Any = Depends(get_purge_service),
+):
+    """批量硬删（文件列表勾选删除；一条管线三入口复用）."""
+    from knowledge_mining.mining.kb.services.purge_service import PurgeError
+    ids = [i for i in body.document_ids if i.strip()]
+    if not ids:
+        raise HTTPException(422, "document_ids required")
+    if len(ids) > 5000:
+        raise HTTPException(422, "document_ids exceeds 5000 per request")
+    try:
+        await svc._svc._assert_write(kb_id, user["id"])  # noqa: SLF001
+        summary = await purge.purge_documents(kb_id, ids)
+        return {"ok": True,
+                "deleted_documents": len(summary["deleted_documents"]),
+                "reclaimed_snapshots": summary["reclaimed_snapshots"],
+                "reclaimed_objects": summary["reclaimed_objects"]}
+    except (NotFound, Forbidden) as exc:
+        raise _map_error(exc) from exc
+    except PurgeError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/{document_id}/restore")

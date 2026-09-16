@@ -336,6 +336,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_asset_retrieval_units_search_vector ON asset_retrieval_units;
 CREATE TRIGGER trg_asset_retrieval_units_search_vector
     BEFORE INSERT OR UPDATE OF title, text, search_text ON asset_retrieval_units
     FOR EACH ROW EXECUTE FUNCTION asset_retrieval_units_search_vector_update();
@@ -354,6 +355,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_populate_embedding_vector ON asset_retrieval_embeddings;
 CREATE TRIGGER trg_populate_embedding_vector
     BEFORE INSERT OR UPDATE OF embedding_vector ON asset_retrieval_embeddings
     FOR EACH ROW EXECUTE FUNCTION populate_embedding_vector_vec();

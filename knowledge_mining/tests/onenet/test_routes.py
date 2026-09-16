@@ -336,23 +336,24 @@ def test_list_and_detail_imports(monkeypatch):
 
 
 def test_delete_import_source_level(monkeypatch):
+    """source 删除走统一硬删管线（2026-09-16）：全量文档 id → PurgeService →
+    目录子树 → 记录硬删。"""
     c, repo = _client(monkeypatch)
     repo.imports["imp-1"] = {"id": "imp-1", "domain": "cloud_core_network",
                              "source_id": "DOC1", "kb_id": "kb-pub",
                              "status": "done", "document_count": 2,
                              "doc_name": "UDG"}
-    soft: dict[str, str] = {}
     subtree: dict[str, object] = {}
+    purged: dict[str, object] = {}
 
     class FakeKbDb2:
-        async def soft_delete_documents_by_key_prefix(self, kb_id, key_prefix):
-            assert key_prefix == "onenet:DOC1:"      # 全量批量，无 LIMIT
-            soft["prefix"] = key_prefix
+        async def list_document_ids_by_key_prefix(self, kb_id, key_prefix):
+            assert key_prefix == "onenet:DOC1:"       # 全量 id，无 LIMIT
             return ["d1", "d2"]
 
         async def count_docs_under_path(self, *, kb_id, path):
             subtree["counted"] = path
-            return 0                       # 软删后活文档清零
+            return 0                       # 硬删后活文档清零
 
         async def delete_folder_subtree(self, kb_id, path):
             subtree["deleted"] = path
@@ -361,22 +362,34 @@ def test_delete_import_source_level(monkeypatch):
     import knowledge_mining.mining.onenet.routes as r
     monkeypatch.setattr(r, "KbDB", lambda pool: FakeKbDb2())
 
-    import knowledge_mining.mining.onenet.refs_service as refs_svc
+    import knowledge_mining.mining.kb.services.purge_service as ps
 
-    class FakeRefs:
-        async def remove_refs_for_documents(self, document_ids):
-            assert document_ids == ["d1", "d2"]
-            return 3
-    monkeypatch.setattr(refs_svc, "RefsService", lambda pool: FakeRefs())
+    class FakePurge:
+        def _summary(self):
+            return {"deleted_documents": [], "reclaimed_snapshots": 0,
+                    "skipped_shared_snapshots": [], "reclaimed_objects": 0,
+                    "skipped_shared_objects": []}
+
+        async def purge_documents(self, kb_id, doc_ids, *, assert_kb=True):
+            purged["kb"] = kb_id
+            purged["ids"] = list(doc_ids)
+            return {"deleted_documents": list(doc_ids),
+                    "reclaimed_snapshots": 3, "skipped_shared_snapshots": [],
+                    "reclaimed_objects": 2, "skipped_shared_objects": []}
+
+    monkeypatch.setattr(ps, "PurgeService", lambda pool, store: FakePurge())
 
     resp = c.delete("/api/onenet/imports/imp-1")
     assert resp.status_code == 200
-    assert resp.json() == {"deleted_documents": ["d1", "d2"], "removed_refs": 3,
-                           "removed_folders": 7}
-    assert soft["prefix"] == "onenet:DOC1:"
-    assert subtree["counted"] == "UDG [DOC1]"   # 顶层文档段
+    body = resp.json()
+    assert body["deleted_documents"] == ["d1", "d2"]
+    assert body["reclaimed_snapshots"] == 3
+    assert body["reclaimed_objects"] == 2
+    assert body["removed_folders"] == 7
+    assert purged == {"kb": "kb-pub", "ids": ["d1", "d2"]}
+    assert subtree["counted"] == "UDG [DOC1]"      # 顶层文档段
     assert subtree["deleted"] == "UDG [DOC1]"
-    assert "imp-1" not in repo.imports          # 记录硬删
+    assert "imp-1" not in repo.imports             # 记录硬删
     assert repo.deleted == ["imp-1"]
 
 

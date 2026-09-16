@@ -206,6 +206,36 @@ export interface LlmTaskDetail extends LlmTask {
   parsed_output?: Record<string, unknown>
 }
 
+export interface LlmCleanupCounts {
+  tasks: number
+  requests: number
+  attempts: number
+  results: number
+  events: number
+  model_calls: number
+}
+
+export interface LlmCleanupTableSize {
+  table_name: string
+  label?: string
+  approx_rows: number
+  total_bytes: number
+}
+
+export interface LlmCleanupResult {
+  dry_run: boolean
+  retention_days: number
+  cutoff_at: string
+  truncated: boolean
+  batches: number
+  duration_ms: number
+  estimates?: LlmCleanupCounts
+  deleted?: LlmCleanupCounts
+  remaining?: LlmCleanupCounts
+  table_sizes?: LlmCleanupTableSize[]
+  notes?: string[]
+}
+
 export interface RunTrace {
   run_id: string
   domain: string

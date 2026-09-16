@@ -101,6 +101,33 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def fetch_internal_verify_secret() -> str:
+    """Fetch internal_verify_secret from control plane auth.yaml (best-effort).
+
+    The control-plane proxy strips client-forged X-Internal-Auth headers and
+    injects the real secret only for authenticated users — destructive admin
+    endpoints use it (plus X-KB-Role) as a fail-closed gate. Returns "" on
+    any failure so those endpoints refuse to run rather than open up.
+    """
+    url = CONTROL_PLANE_BASE_URL.rstrip("/")
+    try:
+        resp = httpx.get(
+            f"{url}/api/v1/system/auth/raw",
+            timeout=5.0,
+            proxy=None,
+            trust_env=False,
+        )
+        resp.raise_for_status()
+        data = yaml.safe_load(resp.text) or {}
+        return str(data.get("internal_verify_secret", ""))
+    except Exception:
+        logger.warning(
+            "Could not fetch internal_verify_secret from control plane — "
+            "destructive admin endpoints will fail closed"
+        )
+        return ""
+
+
 def dig_optional(data: dict, *keys: str, default: Any = None) -> Any:
     """Walk nested dict by *keys*; return *default* on miss."""
     node: Any = data

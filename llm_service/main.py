@@ -8,7 +8,7 @@ from typing import Callable
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from llm_service.config import load_llm_config, dig, resolve_active_model_config
+from llm_service.config import load_llm_config, dig, resolve_active_model_config, fetch_internal_verify_secret
 from llm_service.db import LlmRuntimeDB
 from llm_service.pg_config import load_db_config
 from llm_service.pg_schema import ensure_schema
@@ -60,6 +60,10 @@ def create_app(
             id(cfg),
             start_worker,
         )
+        # Internal verify secret (from control plane auth.yaml) — the fail-closed
+        # gate for destructive admin endpoints; empty means those refuse to run.
+        app.state.internal_verify_secret = fetch_internal_verify_secret()
+
         # PostgreSQL — all params from control plane database.yaml
         pg_cfg = load_db_config()
         logger.info("Ensuring database schema for %s @ %s:%s", pg_cfg.dbname, pg_cfg.host, pg_cfg.port)

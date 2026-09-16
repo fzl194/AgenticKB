@@ -1,4 +1,4 @@
-import type { HealthStatus, LlmTaskStats, LlmTask, LlmTaskDetail } from '@/types'
+import type { HealthStatus, LlmTaskStats, LlmTask, LlmTaskDetail, LlmCleanupResult } from '@/types'
 import { createProxyClient, extractItems } from '@/api/proxyClient'
 
 export function useLlmApi() {
@@ -52,6 +52,21 @@ export function useLlmApi() {
         const { data } = await client.get('/api/v1/templates', { params })
         return Array.isArray(data) ? data : []
       } catch { return [] }
+    },
+
+    /**
+     * POST /api/v1/admin/cleanup — retention cleanup (dry_run=estimate only).
+     * knowledge_domain omitted = all domains.
+     * Long-running real deletes: explicit timeout below the proxy's 300s read limit.
+     */
+    async cleanupTasks(params: {
+      retention_days: number
+      dry_run: boolean
+      knowledge_domain?: string
+    }): Promise<LlmCleanupResult> {
+      const { data } = await client.post('/api/v1/admin/cleanup', params, { timeout: 290_000 })
+      const resp = data as Record<string, unknown>
+      return (resp.data ?? resp) as LlmCleanupResult
     },
   }
 }

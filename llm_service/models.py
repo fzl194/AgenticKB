@@ -121,6 +121,20 @@ class BatchStatusRequest(BaseModel):
     include_results: bool = True
 
 
+class CleanupRequest(BaseModel):
+    """Admin-triggered retention cleanup for agent_llm_* audit tables.
+
+    dry_run defaults to True: an empty/omitted field can never delete data.
+    The terminal-status whitelist (succeeded/failed/dead_letter/cancelled) is
+    hardcoded in runtime/cleanup.py SQL and is NOT client-suppliable.
+    knowledge_domain omitted = all domains.
+    """
+
+    retention_days: int = Field(default=30, ge=1, le=3650)
+    dry_run: bool = True
+    knowledge_domain: str | None = Field(default=None, min_length=1, max_length=128)
+
+
 class EmbeddingRequest(BaseModel):
     input: list[str] | str = Field(..., max_length=100)
     model: str | None = None

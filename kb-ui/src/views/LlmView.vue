@@ -16,6 +16,14 @@
       <el-tab-pane name="overview">
         <template #label>概览</template>
 
+        <!-- Cleanup toolbar -->
+        <div class="llm-view__cleanup-bar">
+          <span class="llm-view__cleanup-hint">历史任务会持续累积，可定期清理已结束超过保留期的任务</span>
+          <el-button type="warning" plain size="small" @click="openCleanupDialog">
+            <el-icon style="margin-right: 4px"><Delete /></el-icon>清理历史任务
+          </el-button>
+        </div>
+
         <!-- Metric Cards -->
         <div class="llm-view__metrics">
           <div class="metric-card">
@@ -274,16 +282,126 @@
         <EmptyState v-if="!loadingTemplates && !templates.length" text="暂无模板" />
       </el-tab-pane>
     </el-tabs>
+
+    <!-- Cleanup dialog -->
+    <el-dialog
+      v-model="cleanupVisible"
+      title="清理历史任务"
+      width="640px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="cleanupPhase !== 'executing'"
+      :show-close="cleanupPhase !== 'executing'"
+      :before-close="handleCleanupDialogClose"
+    >
+      <!-- Phase: config -->
+      <div v-if="cleanupPhase === 'config'" class="cleanup-body">
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="仅删除已结束（成功 / 失败 / 死信 / 已取消）且超过保留期的任务及其附属数据"
+          description="排队中、运行中的任务不会被删除；提示词模板与知识库业务数据不受影响。"
+        />
+        <div class="cleanup-config-row">
+          <span>保留最近</span>
+          <el-select v-model="cleanupRetention" style="width: 110px">
+            <el-option :value="7" label="7 天" />
+            <el-option :value="30" label="30 天" />
+            <el-option :value="90" label="90 天" />
+          </el-select>
+          <span>内的任务</span>
+        </div>
+        <div class="cleanup-config-row">
+          <span>清理范围</span>
+          <el-select v-model="cleanupScope" style="width: 220px">
+            <el-option value="current" :label="`当前知识域（${domainStore.currentDomain}）`" />
+            <el-option value="all" label="全部知识域" />
+          </el-select>
+        </div>
+        <div class="cleanup-config-row">
+          <el-button type="primary" plain @click="runCleanupEstimate">预览将删除的数据</el-button>
+        </div>
+      </div>
+
+      <!-- Phase: estimating -->
+      <div v-else-if="cleanupPhase === 'estimating'" class="cleanup-body cleanup-center">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span style="margin-left: 8px">正在统计符合条件的任务…</span>
+      </div>
+
+      <!-- Phase: preview -->
+      <div v-else-if="cleanupPhase === 'preview'" class="cleanup-body">
+        <el-alert
+          :type="estimateTotal > 0 ? 'warning' : 'success'"
+          :closable="false"
+          show-icon
+          :title="estimateTotal > 0 ? `将永久删除「${cleanupScopeLabel}」的 ${estimateTotal.toLocaleString()} 行数据，此操作不可恢复` : `「${cleanupScopeLabel}」没有符合清理条件的数据`"
+        />
+        <el-table v-if="estimateTotal > 0" :data="estimateRows" size="small" border>
+          <el-table-column prop="label" label="数据表" min-width="120" />
+          <el-table-column prop="count" label="将删除行数" width="140" align="right">
+            <template #default="{ row }">{{ row.count.toLocaleString() }}</template>
+          </el-table-column>
+        </el-table>
+        <div class="cleanup-config-row cleanup-config-row--actions">
+          <el-button @click="cleanupPhase = 'config'">返 回</el-button>
+          <el-button type="danger" :disabled="estimateTotal === 0" @click="runCleanupDelete">确认删除</el-button>
+        </div>
+      </div>
+
+      <!-- Phase: executing -->
+      <div v-else-if="cleanupPhase === 'executing'" class="cleanup-body cleanup-center">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span style="margin-left: 8px">正在分批删除，数据量大时可能耗时数分钟，请勿关闭页面…</span>
+      </div>
+
+      <!-- Phase: done -->
+      <div v-else class="cleanup-body">
+        <el-alert
+          :type="hasRemainingRows ? 'warning' : 'success'"
+          :closable="false"
+          show-icon
+          :title="hasRemainingRows ? '本次清理未全部完成' : '清理完成'"
+        />
+        <el-table :data="deletedRows" size="small" border>
+          <el-table-column prop="label" label="数据表" min-width="120" />
+          <el-table-column prop="count" label="已删除行数" width="140" align="right">
+            <template #default="{ row }">{{ row.count.toLocaleString() }}</template>
+          </el-table-column>
+        </el-table>
+        <div class="cleanup-meta">
+          <span>耗时 {{ formatMs(cleanupDoneResult?.duration_ms) }}</span>
+          <span>批次 {{ cleanupDoneResult?.batches ?? 0 }}</span>
+        </div>
+        <el-alert
+          v-if="hasRemainingRows"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="`已达单次清理上限，剩余约 ${remainingTotal.toLocaleString()} 行数据（含 ${remainingTasks.toLocaleString()} 个任务）未清理，可点击「继续清理」`"
+        />
+        <div class="cleanup-config-row cleanup-config-row--actions">
+          <el-button
+            v-if="hasRemainingRows"
+            type="warning"
+            plain
+            @click="runCleanupDelete"
+          >继续清理</el-button>
+          <el-button type="primary" @click="cleanupVisible = false">完 成</el-button>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Delete, Loading } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useLlmApi } from '@/api/llm'
-import type { LlmTaskStats, LlmTask } from '@/types'
+import type { LlmTaskStats, LlmTask, LlmCleanupCounts, LlmCleanupResult } from '@/types'
 import { usePolling } from '@/composables/usePolling'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import PieChart from '@/components/charts/PieChart.vue'
@@ -447,6 +565,103 @@ function goToTask(row: LlmTask) {
   router.push(`/llm/${row.id}`)
 }
 
+// ── Retention cleanup dialog ────────────────────────────────────────
+// Phase flow: config → estimating → preview → executing → done.
+// Delete may stop early (truncated) under the backend 240s budget —
+// the "继续清理" button re-invokes with the same retention window.
+
+type CleanupPhase = 'config' | 'estimating' | 'preview' | 'executing' | 'done'
+
+const CLEANUP_TABLE_LABELS: Array<{ key: keyof LlmCleanupCounts; label: string }> = [
+  { key: 'tasks', label: '任务主表' },
+  { key: 'requests', label: '请求快照' },
+  { key: 'attempts', label: '执行尝试' },
+  { key: 'results', label: '解析结果' },
+  { key: 'events', label: '事件流水' },
+  { key: 'model_calls', label: '模型调用审计' },
+]
+
+const cleanupVisible = ref(false)
+const cleanupPhase = ref<CleanupPhase>('config')
+const cleanupRetention = ref(30)
+const cleanupScope = ref<'current' | 'all'>('current')
+const cleanupEstimate = ref<LlmCleanupResult | null>(null)
+const cleanupDoneResult = ref<LlmCleanupResult | null>(null)
+
+// The cleanup endpoint serves ALL domains of the shared LLM service — the
+// page itself is domain-scoped, so the default matches the current domain
+// and "全部知识域" must be an explicit choice.
+const cleanupScopeLabel = computed(() =>
+  cleanupScope.value === 'all' ? '全部知识域' : `当前知识域（${domainStore.currentDomain}）`,
+)
+function cleanupParams(extra: { dry_run: boolean }) {
+  return cleanupScope.value === 'current'
+    ? { retention_days: cleanupRetention.value, knowledge_domain: domainStore.currentDomain, ...extra }
+    : { retention_days: cleanupRetention.value, ...extra }
+}
+
+const estimateRows = computed(() =>
+  CLEANUP_TABLE_LABELS.map(({ key, label }) => ({
+    key,
+    label,
+    count: cleanupEstimate.value?.estimates?.[key] ?? 0,
+  })),
+)
+const estimateTotal = computed(() => estimateRows.value.reduce((a, r) => a + r.count, 0))
+const deletedRows = computed(() =>
+  CLEANUP_TABLE_LABELS.map(({ key, label }) => ({
+    key,
+    label,
+    count: cleanupDoneResult.value?.deleted?.[key] ?? 0,
+  })),
+)
+const remainingTasks = computed(() => cleanupDoneResult.value?.remaining?.tasks ?? 0)
+const remainingTotal = computed(() =>
+  CLEANUP_TABLE_LABELS.reduce((a, { key }) => a + (cleanupDoneResult.value?.remaining?.[key] ?? 0), 0),
+)
+// Truncation may leave model_calls behind even when all tasks are done —
+// judge "unfinished" by any table, not tasks alone.
+const hasRemainingRows = computed(() =>
+  cleanupDoneResult.value?.truncated === true && remainingTotal.value > 0,
+)
+
+function openCleanupDialog() {
+  cleanupPhase.value = 'config'
+  cleanupRetention.value = 30
+  cleanupScope.value = 'current'
+  cleanupEstimate.value = null
+  cleanupDoneResult.value = null
+  cleanupVisible.value = true
+}
+
+function handleCleanupDialogClose(done: () => void) {
+  if (cleanupPhase.value === 'executing') return // never close mid-delete
+  done()
+}
+
+async function runCleanupEstimate() {
+  cleanupPhase.value = 'estimating'
+  try {
+    cleanupEstimate.value = await llmApi.cleanupTasks(cleanupParams({ dry_run: true }))
+    cleanupPhase.value = 'preview'
+  } catch (e) {
+    cleanupPhase.value = 'config'
+    ElMessage.error(`清理预估失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
+async function runCleanupDelete() {
+  cleanupPhase.value = 'executing'
+  try {
+    cleanupDoneResult.value = await llmApi.cleanupTasks(cleanupParams({ dry_run: false }))
+    cleanupPhase.value = 'done'
+    await Promise.all([loadStats(true), loadTasks(true)])
+  } catch (e) {
+    cleanupPhase.value = cleanupEstimate.value ? 'preview' : 'config'
+    ElMessage.error(`清理执行失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
 const { start: startPolling } = usePolling(refreshLiveData, 5000, { immediate: false })
 
 watch([filterStatus, filterType, filterStage], () => { currentPage.value = 1; loadTasks() })
@@ -501,6 +716,15 @@ watch(() => domainStore.currentDomain, () => {
 .metric-card__value--warn { color: var(--kb-warning); }
 .metric-card__value--bad { color: var(--kb-danger); }
 .metric-card__sub { position: absolute; bottom: 8px; right: 14px; font-size: 11px; color: var(--kb-text-tertiary); }
+
+/* Cleanup bar + dialog */
+.llm-view__cleanup-bar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: 12px; }
+.llm-view__cleanup-hint { font-size: 12px; color: var(--kb-text-tertiary); }
+.cleanup-body { display: flex; flex-direction: column; gap: 14px; }
+.cleanup-center { align-items: center; justify-content: center; padding: 28px 0; color: var(--kb-text-secondary); }
+.cleanup-config-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--kb-text-secondary); }
+.cleanup-config-row--actions { justify-content: flex-end; }
+.cleanup-meta { display: flex; gap: 16px; font-size: 12px; color: var(--kb-text-tertiary); }
 
 /* Charts */
 .llm-view__charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

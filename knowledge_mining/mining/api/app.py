@@ -5,9 +5,9 @@ Start:
     # or
     uvicorn knowledge_mining.mining.api.app:create_app --host 0.0.0.0 --port 8901 --factory
 """
-from __future__ import asyncio
-import annotations
+from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit

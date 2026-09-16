@@ -174,6 +174,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
+import { minimalSubtreePaths } from '@/utils/onenetSelection'
 import { useOnenetApi } from '@/api/onenet'
 import type {
   OnenetCondition, OnenetImport, OnenetImportStatus, OnenetProbe,
@@ -378,8 +379,11 @@ async function mergeAndResync() {
 }
 
 function checkedSubtreePaths(): string[] {
-  const checked = (tocTreeRef.value?.getCheckedNodes(false, true) ?? []) as Array<{ path?: string }>
-  return checked.map((n) => n.path).filter((p): p is string => Boolean(p))
+  // includeHalfChecked 必须 false：半选祖先（一路串到包名根=全文档前缀）
+  // 会让 selection 退化成整本导入（2026-09-16 内网事故）
+  const checked = (tocTreeRef.value?.getCheckedNodes(false, false) ?? []) as Array<{ path?: string }>
+  const paths = checked.map((n) => n.path).filter((p): p is string => Boolean(p))
+  return minimalSubtreePaths(paths)
 }
 
 async function reloadImports() {

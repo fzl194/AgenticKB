@@ -1693,6 +1693,27 @@ WITH latest AS (
                 [datetime.now(timezone.utc).isoformat(), document_id],
             )
 
+    async def soft_delete_documents_by_key_prefix(
+        self, kb_id: str, key_prefix: str,
+    ) -> list[str]:
+        """按 document_key 前缀**全量**批量软删，返回被软删的文档 id 列表。
+
+        source 级删除专用（2026-09-16 事故）：list_documents_by_key_prefix 带
+        LIMIT（管理面小规模用），2W+ 文档的 source 只删了前 5000 个。
+        单条 UPDATE ... RETURNING 覆盖全部，无上限。
+        """
+        # LIKE 通配转义（安全审查 L-2，同 list_documents_by_key_prefix）
+        escaped = key_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE asset_documents SET deleted_at = %s
+                   WHERE kb_id = %s AND document_key LIKE %s ESCAPE '\\'
+                     AND deleted_at IS NULL
+                   RETURNING id""",
+                [datetime.now(timezone.utc).isoformat(), kb_id, escaped + "%"],
+            )
+            return [str(r["id"]) for r in await cur.fetchall()]
+
     async def clear_document_deleted(self, document_id: str) -> None:
         """restore：清软删标记（身份行与对象指针不变）。"""
         from .location_repository import lock_document, assert_location_free, assert_directory_exists

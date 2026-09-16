@@ -471,12 +471,10 @@ async def onenet_delete_import(
         raise HTTPException(409, f"import_busy: {row.get('status')}")
 
     kbdb = KbDB(request.app.state.pg_pool)
-    docs = await kbdb.list_documents_by_key_prefix(
+    # 全量批量软删（2026-09-16 事故：prefix 列表带 LIMIT 5000，2W 文档只删了
+    # 前 5000——单语句 UPDATE 全量覆盖，无上限）
+    doc_ids = await kbdb.soft_delete_documents_by_key_prefix(
         row["kb_id"], f"onenet:{row['source_id']}:")
-    doc_ids = [str(d["id"]) for d in docs]
-    for d in docs:
-        if d.get("deleted_at") is None:
-            await kbdb.soft_delete_document(d["id"])
 
     from knowledge_mining.mining.onenet.refs_service import RefsService
     removed_refs = 0

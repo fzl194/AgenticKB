@@ -138,11 +138,12 @@ async def test_delete_folder_subtree_real_sql():
                    VALUES ('d1', 'IP', %s, 'onenet:DOC1100938722:x1',
                            'QoS.jsonl', %s, %s)""",
                 [kb_id, f"{top}/02 特性配置", await _now()])
-            await conn.execute(
-                "UPDATE asset_documents SET deleted_at = %s WHERE id = 'd1'",
-                [await _now()])
+            # 软删走生产同款批量前缀方法（2026-09-16 事故回归）
 
         kbdb = KbDB(pool)
+        deleted_ids = await kbdb.soft_delete_documents_by_key_prefix(
+            kb_id, "onenet:DOC1100938722:")
+        assert deleted_ids == ["d1"]
         # 活文档已清零（count_docs_under_path 过滤软删）→ 整树删除本 source 目录
         assert await kbdb.count_docs_under_path(
             kb_id=kb_id, path=top) == 0

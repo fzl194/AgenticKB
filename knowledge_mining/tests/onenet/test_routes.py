@@ -341,17 +341,14 @@ def test_delete_import_source_level(monkeypatch):
                              "source_id": "DOC1", "kb_id": "kb-pub",
                              "status": "done", "document_count": 2,
                              "doc_name": "UDG"}
-    soft: list[str] = []
+    soft: dict[str, str] = {}
     subtree: dict[str, object] = {}
 
     class FakeKbDb2:
-        async def list_documents_by_key_prefix(self, kb_id, prefix, *, limit=5000):
-            assert prefix == "onenet:DOC1:"
-            return [{"id": "d1", "deleted_at": None},
-                    {"id": "d2", "deleted_at": None}]
-
-        async def soft_delete_document(self, document_id):
-            soft.append(document_id)
+        async def soft_delete_documents_by_key_prefix(self, kb_id, key_prefix):
+            assert key_prefix == "onenet:DOC1:"      # 全量批量，无 LIMIT
+            soft["prefix"] = key_prefix
+            return ["d1", "d2"]
 
         async def count_docs_under_path(self, *, kb_id, path):
             subtree["counted"] = path
@@ -376,7 +373,7 @@ def test_delete_import_source_level(monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"deleted_documents": ["d1", "d2"], "removed_refs": 3,
                            "removed_folders": 7}
-    assert soft == ["d1", "d2"]
+    assert soft["prefix"] == "onenet:DOC1:"
     assert subtree["counted"] == "UDG [DOC1]"   # 顶层文档段
     assert subtree["deleted"] == "UDG [DOC1]"
     assert "imp-1" not in repo.imports          # 记录硬删

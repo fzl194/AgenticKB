@@ -1190,20 +1190,24 @@ WITH latest AS (
             return int((await cur.fetchone())["n"])
 
     async def key_open_kb_ids(self, *, key_id: str) -> list[str]:
-        """钥匙当前生效的开放库（active ∩ 同域），按授权时间排序。"""
+        """钥匙当前生效的开放库（active ∩ 同域），按授权时间排序。
+        域过滤与 find_mcp_key_by_hash/replace 口径一致——T8 开放集校验用。"""
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT o.kb_id FROM mcp_key_open_kbs o
                    JOIN knowledge_bases k ON k.id = o.kb_id
                    WHERE o.key_id = %s AND k.status = 'active'
+                     AND k.domain = (SELECT domain FROM mcp_keys WHERE id = %s)
                    ORDER BY o.granted_at""",
-                (key_id,),
+                (key_id, key_id),
             )
             return [r["kb_id"] for r in await cur.fetchall()]
 
     async def replace_mcp_key_open_kbs(self, *, key_id: str,
                                        kb_ids: list[str]) -> list[str]:
-        """全量覆盖钥匙的开放库勾选。域+active 防线在 SQL 层（越域/软删静默丢弃）。"""
+        """全量覆盖钥匙的开放库勾选。域+active 防线在 SQL 层（越域/软删静默丢弃）。
+        前置条件：调用方（McpKeyService）须先 get_mcp_key 校验存在且
+        status='active'——本方法不校验钥匙存在性/状态。"""
         async with self._pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(
@@ -1231,7 +1235,9 @@ WITH latest AS (
         self, *, key_id: str, open_tools: list[str] | None,
         instructions: str | None, tool_descriptions: dict[str, str] | None,
     ) -> None:
-        """钥匙级三列部分更新；None = 不改该字段（COALESCE 语义同旧 update_mcp_config）。"""
+        """钥匙级三列部分更新；None = 不改该字段（COALESCE 语义同旧 update_mcp_config）。
+        前置条件：调用方（McpKeyService）须先 get_mcp_key 校验存在且
+        status='active'——本方法不校验钥匙存在性/状态（miss 时静默无效果）。"""
         async with self._pool.connection() as conn:
             await conn.execute(
                 """UPDATE mcp_keys SET

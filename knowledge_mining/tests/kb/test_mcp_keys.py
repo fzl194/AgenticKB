@@ -82,6 +82,19 @@ async def test_mcp_key_lifecycle(kbdb):
     assert set(effective) == {kb_a["id"], kb_b["id"]}
     assert set(await kbdb.key_open_kb_ids(key_id=key_id)) == set(effective)
 
+    # 读侧域过滤：直插越域开放行（绕过 replace 防线）也不出现在 key_open_kb_ids
+    async with kbdb._pool.connection() as conn:
+        await conn.execute(
+            "INSERT INTO mcp_key_open_kbs (key_id, kb_id) VALUES (%s, %s)",
+            (key_id, kb_c["id"]),
+        )
+    assert set(await kbdb.key_open_kb_ids(key_id=key_id)) == set(effective)
+    async with kbdb._pool.connection() as conn:
+        await conn.execute(
+            "DELETE FROM mcp_key_open_kbs WHERE key_id = %s AND kb_id = %s",
+            (key_id, kb_c["id"]),
+        )
+
     # 验钥：节流窗口内二次调用仍命中（只读回退分支）
     v1 = await kbdb.find_mcp_key_by_hash(h1)
     assert v1 is not None and v1["key_id"] == key_id

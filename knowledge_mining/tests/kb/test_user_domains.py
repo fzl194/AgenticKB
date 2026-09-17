@@ -187,6 +187,19 @@ async def test_create_kb_requires_binding(kbdb):
 
 
 @pytest.mark.asyncio
+async def test_create_member_auto_binds_default_domain(async_pool):
+    """51号批次1：新用户（member）创建即自动绑默认域——零绑定视为缺陷。"""
+    from knowledge_mining.mining.kb.services.user_service import UserService
+    from knowledge_mining.mining.infra.domain_pack import get_default_domain
+
+    svc = UserService(KbDB(async_pool))
+    u = await svc.create_user(username=f"auto_bind_{_suffix()}", site_role="member")
+    kbdb = KbDB(async_pool)
+    bound = await kbdb.list_user_domains(user_id=u["id"])
+    assert get_default_domain() in bound
+
+
+@pytest.mark.asyncio
 async def test_document_readable_requires_binding(kbdb):
     """document_readable_by_user（属主库/引用库两张查询）同语义——public 亦须域绑定。"""
     s = _suffix()

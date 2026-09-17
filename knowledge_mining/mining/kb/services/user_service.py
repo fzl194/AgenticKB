@@ -1,12 +1,16 @@
 """用户管理业务逻辑（admin 操作 + 改自己密码 + 登录凭证校验）。"""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from psycopg.errors import UniqueViolation
 
+from knowledge_mining.mining.infra.domain_pack import get_default_domain
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.security import hash_password, verify_password
+
+logger = logging.getLogger(__name__)
 
 
 class UserError(Exception):
@@ -69,12 +73,20 @@ class UserService:
             # member（工号）—— 无密码（白名单 = 表里有此行即信任）
             pw_hash = None
         try:
-            return await self._db.create_user(
+            user = await self._db.create_user(
                 username=username.strip(), password_hash=pw_hash,
                 site_role=site_role, display_name=display_name,
             )
         except UniqueViolation as exc:
             raise DuplicateUser(username) from exc
+        # 51号批次1：新用户自动绑默认域（registry default_domain 运行时读取）。
+        # admin 免绑定全通；绑定失败不阻塞用户创建（记日志，admin 可后补）。
+        if site_role != "admin":
+            try:
+                await self._db.bind_domain(user_id=user["id"], domain=get_default_domain())
+            except Exception:  # noqa: BLE001 — 用户创建优先，绑定降级
+                logger.warning("auto-bind default domain failed for %s", username)
+        return user
 
     async def update_user(
         self, *, user_id: str, actor_id: str | None = None,

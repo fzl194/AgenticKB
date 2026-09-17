@@ -86,8 +86,9 @@ class Identity:
     open_tools: tuple[str, ...] | None = None
     instructions: str | None = None
     tool_descriptions: tuple[dict, ...] = ()
-    #: 开放库覆盖的知识域（有序去重）——domain 免传的解析源
-    domains: tuple[str, ...] = ()
+    #: 单域钥匙（批次2）：钥匙绑定的域定死——domain 参数只是校验参数
+    key_id: str = ""
+    key_domain: str = ""
 
     @property
     def open_kb_ids(self) -> list[str]:
@@ -109,34 +110,18 @@ class Identity:
                 return str(d[name])
         return default
 
-    def resolve_domain(self, explicit: str | None) -> str:
-        """工具 domain 参数的缺省解析（2026-08-31 用户拍板的目标态）。
 
-        - 显式传入：优先使用；不在开放库覆盖域内 → 报错带可用清单（防 typo/防猜域）
-        - 未传且只覆盖一个域：自动用该域（一台部署机器通常一个 domain 的常态）
-        - 未传且跨多域：报错并列出全部可用域——Agent 不知道信息就必须给它清单去选
-        - 未传且无域信息（旧 mining 混布窗口）：要求显式指定
-        """
-        if explicit is not None and str(explicit).strip():
-            domain = str(explicit).strip()
-            if self.domains and domain not in self.domains:
-                raise IdentityError(
-                    f"知识域 {domain!r} 不在你的开放知识库覆盖范围内。"
-                    f"可用知识域：{'、'.join(self.domains)}。"
-                )
-            return domain
-        if len(self.domains) == 1:
-            return self.domains[0]
-        if len(self.domains) > 1:
-            raise IdentityError(
-                "未指定 domain，且你的开放知识库跨越多个知识域："
-                f"{'、'.join(self.domains)}。请从中选择一个作为 domain 参数重试"
-                "（可用 get_knowledge 不带参数浏览各域下的知识库）。"
-            )
+def validate_domain(identity: Identity, explicit: str | None) -> str:
+    """M3（批次2）：domain 只是校验参数——不传=钥匙域；传了必须等于钥匙域。"""
+    if explicit is None or not str(explicit).strip():
+        return identity.key_domain
+    domain = str(explicit).strip()
+    if domain != identity.key_domain:
         raise IdentityError(
-            "无法确定默认知识域：请显式指定 domain 参数"
-            "（可用 get_knowledge 不带参数查看你开放的知识库）。"
+            f"该 MCP 钥匙绑定知识域 {identity.key_domain!r}，不支持指定其他域"
+            f"（收到 {domain!r}）。如需访问其他域请新建对应域的钥匙"
         )
+    return domain
 
 
 #: 当前请求的 identity（middleware 验明后 set，工具函数内 get）。
@@ -199,6 +184,18 @@ def require_identity(headers) -> Identity:
             "MCP 接入密钥无效或已被轮换/吊销：请在平台「个人设置 → MCP 接入」"
             "重新生成，并更新 Agent 配置。"
         )
+    if resp.status_code == 403:
+        detail = {}
+        try:
+            detail = resp.json().get("detail") or {}
+        except Exception:  # pragma: no cover - 非 JSON 响应兜底
+            detail = {}
+        if isinstance(detail, dict) and detail.get("code") == "domain_not_bound":
+            raise IdentityError(
+                str(detail.get("message") or "该钥匙绑定的知识域已被解绑")
+            ) from None
+        logger.warning("mcp key verify returned HTTP 403: %s", detail)
+        raise IdentityError("身份校验失败，请稍后重试。")
     if resp.status_code != 200:
         logger.warning("mcp key verify returned HTTP %d", resp.status_code)
         raise IdentityError("身份校验失败，请稍后重试。")
@@ -225,10 +222,6 @@ def require_identity(headers) -> Identity:
         tuple({"tool": k, "description": v} for k, v in raw_descs.items())
         if isinstance(raw_descs, dict) else ())
     instructions = data.get("instructions")
-    domains = tuple(
-        str(d) for d in (data.get("domains") or [])
-        if isinstance(d, str) and d
-    )
     return Identity(
         username=str(data["username"]),
         user_id=str(data.get("user_id") or ""),
@@ -236,7 +229,8 @@ def require_identity(headers) -> Identity:
         open_tools=open_tools,
         instructions=str(instructions) if instructions else None,
         tool_descriptions=tool_descriptions,
-        domains=domains,
+        key_id=str(data.get("key_id") or ""),
+        key_domain=str(data.get("key_domain") or ""),
     )
 
 

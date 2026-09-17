@@ -33,6 +33,7 @@ from mcp_server.identity import (
     require_current_identity,
     require_identity,
     resolve_kb_ids,
+    validate_domain,
 )
 from mcp_server.schemas import SearchInput
 
@@ -141,9 +142,9 @@ def _identity() -> Identity:
 
 
 def _domain(ident: Identity, explicit: str | None) -> str:
-    """domain 参数缺省解析：单域自动 / 多域带清单报错 / 显式优先且校验。"""
+    """M3：domain 只是校验参数——不传=钥匙域；传了必须等于钥匙域。"""
     try:
-        return ident.resolve_domain(explicit)
+        return validate_domain(ident, explicit)
     except IdentityError as exc:
         raise ToolError(str(exc)) from None
 

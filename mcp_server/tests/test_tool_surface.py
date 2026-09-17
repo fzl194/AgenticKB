@@ -1,7 +1,7 @@
 """2026-08-31 工具族收敛（两轮 9→7→3）的纯逻辑契约。
 
 覆盖：
-- Identity.resolve_domain 三态（唯一域自动 / 多域带清单报错 / 显式优先且校验）
+- validate_domain 三态（不传=钥匙域 / 相等通过 / 不等报错）——单域钥匙语义
 - get_knowledge 分流矩阵：kb_tree / documents / capabilities / evidence_content /
   document_content / table_rows / navigation 七种 view，与参数互斥的显式报错
 """
@@ -10,61 +10,49 @@ from __future__ import annotations
 import pytest
 from fastmcp.exceptions import ToolError
 
-from mcp_server.identity import Identity, IdentityError
+from mcp_server.identity import Identity, IdentityError, validate_domain
 from mcp_server import server
 
 
-def ident_of(kbs: list[tuple[str, str, str]], domains: tuple[str, ...] = ()) -> Identity:
-    """kbs: [(id, name, domain)]；domains 显式给出（正常来自 verify 响应推导）。"""
+def ident_of(kbs: list[tuple[str, str, str]], key_domain: str = "cloud_core_network") -> Identity:
+    """kbs: [(id, name, domain)]；key_domain = 钥匙绑定的知识域（批次2 单域钥匙）。"""
     return Identity(
         username="alice",
         user_id="u-1",
+        key_id="key-1",
+        key_domain=key_domain,
         open_kbs=tuple(
             {"id": i, "name": n, "domain": d} for i, n, d in kbs
         ),
-        domains=domains,
     )
 
 
 SINGLE = ident_of(
     [("kb-1", "网络手册库", "cloud_core_network")],
-    domains=("cloud_core_network",),
-)
-MULTI = ident_of(
-    [("kb-1", "网络手册库", "cloud_core_network"),
-     ("kb-2", "通用库", "generic")],
-    domains=("cloud_core_network", "generic"),
+    key_domain="cloud_core_network",
 )
 
 
-# ── resolve_domain ───────────────────────────────────────────────────────
+# ── validate_domain（M3：domain 只是校验参数） ───────────────────────────
 
 
-def test_single_domain_defaults_automatically() -> None:
-    assert SINGLE.resolve_domain(None) == "cloud_core_network"
-    assert SINGLE.resolve_domain("") == "cloud_core_network"
-    assert SINGLE.resolve_domain("  ") == "cloud_core_network"
+def test_absent_domain_means_key_domain() -> None:
+    assert validate_domain(SINGLE, None) == "cloud_core_network"
+    assert validate_domain(SINGLE, "") == "cloud_core_network"
+    assert validate_domain(SINGLE, "  ") == "cloud_core_network"
 
 
-def test_explicit_domain_wins_and_is_validated() -> None:
-    assert SINGLE.resolve_domain("cloud_core_network") == "cloud_core_network"
-    with pytest.raises(IdentityError, match="不在你的开放知识库覆盖范围.*cloud_core_network"):
-        MULTI.resolve_domain("civil_engineering")
+def test_matching_explicit_domain_passes_through() -> None:
+    assert validate_domain(SINGLE, "cloud_core_network") == "cloud_core_network"
+    assert validate_domain(SINGLE, "  cloud_core_network ") == "cloud_core_network"
 
 
-def test_multi_domain_without_explicit_lists_the_choices() -> None:
+def test_mismatched_domain_is_rejected_with_both_names() -> None:
     with pytest.raises(
-        IdentityError, match="多个知识域：cloud_core_network、generic。请从中选择"
+        IdentityError,
+        match="绑定知识域 'cloud_core_network'.*收到 'civil_engineering'",
     ):
-        MULTI.resolve_domain(None)
-
-
-def test_no_domain_info_requires_explicit() -> None:
-    bare = ident_of([("kb-1", "库", "whatever")], domains=())
-    with pytest.raises(IdentityError, match="无法确定默认知识域"):
-        bare.resolve_domain(None)
-    # 显式传入时无清单可校验 → 放行（旧 mining 混布窗口的兼容语义）
-    assert bare.resolve_domain("odn") == "odn"
+        validate_domain(SINGLE, "civil_engineering")
 
 
 # ── get_knowledge 分流矩阵 ───────────────────────────────────────────────

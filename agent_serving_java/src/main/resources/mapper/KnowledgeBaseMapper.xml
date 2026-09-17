@@ -7,7 +7,7 @@
       The LEFT JOIN resolves X-KB-User to a kb_users row without requiring one to exist: when
       #{username} is null or unknown, u.id stays NULL, the owner comparison, the member EXISTS
       and the user_domains EXISTS all evaluate false — the anonymous case is fully denied
-      (51号批次1: public 域内化). Callers such as mcp_server send no identity header at all.
+      (51号批次1: public 域内化). mcp_server 调用实际携带 X-KB-User（client.py）；真正无身份头的匿名直连调用才会落到 NULL 分支。
     -->
     <select id="selectAccessibleKbIds" resultType="java.lang.String">
         SELECT kb.id

@@ -8,7 +8,7 @@
 - on_call_tool：开关检查；identity 注入 ContextVar 供工具函数取用
 
 工具族（用户拍板"功能类似只是维度/层级不同必须合并"——第二轮收敛到三件套）：
-- search_knowledge：唯一检索入口（domain 可免传——单域自动默认，多域报错带清单）
+- search_knowledge：唯一检索入口（domain 只是校验参数——不传即钥匙绑定域）
 - get_knowledge：一切读取行为（ref 分流 ev_/doc_/st_ + 层级浏览 + 能力报告默认），
   合并了 get_content / browse_knowledge / inspect_knowledge / navigate_structure /
   query_structured_asset 五件——Agent 只需知道"有了 ref 或库名就调它"
@@ -44,8 +44,8 @@ DEFAULT_INSTRUCTIONS = """\
 （两步：先拿 upload_url，再 PUT 文件原始字节，不要 base64）。
 
 知识按三层组织：知识域（domain）→ 知识库（knowledge base）→ 文档（document）。
-密钥主人决定开放哪些知识库；一台部署通常只有一个 domain——domain 参数可不传，
-开放库只覆盖一个域时自动使用；跨多域时返回错误并列出可用域，选一个重试。
+密钥主人决定开放哪些知识库；每把钥匙绑定一个知识域——domain 参数可不传
+（自动使用钥匙绑定域），传了也必须等于绑定域，跨域访问请换对应域的钥匙。
 不要根据问题内容猜测领域。
 
 工作流：先用 get_knowledge 不带参数看自己有什么（返回域→库树），或直接
@@ -213,8 +213,8 @@ def search_knowledge(
 
     Args:
         query: 用户原问题。
-        domain: 可选知识域。不传时若开放库只覆盖一个域则自动使用该域（最常见）；
-            跨多域时报错并列出可用域，选一个重试。不要按问题内容猜领域。
+        domain: 可选，仅校验：必须等于本钥匙绑定的知识域，不传即钥匙域
+            （每把 MCP 钥匙绑定一个域——访问其他域需另配对应域的钥匙）。
         kb_names: 可选，在开放的多个库中缩小范围。不传 = 检索全部开放库。
         within: 可选范围约束（hard filter）：{"document_refs": ["doc_…"],
             "section_refs": ["st_…"]}。doc_/st_ 可直接传 search/inspect 返回的
@@ -285,8 +285,8 @@ def get_knowledge(
             st_ → 可用 query 或 relation；只传它 = 能力报告。
         kb_name: 要看的目标知识库名（顶层浏览返回的 name）——传了列该库文件清单，
             不能与 ref 同时传。
-        domain: 知识域。ref 分支 = 路由域（不传自动：单域默认，跨多域报错带清单）；
-            顶层分支 = 只看该域。
+        domain: 可选，仅校验：必须等于本钥匙绑定的知识域，不传即钥匙域
+            （顶层浏览始终只展示钥匙域下的开放库）。
         mode: 仅 ref=ev_ 有效：展开粒度 auto|exact|window|parent|whole_document
             （默认 auto=预算内就大：父章节/整文优先）。truncated=true 的证据取全用。
         relation: 仅 ref=st_ 有效：parent/children/previous/next/ancestors/
@@ -377,7 +377,7 @@ def _list_kb_documents(ident: Identity, kb_name: str,
                        limit: int | None, offset: int | None) -> dict:
     kb_id = _resolve_open_kb(ident, kb_name)
     try:
-        out = backend.list_documents(ident.username, kb_id,
+        out = backend.list_documents(ident.username, ident.key_id, kb_id,
                                      limit if limit is not None else 50,
                                      offset or 0)
     except backend.ToolBackendError as exc:
@@ -386,43 +386,26 @@ def _list_kb_documents(ident: Identity, kb_name: str,
 
 
 def _browse_top(ident: Identity, domain: str | None) -> dict:
-    """顶层：开放库按域分组（mining 端点 ∩ 实时可见，含描述；不回内部 id——
-    Agent 只需要 name（检索/浏览参数按名称）与 domain（检索参数））。"""
+    """顶层：开放库按钥匙域分组（批次2 单域钥匙——分组只含 key_domain，
+    不再按 listing 的域聚合多组；不回内部 id，Agent 只需要 name）。"""
+    resolved = _domain(ident, domain)  # 校验参数：不传=钥匙域；传了必须相等
     try:
-        listing = backend.list_knowledge_bases(ident.username)
+        listing = backend.list_knowledge_bases(ident.username, ident.key_id)
     except backend.ToolBackendError as exc:
         raise ToolError(str(exc)) from None
-    groups: dict[str, list[dict]] = {}
-    order: list[str] = []
+    kbs: list[dict] = []
     for k in (listing.get("knowledge_bases") or []):
-        dom = str(k.get("domain") or "")
+        if str(k.get("domain") or "") != resolved:
+            continue  # 钥匙绑定单域：其他域的库不出现（防御 listing 脏数据）
         entry = {"name": str(k.get("name") or "")}
         if k.get("description"):
             entry["description"] = str(k["description"])
-        if dom not in groups:
-            groups[dom] = []
-            order.append(dom)
-        groups[dom].append(entry)
-    if domain and str(domain).strip():
-        wanted = str(domain).strip()
-        order = [d for d in order if d == wanted]
-        if not order:
-            available = "、".join(
-                d if d else "（未分组）" for d in groups) or "（无）"
-            raise ToolError(
-                f"知识域 {wanted!r} 下没有开放的知识库。当前有库的知识域：{available}。"
-            )
+        kbs.append(entry)
     return {
         "view": "kb_tree",
-        "domains": [
-            {"domain": d, "knowledge_bases": groups[d]} for d in order
-        ],
-        "default_domain": order[0] if len(order) == 1 else None,
-        "hint": (
-            "检索用 search_knowledge；只覆盖一个域时 domain 可不传。"
-            if len(order) == 1
-            else "覆盖多个域：检索时从中选一个作为 domain 参数。"
-        ),
+        "domains": [{"domain": resolved, "knowledge_bases": kbs}],
+        "default_domain": resolved,
+        "hint": "检索用 search_knowledge；domain 可不传（自动使用本钥匙绑定的知识域）。",
     }
 
 
@@ -483,7 +466,8 @@ def upload_document(kb_name: str, filenames: list[str]) -> dict:
     uploads = []
     for filename in filenames:
         try:
-            issued = backend.begin_upload(ident.username, kb_id, str(filename))
+            issued = backend.begin_upload(
+                ident.username, ident.key_id, kb_id, str(filename))
         except backend.ToolBackendError as exc:
             raise ToolError(str(exc)) from None
         # 无 Host 上下文（理论不可达）时退化为相对路径，Agent 自行补全

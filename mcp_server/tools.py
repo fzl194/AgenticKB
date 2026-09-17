@@ -184,13 +184,18 @@ def query_structured_asset(
     })
 
 
-def list_knowledge_bases(username: str) -> dict:
-    return _post("/api/kb/mcp-tools/list-kbs", {"username": username})
+def list_knowledge_bases(username: str, key_id: str = "") -> dict:
+    return _post("/api/kb/mcp-tools/list-kbs", {
+        "username": username, "key_id": key_id,
+    })
 
 
-def list_documents(username: str, kb_id: str, limit: int = 50, offset: int = 0) -> dict:
+def list_documents(
+    username: str, key_id: str, kb_id: str, limit: int = 50, offset: int = 0
+) -> dict:
     return _post("/api/kb/mcp-tools/list-documents", {
-        "username": username, "kb_id": kb_id, "limit": limit, "offset": offset,
+        "username": username, "key_id": key_id, "kb_id": kb_id,
+        "limit": limit, "offset": offset,
     })
 
 
@@ -198,10 +203,11 @@ def list_documents(username: str, kb_id: str, limit: int = 50, offset: int = 0) 
 # mining 的旧 /api/kb/mcp-tools/get-document 端点已随代码瘦身批次3 删除。
 
 
-def begin_upload(username: str, kb_id: str, filename: str) -> dict:
+def begin_upload(username: str, key_id: str, kb_id: str, filename: str) -> dict:
     """直传第一步：签发一次性上传票据（mining 校验权限/文件名后返回）。"""
     return _post("/api/kb/mcp-tools/begin-upload", {
-        "username": username, "kb_id": kb_id, "filename": filename,
+        "username": username, "key_id": key_id, "kb_id": kb_id,
+        "filename": filename,
     })
 
 

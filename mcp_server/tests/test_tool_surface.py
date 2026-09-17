@@ -79,7 +79,7 @@ def _patch_backend(monkeypatch, ident=SINGLE):
         server.backend, "list_documents", note("docs", {"documents": []}))
     monkeypatch.setattr(
         server.backend, "list_knowledge_bases",
-        lambda username: {"knowledge_bases": [
+        lambda username, key_id: {"knowledge_bases": [
             {"id": "kb-1", "name": "网络手册库", "domain": "cloud_core_network"}]})
     return calls
 
@@ -96,7 +96,7 @@ def test_kb_name_lists_documents(monkeypatch) -> None:
     calls = _patch_backend(monkeypatch)
     out = server.get_knowledge(kb_name="网络手册库", limit=10, offset=5)
     assert out["view"] == "documents"
-    assert calls == [("docs", "alice", "kb-1", 10, 5)]
+    assert calls == [("docs", "alice", "key-1", "kb-1", 10, 5)]
 
 
 def test_bare_ref_semantics_per_ref_type(monkeypatch) -> None:
@@ -177,7 +177,7 @@ def test_upload_document_returns_direct_upload_urls(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     monkeypatch.setattr(
         server.backend, "begin_upload",
-        lambda username, kb_id, filename: {
+        lambda username, key_id, kb_id, filename: {
             "ticket": f"up_{filename}", "max_bytes": 52_428_800,
             "expires_in": 600,
         },

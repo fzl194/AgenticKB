@@ -239,11 +239,25 @@ class KbDB:
                    VALUES (%(id)s, %(u)s, %(d)s, 'active', %(t)s)
                    ON CONFLICT (username) DO UPDATE
                      SET display_name = COALESCE(%(d)s, kb_users.display_name)
-                   RETURNING id, username, display_name, status, site_role""",
+                   RETURNING id, username, display_name, status, site_role,
+                             (xmax = 0) AS _inserted""",
                 {"id": _new_id(), "u": username, "d": display_name, "t": _utcnow()},
             )
-            row = await cur.fetchone()
-            return dict(row)  # type: ignore[arg-type]
+            row = dict(await cur.fetchone())  # type: ignore[arg-type]
+            # 51号批次1：网关身份惰性建档路径也要自动绑默认域（与
+            # user_service.create_user 对齐）——否则零绑定 member 处处 403。
+            # 仅新插入行绑（xmax=0）；已存在用户不碰（解绑语义归 admin 端点/backfill）。
+            if row.pop("_inserted") and row.get("site_role") != "admin":
+                from knowledge_mining.mining.infra.domain_pack import get_default_domain
+                try:
+                    await conn.execute(
+                        "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s)"
+                        " ON CONFLICT DO NOTHING",
+                        (row["id"], get_default_domain()),
+                    )
+                except Exception:  # noqa: BLE001 — 身份建档优先，绑定降级不挡认证
+                    pass
+            return row
 
     # ---------------------------------------------------- user management (Phase 2)
 

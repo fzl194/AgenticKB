@@ -79,6 +79,9 @@ async def test_service_normalizes_names_for_create_and_update() -> None:
         async def create_kb(self, **kwargs):
             return kwargs
 
+        async def can_create_in_domain(self, **_kwargs):
+            return True
+
         async def is_visible(self, **_kwargs):
             return True
 

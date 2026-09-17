@@ -68,7 +68,7 @@ class IdentityError(Exception):
 #: MCP 工具族三件套（2026-08-31 用户两轮拍板"功能类似必须合并"）：
 #: - get_knowledge = get_content + browse_knowledge + inspect_knowledge +
 #:   navigate_structure + query_structured_asset（一切读取行为，ref/库分流）
-#: 与 mcp_access_service.MCP_TOOL_NAMES 一一对应。
+#: 与 mining mcp_key_service.MCP_TOOL_NAMES 一一对应。
 TOOL_NAMES = frozenset({
     "search_knowledge",
     "get_knowledge",

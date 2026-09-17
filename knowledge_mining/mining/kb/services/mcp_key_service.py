@@ -1,9 +1,8 @@
 """51号批次2（Task 3）：单域 MCP 钥匙生命周期服务（多钥匙）。
 
-与旧 mcp_access_service（一人一钥）并存至 Task 5 统一收口；共享件
-（generate_mcp_key / MCP_TOOL_NAMES / _RENAMED_TOOLS /
-normalize_legacy_open_tools / 文案长度上限）按审查裁定**复制**进本模块，
-不 import 旧模块、不删旧件（auth.py 仍依赖 normalize_legacy_open_tools）。
+旧 mcp_access_service（一人一钥）已于 Task 5 退役删除；本模块是唯一存续
+实现，共享件（generate_mcp_key / MCP_TOOL_NAMES / _RENAMED_TOOLS /
+normalize_legacy_open_tools / 文案长度上限）即权威副本。
 
 密钥形态：kbm_ + 32 字节随机 hex；明文仅 create/rotate 响应返回一次，库内
 只存 sha256 hex。轮换语义：覆盖 key_hash，旧钥立即失效（无并存期）。

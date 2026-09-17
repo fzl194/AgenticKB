@@ -2,7 +2,7 @@
 
 
 def test_non_legacy_set_returns_none():
-    from knowledge_mining.mining.kb.services.mcp_access_service import (
+    from knowledge_mining.mining.kb.services.mcp_key_service import (
         normalize_legacy_open_tools,
     )
 
@@ -14,7 +14,7 @@ def test_non_legacy_set_returns_none():
 
 
 def test_any_read_source_open_keeps_get_knowledge_open():
-    from knowledge_mining.mining.kb.services.mcp_access_service import (
+    from knowledge_mining.mining.kb.services.mcp_key_service import (
         normalize_legacy_open_tools,
     )
 
@@ -45,7 +45,7 @@ def test_any_read_source_open_keeps_get_knowledge_open():
 
 
 def test_all_read_sources_disabled_keeps_get_knowledge_disabled():
-    from knowledge_mining.mining.kb.services.mcp_access_service import (
+    from knowledge_mining.mining.kb.services.mcp_key_service import (
         normalize_legacy_open_tools,
     )
 
@@ -57,7 +57,7 @@ def test_all_read_sources_disabled_keeps_get_knowledge_disabled():
 
 
 def test_retired_names_are_dropped():
-    from knowledge_mining.mining.kb.services.mcp_access_service import (
+    from knowledge_mining.mining.kb.services.mcp_key_service import (
         normalize_legacy_open_tools,
     )
 

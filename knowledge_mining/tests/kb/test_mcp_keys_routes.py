@@ -1,4 +1,5 @@
 """51号批次2（Task 4）：/users/me/mcp-keys 路由族（ASGITransport + PG 真库）。"""
+import os
 import uuid
 
 import pytest
@@ -6,6 +7,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from knowledge_mining.mining.kb.db import KbDB
+from knowledge_mining.mining.kb.routes.auth import router as auth_router
 from knowledge_mining.mining.kb.routes.mcp_keys import router as mcp_keys_router
 from knowledge_mining.mining.kb.services.mcp_key_service import (
     KEY_PREFIX_TAG,
@@ -14,6 +16,8 @@ from knowledge_mining.mining.kb.services.mcp_key_service import (
 from knowledge_mining.tests.conftest import kb_headers
 
 BASE = "/api/kb/users/me/mcp-keys"
+VERIFY = "/api/kb/auth/mcp-key-verify"
+INTERNAL = {"X-Internal-Auth": os.environ.get("KB_TEST_INTERNAL_AUTH", "test-ivs")}
 
 
 @pytest.fixture
@@ -32,6 +36,7 @@ async def _client(async_pool):
     app.state.pg_pool = async_pool
     app.state.db_config = MiningDbConfig()
     app.include_router(mcp_keys_router)
+    app.include_router(auth_router)
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
@@ -209,3 +214,104 @@ async def test_unauthenticated_401(async_pool):
     async with await _client(async_pool) as c:
         r = await c.get(BASE)
         assert r.status_code == 401
+
+
+# --------------------------------------- 51号批次2（Task 5）：mcp-key-verify 钥匙级
+
+async def _mk_key_with_kb(async_pool, kbdb, c, headers):
+    """member（绑定 generic）+ 一库 + 一把 generic 钥匙（开该库）→ (user, kb, created)。"""
+    s = _suffix()
+    u = await _mk_user(async_pool)
+    await kbdb.set_user_domains(user_id=u["id"], domains=["generic"])
+    kb = await kbdb.create_kb(domain="generic", name=f"mkv-{s}", owner_id=u["id"])
+    created = await _create(c, f"v-{s}", "generic", headers(u["username"]))
+    r = await c.put(f"{BASE}/{created['id']}/open-kbs",
+                    json={"kb_ids": [kb["id"]]}, headers=headers(u["username"]))
+    assert r.status_code == 200, r.text
+    return u, kb, created
+
+
+@pytest.mark.asyncio
+async def test_verify_endpoint_ok_shape(async_pool, kbdb):
+    async with await _client(async_pool) as c:
+        u, kb, created = await _mk_key_with_kb(async_pool, kbdb, c, kb_headers)
+        r = await c.post(VERIFY, json={"key": created["key"]}, headers=INTERNAL)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert body["username"] == u["username"]
+        assert body["user_id"] == u["id"]
+        assert body["key_id"] == created["id"]
+        assert body["key_domain"] == "generic"
+        assert body["open_kb_ids"] == [kb["id"]]
+        assert [k["id"] for k in body["open_kbs"]] == [kb["id"]]
+        # N3：单域钥匙定死域——domains 字段明确删除
+        assert "domains" not in body
+
+
+@pytest.mark.asyncio
+async def test_verify_unbound_domain_403(async_pool, kbdb):
+    async with await _client(async_pool) as c:
+        u, _kb, created = await _mk_key_with_kb(async_pool, kbdb, c, kb_headers)
+        # 解绑所有域 → 同钥 403 domain_not_bound（N4 联动）
+        await kbdb.set_user_domains(user_id=u["id"], domains=[])
+        r = await c.post(VERIFY, json={"key": created["key"]}, headers=INTERNAL)
+        assert r.status_code == 403, r.text
+        detail = r.json()["detail"]
+        assert detail["code"] == "domain_not_bound"
+        assert "已被解绑" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_verify_revoked_and_wrong_key_401(async_pool, kbdb):
+    async with await _client(async_pool) as c:
+        _u, _kb, created = await _mk_key_with_kb(async_pool, kbdb, c, kb_headers)
+        # 错误钥：与 miss 同文案（不区分）
+        r = await c.post(VERIFY, json={"key": f"{KEY_PREFIX_TAG}nope"},
+                         headers=INTERNAL)
+        assert r.status_code == 401
+        assert r.json()["detail"] == "invalid mcp key"
+        # 吊销后同钥 → 401（同文案）
+        r = await c.post(f"{BASE}/{created['id']}/revoke",
+                         headers=kb_headers(_u["username"]))
+        assert r.status_code == 204
+        r = await c.post(VERIFY, json={"key": created["key"]}, headers=INTERNAL)
+        assert r.status_code == 401
+        assert r.json()["detail"] == "invalid mcp key"
+
+
+@pytest.mark.asyncio
+async def test_verify_normalizes_legacy_open_tools(async_pool, kbdb):
+    """db 直写旧形状 open_tools → 验钥响应已归一（读时归一，不回写）。"""
+    async with await _client(async_pool) as c:
+        _u, _kb, created = await _mk_key_with_kb(async_pool, kbdb, c, kb_headers)
+        async with async_pool.connection() as conn:
+            await conn.execute(
+                """UPDATE mcp_keys SET open_tools = %s::jsonb WHERE id = %s""",
+                ('["search_knowledge", "get_evidence"]', created["id"]),
+            )
+        r = await c.post(VERIFY, json={"key": created["key"]}, headers=INTERNAL)
+        assert r.status_code == 200, r.text
+        # get_evidence（旧名）→ get_knowledge（_RENAMED_TOOLS 真实映射）
+        assert r.json()["open_tools"] == ["search_knowledge", "get_knowledge"]
+        # 只归一响应，不回写 db（db 层仍是原始旧形状）
+        async with async_pool.connection() as conn:
+            row = await (await conn.execute(
+                "SELECT open_tools FROM mcp_keys WHERE id = %s",
+                (created["id"],),
+            )).fetchone()
+        assert list(row["open_tools"]) == ["search_knowledge", "get_evidence"]
+
+
+@pytest.mark.asyncio
+async def test_verify_admin_without_bindings_200(async_pool, kbdb):
+    """admin 无绑定行（can_create_in_domain 全通）→ 验钥仍 200。"""
+    async with await _client(async_pool) as c:
+        admin = await _mk_user(async_pool, site_role="admin")
+        created = await _create(c, f"adm-{_suffix()}", "odn",
+                                kb_headers(admin["username"]))
+        assert await kbdb.list_user_domains(user_id=admin["id"]) == []
+        r = await c.post(VERIFY, json={"key": created["key"]}, headers=INTERNAL)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["key_domain"] == "odn"

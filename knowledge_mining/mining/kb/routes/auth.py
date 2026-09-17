@@ -25,7 +25,8 @@ from knowledge_mining.mining.kb.deps import get_kb_db, get_user_service
 import logging
 
 logger = logging.getLogger(__name__)
-from knowledge_mining.mining.kb.services.mcp_access_service import (
+from knowledge_mining.mining.kb.services.mcp_key_service import (
+    McpKeyService,
     normalize_legacy_open_tools,
 )
 from knowledge_mining.mining.kb.services.user_service import (
@@ -149,63 +150,41 @@ async def verify_mcp_key(
     body: McpKeyVerifyReq,
     request: Request,
 ) -> dict[str, Any]:
-    """验钥 → 绑定身份与开放库。miss（无钥/已轮换/已吊销）→ 401。
+    """验钥 → 绑定身份与开放库（钥匙级，批次2 T5）。miss（无钥/已轮换/已
+    吊销）→ 401；钥匙域已解绑 → 403 domain_not_bound（N4 未绑定联动）。
 
     返回 username 与 open_kb_ids：MCP 免二次查询；开放库 ∩ 实时权限由检索层
     authorize 兜底（开放了但权限被收窄的库在检索时自然 403/剔除）。
+    单域钥匙：无 domains 字段——域由 key_domain 定死（N3）。
     """
-    from knowledge_mining.mining.kb.deps import get_kb_db
-    from knowledge_mining.mining.kb.services.mcp_access_service import (
-        McpAccessService,
-    )
-
-    svc = McpAccessService(await get_kb_db(request))
-    result = await svc.verify_key(body.key)
+    kbdb = await get_kb_db(request)
+    result = await McpKeyService(kbdb).verify_key(body.key)
     if result is None:
         raise HTTPException(401, "invalid mcp key")
 
-    # 29号（未完成 E）：历史 open_tools 一次性迁移——含已退役
-    # get_segment_fulltext 的旧集合：剔除退役名 + 补齐当时不存在的新四结构
-    # 工具（用户从未见过它们，不存在"误开启"；显式关闭的既有工具保持
-    # 关闭）。规范化并回写一次，UI/runtime 后续读到即为终态。
+    if not await kbdb.can_create_in_domain(
+        user_id=result["user_id"], domain=result["domain"],
+    ):
+        raise HTTPException(403, detail={
+            "code": "domain_not_bound",
+            "message": "该钥匙绑定的知识域已被解绑，请联系管理员重新分配后重建钥匙",
+        })
+
+    # 读时归一（db 存的是原始值；旧形状迁移持久化由 T9 backfill 承担）
     open_tools = result.get("open_tools")
     normalized = normalize_legacy_open_tools(open_tools or [])
-    if open_tools and normalized is not None:
-        if normalized:
-            retired = [t for t in open_tools if t not in normalized]
-            added = [t for t in normalized if t not in (open_tools or [])]
-            try:
-                await svc.update_config(
-                    user_id=result["user_id"], open_tools=normalized,
-                )
-                logger.info(
-                    "[mcp-tools] migrated legacy open_tools for %s: "
-                    "retired=%s added=%s",
-                    result["username"], retired, added,
-                )
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "[mcp-tools] legacy open_tools migration failed for %s "
-                    "(serving normalized list without persisting)",
-                    result["username"],
-                    exc_info=True,
-                )
+    if normalized is not None:
         open_tools = normalized
 
     return {
         "ok": True,
         "username": result["username"],
         "user_id": result["user_id"],
+        "key_id": result["key_id"],
+        "key_domain": result["domain"],
         "open_kb_ids": result["open_kb_ids"],
         # kb_names → id 的解析源：开放库 id+name+domain（软删库自动从清单消失）
         "open_kbs": result.get("open_kbs", []),
-        # 开放库覆盖的知识域（有序去重）——MCP 侧 domain 免传的解析源：
-        # 唯一域自动默认；跨多域时 Agent 必须显式选择（错误响应带本清单）
-        "domains": list(dict.fromkeys(
-            str(kb.get("domain"))
-            for kb in (result.get("open_kbs") or [])
-            if isinstance(kb, dict) and kb.get("domain")
-        )),
         # 批次7：工具开关 / 提示词 / 工具描述（MCP 免二次查）
         "open_tools": open_tools,
         "instructions": result.get("instructions"),

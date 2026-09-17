@@ -343,3 +343,70 @@ async def test_document_readable_requires_binding(kbdb):
             await conn.execute(
                 "DELETE FROM knowledge_bases WHERE id = %s", (kb_id,)
             )
+
+
+# ---------------------------------------------------------------- internal endpoints (Task 8)
+
+async def _internal_client(async_pool):
+    from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+
+    app = FastAPI()
+    app.state.pg_pool = async_pool
+    app.state.db_config = MiningDbConfig()
+    app.include_router(auth_router)
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+async def test_internal_user_domains_roundtrip(async_pool):
+    """51号批次1：内部端点用户名→绑定域。member/admin 都返回绑定行；不存在→[]。"""
+    db = KbDB(async_pool)
+    s = _suffix()
+    m = await db.create_user(username=f"iu_member_{s}", site_role="member")
+    a = await db.create_user(username=f"iu_admin_{s}", site_role="admin")
+    await db.set_user_domains(user_id=m["id"], domains=["generic", "odn"])
+    await db.set_user_domains(user_id=a["id"], domains=["odn"])
+    async with await _internal_client(async_pool) as c:
+        r = await c.get(f"/api/kb/internal/users/iu_member_{s}/domains",
+                        headers=kb_headers("i"))
+        assert r.status_code == 200, r.text
+        assert sorted(r.json()["domains"]) == ["generic", "odn"]
+        # admin 不按角色短路——main_control 自己按 JWT role 处理
+        r = await c.get(f"/api/kb/internal/users/iu_admin_{s}/domains",
+                        headers=kb_headers("i"))
+        assert r.status_code == 200, r.text
+        assert r.json()["domains"] == ["odn"]
+        # 不存在的用户名 → 空列表不报错
+        r = await c.get("/api/kb/internal/users/nobody_here_xxx/domains",
+                        headers=kb_headers("i"))
+        assert r.status_code == 200, r.text
+        assert r.json()["domains"] == []
+        # 无内部头 → 401
+        r = await c.get(f"/api/kb/internal/users/iu_member_{s}/domains")
+        assert r.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_internal_kb_count(async_pool):
+    """51号批次1：内部端点域名→active KB 数。"""
+    db = KbDB(async_pool)
+    s = _suffix()
+    domain = f"dom_cnt_{s}"
+    u = await db.create_user(username=f"iu_cnt_{s}", site_role="member")
+    kb = await db.create_kb(domain=domain, name=f"iu-cnt-{s}", owner_id=u["id"])
+    try:
+        async with await _internal_client(async_pool) as c:
+            r = await c.get(f"/api/kb/internal/domains/{domain}/kb-count",
+                            headers=kb_headers("i"))
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["domain"] == domain
+            assert isinstance(body["kb_count"], int) and body["kb_count"] >= 1
+            # 无头 → 401
+            r = await c.get(f"/api/kb/internal/domains/{domain}/kb-count")
+            assert r.status_code in (401, 403)
+    finally:
+        async with db._pool.connection() as conn:
+            await conn.execute(
+                "DELETE FROM knowledge_bases WHERE id = %s", (kb["id"],)
+            )

@@ -211,6 +211,29 @@ async def verify_mcp_key(
         "instructions": result.get("instructions"),
         "tool_descriptions": result.get("tool_descriptions"),
     }
+@router.get("/internal/users/{username}/domains", dependencies=[Depends(_require_internal)])
+async def internal_user_domains(
+    username: str,
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    """51号批次1：main_control 域列表过滤用（用户名→绑定域集）。
+
+    不按角色短路——main_control 自己按 JWT role 处理 admin；
+    不存在/非 active 用户 → 空列表（不报错，反探测语义同 login）。
+    """
+    user = await kbdb.get_user_by_username(username)
+    if not user or user.get("status") != "active":
+        return {"domains": []}
+    return {"domains": await kbdb.list_user_domains(user_id=user["id"])}
+
+
+@router.get("/internal/domains/{domain}/kb-count", dependencies=[Depends(_require_internal)])
+async def internal_kb_count(
+    domain: str,
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    """51号批次1：main_control 删域保护用（域内 active KB 数）。"""
+    return {"domain": domain, "kb_count": await kbdb.count_kbs_by_domain(domain=domain)}
 
 
 # ---------------------------------------------------------------- user CRUD (admin)

@@ -17,8 +17,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from knowledge_mining.mining.infra.control_plane import get_internal_verify_secret
+from knowledge_mining.mining.infra.domain_pack import resolve_domain
 from knowledge_mining.mining.kb.auth import current_user, require_admin
-from knowledge_mining.mining.kb.deps import get_user_service
+from knowledge_mining.mining.kb.db import KbDB
+from knowledge_mining.mining.kb.deps import get_kb_db, get_user_service
 
 import logging
 
@@ -64,6 +66,10 @@ class ResetPasswordReq(BaseModel):
 class ChangeMyPasswordReq(BaseModel):
     old: str
     new: str
+
+
+class UserDomainsReq(BaseModel):
+    domains: list[str]
 
 
 # ---------------------------------------------------------------- helpers
@@ -277,3 +283,41 @@ async def change_my_password(
         return {"ok": True}
     except (UserNotFound, WrongPassword, UserError) as exc:
         raise _map_user_error(exc) from None
+
+
+# ---------------------------------------------------------------- 域分配 (admin, 51号批次1)
+
+@router.get("/admin/users/{user_id}/domains")
+async def get_user_domains(
+    user_id: str,
+    _admin: dict = Depends(require_admin),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    user = await kbdb.get_user(user_id)
+    if not user:
+        raise HTTPException(404, "user_not_found")
+    return {"user_id": user_id, "domains": await kbdb.list_user_domains(user_id=user_id)}
+
+
+@router.post("/admin/users/{user_id}/domains")
+async def assign_user_domains(
+    user_id: str,
+    body: UserDomainsReq,
+    _admin: dict = Depends(require_admin),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    user = await kbdb.get_user(user_id)
+    if not user:
+        raise HTTPException(404, "user_not_found")
+    domains = sorted({d.strip() for d in body.domains if d and d.strip()})
+    if not domains:
+        raise HTTPException(422, "domains_must_not_be_empty")  # 51号：不允许零绑定
+    for d in domains:
+        try:
+            resolve_domain(d)
+        except Exception as exc:
+            raise HTTPException(400, f"invalid_domain:{d}") from exc
+    if user["site_role"] == "admin":
+        return {"user_id": user_id, "domains": []}  # admin 免绑定，幂等空操作
+    updated = await kbdb.set_user_domains(user_id=user_id, domains=domains)
+    return {"user_id": user_id, "domains": updated}

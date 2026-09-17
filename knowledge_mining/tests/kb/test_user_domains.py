@@ -2,8 +2,12 @@
 import uuid
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
 from knowledge_mining.mining.kb.db import KbDB
+from knowledge_mining.mining.kb.routes.auth import router as auth_router
+from knowledge_mining.tests.conftest import kb_headers
 
 
 @pytest.fixture
@@ -197,6 +201,117 @@ async def test_create_member_auto_binds_default_domain(async_pool):
     kbdb = KbDB(async_pool)
     bound = await kbdb.list_user_domains(user_id=u["id"])
     assert get_default_domain() in bound
+
+
+# ---------------------------------------------------------------- admin 域分配端点
+
+async def _client(async_pool):
+    from knowledge_mining.mining.infra.pg_config import MiningDbConfig
+    app = FastAPI()
+    app.state.pg_pool = async_pool
+    app.state.db_config = MiningDbConfig()
+    app.include_router(auth_router)
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+async def _mk_admin(async_pool):
+    db = KbDB(async_pool)
+    return await db.create_user(username=f"root_{_suffix()}", password_hash="x", site_role="admin")
+
+
+@pytest.mark.asyncio
+async def test_admin_get_and_assign_user_domains(async_pool):
+    """GET 返回 list；POST 覆盖式分配后 sorted == 传入（替换自动绑定的默认域）。"""
+    db = KbDB(async_pool)
+    admin = await _mk_admin(async_pool)
+    target = await db.create_user(username=f"dom_target_{_suffix()}", site_role="member")
+    async with await _client(async_pool) as c:
+        r = await c.get(f"/api/kb/admin/users/{target['id']}/domains",
+                        headers=kb_headers(admin["username"]))
+        assert r.status_code == 200, r.text
+        assert isinstance(r.json()["domains"], list)
+
+        r = await c.post(f"/api/kb/admin/users/{target['id']}/domains",
+                         json={"domains": ["generic", "odn"]},
+                         headers=kb_headers(admin["username"]))
+        assert r.status_code == 200, r.text
+        assert sorted(r.json()["domains"]) == ["generic", "odn"]
+        # 覆盖式：再分配单域替换
+        r = await c.post(f"/api/kb/admin/users/{target['id']}/domains",
+                         json={"domains": ["odn"]},
+                         headers=kb_headers(admin["username"]))
+        assert r.status_code == 200, r.text
+        assert r.json()["domains"] == ["odn"]
+    assert await db.list_user_domains(user_id=target["id"]) == ["odn"]
+
+
+@pytest.mark.asyncio
+async def test_admin_assign_empty_domains_422(async_pool):
+    """51号：不允许零绑定——空集（显式空或全空白）→ 422。"""
+    db = KbDB(async_pool)
+    admin = await _mk_admin(async_pool)
+    target = await db.create_user(username=f"dom_empty_{_suffix()}", site_role="member")
+    async with await _client(async_pool) as c:
+        r = await c.post(f"/api/kb/admin/users/{target['id']}/domains",
+                         json={"domains": []},
+                         headers=kb_headers(admin["username"]))
+        assert r.status_code == 422, r.text
+        r = await c.post(f"/api/kb/admin/users/{target['id']}/domains",
+                         json={"domains": ["  "]},
+                         headers=kb_headers(admin["username"]))
+        assert r.status_code == 422, r.text
+
+
+@pytest.mark.asyncio
+async def test_admin_assign_invalid_domain_400(async_pool):
+    db = KbDB(async_pool)
+    admin = await _mk_admin(async_pool)
+    target = await db.create_user(username=f"dom_bad_{_suffix()}", site_role="member")
+    async with await _client(async_pool) as c:
+        r = await c.post(f"/api/kb/admin/users/{target['id']}/domains",
+                         json={"domains": ["no_such_domain"]},
+                         headers=kb_headers(admin["username"]))
+        assert r.status_code == 400, r.text
+
+
+@pytest.mark.asyncio
+async def test_user_domains_admin_only_403(async_pool):
+    db = KbDB(async_pool)
+    await _mk_admin(async_pool)
+    member = await db.create_user(username=f"dom_member_{_suffix()}", site_role="member")
+    async with await _client(async_pool) as c:
+        r = await c.get("/api/kb/admin/users/someone/domains", headers=kb_headers(member["username"]))
+        assert r.status_code == 403
+        r = await c.post("/api/kb/admin/users/someone/domains", json={"domains": ["generic"]},
+                         headers=kb_headers(member["username"]))
+        assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_user_domains_user_not_found_404(async_pool):
+    admin = await _mk_admin(async_pool)
+    async with await _client(async_pool) as c:
+        r = await c.get("/api/kb/admin/users/u_no_such_user/domains",
+                        headers=kb_headers(admin["username"]))
+        assert r.status_code == 404
+        r = await c.post("/api/kb/admin/users/u_no_such_user/domains",
+                         json={"domains": ["generic"]},
+                         headers=kb_headers(admin["username"]))
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_assign_domains_to_admin_is_noop(async_pool):
+    """admin 目标免绑定：幂等空操作，返回空集且不落 user_domains。"""
+    db = KbDB(async_pool)
+    admin = await _mk_admin(async_pool)
+    async with await _client(async_pool) as c:
+        r = await c.post(f"/api/kb/admin/users/{admin['id']}/domains",
+                         json={"domains": ["generic"]},
+                         headers=kb_headers(admin["username"]))
+        assert r.status_code == 200, r.text
+        assert r.json()["domains"] == []
+    assert await db.list_user_domains(user_id=admin["id"]) == []
 
 
 @pytest.mark.asyncio

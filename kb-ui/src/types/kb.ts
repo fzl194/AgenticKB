@@ -372,6 +372,41 @@ export interface McpAccessRotateResult {
   rotated_at: string
 }
 
+/** 51号批次2：MCP 多钥匙——钥匙列表行。 */
+export interface McpKeyItem {
+  id: string
+  name: string
+  domain: string
+  key_prefix: string
+  status: 'active' | 'revoked'
+  created_at: string
+  rotated_at: string | null
+  last_used_at: string | null
+  /** false = 域已解绑，钥匙失效（列表页标红） */
+  domain_bound: boolean
+  open_kb_ids: string[]
+  open_tools: string[] | null
+  instructions: string | null
+  tool_descriptions: Record<string, string> | null
+}
+
+/** 51号批次2：创建钥匙响应——明文 key 仅此一次返回。 */
+export interface McpKeyCreated {
+  id: string
+  name: string
+  domain: string
+  /** 明文密钥——仅创建响应出现一次，界面展示后不再可取。 */
+  key: string
+}
+
+/** 51号批次2：轮换钥匙响应——明文 key 仅此一次返回。 */
+export interface McpKeyRotateResult {
+  /** 明文密钥——仅轮换响应出现一次，界面展示后不再可取。 */
+  key: string
+  key_prefix: string
+  rotated_at: string
+}
+
 
 /** site-admin 已删库清单行（list_deleted_kbs 只含身份字段，勿当 KbSummary 用） */
 export interface DeletedKbRow {

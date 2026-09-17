@@ -12,6 +12,7 @@ import type {
   DeletedKbRow, KbPurgeTask,
   KbOverview, KbRunRecord, KbStats, KbSummary, KbUpdateBody, KbUserCandidate,
   McpAccessRotateResult, McpAccessStatus,
+  McpKeyCreated, McpKeyItem, McpKeyRotateResult,
   DocumentKnowledge,
 } from '@/types/kb'
 
@@ -125,6 +126,46 @@ export function useKbApi() {
     }): Promise<McpAccessStatus> {
       const { data } = await client.put('/api/kb/users/me/mcp-access/config', body)
       return extractOne<McpAccessStatus>(data)
+    },
+
+    // ── MCP 多钥匙（51号批次2；旧四函数待 T11 视图重写时一并下线）──
+    /** 钥匙列表（含 domain_bound=false 的失效钥，列表页标红）。 */
+    async listMcpKeys(): Promise<{ keys: McpKeyItem[] }> {
+      const { data } = await client.get('/api/kb/users/me/mcp-keys')
+      return extractOne<{ keys: McpKeyItem[] }>(data)
+    },
+
+    /** 新建钥匙：明文 key 仅本次响应返回。 */
+    async createMcpKey(body: { name: string; domain: string }): Promise<McpKeyCreated> {
+      const { data } = await client.post('/api/kb/users/me/mcp-keys', body)
+      return extractOne<McpKeyCreated>(data)
+    },
+
+    /** 轮换指定钥匙：旧钥立即失效；明文仅本次响应返回。 */
+    async rotateMcpKeyV2(keyId: string): Promise<McpKeyRotateResult> {
+      const { data } = await client.post(`/api/kb/users/me/mcp-keys/${keyId}/rotate`)
+      return extractOne<McpKeyRotateResult>(data)
+    },
+
+    /** 吊销指定钥匙：不可逆。 */
+    async revokeMcpKey(keyId: string): Promise<void> {
+      await client.post(`/api/kb/users/me/mcp-keys/${keyId}/revoke`)
+    },
+
+    /** 全量覆盖该钥匙的开放库勾选（空数组=清空）。 */
+    async putMcpKeyOpenKbs(keyId: string, kbIds: string[]): Promise<{ open_kb_ids: string[] }> {
+      const { data } = await client.put(`/api/kb/users/me/mcp-keys/${keyId}/open-kbs`, { kb_ids: kbIds })
+      return extractOne<{ open_kb_ids: string[] }>(data)
+    },
+
+    /** 钥匙级工具开关 / 提示词 / 工具描述（null=不改；instructions ""=恢复默认）。 */
+    async putMcpKeyConfig(keyId: string, body: {
+      open_tools?: string[] | null
+      instructions?: string | null
+      tool_descriptions?: Record<string, string> | null
+    }): Promise<McpKeyItem> {
+      const { data } = await client.put(`/api/kb/users/me/mcp-keys/${keyId}/config`, body)
+      return extractOne<McpKeyItem>(data)
     },
 
     // ── 成员 ──

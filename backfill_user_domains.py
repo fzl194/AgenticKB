@@ -104,9 +104,12 @@ def main() -> int:
 
         total_inserted = 0
         total_skipped = 0
+        admin_skipped = 0
+        zero_binding = 0
         for user_id, username, site_role in users:
             if site_role == "admin":
                 print(f"  [skip-admin] {username}")
+                admin_skipped += 1
                 continue
             domains = user_domains.get(user_id)
             if domains:
@@ -116,6 +119,7 @@ def main() -> int:
                 print(f"  [bind] {username} -> {domains} (fallback)")
             else:
                 print(f"  [WARN-zero-binding] {username}: no active KBs and no fallback domain")
+                zero_binding += 1
                 continue
             if not args.dry_run:
                 with conn.cursor() as cur:
@@ -130,11 +134,15 @@ def main() -> int:
                         else:
                             total_skipped += 1
         if args.dry_run:
-            print(f"[dry-run] would have bound users; no rows written.")
+            print(
+                f"[dry-run] would have bound users; no rows written. "
+                f"admin_skipped={admin_skipped}, zero_binding={zero_binding}"
+            )
         else:
             print(
                 f"done: inserted {total_inserted} binding rows, "
-                f"{total_skipped} skipped (already present)."
+                f"{total_skipped} skipped (already present), "
+                f"admin_skipped={admin_skipped}, zero_binding={zero_binding}"
             )
     except psycopg.Error as exc:
         print(f"[ERROR] database failure: {exc}")

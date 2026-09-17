@@ -344,6 +344,59 @@ class KbDB:
             )
             return int((await cur.fetchone())["n"])
 
+    # ------------------------------------- 51号批次1：用户↔域绑定
+
+    async def list_user_domains(self, *, user_id: str) -> list[str]:
+        """用户绑定的域（升序）。admin 不写绑定行（全通由调用方按角色短路）。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT domain FROM user_domains WHERE user_id = %s ORDER BY domain",
+                (user_id,),
+            )
+            return [r["domain"] for r in await cur.fetchall()]
+
+    async def set_user_domains(self, *, user_id: str, domains: list[str]) -> list[str]:
+        """覆盖式更新绑定（admin 分配端点专用；空集由路由层 422 拦截）。"""
+        cleaned = sorted({d.strip() for d in domains if d and d.strip()})
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM user_domains WHERE user_id = %s", (user_id,))
+                for d in cleaned:
+                    await conn.execute(
+                        "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s)",
+                        (user_id, d),
+                    )
+        return cleaned
+
+    async def bind_domain(self, *, user_id: str, domain: str) -> None:
+        """单条幂等绑定（新用户自动绑默认域用）。"""
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (user_id, domain),
+            )
+
+    async def can_create_in_domain(self, *, user_id: str, domain: str) -> bool:
+        """建库资格：site admin 全通；普通用户须绑定该域（51号批次1收敛）。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT (EXISTS (SELECT 1 FROM kb_users u
+                           WHERE u.id = %s AND u.site_role = 'admin')
+                       OR EXISTS (SELECT 1 FROM user_domains ud
+                           WHERE ud.user_id = %s AND ud.domain = %s)) AS ok""",
+                (user_id, user_id, domain),
+            )
+            return bool((await cur.fetchone())["ok"])
+
+    async def count_kbs_by_domain(self, *, domain: str) -> int:
+        """域下活跃 KB 数——main_control 删域保护用。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT count(*) AS n FROM knowledge_bases WHERE domain = %s AND status = 'active'",
+                (domain,),
+            )
+            return int((await cur.fetchone())["n"])
+
     # -------------------------------------------------------- knowledge bases
 
     async def create_kb(

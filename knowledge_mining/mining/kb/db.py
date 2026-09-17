@@ -1042,6 +1042,211 @@ WITH latest AS (
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    # --------------------------------- 51号批次2：MCP 多钥匙（单域钥匙）
+    # mcp_keys 每行一把单域钥匙；key_id 由服务层生成后传入。开放库域防线在 SQL 层
+    #（kb.status='active' AND kb.domain = key.domain），应用层校验只是前置提示。
+    # 旧 mcp_access 五方法保留至 T5（迁移源+回滚），新代码一律走本方法组。
+
+    async def create_mcp_key(self, *, user_id: str, name: str, domain: str,
+                             key_hash: str, key_prefix: str, key_id: str) -> dict[str, Any]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """INSERT INTO mcp_keys (id, user_id, name, domain, key_hash, key_prefix)
+                   VALUES (%(id)s, %(u)s, %(n)s, %(d)s, %(h)s, %(p)s)
+                   RETURNING id, user_id, name, domain, key_prefix, status, created_at""",
+                {"id": key_id, "u": user_id, "n": name, "d": domain,
+                 "h": key_hash, "p": key_prefix},
+            )
+            return dict(await cur.fetchone())  # type: ignore[arg-type]
+
+    async def list_mcp_keys(self, *, user_id: str) -> list[dict[str, Any]]:
+        """本人全部钥匙（无 key_hash），每把附 open_kb_ids 聚合（active ∩ 同域）。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT m.id, m.user_id, m.name, m.domain, m.key_prefix, m.status,
+                          m.open_tools, m.instructions, m.tool_descriptions,
+                          m.created_at, m.rotated_at,
+                          COALESCE(
+                            (SELECT jsonb_agg(k.id)
+                             FROM mcp_key_open_kbs o
+                             JOIN knowledge_bases k ON k.id = o.kb_id
+                             WHERE o.key_id = m.id AND k.status = 'active'
+                               AND k.domain = m.domain),
+                            '[]'::jsonb) AS open_kb_ids
+                   FROM mcp_keys m
+                   WHERE m.user_id = %s
+                   ORDER BY m.created_at""",
+                (user_id,),
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def get_mcp_key(self, *, key_id: str) -> dict[str, Any] | None:
+        """单把钥匙（无 key_hash），含三配置列与 status/domain。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, user_id, name, domain, key_prefix, status,
+                          open_tools, instructions, tool_descriptions,
+                          created_at, rotated_at
+                   FROM mcp_keys WHERE id = %s""",
+                (key_id,),
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def find_mcp_key_by_hash(
+        self, key_hash: str, *, last_used_throttle_s: int = 60,
+    ) -> dict[str, Any] | None:
+        """验钥热路径（复刻旧 verify_mcp_key 的 60s 节流 UPDATE...RETURNING 模式）。
+
+        last_used_at 节流更新（距上次 ≥throttle 才写）；节流窗口内走只读 SELECT。
+        active-only：miss / revoked → None。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE mcp_keys
+                   SET last_used_at = now()
+                   WHERE key_hash = %(h)s AND status = 'active'
+                     AND (last_used_at IS NULL
+                          OR last_used_at <= now() - %(throttle)s * interval '1 second')
+                   RETURNING id""",
+                {"h": key_hash, "throttle": last_used_throttle_s},
+            )
+            hit = await cur.fetchone()
+            if hit is None:
+                # 节流窗口内或无需更新：只读校验
+                cur = await conn.execute(
+                    "SELECT id FROM mcp_keys WHERE key_hash = %s AND status = 'active'",
+                    (key_hash,),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    return None
+                key_id = row["id"]
+            else:
+                key_id = hit["id"]
+            cur = await conn.execute(
+                """SELECT m.id AS key_id, m.user_id, u.username, m.name, m.domain,
+                          m.open_tools, m.instructions, m.tool_descriptions
+                   FROM mcp_keys m JOIN kb_users u ON u.id = m.user_id
+                   WHERE m.id = %s AND m.status = 'active'""",
+                (key_id,),
+            )
+            mrow = await cur.fetchone()
+            if mrow is None:
+                return None
+            cur = await conn.execute(
+                """SELECT k.id, k.name, k.domain FROM mcp_key_open_kbs o
+                   JOIN knowledge_bases k ON k.id = o.kb_id
+                   WHERE o.key_id = %s AND k.status = 'active'
+                     AND k.domain = (SELECT domain FROM mcp_keys WHERE id = %s)
+                   ORDER BY k.name""",
+                (key_id, key_id),
+            )
+            open_kbs = [dict(r) for r in await cur.fetchall()]
+            cfg = dict(mrow)
+            return {
+                "key_id": cfg["key_id"],
+                "user_id": cfg["user_id"],
+                "username": cfg["username"],
+                "name": cfg["name"],
+                "domain": cfg["domain"],
+                "open_tools": cfg.get("open_tools"),
+                "instructions": cfg.get("instructions"),
+                "tool_descriptions": cfg.get("tool_descriptions"),
+                "open_kbs": open_kbs,
+                "open_kb_ids": [k["id"] for k in open_kbs],
+            }
+
+    async def rotate_mcp_key(self, *, key_id: str, key_hash: str,
+                             key_prefix: str) -> dict[str, Any] | None:
+        """覆盖 hash 即轮换（旧钥立即失效）；revoked → None。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE mcp_keys
+                   SET key_hash = %(h)s, key_prefix = %(p)s, rotated_at = now()
+                   WHERE id = %(id)s AND status = 'active'
+                   RETURNING id, name, domain, key_prefix, status, created_at, rotated_at""",
+                {"h": key_hash, "p": key_prefix, "id": key_id},
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def revoke_mcp_key(self, *, key_id: str) -> bool:
+        """active → revoked；有返回行 True（已 revoked / 不存在 False）。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE mcp_keys SET status = 'revoked'
+                   WHERE id = %s AND status = 'active' RETURNING id""",
+                (key_id,),
+            )
+            return await cur.fetchone() is not None
+
+    async def count_active_mcp_keys(self, *, user_id: str) -> int:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT count(*) AS n FROM mcp_keys
+                   WHERE user_id = %s AND status = 'active'""",
+                (user_id,),
+            )
+            return int((await cur.fetchone())["n"])
+
+    async def key_open_kb_ids(self, *, key_id: str) -> list[str]:
+        """钥匙当前生效的开放库（active ∩ 同域），按授权时间排序。"""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT o.kb_id FROM mcp_key_open_kbs o
+                   JOIN knowledge_bases k ON k.id = o.kb_id
+                   WHERE o.key_id = %s AND k.status = 'active'
+                   ORDER BY o.granted_at""",
+                (key_id,),
+            )
+            return [r["kb_id"] for r in await cur.fetchall()]
+
+    async def replace_mcp_key_open_kbs(self, *, key_id: str,
+                                       kb_ids: list[str]) -> list[str]:
+        """全量覆盖钥匙的开放库勾选。域+active 防线在 SQL 层（越域/软删静默丢弃）。"""
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM mcp_key_open_kbs WHERE key_id = %s", (key_id,),
+                )
+                await conn.execute(
+                    """INSERT INTO mcp_key_open_kbs (key_id, kb_id)
+                       SELECT %(kid)s, k.id FROM knowledge_bases k
+                       WHERE k.id = ANY(%(kbs)s) AND k.status = 'active'
+                         AND k.domain = (SELECT domain FROM mcp_keys WHERE id = %(kid)s)
+                       ON CONFLICT DO NOTHING""",
+                    {"kid": key_id, "kbs": list(kb_ids)},
+                )
+            cur = await conn.execute(
+                """SELECT o.kb_id FROM mcp_key_open_kbs o
+                   JOIN knowledge_bases k ON k.id = o.kb_id
+                   WHERE o.key_id = %s AND k.status = 'active'
+                     AND k.domain = (SELECT domain FROM mcp_keys WHERE id = %s)
+                   ORDER BY o.granted_at""",
+                (key_id, key_id),
+            )
+            return [r["kb_id"] for r in await cur.fetchall()]
+
+    async def update_mcp_key_config(
+        self, *, key_id: str, open_tools: list[str] | None,
+        instructions: str | None, tool_descriptions: dict[str, str] | None,
+    ) -> None:
+        """钥匙级三列部分更新；None = 不改该字段（COALESCE 语义同旧 update_mcp_config）。"""
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """UPDATE mcp_keys SET
+                     open_tools = COALESCE(%(ot)s::jsonb, open_tools),
+                     instructions = COALESCE(%(ins)s, instructions),
+                     tool_descriptions = COALESCE(%(td)s::jsonb, tool_descriptions)
+                   WHERE id = %(id)s""",
+                {
+                    "id": key_id,
+                    "ot": _json(open_tools) if open_tools is not None else None,
+                    "ins": instructions,
+                    "td": _json(tool_descriptions) if tool_descriptions is not None else None,
+                },
+            )
+
     # ------------------------------------------------ MCP 用户接入（阶段 A / 批次5）
     # 一人一钥：mcp_access 每用户至多一行；rotate 覆盖 key_hash（旧钥立即失效，无并存期）。
 

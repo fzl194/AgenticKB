@@ -46,6 +46,15 @@ export function useAuthApi() {
     async resetPassword(id: string, password: string): Promise<void> {
       await mining.post(`/api/kb/users/${id}/reset-password`, { password })
     },
+    /** 51号批次1：admin 域分配。 */
+    async getUserDomains(id: string): Promise<string[]> {
+      const { data } = await mining.get(`/api/kb/admin/users/${id}/domains`)
+      return data?.domains ?? []
+    },
+    async setUserDomains(id: string, domains: string[]): Promise<string[]> {
+      const { data } = await mining.post(`/api/kb/admin/users/${id}/domains`, { domains })
+      return data?.domains ?? []
+    },
     async changeMyPassword(oldPw: string, newPw: string): Promise<void> {
       await mining.post('/api/kb/users/me/password', { old: oldPw, new: newPw })
     },

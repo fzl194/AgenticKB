@@ -9,9 +9,39 @@
       <el-table-column prop="display_name" label="显示名" />
       <el-table-column prop="site_role" label="角色" width="90" />
       <el-table-column prop="status" label="状态" width="90" />
-      <el-table-column label="操作" width="280">
+      <el-table-column label="知识域" width="140">
+        <template #default="{ row }">
+          <template v-if="row.site_role === 'admin'">
+            <el-tag size="small" type="info">全域通行</el-tag>
+          </template>
+          <template v-else-if="userDomains[row.id]">
+            <el-tag
+              v-for="d in userDomains[row.id]!.slice(0, 2)"
+              :key="d"
+              size="small"
+              style="margin-right: 4px"
+            >
+              {{ domainLabel(d) }}
+            </el-tag>
+            <el-tag v-if="userDomains[row.id]!.length > 2" size="small" type="info">
+              +{{ userDomains[row.id]!.length - 2 }}
+            </el-tag>
+            <span v-if="userDomains[row.id]!.length === 0" class="um__hint">未分配</span>
+          </template>
+          <span v-else class="um__hint">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="340">
         <template #default="{ row }">
           <el-button size="small" link @click="openEdit(row)">编辑</el-button>
+          <el-tooltip
+            v-if="row.site_role === 'admin'"
+            content="管理员默认全域通行"
+            placement="top"
+          >
+            <span class="um__disabled"><el-button size="small" link disabled>分配域</el-button></span>
+          </el-tooltip>
+          <el-button v-else size="small" link @click="openDomains(row)">分配域</el-button>
           <el-button size="small" link @click="resetPw(row)">重置密码</el-button>
           <el-button
             v-if="!isSelf(row)"
@@ -69,14 +99,39 @@
         <el-button type="primary" @click="confirmEdit">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="domainsVisible" :title="`分配知识域：${domainsForm.username}`" width="480">
+      <el-select
+        v-model="domainsForm.selected"
+        multiple
+        collapse-tags
+        collapse-tags-tooltip
+        placeholder="选择可访问的知识域"
+        style="width: 100%"
+        :loading="domainsLoading"
+      >
+        <el-option
+          v-for="opt in domainOptions"
+          :key="opt.value"
+          :label="opt.label"
+          :value="opt.value"
+        />
+      </el-select>
+      <div class="um__hint">member 用户只能访问被分配的知识域；管理员默认全域通行。</div>
+      <template #footer>
+        <el-button @click="domainsVisible = false">取消</el-button>
+        <el-button type="primary" :loading="domainsSaving" @click="confirmDomains">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
+import { useDomainStore } from '@/stores/domain'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { AuthUser, SiteRole } from '@/types/auth'
 
@@ -88,7 +143,58 @@ interface UserRow extends AuthUser {
 
 const api = useAuthApi()
 const auth = useAuthStore()
+const domainStore = useDomainStore()
 const users = ref<UserRow[]>([])
+
+/** 51号批次1：用户已绑定的知识域（打开分配弹窗时拉取缓存，列表接口不带域数据避免 N 次请求）。 */
+const userDomains = ref<Record<string, string[]>>({})
+const domainOptions = computed(() =>
+  domainStore.domains.map(d => ({ value: d.domain_id, label: d.display_name || d.domain_id }))
+)
+
+function domainLabel(domainId: string): string {
+  const hit = domainStore.domains.find(d => d.domain_id === domainId)
+  return hit?.display_name || domainId
+}
+
+const domainsVisible = ref(false)
+const domainsLoading = ref(false)
+const domainsSaving = ref(false)
+const domainsForm = ref<{ id: string; username: string; selected: string[] }>({
+  id: '', username: '', selected: [],
+})
+
+async function openDomains(row: UserRow): Promise<void> {
+  domainsForm.value = { id: row.id, username: row.username, selected: [] }
+  domainsVisible.value = true
+  if (domainStore.domains.length === 0) await domainStore.fetchDomains()
+  domainsLoading.value = true
+  try {
+    const domains = await api.getUserDomains(row.id)
+    userDomains.value = { ...userDomains.value, [row.id]: domains }
+    // 仅当仍在该行弹窗时回显，避免竞态覆盖
+    if (domainsForm.value.id === row.id) domainsForm.value.selected = [...domains]
+  } catch (e) {
+    ElMessage.error((await apiErrorDetail(e)) || '加载用户域失败')
+  } finally {
+    domainsLoading.value = false
+  }
+}
+
+async function confirmDomains(): Promise<void> {
+  try {
+    domainsSaving.value = true
+    const saved = await api.setUserDomains(domainsForm.value.id, domainsForm.value.selected)
+    userDomains.value = { ...userDomains.value, [domainsForm.value.id]: saved }
+    domainsVisible.value = false
+    ElMessage.success('已保存')
+  } catch (e) {
+    // 422=空集 / 400=非法域，后端 detail 直接展示
+    ElMessage.error((await apiErrorDetail(e)) || '保存失败')
+  } finally {
+    domainsSaving.value = false
+  }
+}
 
 /** 不能禁用/降级自己（否则把自己锁死）；后端有同义守卫兜底。 */
 function isSelf(row: UserRow): boolean {

@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS mcp_keys (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mcp_keys_user ON mcp_keys(user_id);
-CREATE INDEX IF NOT EXISTS idx_mcp_keys_hash ON mcp_keys(key_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_keys_hash ON mcp_keys(key_hash);
 
 -- 钥匙级开放库：入库时应用层校验 kb.domain = key.domain（INSERT...SELECT 兜底）。
 CREATE TABLE IF NOT EXISTS mcp_key_open_kbs (

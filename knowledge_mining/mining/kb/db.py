@@ -619,7 +619,7 @@ class KbDB:
             return dict(row) if row else None
 
     async def list_visible(self, *, user_id: str, domain: str) -> list[dict[str, Any]]:
-        """KBs visible to user in domain: owned + member + public, status='active'.
+        """KBs visible to user in domain: owned + member + 域内 public（51号批次1）, status='active'.
 
         site admin 短路：看域内全部 KB，my_role='admin'（admin 全通）。
         其余附带 my_role（owner/editor/viewer 有效访问级别）与 document_count（KB 内文档数），
@@ -666,7 +666,10 @@ class KbDB:
                    LEFT JOIN kb_users u ON u.id = kb.owner_id
                    WHERE kb.domain = %(dom)s AND kb.status = 'active'
                      AND (kb.owner_id = %(uid)s
-                          OR kb.visibility = 'public'
+                          OR (kb.visibility = 'public'
+                              AND EXISTS (SELECT 1 FROM user_domains ud
+                                          WHERE ud.user_id = %(uid)s
+                                            AND ud.domain = kb.domain))
                           OR EXISTS (SELECT 1 FROM kb_members m
                                      WHERE m.kb_id = kb.id AND m.user_id = %(uid)s))
                    ORDER BY kb.created_at DESC""",
@@ -677,8 +680,8 @@ class KbDB:
     async def list_visible_kb_ids(self, *, user_id: str, domain: str) -> list[str]:
         """域内该用户可见的 KB id 集——list_visible 的轻量版。
 
-        可见性条件与 list_visible / is_visible 逐项一致（admin 全通 / owner / public /
-        任意成员），只是不带 my_role 与 document_count 那个 COUNT 子查询。给「按可见集
+        可见性条件与 list_visible / is_visible 逐项一致（admin 全通 / owner /
+        域内 public——51号批次1 / 任意成员），只是不带 my_role 与 document_count 那个 COUNT 子查询。给「按可见集
         收窄」这类调用方用（/api/runs 护栏、概览页聚合），它们只要 id 边界。
         """
         async with self._pool.connection() as conn:
@@ -688,7 +691,10 @@ class KbDB:
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %(uid)s AND u.site_role = 'admin')
                           OR kb.owner_id = %(uid)s
-                          OR kb.visibility = 'public'
+                          OR (kb.visibility = 'public'
+                              AND EXISTS (SELECT 1 FROM user_domains ud
+                                          WHERE ud.user_id = %(uid)s
+                                            AND ud.domain = kb.domain))
                           OR EXISTS (SELECT 1 FROM kb_members m
                                      WHERE m.kb_id = kb.id AND m.user_id = %(uid)s))""",
                 {"uid": user_id, "dom": domain},
@@ -1354,7 +1360,7 @@ WITH latest AS (
     # ------------------------------------------------------------- visibility
 
     async def is_visible(self, *, kb_id: str, user_id: str) -> bool:
-        """True iff user can read this KB (admin 全通 / owner / member / public) and KB is active."""
+        """True iff user can read this KB (admin 全通 / owner / member / 域内 public——51号批次1) and KB is active."""
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT 1 FROM knowledge_bases kb
@@ -1362,10 +1368,13 @@ WITH latest AS (
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %s AND u.site_role = 'admin')
                           OR kb.owner_id = %s
-                          OR kb.visibility = 'public'
+                          OR (kb.visibility = 'public'
+                              AND EXISTS (SELECT 1 FROM user_domains ud
+                                          WHERE ud.user_id = %s
+                                            AND ud.domain = kb.domain))
                           OR EXISTS (SELECT 1 FROM kb_members m
                                      WHERE m.kb_id = kb.id AND m.user_id = %s))""",
-                [kb_id, user_id, user_id, user_id],
+                [kb_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 
@@ -1675,7 +1684,10 @@ WITH latest AS (
     async def document_readable_by_user(
         self, document_id: str, user_id: str,
     ) -> bool:
-        """文档级读授权（47 号引用即只读授权）：属主库可见 OR 任一引用库可见."""
+        """文档级读授权（47 号引用即只读授权）：属主库可见 OR 任一引用库可见.
+
+        public 分支为域内 public（51号批次1）：须用户绑定该 KB 所在域。
+        """
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT 1
@@ -1686,11 +1698,14 @@ WITH latest AS (
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %s AND u.site_role = 'admin')
                           OR k.owner_id = %s
-                          OR k.visibility = 'public'
+                          OR (k.visibility = 'public'
+                              AND EXISTS (SELECT 1 FROM user_domains ud
+                                          WHERE ud.user_id = %s
+                                            AND ud.domain = k.domain))
                           OR EXISTS (SELECT 1 FROM kb_members m
                                      WHERE m.kb_id = k.id AND m.user_id = %s))
                    LIMIT 1""",
-                [document_id, user_id, user_id, user_id],
+                [document_id, user_id, user_id, user_id, user_id],
             )
             if (await cur.fetchone()) is not None:
                 return True
@@ -1704,11 +1719,14 @@ WITH latest AS (
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %s AND u.site_role = 'admin')
                           OR k.owner_id = %s
-                          OR k.visibility = 'public'
+                          OR (k.visibility = 'public'
+                              AND EXISTS (SELECT 1 FROM user_domains ud
+                                          WHERE ud.user_id = %s
+                                            AND ud.domain = k.domain))
                           OR EXISTS (SELECT 1 FROM kb_members m
                                      WHERE m.kb_id = k.id AND m.user_id = %s))
                    LIMIT 1""",
-                [document_id, user_id, user_id, user_id],
+                [document_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 

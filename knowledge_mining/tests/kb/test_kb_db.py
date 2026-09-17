@@ -37,6 +37,8 @@ async def test_list_visible_owner_member_public(async_pool):
     pub = await db.create_kb(domain="cloud_core_network", name="pub", owner_id=bob["id"], visibility="public")
     shared = await db.create_kb(domain="cloud_core_network", name="shared", owner_id=carol["id"], visibility="private")
     await db.add_member(kb_id=shared["id"], user_id=alice["id"], role="viewer")
+    # 51号批次1：public 库域内化——读者须绑定所在域才可见（owner/member 分支不受影响）
+    await db.bind_domain(user_id=alice["id"], domain="cloud_core_network")
 
     visible_to_alice = {k["name"] for k in await db.list_visible(user_id=alice["id"], domain="cloud_core_network")}
     # alice 看得到：自己的 private + bob 的 public + carol 的 private（被加为 member）

@@ -50,6 +50,10 @@ def _mw_app(tmp_path: Path, auth_text: str = _AUTH_YAML) -> FastAPI:
     def get_cfg():
         return {"ok": 1}
 
+    @app.get("/api/v1/domains")
+    def list_domains():
+        return {"items": []}
+
     app.add_middleware(AuthMiddleware, config_path=auth_path)
     return app
 
@@ -175,3 +179,45 @@ def test_cors_preflight_allows_only_configured_origin_before_auth(tmp_path):
     assert allowed.headers["access-control-allow-origin"] == "http://localhost:8080"
     assert blocked.status_code == 400
     assert "access-control-allow-origin" not in blocked.headers
+
+
+# ----------------------------------------------------------------------
+# 51号批次1：/api/v1/domains 读收口 —— 内部 secret 旁路（fail-closed）
+# ----------------------------------------------------------------------
+
+def test_domains_read_requires_token_or_internal_secret(tmp_path):
+    """收口后无 token 无内部头 → 401（原为免鉴权可读）。"""
+    with TestClient(_mw_app(tmp_path)) as c:
+        assert c.get("/api/v1/domains").status_code == 401
+
+
+def test_domains_read_internal_bypass_with_correct_secret(tmp_path):
+    """无 token + 正确 X-Internal-Auth → 放行（服务启动期拉取）。"""
+    with TestClient(_mw_app(tmp_path)) as c:
+        r = c.get("/api/v1/domains", headers={"X-Internal-Auth": "test-ivs"})
+        assert r.status_code == 200
+
+
+def test_domains_read_wrong_internal_secret_401(tmp_path):
+    """无 token + 错误 X-Internal-Auth → 401（fail-closed）。"""
+    with TestClient(_mw_app(tmp_path)) as c:
+        assert c.get("/api/v1/domains", headers={"X-Internal-Auth": "wrong"}).status_code == 401
+
+
+def test_domains_read_no_secret_configured_fails_closed(tmp_path):
+    """internal_verify_secret 未配置（空）时，secret 匹配旁路不生效（fail-closed）。
+
+    注意：此配置下 secrets_valid=False → 中间件先 503；无论哪种，都不是 200 放行。
+    """
+    with TestClient(_mw_app(tmp_path, auth_text=(
+        "enabled: true\njwt_secret: s\ntoken_ttl_seconds: 60\ninternal_verify_secret: ''\n"
+    ))) as c:
+        r = c.get("/api/v1/domains", headers={"X-Internal-Auth": ""})
+        assert r.status_code != 200
+
+
+def test_domains_write_not_bypassed_by_internal_secret(tmp_path):
+    """内部旁路仅限 GET —— POST /api/v1/domains 不旁路（admin-only 且需 token）。"""
+    with TestClient(_mw_app(tmp_path)) as c:
+        r = c.post("/api/v1/domains", headers={"X-Internal-Auth": "test-ivs"})
+        assert r.status_code == 401

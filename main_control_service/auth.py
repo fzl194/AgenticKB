@@ -66,8 +66,8 @@ def _is_open_config_read(method: str, path: str) -> bool:
         return True
     if path == "/api/v1/serving-config":
         return True
-    if path.startswith("/api/v1/domains"):
-        return True
+    # /api/v1/domains 读已收口（51号批次1）：用户侧须带 token（member 按绑定过滤），
+    # 内部服务经 X-Internal-Auth 旁路（见 dispatch 中的内部旁路逻辑）。
     return False
 
 
@@ -136,6 +136,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if (request.method == "OPTIONS"
                 or request.url.path in _SKIP_PATHS
                 or _is_open_config_read(request.method, request.url.path)):
+            return await call_next(request)
+
+        # 51号批次1：domains 读收口——内部服务凭共享 secret 旁路（服务启动期拉取），
+        # 用户侧必须携带 token；无 secret 配置时不旁路（fail-closed）。
+        if (request.method == "GET" and request.url.path.startswith("/api/v1/domains")
+                and getattr(request.app.state, "internal_verify_secret", "")
+                and request.headers.get("x-internal-auth", "") == request.app.state.internal_verify_secret):
+            request.state.internal_call = True
             return await call_next(request)
 
         auth = request.headers.get("authorization", "")

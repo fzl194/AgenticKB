@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
@@ -253,8 +253,17 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/v1/domains")
-    def list_domains() -> dict:
-        return {"items": service.list_domains()}
+    async def list_domains(request: Request) -> dict:
+        # 51号批次1：内部旁路调用（无用户态，X-Internal-Auth 已在中间件验过）与
+        # admin 全量；普通用户按 mining 绑定域过滤（fail-closed：不可达 503）。
+        user = getattr(request.state, "user", None)
+        if user is None or user.get("role") == "admin":
+            return {"items": service.list_domains()}
+        internal_secret = getattr(request.app.state, "internal_verify_secret", "") or ""
+        bound = await service.bound_domains_for(str(user.get("username") or ""), internal_secret)
+        if bound is None:
+            raise HTTPException(status_code=503, detail="mining_unavailable")
+        return {"items": [d for d in service.list_domains() if d.get("domain_id") in bound]}
 
     @app.get("/api/v1/domains/{domain_id}")
     def get_domain(domain_id: str) -> dict:
@@ -269,7 +278,6 @@ def create_app(
         body = await request.json()
         domain_id = body.get("domain_id")
         if not domain_id:
-            from fastapi import HTTPException
             raise HTTPException(status_code=400, detail="domain_id is required")
         return service.create_domain(domain_id, body)
 
@@ -281,7 +289,14 @@ def create_app(
         return {"ok": True}
 
     @app.delete("/api/v1/domains/{domain_id}")
-    def delete_domain(domain_id: str) -> dict:
+    async def delete_domain(domain_id: str, request: Request) -> dict:
+        # 51号批次1：删域保护——域下仍有 KB 时 409；mining 不可达时 503（fail-closed）。
+        internal_secret = getattr(request.app.state, "internal_verify_secret", "") or ""
+        count = await service.kb_count_for(domain_id, internal_secret)
+        if count is None:
+            raise HTTPException(status_code=503, detail="mining_unavailable")
+        if count > 0:
+            raise HTTPException(status_code=409, detail=f"domain_has_kbs:{count}")
         service.delete_domain(domain_id)
         return {"ok": True}
 

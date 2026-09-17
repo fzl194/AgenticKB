@@ -312,3 +312,57 @@ class YamlConfigService:
                 seen.add(url)
                 urls.append(url)
         return urls
+
+    def mining_internal_base_url(self) -> str | None:
+        """51号批次1：内部查询用 mining 基址（首个 enabled 域的 mining_url）。"""
+        registry = self._load_domain_registry()
+        seen: set[str] = set()
+        for entry in registry.values():
+            if not bool(entry.get("enabled", True)):
+                continue
+            url = (entry.get("services") or {}).get("mining_url")
+            base = str(url).rstrip("/") if url else ""
+            if base and base not in seen:
+                seen.add(base)
+                return base
+        return None
+
+    async def bound_domains_for(self, username: str, internal_secret: str) -> set[str] | None:
+        """问 mining 拿用户绑定域；不可达返回 None（调用方 503，不降级全量）。"""
+        from main_control_service.proxy import get_proxy_client
+
+        if not username or not internal_secret:
+            return None
+        base = self.mining_internal_base_url()
+        if not base:
+            return None
+        try:
+            resp = await get_proxy_client().get(
+                f"{base}/api/kb/internal/users/{username}/domains",
+                headers={"X-Internal-Auth": internal_secret},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return set(resp.json().get("domains", []))
+        except Exception:  # noqa: BLE001 — fail-closed 由调用方处理
+            return None
+
+    async def kb_count_for(self, domain_id: str, internal_secret: str) -> int | None:
+        """51号批次1：删域保护；不可达返回 None（调用方 503）。"""
+        from main_control_service.proxy import get_proxy_client
+
+        if not internal_secret:
+            return None
+        base = self.mining_internal_base_url()
+        if not base:
+            return None
+        try:
+            resp = await get_proxy_client().get(
+                f"{base}/api/kb/internal/domains/{domain_id}/kb-count",
+                headers={"X-Internal-Auth": internal_secret},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return int(resp.json().get("kb_count", 0))
+        except Exception:  # noqa: BLE001
+            return None

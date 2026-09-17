@@ -153,6 +153,11 @@ class McpKeyService:
             if normalized is not None:
                 status["open_tools"] = normalized
         status["open_kb_ids"] = await self._db.key_open_kb_ids(key_id=key_id)
+        # 终审整改：单钥匙响应自带 domain_bound（与 list_keys 同源语义）——
+        # update_config 等返回本组装的端点不再让前端把健康钥匙误标「域已解绑」。
+        status["domain_bound"] = await self._db.can_create_in_domain(
+            user_id=user_id, domain=status["domain"],
+        )
         return status
 
     # ------------------------------------------------------------ 生命周期
@@ -193,7 +198,8 @@ class McpKeyService:
             )
         except UniqueViolation as exc:
             raise KeyNameConflict(
-                f"该知识域下你名下已有同名活跃钥匙「{cleaned}」") from exc
+                f"创建失败：该知识域（{domain}）下你名下已有同名的活跃钥匙"
+                f"「{cleaned}」（吊销后可重建同名）") from exc
         return {**row, "key": plaintext}  # 明文仅此一次
 
     async def rotate_key(self, *, user_id: str, key_id: str) -> dict[str, Any]:

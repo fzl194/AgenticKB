@@ -14,12 +14,16 @@ CREATE TABLE IF NOT EXISTS mcp_keys (
     tool_descriptions JSONB,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     rotated_at  TIMESTAMPTZ,
-    last_used_at TIMESTAMPTZ,             -- 验钥时节流更新（沿用旧 mcp_access 语义）
-    UNIQUE (user_id, name)
+    last_used_at TIMESTAMPTZ              -- 验钥时节流更新（沿用旧 mcp_access 语义）
 );
 
 CREATE INDEX IF NOT EXISTS idx_mcp_keys_user ON mcp_keys(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_keys_hash ON mcp_keys(key_hash);
+
+-- 同名约束：仅「同用户+同域+活跃」内唯一（部分唯一索引，终审整改）——
+-- 吊销（revoked）后可重建同名；跨域同名放行（多钥匙多域语义）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_keys_active_name
+    ON mcp_keys(user_id, domain, name) WHERE status = 'active';
 
 -- 钥匙级开放库：入库时应用层校验 kb.domain = key.domain（INSERT...SELECT 兜底）。
 CREATE TABLE IF NOT EXISTS mcp_key_open_kbs (

@@ -281,7 +281,8 @@ def main() -> int:
                                (id, user_id, name, domain, key_hash, key_prefix,
                                 status, open_tools, instructions, tool_descriptions)
                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                               ON CONFLICT (user_id, name) DO NOTHING
+                               ON CONFLICT (user_id, domain, name) WHERE status = 'active'
+                               DO NOTHING
                                RETURNING id""",
                             (key_id, user_id, name, domain, key_hash, key_prefix,
                              status,

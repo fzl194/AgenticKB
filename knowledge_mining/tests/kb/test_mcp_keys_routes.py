@@ -120,6 +120,55 @@ async def test_create_name_conflict_and_limit_409(async_pool, kbdb):
 
 
 @pytest.mark.asyncio
+async def test_revoke_then_same_name_recreate_201(async_pool, kbdb):
+    """终审整改①：吊销=终态，同名同域重建放行（部分唯一索引只约束 active）。"""
+    s = _suffix()
+    u = await _mk_user(async_pool)
+    await kbdb.set_user_domains(user_id=u["id"], domains=["generic"])
+    async with await _client(async_pool) as c:
+        headers = kb_headers(u["username"])
+        created = await _create(c, f"reborn-{s}", "generic", headers)
+        r = await c.post(f"{BASE}/{created['id']}/revoke", headers=headers)
+        assert r.status_code == 204
+        r = await c.post(BASE, json={"name": f"reborn-{s}", "domain": "generic"},
+                         headers=headers)
+        assert r.status_code == 201, r.text
+        assert r.json()["name"] == f"reborn-{s}"
+
+
+@pytest.mark.asyncio
+async def test_same_name_across_domains_201(async_pool, kbdb):
+    """终审整改②：跨域同名放行（用户在 A/B 两域各建一把 'prod'）。"""
+    s = _suffix()
+    u = await _mk_user(async_pool)
+    await kbdb.set_user_domains(user_id=u["id"], domains=["generic", "odn"])
+    async with await _client(async_pool) as c:
+        headers = kb_headers(u["username"])
+        k1 = await _create(c, f"prod-{s}", "generic", headers)
+        k2 = await _create(c, f"prod-{s}", "odn", headers)
+        assert k1["domain"] == "generic" and k2["domain"] == "odn"
+        assert k1["id"] != k2["id"]
+
+
+@pytest.mark.asyncio
+async def test_same_name_same_domain_active_409_with_domain_in_message(
+        async_pool, kbdb):
+    """终审整改③：同域同名活跃冲突 → 409 且文案含域名。"""
+    s = _suffix()
+    u = await _mk_user(async_pool)
+    await kbdb.set_user_domains(user_id=u["id"], domains=["generic"])
+    async with await _client(async_pool) as c:
+        headers = kb_headers(u["username"])
+        await _create(c, f"clash-{s}", "generic", headers)
+        r = await c.post(BASE, json={"name": f"clash-{s}", "domain": "generic"},
+                         headers=headers)
+        assert r.status_code == 409, r.text
+        message = r.json()["detail"]  # 409 族 detail 为纯文案字符串
+        assert "generic" in message
+        assert "吊销后可重建同名" in message
+
+
+@pytest.mark.asyncio
 async def test_rotate_invalidates_old_plaintext(async_pool, kbdb):
     s = _suffix()
     u = await _mk_user(async_pool)
@@ -214,6 +263,29 @@ async def test_unauthenticated_401(async_pool):
     async with await _client(async_pool) as c:
         r = await c.get(BASE)
         assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_config_save_response_carries_domain_bound(async_pool, kbdb):
+    """终审整改：PUT config 响应自带 domain_bound——保存一次配置不会把健康
+    钥匙误标「域已解绑」（False 场景：解绑后保存其它域钥匙配置）。"""
+    s = _suffix()
+    u = await _mk_user(async_pool)
+    await kbdb.set_user_domains(user_id=u["id"], domains=["generic", "odn"])
+    async with await _client(async_pool) as c:
+        headers = kb_headers(u["username"])
+        k_g = await _create(c, f"cfg-g-{s}", "generic", headers)
+        k_o = await _create(c, f"cfg-o-{s}", "odn", headers)
+        r = await c.put(f"{BASE}/{k_g['id']}/config",
+                        json={"instructions": "保存后仍健康"}, headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["domain_bound"] is True
+        # 解绑 odn → odn 钥匙配置保存响应 domain_bound=False
+        await kbdb.set_user_domains(user_id=u["id"], domains=["generic"])
+        r = await c.put(f"{BASE}/{k_o['id']}/config",
+                        json={"instructions": "已解绑"}, headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["domain_bound"] is False
 
 
 # --------------------------------------- 51号批次2（Task 5）：mcp-key-verify 钥匙级

@@ -48,6 +48,10 @@ class InvalidName(KbError):
     pass
 
 
+class DomainNotBound(KbError):
+    """用户未绑定该知识域（51号批次1建库收敛）。"""
+
+
 # ----------------------------------------------------------------- service
 
 class KbService:
@@ -62,6 +66,8 @@ class KbService:
         metadata: dict | None = None,
     ) -> dict[str, Any]:
         _validate_domain(domain)
+        if not await self._db.can_create_in_domain(user_id=owner_id, domain=domain):
+            raise DomainNotBound(domain)
         _validate_visibility(visibility)
         name = normalize_kb_name(name)
         try:

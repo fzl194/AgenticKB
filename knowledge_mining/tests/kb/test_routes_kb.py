@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -10,6 +11,21 @@ from knowledge_mining.tests.conftest import kb_headers
 
 pytestmark = pytest.mark.asyncio
 DOMAIN = "cloud_core_network"
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _bind_test_users(async_pool):
+    """51号批次1：非 admin 建库须绑定域——为路由测试用户预绑 DOMAIN 与 generic。
+
+    upsert_by_username 幂等（id 稳定），bind_domain 亦幂等。
+    """
+    from knowledge_mining.mining.kb.db import KbDB
+
+    db = KbDB(async_pool)
+    for name in ("alice", "bob", "carol", "dave", "eve"):
+        user = await db.upsert_user_by_username(name)
+        for domain in (DOMAIN, "generic"):
+            await db.bind_domain(user_id=user["id"], domain=domain)
 
 
 async def _client(async_pool):
@@ -42,10 +58,17 @@ async def test_create_list_get_update_delete(async_pool):
         r = await c.patch(f"/api/kb/{kb_id}", json={"name": "KB-A2"}, headers=h)
         assert r.status_code == 200 and r.json()["name"] == "KB-A2"
 
-        r = await c.delete(f"/api/kb/{kb_id}", headers=h)
-        assert r.status_code == 200
-        r = await c.get(f"/api/kb/{kb_id}", headers=h)
-        assert r.status_code == 404  # 软删 → NotFound，不泄露存在性
+        # 2026-09-16 删除体系：DELETE=硬删管线，需 confirm_name（库全名）→ 202
+        r = await c.request("DELETE", f"/api/kb/{kb_id}", json={"confirm_name": "KB-A2"}, headers=h)
+        assert r.status_code == 202, r.text
+        # deleting 态置位/后台管线有异步窗口——轮询至 404（读写全退，不泄露存在性）
+        import asyncio
+        for _ in range(20):
+            r = await c.get(f"/api/kb/{kb_id}", headers=h)
+            if r.status_code == 404:
+                break
+            await asyncio.sleep(0.5)
+        assert r.status_code == 404
 
 
 async def test_other_user_cannot_see_private(async_pool):

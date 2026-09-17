@@ -15,7 +15,7 @@ from knowledge_mining.mining.kb.deps import (
     get_kb_db, get_kb_service, get_purge_service,
 )
 from knowledge_mining.mining.kb.services.kb_service import (
-    Duplicate, Forbidden, InvalidDomain, InvalidName, InvalidVisibility,
+    Duplicate, DomainNotBound, Forbidden, InvalidDomain, InvalidName, InvalidVisibility,
     KbService, NotFound,
 )
 
@@ -55,6 +55,8 @@ def _map_error(exc: Exception) -> HTTPException:
         return HTTPException(403, str(exc) or "forbidden")
     if isinstance(exc, Duplicate):
         return HTTPException(409, str(exc))
+    if isinstance(exc, DomainNotBound):
+        return HTTPException(403, "domain_not_bound: 未绑定该知识域，请联系管理员分配")
     if isinstance(exc, InvalidDomain):
         return HTTPException(400, f"invalid domain: {exc}")
     if isinstance(exc, InvalidVisibility):
@@ -77,7 +79,7 @@ async def create_kb(
             domain=body.domain, name=body.name, owner_id=user["id"],
             visibility=body.visibility, description=body.description,
         )
-    except (Duplicate, InvalidDomain, InvalidName, InvalidVisibility) as exc:
+    except (Duplicate, DomainNotBound, InvalidDomain, InvalidName, InvalidVisibility) as exc:
         raise _map_error(exc) from None
 
 

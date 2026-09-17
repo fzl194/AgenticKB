@@ -160,6 +160,33 @@ async def test_public_kb_visibility_requires_binding(kbdb):
 
 
 @pytest.mark.asyncio
+async def test_create_kb_requires_binding(kbdb):
+    """service 层建库收敛：非 admin 未绑定域 → DomainNotBound；绑定后成功；admin 免绑定。"""
+    from knowledge_mining.mining.kb.services.kb_service import KbService, DomainNotBound
+
+    svc = KbService(kbdb)
+    s = _suffix()
+    uid, admin_uid = f"u_cb_1_{s}", f"u_cb_2_{s}"
+    await _mk_user(kbdb, uid, f"cb_user_1_{s}")
+    await _mk_user(kbdb, admin_uid, f"cb_user_2_{s}", site_role="admin")
+    # 未绑定 → DomainNotBound
+    with pytest.raises(DomainNotBound):
+        await svc.create_kb(domain="generic", name=f"绑定测试库{s}", owner_id=uid)
+    # 绑定后 → 成功
+    await kbdb.bind_domain(user_id=uid, domain="generic")
+    kb = await svc.create_kb(domain="generic", name=f"绑定测试库{s}", owner_id=uid)
+    assert kb["domain"] == "generic"
+    # admin 不绑域，create_kb 不被拦
+    kb_admin = await svc.create_kb(domain="odn", name=f"绑定测试库{s}", owner_id=admin_uid)
+    assert kb_admin["domain"] == "odn"
+    # 清理：避免共享测试库残留
+    async with kbdb._pool.connection() as conn:
+        await conn.execute(
+            "DELETE FROM knowledge_bases WHERE id IN (%s, %s)", (kb["id"], kb_admin["id"])
+        )
+
+
+@pytest.mark.asyncio
 async def test_document_readable_requires_binding(kbdb):
     """document_readable_by_user（属主库/引用库两张查询）同语义——public 亦须域绑定。"""
     s = _suffix()

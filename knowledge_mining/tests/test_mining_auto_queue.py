@@ -331,6 +331,17 @@ class _McpKbDb:
     async def get_user_by_username(self, _username):
         return {"id": "u1", "username": "alice"}
 
+    # 51号批次2 钥匙化：begin-upload/upload-direct 走 _key_scope/票据 peek
+    # 先验钥匙活性——桩给一把恒 active 的本人钥匙（key_id 空串→None 拒掉）
+    async def get_mcp_key(self, key_id):
+        if not key_id:
+            return None
+        return {"id": "k1", "user_id": "u1", "status": "active",
+                "domain": "odn", "name": "auto-queue 桩钥匙"}
+
+    async def key_open_kb_ids(self, **_kwargs):
+        return {"kb-1"}
+
     async def is_visible(self, **_kwargs):
         return True
 
@@ -381,7 +392,8 @@ def _mcp_app(monkeypatch, repo, kb):
 
 
 def _begin_body(filename: str = "手册.md") -> dict:
-    return {"username": "alice", "kb_id": "kb-1", "filename": filename}
+    return {"username": "alice", "kb_id": "kb-1", "filename": filename,
+            "key_id": "k1"}
 
 
 _HEADERS = {"X-Internal-Auth": "test-ivs"}

@@ -7,7 +7,7 @@ mcp_key_open_kbs 开放库勾选。规则：
   - 域推导：a) 开放库（active）按 kb.domain 计数取最多（并列字典序最小）；
     b) 开放库为空 → user_domains 字典序第一个；c) --fallback-domain 只覆盖 b；
     d) 仍无且用户为 admin → get_default_domain()；e) 仍无 → WARN + skip。
-  - active+revoked 旧行都迁（保状态）；跨域开放库勾选丢弃并打印清单
+  - active+revoked 旧行都迁（保状态）；跨域/失活开放库勾选丢弃并打印清单
     （给用户重建第二把钥匙的依据）。
   - 回滚安全：本脚本只写 mcp_keys/mcp_key_open_kbs，不删/不改旧
     mcp_access/mcp_open_kbs——回滚=删新表行即可。
@@ -84,6 +84,7 @@ def main() -> int:
     total = 0
     migrated = 0
     skipped_hash_exists = 0
+    skipped_name_conflict = 0
     zero_binding = 0
     dropped_total = 0
     dropped_detail: list[str] = []
@@ -160,11 +161,17 @@ def main() -> int:
             dropped = [(name, d) for _, d, name, s in kbs
                        if not (d == domain and s == "active")]
 
-            # open_tools 归一：归一结果为 None/空 → 落 None（=全开）
-            migrated_open_tools = None
-            if open_tools:
+            # open_tools 归一——None 语义与读路径（list_keys/验钥）对齐：
+            # normalize 返回 None = 无 legacy 名、无需迁移 → 原样保留（子集不放大）；
+            # 返回空列表 = 全是退役名 → 落 NULL=全开（旧体系不可表达"全关"）。
+            if open_tools is None:
+                migrated_open_tools = None
+            else:
                 normalized = normalize_legacy_open_tools(list(open_tools))
-                migrated_open_tools = normalized or None
+                if normalized is None:
+                    migrated_open_tools = list(open_tools)
+                else:
+                    migrated_open_tools = normalized or None
 
             key_id = uuid.uuid4().hex
             tag = "would-migrate" if args.dry_run else "migrated"
@@ -211,8 +218,8 @@ def main() -> int:
                             migrated += 1
                             existing_hashes.add(key_hash)
                         else:
-                            # 10 次同名仍撞——极端场景，按幂等 skip 处理
-                            skipped_hash_exists += 1
+                            # 10 次同名仍撞——极端场景，单独计数
+                            skipped_name_conflict += 1
                     conn.commit()
                 except psycopg.Error:
                     conn.rollback()
@@ -229,7 +236,9 @@ def main() -> int:
     print("=" * 72)
     print(
         f"total={total} migrated={'0 (dry-run)' if args.dry_run else migrated} "
-        f"skipped_hash_exists={skipped_hash_exists} zero_binding={zero_binding} "
+        f"skipped_hash_exists={skipped_hash_exists} "
+        f"skipped_name_conflict={skipped_name_conflict} "
+        f"zero_binding={zero_binding} "
         f"dropped_cross_domain_total={dropped_total}"
     )
     print("-" * 72)
@@ -237,7 +246,7 @@ def main() -> int:
         print(f"  {line}")
     if dropped_detail:
         print("-" * 72)
-        print("被丢弃的开放库勾选（跨域——用户如需保留请重建第二把对应域钥匙）：")
+        print("被丢弃的开放库勾选（跨域或已失活——用户如需保留请重建第二把对应域钥匙）：")
         for line in dropped_detail:
             print(f"  {line}")
     print("=" * 72)

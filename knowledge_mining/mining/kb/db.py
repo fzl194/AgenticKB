@@ -10,6 +10,7 @@ JSONB via ::jsonb cast, dict_row return).
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -17,6 +18,8 @@ from typing import Any
 from psycopg.rows import dict_row
 
 from knowledge_mining.mining.workflow.presets import DEFAULT_WORKFLOW_ID
+
+logger = logging.getLogger(__name__)
 
 
 def _new_id() -> str:
@@ -250,13 +253,16 @@ class KbDB:
             if row.pop("_inserted") and row.get("site_role") != "admin":
                 from knowledge_mining.mining.infra.domain_pack import get_default_domain
                 try:
-                    await conn.execute(
-                        "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s)"
-                        " ON CONFLICT DO NOTHING",
-                        (row["id"], get_default_domain()),
-                    )
-                except Exception:  # noqa: BLE001 — 身份建档优先，绑定降级不挡认证
-                    pass
+                    # savepoint：绑定失败只回滚绑定本身——否则连接进入 INERROR，
+                    # pool 退出时会把上面的 user INSERT 一起 ROLLBACK（建档丢失）。
+                    async with conn.transaction():
+                        await conn.execute(
+                            "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s)"
+                            " ON CONFLICT DO NOTHING",
+                            (row["id"], get_default_domain()),
+                        )
+                except Exception:  # noqa: BLE001 — 惰性建档优先，绑定降级（与 user_service 一致）
+                    logger.warning("lazy upsert auto-bind default domain failed for %s", username)
             return row
 
     # ---------------------------------------------------- user management (Phase 2)

@@ -91,6 +91,7 @@ class KbAccessServiceIT {
     @AfterEach
     void cleanUp() {
         if (jdbc == null || token == null) return;
+        jdbc.update("DELETE FROM user_domains WHERE user_id LIKE ?", "%" + token);
         jdbc.update("DELETE FROM kb_members WHERE kb_id LIKE ?", "%" + token);
         jdbc.update("DELETE FROM knowledge_bases WHERE id LIKE ?", "%" + token);
         jdbc.update("DELETE FROM kb_users WHERE id LIKE ?", "%" + token);
@@ -124,11 +125,14 @@ class KbAccessServiceIT {
     }
 
     @Test
-    @DisplayName("anonymous callers see public KBs and nothing else")
-    void anonymousSeesPublicOnly() {
+    @DisplayName("anonymous callers are denied even for public KBs (51号：public 域内化)")
+    void anonymousDeniedForPublicToo() {
         // mcp_server and any pre-existing client send no X-KB-User at all.
-        assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPublic), null))
-                .containsExactly(kbPublic);
+        // 51号批次1新语义：匿名无 user_domains 绑定 → public 也拒绝（原「匿名可读 public」为
+        // spec 预期变化，与 mining list_visible_kb_ids 对齐）。
+        assertThatThrownBy(() -> kbAccessService.authorize(DOMAIN, List.of(kbPublic), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("kb_not_found");
 
         assertThatThrownBy(() -> kbAccessService.authorize(DOMAIN, List.of(kbPrivate), null))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -136,9 +140,12 @@ class KbAccessServiceIT {
 
     @Test
     @DisplayName("an unknown username is anonymous, not an error")
-    void unknownUsernameFallsBackToPublic() {
-        assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPublic), "nobody-" + token))
-                .containsExactly(kbPublic);
+    void unknownUsernameFallsBackToAnonymous() {
+        // 未知用户 LEFT JOIN 为 NULL，等价匿名：public 也拒绝，但不是异常路径之外的错误。
+        assertThatThrownBy(() ->
+                kbAccessService.authorize(DOMAIN, List.of(kbPublic), "nobody-" + token))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("kb_not_found");
     }
 
     @Test
@@ -224,13 +231,38 @@ class KbAccessServiceIT {
                 kbAccessService.authorize(DOMAIN, List.of(kbPrivate), username(outsider)))
                 .hasMessage("kb_not_found");                       // non-member × private
 
-        // public
+        // public（51号批次1：域内化——未绑定域一律拒绝）
+        assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPublic), username(owner)))
+                .containsExactly(kbPublic);                        // owner × public（owner 分支，无需绑定）
+        assertThatThrownBy(() ->
+                kbAccessService.authorize(DOMAIN, List.of(kbPublic), username(outsider)))
+                .hasMessage("kb_not_found");                       // 未绑定 × public
+        assertThatThrownBy(() ->
+                kbAccessService.authorize(DOMAIN, List.of(kbPublic), null))
+                .hasMessage("kb_not_found");                       // anonymous × public
+        assertThatThrownBy(() ->
+                kbAccessService.authorize(DOMAIN, List.of(kbPublic), "name-nobody-" + token))
+                .hasMessage("kb_not_found");                       // 未知用户 × public（LEFT JOIN NULL 语义）
+    }
+
+    // ---- 51号批次1：public 域内化——public 库须用户绑定该域（与 mining list_visible_kb_ids 对齐）------
+
+    @Test
+    @DisplayName("a user bound to the domain reads a public KB in it")
+    void publicKbInBoundDomain_visible() {
+        jdbc.update("INSERT INTO user_domains (user_id, domain) VALUES (?,?)", outsider, DOMAIN);
         assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPublic), username(outsider)))
-                .containsExactly(kbPublic);                        // non-member × public
-        assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPublic), null))
-                .containsExactly(kbPublic);                        // anonymous × public
-        assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPublic), "name-nobody-" + token))
-                .containsExactly(kbPublic);                        // 未知用户 × public（LEFT JOIN NULL 语义）
+                .containsExactly(kbPublic);
+    }
+
+    @Test
+    @DisplayName("a user without a domain binding cannot read a public KB")
+    void publicKbInUnboundDomain_denied() {
+        // 用户存在、库 public、同域——但没有 user_domains 绑定行，必须拒绝（51号新语义）。
+        assertThatThrownBy(() ->
+                kbAccessService.authorize(DOMAIN, List.of(kbPublic), username(outsider)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("kb_not_found");
     }
 
     // -------------------------------------------------------------------------

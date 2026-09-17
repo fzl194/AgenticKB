@@ -5,9 +5,9 @@
 
     <!--
       The LEFT JOIN resolves X-KB-User to a kb_users row without requiring one to exist: when
-      #{username} is null or unknown, u.id stays NULL, both the owner comparison and the member
-      EXISTS evaluate false, and only 'public' KBs survive. That is the anonymous case — callers
-      such as mcp_server send no identity header at all.
+      #{username} is null or unknown, u.id stays NULL, the owner comparison, the member EXISTS
+      and the user_domains EXISTS all evaluate false — the anonymous case is fully denied
+      (51号批次1: public 域内化). Callers such as mcp_server send no identity header at all.
     -->
     <select id="selectAccessibleKbIds" resultType="java.lang.String">
         SELECT kb.id
@@ -22,8 +22,7 @@
               #{kbId}
           </foreach>
           AND (
-                kb.visibility = 'public'
-                OR kb.owner_id = u.id
+                kb.owner_id = u.id
                 OR EXISTS (
                     SELECT 1 FROM kb_members m
                     WHERE m.kb_id = kb.id AND m.user_id = u.id
@@ -31,6 +30,13 @@
                   <!-- 1.0.2 修复：站点管理员全通（与 mining kb/db.list_visible_kb_ids 的
                        admin 分支对齐）——软删/跨域仍被上面的 status/domain 条件挡住。 -->
                 OR u.site_role = 'admin'
+                <!-- 51号批次1：public 域内化——须用户绑定该域（与 mining kb/db
+                     list_visible_kb_ids 谓词逐字对齐；匿名 u.id 为 NULL 时自然拒绝） -->
+                OR (kb.visibility = 'public'
+                    AND EXISTS (
+                        SELECT 1 FROM user_domains ud
+                        WHERE ud.user_id = u.id AND ud.domain = kb.domain
+                    ))
               )
     </select>
 

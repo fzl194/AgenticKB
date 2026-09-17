@@ -40,6 +40,9 @@ public class ServingRuntimeSchemaInitializer implements DomainSchemaEnsurer {
 
     private static final String[] SCRIPTS = {
             "db/serving/001_serving_query_logs.sql",
+            // 51号批次1：user_domains 镜像（源 databases/kb/schemas/013_user_domains.sql）——
+            // public 可见性谓词依赖该表，路由域自足建表避免查库即炸。
+            "db/serving/013_user_domains.sql",
     };
 
     private final DataSource defaultDataSource;

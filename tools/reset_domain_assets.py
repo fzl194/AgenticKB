@@ -88,6 +88,7 @@ TRUNCATE_TABLES = (
 PRESERVED_TABLES = frozenset({
     "kb_users", "kb_folders", "kb_members", "knowledge_bases",
     "mcp_access", "mcp_open_kbs",
+    "mcp_keys", "mcp_key_open_kbs",
     "asset_documents", "asset_file_audit_events",
     "asset_storage_objects", "asset_storage_object_refs",
     "asset_storage_operations", "asset_storage_quotas", "asset_upload_sessions",

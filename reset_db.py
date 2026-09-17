@@ -81,6 +81,8 @@ _MANAGED_TABLE_NAMES = frozenset(
         "kb_users",
         "knowledge_bases",
         "mcp_access",
+        "mcp_key_open_kbs",
+        "mcp_keys",
         "mcp_open_kbs",
         "mining_run_documents",
         "mining_run_stage_events",

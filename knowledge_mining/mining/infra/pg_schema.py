@@ -135,6 +135,8 @@ _SNAPSHOT_DEPRECATION_DDL = (
 _USER_DOMAINS_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "013_user_domains.sql"
 )
+# 51号批次2：MCP 多钥匙化——一人多把单域钥匙 + 钥匙级开放库。
+_MCP_KEYS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "014_mcp_keys.sql"
 # KB 硬删任务化（013）：status 加 deleting + kb_purge_tasks 进度表。
 _KB_PURGE_TASKS_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "013_kb_purge_tasks.sql"
@@ -245,6 +247,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _KB_PURGE_TASKS_DDL,
         # 51号批次1：用户↔域绑定（public 可见性/建库权限依赖）。
         _USER_DOMAINS_DDL,
+        # 51号批次2：MCP 多钥匙（依赖 kb_users/knowledge_bases，链尾安全）。
+        _MCP_KEYS_DDL,
     )
 
 

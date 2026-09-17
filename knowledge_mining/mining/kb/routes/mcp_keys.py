@@ -37,11 +37,12 @@ def _get_service(kbdb: KbDB = Depends(get_kb_db)) -> McpKeyService:
     return McpKeyService(kbdb)
 
 
-def _http_error(exc: Exception) -> HTTPException:
-    """异常族 → HTTP 映射。
+def _http_error(exc: McpKeyError) -> HTTPException:
+    """异常族 → HTTP 映射。子类判定必须在基类兜底（422）之前。
 
     403 的响应体形状是硬约定（mcp_server / 前端按 detail.code 分支）：
     {"detail": {"code": "domain_not_bound", "message": <文案>}}。
+    新增异常子类不在此映射即落 422 兜底，不会裸 500。
     """
     if isinstance(exc, KeyNotFound):
         return HTTPException(404, "钥匙不存在")
@@ -51,7 +52,7 @@ def _http_error(exc: Exception) -> HTTPException:
         })
     if isinstance(exc, (KeyLimitExceeded, KeyNameConflict, KeyRevoked)):
         return HTTPException(409, str(exc))
-    return HTTPException(422, str(exc))
+    return HTTPException(422, str(exc))  # McpKeyError 基类兜底
 
 
 # ------------------------------------------------------------ 查询
@@ -86,8 +87,7 @@ async def create_my_key(
             user_id=user["id"], name=body.name, domain=body.domain,
             is_admin=user.get("site_role") == "admin",
         )
-    except (McpKeyError, KeyDomainNotBound, KeyLimitExceeded,
-            KeyNameConflict) as exc:
+    except McpKeyError as exc:
         raise _http_error(exc) from None
 
 
@@ -100,7 +100,7 @@ async def rotate_my_key(
     """轮换：旧钥立即失效；新明文仅本次响应可见。"""
     try:
         return await svc.rotate_key(user_id=user["id"], key_id=key_id)
-    except (KeyNotFound, KeyRevoked) as exc:
+    except McpKeyError as exc:
         raise _http_error(exc) from None
 
 
@@ -113,7 +113,7 @@ async def revoke_my_key(
     """吊销（幂等：已吊销不报错）。"""
     try:
         await svc.revoke_key(user_id=user["id"], key_id=key_id)
-    except KeyNotFound as exc:
+    except McpKeyError as exc:
         raise _http_error(exc) from None
     return Response(status_code=204)
 
@@ -136,7 +136,7 @@ async def put_my_key_open_kbs(
         final = await svc.replace_open_kbs(
             user_id=user["id"], key_id=key_id, kb_ids=body.kb_ids,
         )
-    except (KeyNotFound, KeyRevoked) as exc:
+    except McpKeyError as exc:
         raise _http_error(exc) from None
     return {"open_kb_ids": final}
 
@@ -162,5 +162,5 @@ async def put_my_key_config(
             instructions=body.instructions,
             tool_descriptions=body.tool_descriptions,
         )
-    except (McpKeyError, KeyNotFound, KeyRevoked) as exc:
+    except McpKeyError as exc:
         raise _http_error(exc) from None

@@ -29,26 +29,27 @@ from knowledge_mining.mining.kb.services.kb_service import InvalidDomain, _valid
 
 
 class McpKeyError(Exception):
-    """参数校验失败（路由层 422）。"""
+    """钥匙异常族基类。路由层单点捕获本类即可：未映射的子类落 422 兜底，
+    不会裸 500（异常族演进安全网）。"""
 
 
-class KeyNotFound(Exception):
+class KeyNotFound(McpKeyError):
     """钥匙不存在或不属于本人（不泄露他人钥匙存在性）。"""
 
 
-class KeyLimitExceeded(Exception):
+class KeyLimitExceeded(McpKeyError):
     """活跃钥匙数达到上限。"""
 
 
-class KeyNameConflict(Exception):
+class KeyNameConflict(McpKeyError):
     """同域同名活跃钥匙已存在。"""
 
 
-class KeyRevoked(Exception):
+class KeyRevoked(McpKeyError):
     """对已吊销钥匙执行轮换/配置/开放库操作。"""
 
 
-class KeyDomainNotBound(Exception):
+class KeyDomainNotBound(McpKeyError):
     """用户未绑定该域（无建钥资格）。"""
 
 

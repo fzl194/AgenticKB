@@ -52,6 +52,7 @@ class KeyDomainNotBound(McpKeyError):
     """用户未绑定该域（无建钥资格）。"""
 
 
+#: 活跃钥匙上限（建钥 409 防线）。前端有副本须同步改：kb-ui/src/views/McpAccessView.vue 的 MAX_KEYS。
 MAX_KEYS_PER_USER = 10
 MAX_KEY_NAME_LEN = 64
 

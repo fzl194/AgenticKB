@@ -186,7 +186,8 @@ function initFromKey(item: McpKeyItem) {
   configFormat.value = 'generic'
 }
 
-// 钥匙行或域库清单变化（父组件刷新列表后传新对象）都重置表单
+// 钥匙行或域库清单变化（父组件刷新列表后传新对象）都重置表单。
+// 隐式耦合：若父组件复用同一数组引用（原地改 domainKbs），watch 源不变则不触发重置。
 watch(() => [props.keyItem.id, props.domainKbs], () => initFromKey(props.keyItem), { immediate: true })
 
 const configJson = computed(() => {

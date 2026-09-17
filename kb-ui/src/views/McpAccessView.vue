@@ -134,7 +134,8 @@ import { useDomainStore } from '@/stores/domain'
 import type { McpKeyItem } from '@/types/kb'
 import McpKeyConfigPanel from '@/components/mcp/McpKeyConfigPanel.vue'
 
-/** 与后端 MAX_KEYS_PER_USER 对齐（超出时建钥 409）。 */
+/** 与后端上限同步改：mining/kb/services/mcp_key_service.py 的
+ *  MAX_KEYS_PER_USER（前端仅提前禁用按钮，最终防线在后端 409）。 */
 const MAX_KEYS = 10
 
 const kbApi = useKbApi()
@@ -239,6 +240,9 @@ async function openConfig(row: McpKeyItem) {
   try {
     // 钥匙域即数据源——不 watch 页面当前域切换
     const kbs = await kbApi.listKbs(row.domain)
+    // 响应竞态防护：等待期间用户可能已切到另一把钥匙——落地前比对当前钥匙
+    // id，不是发起时那把则丢弃，避免旧域库清单覆盖新面板（所见非所得）
+    if (configKey.value?.id !== row.id) return
     configDomainKbs.value = kbs.map(k => ({ id: k.id, name: k.name, document_count: k.document_count }))
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))

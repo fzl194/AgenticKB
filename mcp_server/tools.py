@@ -184,7 +184,7 @@ def query_structured_asset(
     })
 
 
-def list_knowledge_bases(username: str, key_id: str = "") -> dict:
+def list_knowledge_bases(username: str, key_id: str) -> dict:
     return _post("/api/kb/mcp-tools/list-kbs", {
         "username": username, "key_id": key_id,
     })

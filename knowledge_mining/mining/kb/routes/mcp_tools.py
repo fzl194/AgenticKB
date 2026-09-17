@@ -70,12 +70,14 @@ class _UploadTicketStore:
 
     def issue(
         self, *, kb_id: str, user_id: str, username: str, filename: str,
+        key_id: str = "",
     ) -> dict[str, Any]:
         self._sweep()
         ticket = f"up_{secrets.token_urlsafe(24)}"
         self._tickets[ticket] = {
             "kb_id": kb_id, "user_id": user_id, "username": username,
-            "filename": filename, "expires_at": time.monotonic() + self._ttl,
+            "filename": filename, "key_id": key_id,
+            "expires_at": time.monotonic() + self._ttl,
         }
         return {"ticket": ticket, "expires_in": self._ttl}
 
@@ -109,6 +111,20 @@ async def _visible_kb(kbdb: KbDB, user_id: str, kb_id: str) -> None:
         raise HTTPException(404, f"knowledge base not found: {kb_id}")
 
 
+async def _key_scope(kbdb: KbDB, username: str, key_id: str) -> tuple[str, dict]:
+    """解析 body 携带的 username+key_id → (user_id, key行)。
+
+    51号批次2：钥匙级收口——key 不存在/非本人/非 active 统一 401
+    （内部端点，不细分缘由防探测）。key_id 缺失/空走 get_mcp_key("")→None
+    天然拒掉。
+    """
+    user_id = await _user_id(kbdb, username)
+    key = await kbdb.get_mcp_key(key_id=key_id)
+    if key is None or key["user_id"] != user_id or key["status"] != "active":
+        raise HTTPException(401, "invalid mcp key")
+    return user_id, key
+
+
 def _validated_filename(raw: Any) -> str:
     filename = str(raw or "").strip()
     if not filename or "/" in filename or "\\" in filename or ".." in filename:
@@ -119,11 +135,10 @@ def _validated_filename(raw: Any) -> str:
 @router.post("/list-kbs", dependencies=[Depends(_require_internal_body)])
 async def list_kbs(body: dict[str, Any], kbdb: KbDB = Depends(get_kb_db)) -> dict[str, Any]:
     """该用户 MCP 开放的库（∩ 实时可见）：id/名称/文档数/绑定范式。"""
-    user_id = await _user_id(kbdb, str(body.get("username") or ""))
-    access = await kbdb.get_mcp_access(user_id)
-    if access is None:
-        return {"knowledge_bases": []}
-    open_ids = access.get("open_kb_ids") or []
+    user_id, _key = await _key_scope(
+        kbdb, str(body.get("username") or ""), str(body.get("key_id") or ""),
+    )
+    open_ids = await kbdb.key_open_kb_ids(key_id=str(body.get("key_id") or ""))
     out: list[dict[str, Any]] = []
     for kb_id in open_ids:
         kb = await kbdb.get_kb(kb_id)
@@ -150,9 +165,15 @@ async def list_documents(
     47 号引用：外部引用文档合并在后（referenced=true，只读语义），Agent
     看到的是「自有 + 引用」的完整可用知识面。
     """
-    user_id = await _user_id(kbdb, str(body.get("username") or ""))
+    key_id = str(body.get("key_id") or "")
+    user_id, _key = await _key_scope(
+        kbdb, str(body.get("username") or ""), key_id,
+    )
     kb_id = str(body.get("kb_id") or "")
     await _visible_kb(kbdb, user_id, kb_id)
+    if kb_id not in await kbdb.key_open_kb_ids(key_id=key_id):
+        # 钥匙开放集之外的库：与不可见同语义（404 防探测）
+        raise HTTPException(404, f"knowledge base not found: {kb_id}")
     limit = min(int(body.get("limit") or 50), 200)
     offset = max(int(body.get("offset") or 0), 0)
     docs = await kbdb.list_documents_in_kb(kb_id=kb_id, limit=limit, offset=offset)
@@ -188,9 +209,13 @@ async def begin_upload(
 ) -> dict[str, Any]:
     """直传第一步：校验权限与文件名，签发一次性上传票据。"""
     username = str(body.get("username") or "")
-    user_id = await _user_id(kbdb, username)
+    key_id = str(body.get("key_id") or "")
+    user_id, _key = await _key_scope(kbdb, username, key_id)
     kb_id = str(body.get("kb_id") or "")
     await _visible_kb(kbdb, user_id, kb_id)
+    if kb_id not in await kbdb.key_open_kb_ids(key_id=key_id):
+        # 钥匙开放集之外的库：与不可见同语义（404 防探测）
+        raise HTTPException(404, f"knowledge base not found: {kb_id}")
     if not await kbdb.can_write(kb_id=kb_id, user_id=user_id):
         raise HTTPException(403, "only owner or editor may upload")
     filename = _validated_filename(body.get("filename"))
@@ -202,6 +227,7 @@ async def begin_upload(
     )
     issued = _TICKETS.issue(
         kb_id=kb_id, user_id=user_id, username=username, filename=filename,
+        key_id=key_id,
     )
     logger.info("[mcp-tools] begin-upload by %s -> kb=%s file=%s ticket=%s",
                 username, kb_id, filename, issued["ticket"][:11] + "…")
@@ -231,6 +257,10 @@ async def upload_direct(
     entry = _TICKETS.redeem(ticket)
     if entry is None:
         # 不泄露票据是否存在/过期——统一 404
+        raise HTTPException(404, "upload ticket invalid or expired")
+    # 票据绑钥匙：吊销钥匙后未消费票据立即失效（与无效票据同语义防探测）
+    key = await kbdb.get_mcp_key(key_id=str(entry.get("key_id") or ""))
+    if key is None or key["status"] != "active":
         raise HTTPException(404, "upload ticket invalid or expired")
     username = entry["username"]
 

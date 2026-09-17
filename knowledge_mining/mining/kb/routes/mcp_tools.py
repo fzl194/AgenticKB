@@ -60,7 +60,8 @@ class _UploadTicketStore:
     """一次性上传票据账本（capability URL 的服务端侧）。
 
     票据即凭证：随机 192 位、TTL 内单次使用、绑定 (kb_id, user_id, username,
-    filename)。进程内存储——单实例部署约定；重启丢票据只是 10 分钟窗口内的
+    filename, key_id——51号批次2 起直传前还须钥匙 active)。进程内存储——
+    单实例部署约定；重启丢票据只是 10 分钟窗口内的
     直传作废。过期清理在签发/兑换时顺手做，不起后台线程。
     """
 
@@ -81,12 +82,19 @@ class _UploadTicketStore:
         }
         return {"ticket": ticket, "expires_in": self._ttl}
 
-    def redeem(self, ticket: str) -> dict[str, Any] | None:
-        """取出并作废票据（单次使用；过期或未知返回 None）。"""
+    def peek(self, ticket: str) -> dict[str, Any] | None:
+        """查看票据但不消费（过期判定与 redeem 共用；供兑换前的预检用）。"""
         self._sweep()
-        entry = self._tickets.pop(ticket, None)  # pop = 单次使用
+        entry = self._tickets.get(ticket)
         if entry is None or entry["expires_at"] < time.monotonic():
             return None
+        return entry
+
+    def redeem(self, ticket: str) -> dict[str, Any] | None:
+        """取出并作废票据（单次使用；过期或未知返回 None）。"""
+        entry = self.peek(ticket)
+        if entry is not None:
+            self._tickets.pop(ticket, None)  # pop = 单次使用
         return entry
 
     def _sweep(self) -> None:
@@ -114,9 +122,10 @@ async def _visible_kb(kbdb: KbDB, user_id: str, kb_id: str) -> None:
 async def _key_scope(kbdb: KbDB, username: str, key_id: str) -> tuple[str, dict]:
     """解析 body 携带的 username+key_id → (user_id, key行)。
 
-    51号批次2：钥匙级收口——key 不存在/非本人/非 active 统一 401
-    （内部端点，不细分缘由防探测）。key_id 缺失/空走 get_mcp_key("")→None
-    天然拒掉。
+    51号批次2：钥匙级收口——key 不存在/非本人/非 active → 401 "invalid
+    mcp key"。注：本端点在 X-Internal-Auth 之后、探测面为零，未知 username
+    沿用 _user_id 的既有 401 "unknown user: …" 文案（两段文案不同属既有
+    行为）。key_id 缺失/空走 get_mcp_key("")→None 天然拒掉。
     """
     user_id = await _user_id(kbdb, username)
     key = await kbdb.get_mcp_key(key_id=key_id)
@@ -254,13 +263,18 @@ async def upload_direct(
     与 S3 预签名 URL 同一信任模型）。归属用户/库/文件名全部取票据绑定值。
     """
     _require_internal(request)
-    entry = _TICKETS.redeem(ticket)
+    entry = _TICKETS.peek(ticket)
     if entry is None:
         # 不泄露票据是否存在/过期——统一 404
         raise HTTPException(404, "upload ticket invalid or expired")
-    # 票据绑钥匙：吊销钥匙后未消费票据立即失效（与无效票据同语义防探测）
+    # 票据绑钥匙：吊销钥匙后未消费票据立即失效（与无效票据同语义防探测）。
+    # 先 peek 再查库——查库异常不消费票据，Agent 重试同一 ticket 不白吃。
     key = await kbdb.get_mcp_key(key_id=str(entry.get("key_id") or ""))
     if key is None or key["status"] != "active":
+        raise HTTPException(404, "upload ticket invalid or expired")
+    entry = _TICKETS.redeem(ticket)
+    if entry is None:
+        # peek 与 redeem 之间被并发消费——同语义 404
         raise HTTPException(404, "upload ticket invalid or expired")
     username = entry["username"]
 

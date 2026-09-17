@@ -194,6 +194,37 @@ async def test_upload_ticket_dies_with_revoked_key(async_pool, kbdb):
 
 
 @pytest.mark.asyncio
+async def test_peek_does_not_consume_ticket(async_pool, kbdb):
+    """peek 语义：不消费——连续两次 peek 同票据都命中；吊销拒 404 后票据
+    未被弹掉，但钥匙未恢复场景下再次 PUT 仍 404（钥匙是门禁不是状态）。"""
+    from knowledge_mining.mining.kb.routes.mcp_tools import _TICKETS
+
+    user, kb_a, _kb_b, key_a, _key_b = await _setup(kbdb, async_pool)
+    async with await _client(async_pool) as c:
+        r = await c.post(f"{BASE}/begin-upload",
+                         json={"username": user["username"], "key_id": key_a,
+                               "kb_id": kb_a["id"], "filename": "p.txt"},
+                         headers=INTERNAL)
+        assert r.status_code == 200, r.text
+        ticket = r.json()["ticket"]
+
+        # peek 不消费：连续两次都命中同一票据
+        assert _TICKETS.peek(ticket) is not None
+        assert _TICKETS.peek(ticket) is not None
+
+        # 吊销 → PUT 404（peek 路径拒，票据未消费）；再次 PUT 仍 404
+        assert await kbdb.revoke_mcp_key(key_id=key_a) is True
+        r = await c.put(f"{BASE}/upload-direct/{ticket}", content=b"x",
+                        headers=INTERNAL)
+        assert r.status_code == 404
+        # 钥匙未恢复：同一票据再次 PUT 依然 404
+        r = await c.put(f"{BASE}/upload-direct/{ticket}", content=b"x",
+                        headers=INTERNAL)
+        assert r.status_code == 404
+        assert r.json()["detail"] == "upload ticket invalid or expired"
+
+
+@pytest.mark.asyncio
 async def test_upload_direct_with_active_key_still_works(async_pool, kbdb):
     """对照组：钥匙存活时直传照旧可用（intake 以 fake service 注入）。"""
     user, kb_a, _kb_b, key_a, _key_b = await _setup(kbdb, async_pool)

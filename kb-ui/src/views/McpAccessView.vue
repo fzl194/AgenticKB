@@ -1,327 +1,294 @@
 <template>
   <div class="mcp-view">
     <div class="mcp-view__head">
-      <div>
-        <p class="mcp-view__desc">
-          你的 Agent（dify / 扣子 / Claude 等）连平台知识库的唯一入口。一个服务、一把钥匙：
-          下方所有配置只影响你自己的 Agent，其他人互不可见。
-        </p>
-      </div>
+      <p class="mcp-view__desc">
+        你的 Agent（dify / 扣子 / Claude 等）连平台知识库的入口。每个 Agent 一把钥匙、一把钥匙一个知识域：
+        各钥匙的工具、开放库、提示词互不影响。
+      </p>
+      <el-tooltip v-if="atLimit" content="已达上限" placement="top">
+        <span class="mcp-view__add-wrap">
+          <el-button type="primary" disabled>新建钥匙</el-button>
+        </span>
+      </el-tooltip>
+      <el-button v-else type="primary" @click="openCreate">新建钥匙</el-button>
     </div>
 
-    <!-- 加载失败：显式错误态（禁止伪装"未配置密钥"诱导误轮换） -->
+    <!-- 加载失败：显式错误态 -->
     <el-alert v-if="loadFailed" type="error" :closable="false" show-icon style="margin-bottom: 14px">
-      <template #title>配置加载失败——密钥轮换与保存已暂时禁用，不会影响你现役的接入密钥。</template>
+      <template #title>钥匙列表加载失败。你的现役钥匙不受影响，Agent 连接不会中断。</template>
       <el-button size="small" @click="reload">重试加载</el-button>
     </el-alert>
 
-    <!-- ① Agent 接入配置（无密钥时引导先生成） -->
-    <section class="mcp-view__card mcp-view__card--hero">
-      <div class="mcp-view__card-head">
-        <div>
-          <h3 class="mcp-view__card-title">Agent 接入配置</h3>
-          <p class="mcp-view__card-desc">选一种格式，点击复制后粘贴进你的 Agent / MCP 客户端配置。</p>
-        </div>
-        <el-radio-group v-model="configFormat" size="small">
-          <el-radio-button value="generic">通用</el-radio-button>
-          <el-radio-button value="dify">dify</el-radio-button>
-        </el-radio-group>
-      </div>
-      <template v-if="hasKey">
-        <div class="mcp-view__code-wrap">
-          <button class="mcp-view__copy" title="复制" @click="copy(configJson)">复制</button>
-          <pre class="mcp-view__code">{{ configJson }}</pre>
-        </div>
-        <p class="mcp-view__note">
-          连接地址由当前部署地址推导（{{ mcpEndpoint }}）；密钥就是下面你的接入密钥——
-          轮换密钥后记得同步更新 Agent 配置。
-        </p>
-      </template>
-      <el-empty v-else description="先生成接入密钥，配置会自动拼好" :image-size="60" />
+    <!-- 空态引导 -->
+    <section v-if="!loading && !loadFailed && !keys.length" class="mcp-view__card mcp-view__card--hero">
+      <el-empty :image-size="80" description="还没有 MCP 钥匙">
+        <p class="mcp-view__empty-tip">每个 Agent 一把钥匙，一把钥匙一个知识域。<br>为你的第一个 Agent 创建一把钥匙开始接入。</p>
+        <el-button type="primary" :disabled="atLimit" @click="openCreate">新建钥匙</el-button>
+      </el-empty>
     </section>
 
-    <!-- ② 密钥 -->
-    <section class="mcp-view__card">
-      <div class="mcp-view__card-head">
-        <div>
-          <h3 class="mcp-view__card-title">接入密钥</h3>
-          <p class="mcp-view__card-desc">
-            Agent 用它证明"我是你"。重新生成后旧密钥立即失效（防泄漏）；明文只在生成时显示一次。
-          </p>
-        </div>
-        <el-button type="primary" plain :loading="rotating" :disabled="loadFailed" @click="rotate">
-          {{ hasKey ? '重新生成（旧钥立即失效）' : '生成密钥' }}
-        </el-button>
-      </div>
-      <el-descriptions v-if="status?.configured" :column="3" border size="small">
-        <el-descriptions-item label="密钥标识">{{ status.key_prefix }}…</el-descriptions-item>
-        <el-descriptions-item label="最近使用">{{ fmtTime(status.last_used_at) || '从未' }}</el-descriptions-item>
-        <el-descriptions-item label="生成时间">{{ fmtTime(status.created_at) }}</el-descriptions-item>
-      </el-descriptions>
-      <el-alert v-if="freshKey" type="success" :closable="false" class="mcp-view__fresh">
-        <template #title>
-          新密钥（仅此一次可见）：<code class="mcp-view__key">{{ freshKey }}</code>
-          <el-button size="small" text type="primary" @click="copy(freshKey)">复制</el-button>
+    <!-- 钥匙列表 -->
+    <el-table v-else v-loading="loading" :data="keys" class="mcp-view__table">
+      <el-table-column label="名称" min-width="140">
+        <template #default="{ row }">
+          <span class="mcp-view__name" :class="{ 'is-revoked': row.status === 'revoked' }">{{ row.name }}</span>
         </template>
+      </el-table-column>
+      <el-table-column label="域" width="110">
+        <template #default="{ row }">
+          <el-tag size="small" :type="row.domain_bound ? 'info' : 'danger'" effect="plain">{{ row.domain }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="密钥" min-width="150">
+        <template #default="{ row }">
+          <code class="mcp-view__prefix">{{ row.key_prefix }}…</code>
+        </template>
+      </el-table-column>
+      <el-table-column label="状态" width="120">
+        <template #default="{ row }">
+          <el-tag v-if="row.status === 'revoked'" size="small" type="info">已吊销</el-tag>
+          <el-tooltip
+            v-else-if="!row.domain_bound"
+            content="该钥匙绑定的知识域已被解绑，请联系管理员重新分配域后重建钥匙"
+            placement="top"
+          >
+            <el-tag size="small" type="danger">域已解绑</el-tag>
+          </el-tooltip>
+          <el-tag v-else size="small" type="success">正常</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="最近使用" width="150">
+        <template #default="{ row }">{{ fmtTime(row.last_used_at) || '从未' }}</template>
+      </el-table-column>
+      <el-table-column label="创建时间" width="150">
+        <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+      </el-table-column>
+      <el-table-column v-if="hasActiveKeys" label="操作" width="200" fixed="right">
+        <template #default="{ row }">
+          <template v-if="row.status === 'active'">
+            <el-button link type="primary" size="small" @click="openConfig(row)">配置</el-button>
+            <el-button link type="warning" size="small" @click="quickRotate(row)">轮换</el-button>
+            <el-button link type="danger" size="small" @click="quickRevoke(row)">吊销</el-button>
+          </template>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 新建钥匙 dialog -->
+    <el-dialog v-model="createVisible" title="新建 MCP 钥匙" width="440px">
+      <el-form label-width="80px" @submit.prevent>
+        <el-form-item label="名称" required>
+          <el-input v-model="createForm.name" maxlength="64" show-word-limit placeholder="例如：客服机器人" data-test="mcp-key-name" />
+        </el-form-item>
+        <el-form-item label="知识域" required>
+          <el-select v-model="createForm.domain" placeholder="选择该钥匙服务的知识域" style="width: 100%" data-test="mcp-key-domain">
+            <el-option v-for="d in domainStore.enabledDomains" :key="d.domain_id" :value="d.domain_id" :label="d.domain_id" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" :disabled="!createForm.name.trim() || !createForm.domain" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 明文一次性展示 dialog（创建成功） -->
+    <el-dialog v-model="freshVisible" title="钥匙已创建" width="640px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" style="margin-bottom: 12px">
+        <template #title>密钥明文仅此一次显示，关闭后无法再查看。请立即复制并填入你的 Agent 配置。</template>
       </el-alert>
-    </section>
+      <div class="mcp-view__fresh-row">
+        <code class="mcp-view__fresh-key">{{ freshCreated?.key }}</code>
+        <el-button size="small" type="primary" plain @click="copy(freshCreated?.key ?? '')">复制</el-button>
+      </div>
+      <div class="mcp-view__code-wrap">
+        <button class="mcp-view__copy" title="复制" @click="copy(freshConfigJson)">复制</button>
+        <pre class="mcp-view__code">{{ freshConfigJson }}</pre>
+      </div>
+      <p class="mcp-view__note">连接地址由当前部署地址推导（{{ mcpEndpoint }}）；JSON 已预填本次明文。</p>
+      <template #footer>
+        <el-button type="primary" @click="freshVisible = false">我已保存好密钥</el-button>
+      </template>
+    </el-dialog>
 
-    <!-- ③ 工具开关 -->
-    <section class="mcp-view__card">
-      <div class="mcp-view__card-head">
-        <div>
-          <h3 class="mcp-view__card-title">开放的工具</h3>
-          <p class="mcp-view__card-desc">关掉的工具对你的 Agent 完全不可见（清单里都不出现）。至少保留一个。</p>
-        </div>
-        <el-button :loading="savingTools" :disabled="!toolsDirty" @click="saveTools">保存</el-button>
-      </div>
-      <div class="mcp-view__tools">
-        <div v-for="t in ALL_TOOLS" :key="t.name" class="mcp-view__tool">
-          <el-switch v-model="toolOn[t.name]" :disabled="savingTools" />
-          <div class="mcp-view__tool-text">
-            <span class="mcp-view__tool-name">{{ t.name }}</span>
-            <span class="mcp-view__tool-desc">{{ t.label }}</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ④ 开放库 -->
-    <section class="mcp-view__card">
-      <div class="mcp-view__card-head">
-        <div>
-          <h3 class="mcp-view__card-title">开放的知识库</h3>
-          <p class="mcp-view__card-desc">
-            你的 Agent 只能访问这里勾选的库（且仅限你本人有权限的）。只开放一个库时，检索连库名都不用传。
-          </p>
-        </div>
-        <el-button :loading="savingKbs" :disabled="!kbsDirty" @click="saveOpenKbs">保存</el-button>
-      </div>
-      <el-checkbox-group v-model="selectedKbs" class="mcp-view__kbs">
-        <el-checkbox v-for="kb in myKbs" :key="kb.id" :value="kb.id" :label="kb.id">
-          {{ kb.name }}<span class="mcp-view__kb-meta">{{ kb.document_count }} 文档</span>
-        </el-checkbox>
-      </el-checkbox-group>
-      <el-empty v-if="!myKbs.length" description="当前域没有可见的知识库" :image-size="60" />
-    </section>
-
-    <!-- ⑤ 提示词 -->
-    <section class="mcp-view__card">
-      <div class="mcp-view__card-head">
-        <div>
-          <h3 class="mcp-view__card-title">提示词与工具说明</h3>
-          <p class="mcp-view__card-desc">
-            提示词是 MCP 对你 Agent 的"系统级自我介绍"；工具说明可逐个改写成适合你业务的说法。
-            留空 = 使用默认文案。
-          </p>
-        </div>
-        <el-button :loading="savingPrompt" :disabled="!promptDirty" @click="savePrompt">保存</el-button>
-      </div>
-      <el-input
-        v-model="instructions"
-        type="textarea"
-        :rows="6"
-        maxlength="4000"
-        show-word-limit
-        placeholder="留空使用默认提示词。写清楚你的 Agent 该怎么用这套知识库——例如业务口径、常用问法、注意事项。"
-        :title="'已知限制：当前 MCP 服务端版本的 initialize 响应不注入自定义提示词（fastmcp 上游限制，批次9 升级收口）；本配置保存后将在接线生效时启用。'"
+    <!-- 每把钥匙配置 drawer -->
+    <el-drawer v-model="configVisible" size="620px" :title="configKey ? `钥匙配置 · ${configKey.name}` : '钥匙配置'">
+      <McpKeyConfigPanel
+        v-if="configKey"
+        :key-item="configKey"
+        :domain-kbs="configDomainKbs"
+        @updated="onPanelUpdated"
+        @rotated="reload"
+        @revoked="onPanelRevoked"
       />
-      <div class="mcp-view__descs">
-        <div v-for="t in ALL_TOOLS" :key="t.name" class="mcp-view__desc-row">
-          <span class="mcp-view__desc-name">{{ t.name }}</span>
-          <el-input
-            v-model="toolDescs[t.name]"
-            type="textarea"
-            :rows="2"
-            maxlength="2000"
-            :placeholder="`默认：${t.label}`"
-          />
-        </div>
-      </div>
-    </section>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
-import type { McpAccessStatus } from '@/types/kb'
+import type { McpKeyItem } from '@/types/kb'
+import McpKeyConfigPanel from '@/components/mcp/McpKeyConfigPanel.vue'
+
+/** 与后端 MAX_KEYS_PER_USER 对齐（超出时建钥 409）。 */
+const MAX_KEYS = 10
 
 const kbApi = useKbApi()
 const domainStore = useDomainStore()
 
-/** 三件套（与后端 MCP_TOOL_NAMES 一致）；label 为默认文案摘要。
- * 2026-08-31 工具族两轮收敛：get_knowledge = get_content + browse_knowledge +
- * inspect + navigate + query_structured（一切读取行为，ref/库分流，默认能力报告）。 */
-const ALL_TOOLS = [
-  { name: 'search_knowledge', label: '检索知识证据（domain 单域免传）' },
-  { name: 'get_knowledge', label: '深入读取：浏览层级 / 取原文 / 看能力 / 导航 / 查表格' },
-  { name: 'upload_document', label: '上传一个或多个文件（zip 自动解压）入库并自动排队挖掘（跑完才可检索）' },
-] as const
-
-const status = ref<McpAccessStatus | null>(null)
-const freshKey = ref('')
-const rotating = ref(false)
-const configFormat = ref<'generic' | 'dify'>('generic')
-
-const myKbs = ref<{ id: string; name: string; document_count: number }[]>([])
-const selectedKbs = ref<string[]>([])
-const savingKbs = ref(false)
-
-const toolOn = ref<Record<string, boolean>>({})
-const savingTools = ref(false)
-
-const instructions = ref('')
-const toolDescs = ref<Record<string, string>>({})
-const savingPrompt = ref(false)
-
-const hasKey = computed(() => !!status.value?.configured)
+const keys = ref<McpKeyItem[]>([])
+const loading = ref(false)
 const loadFailed = ref(false)
+
+const createVisible = ref(false)
+const creating = ref(false)
+const createForm = ref({ name: '', domain: '' })
+
+/** 创建响应的明文——仅创建后短暂持有，用于一次性展示弹窗。 */
+const freshCreated = ref<{ name: string; domain: string; key: string } | null>(null)
+const freshVisible = ref(false)
+
+const configVisible = ref(false)
+const configKey = ref<McpKeyItem | null>(null)
+const configDomainKbs = ref<{ id: string; name: string; document_count: number }[]>([])
+
+const activeCount = computed(() => keys.value.filter(k => k.status === 'active').length)
+const atLimit = computed(() => activeCount.value >= MAX_KEYS)
+const hasActiveKeys = computed(() => activeCount.value > 0)
 const mcpEndpoint = computed(() => `${window.location.hostname}:9000/mcp`)
 
-const configJson = computed(() => {
-  if (!hasKey.value) return ''
+const freshConfigJson = computed(() => {
+  const key = freshCreated.value?.key
+  if (!key) return ''
   const url = `http://${mcpEndpoint.value}`
-  const key = '__KEY__'
-  const generic = {
+  return JSON.stringify({
     mcpServers: {
       knowledge: {
-        // 显式声明传输类型：Claude 等客户端要求远程服务带 type，
-        // 缺省时部分客户端按 stdio 解析而报错
         type: 'http',
         url,
         headers: { Authorization: `Bearer ${key}` },
       },
     },
-  }
-  const dify = {
-    server_url: url,
-    authorization: `Bearer ${key}`,
-  }
-  const raw = JSON.stringify(configFormat.value === 'dify' ? dify : generic, null, 2)
-  // freshKey 只在轮换后短暂持有；平时展示占位符，提示用户密钥位置
-  return freshKey.value ? raw.replace(key, freshKey.value) : raw
-})
-
-const toolsDirty = computed(() => {
-  const on = ALL_TOOLS.filter(t => toolOn.value[t.name]).map(t => t.name)
-  const saved = status.value?.open_tools
-  if (saved == null) return on.length !== ALL_TOOLS.length
-  return JSON.stringify(on) !== JSON.stringify(saved)
-})
-
-const kbsDirty = computed(() => {
-  const a = [...selectedKbs.value].sort()
-  const b = [...(status.value?.open_kb_ids ?? [])].sort()
-  return JSON.stringify(a) !== JSON.stringify(b)
-})
-
-const promptDirty = computed(() => {
-  const savedInstr = status.value?.instructions ?? ''
-  const savedDescs = status.value?.tool_descriptions ?? {}
-  const nowDescs: Record<string, string> = {}
-  for (const t of ALL_TOOLS) {
-    const v = (toolDescs.value[t.name] || '').trim()
-    if (v) nowDescs[t.name] = v
-  }
-  return instructions.value.trim() !== savedInstr.trim()
-    || JSON.stringify(nowDescs) !== JSON.stringify(savedDescs)
+  }, null, 2)
 })
 
 async function reload() {
-  if (!domainStore.currentDomain) return
+  loading.value = true
   loadFailed.value = false
   try {
-    const [access, kbs] = await Promise.all([
-      kbApi.getMcpAccess(domainStore.currentDomain),
-      kbApi.listKbs(domainStore.currentDomain),
-    ])
-    status.value = access
-    myKbs.value = kbs.map(k => ({ id: k.id, name: k.name, document_count: k.document_count }))
-    // 只保留当前仍可见的库——软删/权限收走的库自动从勾选中消失，
-    // 不让幽灵 id 混进下一次保存请求（后端也会剔除，这里保证界面所见即所得）
-    const visibleIds = new Set(myKbs.value.map(k => k.id))
-    selectedKbs.value = access.open_kb_ids.filter(id => visibleIds.has(id))
-    const savedOn = access.open_tools
-    for (const t of ALL_TOOLS) {
-      toolOn.value[t.name] = savedOn == null ? true : savedOn.includes(t.name)
-      toolDescs.value[t.name] = access.tool_descriptions?.[t.name] ?? ''
+    const r = await kbApi.listMcpKeys()
+    keys.value = r.keys
+    // 抽屉开着时同步面板的钥匙行（轮换/保存后后端状态已变）
+    if (configKey.value) {
+      configKey.value = keys.value.find(k => k.id === configKey.value?.id) ?? configKey.value
     }
-    instructions.value = access.instructions ?? ''
-    freshKey.value = ''
   } catch (e) {
-    // 加载失败不能伪装成"未配置密钥"：那会诱导用户点"生成密钥"把现役
-    // 密钥轮换掉，正在运行的 Agent 全部断连（2026-08-31 前端审查 M8）。
     loadFailed.value = true
     ElMessage.error(await apiErrorDetail(e))
-  }
-}
-
-async function rotate() {
-  if (loadFailed.value || status.value === null) return
-  rotating.value = true
-  try {
-    const r = await kbApi.rotateMcpKey()
-    freshKey.value = r.key
-    ElMessage.success('密钥已生成；旧密钥（如有）立即失效')
-    const key = r.key
-    await reload()
-    freshKey.value = key
-  } catch (e) {
-    ElMessage.error(await apiErrorDetail(e))
   } finally {
-    rotating.value = false
+    loading.value = false
   }
 }
 
-async function saveTools() {
-  const on = ALL_TOOLS.filter(t => toolOn.value[t.name]).map(t => t.name)
-  if (!on.length) { ElMessage.warning('至少保留一个工具'); return }
-  savingTools.value = true
-  try {
-    status.value = await kbApi.putMcpConfig({ open_tools: on })
-    ElMessage.success('工具开关已保存')
-  } catch (e) {
-    ElMessage.error(await apiErrorDetail(e))
-  } finally {
-    savingTools.value = false
-  }
+function openCreate() {
+  createForm.value = { name: '', domain: domainStore.currentDomain || '' }
+  createVisible.value = true
 }
 
-async function saveOpenKbs() {
-  savingKbs.value = true
+async function submitCreate() {
+  creating.value = true
   try {
-    const r = await kbApi.putMcpOpenKbs(selectedKbs.value)
-    status.value = { ...(status.value ?? { configured: true, open_kb_ids: [] }), open_kb_ids: r.open_kb_ids }
-    selectedKbs.value = [...r.open_kb_ids]  // 以响应为准（后端可能剔除了失效勾选）
-    ElMessage.success('开放库已更新')
-  } catch (e) {
-    ElMessage.error(await apiErrorDetail(e))
-  } finally {
-    savingKbs.value = false
-  }
-}
-
-async function savePrompt() {
-  savingPrompt.value = true
-  try {
-    const descs: Record<string, string> = {}
-    for (const t of ALL_TOOLS) {
-      const v = (toolDescs.value[t.name] || '').trim()
-      if (v) descs[t.name] = v
-    }
-    status.value = await kbApi.putMcpConfig({
-      instructions: instructions.value,
-      tool_descriptions: descs,
+    const r = await kbApi.createMcpKey({
+      name: createForm.value.name.trim(),
+      domain: createForm.value.domain,
     })
-    ElMessage.success('提示词已保存')
+    createVisible.value = false
+    freshCreated.value = r
+    freshVisible.value = true
+    await reload()
+  } catch (e) {
+    ElMessage.error(await createErrorText(e))
+  } finally {
+    creating.value = false
+  }
+}
+
+/** 建钥错误的定制文案：403 域未绑定的 detail 是 {code, message} 结构，其余走通用提取。 */
+async function createErrorText(e: unknown): Promise<string> {
+  const resp = (e as { response?: { status?: number; data?: { detail?: { code?: string; message?: string } } } })
+    ?.response
+  const detail = resp?.data?.detail
+  if (resp?.status === 403 && detail?.code === 'domain_not_bound') {
+    return detail.message ?? '你未绑定该知识域，无法创建钥匙'
+  }
+  if (resp?.status === 409) {
+    const msg = await apiErrorDetail(e)
+    return msg.includes('上限') ? '已达 10 把上限，请先吊销不需要的钥匙' : msg
+  }
+  return apiErrorDetail(e)
+}
+
+async function openConfig(row: McpKeyItem) {
+  configKey.value = row
+  configDomainKbs.value = []
+  configVisible.value = true
+  try {
+    // 钥匙域即数据源——不 watch 页面当前域切换
+    const kbs = await kbApi.listKbs(row.domain)
+    configDomainKbs.value = kbs.map(k => ({ id: k.id, name: k.name, document_count: k.document_count }))
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
-  } finally {
-    savingPrompt.value = false
+  }
+}
+
+function onPanelUpdated(item: McpKeyItem) {
+  const idx = keys.value.findIndex(k => k.id === item.id)
+  if (idx >= 0) keys.value[idx] = item
+  configKey.value = item
+}
+
+async function onPanelRevoked(keyId: string) {
+  await reload()
+  configVisible.value = false
+  void keyId
+}
+
+/** 列表快捷轮换：不开抽屉，直接确认框 + 明文弹窗。 */
+async function quickRotate(row: McpKeyItem) {
+  try {
+    await ElMessageBox.confirm(
+      `轮换后「${row.name}」的旧密钥立即失效，正在使用它的 Agent 会断连。确定继续？`,
+      '轮换密钥', { type: 'warning', confirmButtonText: '轮换', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  try {
+    const r = await kbApi.rotateMcpKey(row.id)
+    freshCreated.value = { name: row.name, domain: row.domain, key: r.key }
+    freshVisible.value = true
+    await reload()
+  } catch (e) {
+    ElMessage.error(await apiErrorDetail(e))
+  }
+}
+
+/** 列表快捷吊销。 */
+async function quickRevoke(row: McpKeyItem) {
+  try {
+    await ElMessageBox.confirm(
+      `吊销后「${row.name}」立即失效且不可恢复，正在使用它的 Agent 会断连。确定吊销？`,
+      '吊销钥匙', { type: 'warning', confirmButtonText: '吊销', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  try {
+    await kbApi.revokeMcpKey(row.id)
+    ElMessage.success('钥匙已吊销')
+    await reload()
+  } catch (e) {
+    ElMessage.error(await apiErrorDetail(e))
   }
 }
 
@@ -349,8 +316,10 @@ function fmtTime(v?: string | null): string {
   return v.replace('T', ' ').slice(0, 19)
 }
 
-onMounted(reload)
-watch(() => domainStore.currentDomain, reload)
+onMounted(() => {
+  void domainStore.fetchDomains()
+  reload()
+})
 </script>
 
 <style scoped>
@@ -359,34 +328,42 @@ watch(() => domainStore.currentDomain, reload)
   flex-direction: column;
   gap: 18px;
   padding: 4px;
-  max-width: 960px;
+  max-width: 1060px;
 }
 
-.mcp-view__head { margin-bottom: 2px; }
-.mcp-view__title { margin: 0; font-size: 20px; font-weight: 700; }
+.mcp-view__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
 .mcp-view__desc { margin: 4px 0 0; font-size: 13px; color: var(--kb-text-secondary); line-height: 1.6; }
+.mcp-view__add-wrap { display: inline-block; margin-left: 12px; }
+.mcp-view__empty-tip { margin: 0 0 12px; font-size: 13px; color: var(--kb-text-secondary); line-height: 1.8; }
 
 .mcp-view__card {
   background: var(--kb-bg-card);
   border: 1px solid var(--kb-border-light);
   border-radius: 10px;
   padding: 18px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
 }
-
 .mcp-view__card--hero { border-color: var(--kb-accent, #3b82f6); }
 
-.mcp-view__card-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
+.mcp-view__table { width: 100%; }
+.mcp-view__name { font-weight: 600; }
+.mcp-view__name.is-revoked { color: var(--kb-text-tertiary); text-decoration: line-through; }
+.mcp-view__prefix { font-family: var(--el-font-family-mono, monospace); font-size: 12.5px; }
 
-.mcp-view__card-title { margin: 0; font-size: 14.5px; font-weight: 650; }
-.mcp-view__card-desc { margin: 4px 0 0; font-size: 12.5px; color: var(--kb-text-secondary); line-height: 1.6; max-width: 620px; }
+.mcp-view__fresh-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.mcp-view__fresh-key {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--el-fill-color);
+  font-family: var(--el-font-family-mono, monospace);
+  font-size: 13px;
+  word-break: break-all;
+}
 
 .mcp-view__code-wrap { position: relative; }
 .mcp-view__code {
@@ -400,7 +377,6 @@ watch(() => domainStore.currentDomain, reload)
   line-height: 1.7;
   overflow-x: auto;
 }
-
 .mcp-view__copy {
   position: absolute;
   top: 8px;
@@ -414,29 +390,5 @@ watch(() => domainStore.currentDomain, reload)
   cursor: pointer;
 }
 .mcp-view__copy:hover { color: var(--kb-accent, #3b82f6); border-color: var(--kb-accent, #3b82f6); }
-
-.mcp-view__note { margin: 0; font-size: 12px; color: var(--kb-text-tertiary); line-height: 1.6; }
-
-.mcp-view__fresh :deep(.el-alert__title) { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.mcp-view__key {
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--el-fill-color);
-  font-family: var(--el-font-family-mono, monospace);
-  font-size: 12px;
-  word-break: break-all;
-}
-
-.mcp-view__tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
-.mcp-view__tool { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--kb-border-light); border-radius: 8px; }
-.mcp-view__tool-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.mcp-view__tool-name { font-size: 13px; font-weight: 600; font-family: var(--el-font-family-mono, monospace); }
-.mcp-view__tool-desc { font-size: 12px; color: var(--kb-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.mcp-view__kbs { display: flex; flex-direction: column; gap: 4px; }
-.mcp-view__kb-meta { margin-left: 6px; font-size: 12px; color: var(--kb-text-tertiary); }
-
-.mcp-view__descs { display: flex; flex-direction: column; gap: 10px; }
-.mcp-view__desc-row { display: grid; grid-template-columns: 180px 1fr; gap: 10px; align-items: start; }
-.mcp-view__desc-name { padding-top: 6px; font-size: 12.5px; font-weight: 600; font-family: var(--el-font-family-mono, monospace); color: var(--kb-text-secondary); }
+.mcp-view__note { margin: 8px 0 0; font-size: 12px; color: var(--kb-text-tertiary); line-height: 1.6; }
 </style>

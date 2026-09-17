@@ -350,28 +350,6 @@ export interface KbStats {
 }
 
 
-/** 阶段 A：用户级 MCP 接入（一人一钥 + 开放库清单）。 */
-export interface McpAccessStatus {
-  configured: boolean
-  key_prefix?: string
-  status?: string
-  created_at?: string
-  last_used_at?: string | null
-  rotated_at?: string
-  open_kb_ids: string[]
-  /** null = 全部工具开放；非空 = 仅这些工具可用 */
-  open_tools?: string[] | null
-  instructions?: string | null
-  tool_descriptions?: Record<string, string> | null
-}
-
-export interface McpAccessRotateResult {
-  /** 明文密钥——仅轮换响应出现一次，界面展示后不再可取。 */
-  key: string
-  key_prefix: string
-  rotated_at: string
-}
-
 /** 51号批次2：MCP 多钥匙——钥匙列表行。 */
 export interface McpKeyItem {
   id: string

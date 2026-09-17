@@ -1065,7 +1065,7 @@ WITH latest AS (
             cur = await conn.execute(
                 """SELECT m.id, m.user_id, m.name, m.domain, m.key_prefix, m.status,
                           m.open_tools, m.instructions, m.tool_descriptions,
-                          m.created_at, m.rotated_at,
+                          m.created_at, m.rotated_at, m.last_used_at,
                           COALESCE(
                             (SELECT jsonb_agg(k.id)
                              FROM mcp_key_open_kbs o
@@ -1086,7 +1086,7 @@ WITH latest AS (
             cur = await conn.execute(
                 """SELECT id, user_id, name, domain, key_prefix, status,
                           open_tools, instructions, tool_descriptions,
-                          created_at, rotated_at
+                          created_at, rotated_at, last_used_at
                    FROM mcp_keys WHERE id = %s""",
                 (key_id,),
             )

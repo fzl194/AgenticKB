@@ -11,7 +11,6 @@ import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
   DeletedKbRow, KbPurgeTask,
   KbOverview, KbRunRecord, KbStats, KbSummary, KbUpdateBody, KbUserCandidate,
-  McpAccessRotateResult, McpAccessStatus,
   McpKeyCreated, McpKeyItem, McpKeyRotateResult,
   DocumentKnowledge,
 } from '@/types/kb'
@@ -100,35 +99,7 @@ export function useKbApi() {
       return extractItems<DeletedKbRow>(data)
     },
 
-    // ── MCP 接入（阶段 A：一人一钥 + 开放库清单）──
-    async getMcpAccess(domain: string): Promise<McpAccessStatus> {
-      const { data } = await client.get('/api/kb/users/me/mcp-access', { params: { domain } })
-      return extractOne<McpAccessStatus>(data)
-    },
-
-    /** 生成/轮换密钥：旧钥立即失效；明文仅本次响应返回。 */
-    async rotateMcpKey(): Promise<McpAccessRotateResult> {
-      const { data } = await client.post('/api/kb/users/me/mcp-access/rotate')
-      return extractOne<McpAccessRotateResult>(data)
-    },
-
-    /** 全量覆盖开放库勾选（空数组=清空）。 */
-    async putMcpOpenKbs(kbIds: string[]): Promise<{ open_kb_ids: string[] }> {
-      const { data } = await client.put('/api/kb/users/me/mcp-access/open-kbs', { kb_ids: kbIds })
-      return extractOne<{ open_kb_ids: string[] }>(data)
-    },
-
-    /** 批次7：工具开关 / 提示词 / 工具描述（null=不改；instructions ""=恢复默认）。 */
-    async putMcpConfig(body: {
-      open_tools?: string[] | null
-      instructions?: string | null
-      tool_descriptions?: Record<string, string> | null
-    }): Promise<McpAccessStatus> {
-      const { data } = await client.put('/api/kb/users/me/mcp-access/config', body)
-      return extractOne<McpAccessStatus>(data)
-    },
-
-    // ── MCP 多钥匙（51号批次2；旧四函数待 T11 视图重写时一并下线）──
+    // ── MCP 多钥匙（51号批次2：旧用户级单钥四函数已随视图重写下线）──
     /** 钥匙列表（含 domain_bound=false 的失效钥，列表页标红）。 */
     async listMcpKeys(): Promise<{ keys: McpKeyItem[] }> {
       const { data } = await client.get('/api/kb/users/me/mcp-keys')
@@ -141,8 +112,11 @@ export function useKbApi() {
       return extractOne<McpKeyCreated>(data)
     },
 
-    /** 轮换指定钥匙：旧钥立即失效；明文仅本次响应返回。 */
-    async rotateMcpKeyV2(keyId: string): Promise<McpKeyRotateResult> {
+    /**
+     * 轮换指定钥匙：旧钥立即失效；明文仅本次响应返回。
+     * （曾名 rotateMcpKeyV2——因旧 rotateMcpKey 并存而过渡；旧函数下线后去 V2 化。）
+     */
+    async rotateMcpKey(keyId: string): Promise<McpKeyRotateResult> {
       const { data } = await client.post(`/api/kb/users/me/mcp-keys/${keyId}/rotate`)
       return extractOne<McpKeyRotateResult>(data)
     },

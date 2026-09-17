@@ -119,6 +119,9 @@ async def test_mcp_key_lifecycle(kbdb):
     by_dom = {k["domain"]: k for k in keys}
     assert set(by_dom["generic"]["open_kb_ids"]) == {kb_a["id"], kb_b["id"]}
     assert set(by_dom["odn"]["open_kb_ids"]) == {kb_c["id"]}
+    # 列表视图要显示最近使用——SELECT 必须带出 last_used_at（前面验钥已触写过）
+    assert by_dom["generic"]["last_used_at"] is not None
+    assert "last_used_at" in await kbdb.get_mcp_key(key_id=key_id)
     assert await kbdb.count_active_mcp_keys(user_id=uid) == 2
 
     # rotate：旧 hash 失效、新 hash 命中

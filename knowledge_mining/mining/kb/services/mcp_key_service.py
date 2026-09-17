@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+import unicodedata
 import uuid
 from typing import Any
 
@@ -24,7 +25,7 @@ from psycopg.errors import UniqueViolation
 from knowledge_mining.mining.kb.db import KbDB
 
 # 复用建库同源域校验（51号批次1收敛后的唯一入口）
-from knowledge_mining.mining.kb.services.kb_service import _validate_domain
+from knowledge_mining.mining.kb.services.kb_service import InvalidDomain, _validate_domain
 
 
 class McpKeyError(Exception):
@@ -165,9 +166,14 @@ class McpKeyService:
         if len(cleaned) > MAX_KEY_NAME_LEN:
             raise McpKeyError(
                 f"钥匙名称过长（{len(cleaned)}/{MAX_KEY_NAME_LEN} 字符）")
-        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in cleaned):
+        if any(unicodedata.category(c) in ("Cc", "Cf") for c in cleaned):
+            # Cc=控制字符；Cf=零宽/方向格式符（U+200B 零宽空格、U+202E RTL
+            # override 等——视觉欺骗载体，一并拒绝）
             raise McpKeyError("钥匙名称不能包含控制字符")
-        _validate_domain(domain)
+        try:
+            _validate_domain(domain)
+        except InvalidDomain as exc:
+            raise McpKeyError(f"未知的知识域：{domain}") from exc
         if not is_admin and not await self._db.can_create_in_domain(
             user_id=user_id, domain=domain,
         ):

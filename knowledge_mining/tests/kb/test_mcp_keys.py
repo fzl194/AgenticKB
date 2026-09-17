@@ -290,6 +290,22 @@ async def test_create_rejects_bad_names() -> None:
     with pytest.raises(McpKeyError, match="控制字符"):
         await svc.create_key(user_id="u1", name="bad\x01name", domain="generic",
                              is_admin=False)
+    # Cf 类：零宽空格（U+200B）与 RTL override（U+202E）——视觉欺骗载体
+    with pytest.raises(McpKeyError, match="控制字符"):
+        await svc.create_key(user_id="u1", name="bad​name", domain="generic",
+                             is_admin=False)
+    with pytest.raises(McpKeyError, match="控制字符"):
+        await svc.create_key(user_id="u1", name="bad‮name", domain="generic",
+                             is_admin=False)
+
+
+@pytest.mark.asyncio
+async def test_create_bad_domain_maps_to_mcp_key_error() -> None:
+    """InvalidDomain 归族：坏 domain → McpKeyError（422），不裸 500。"""
+    db = _KeyFakeDb()
+    with pytest.raises(McpKeyError, match="未知的知识域"):
+        await _svc(db).create_key(user_id="u1", name="k",
+                                  domain="no_such_domain", is_admin=False)
 
 
 @pytest.mark.asyncio

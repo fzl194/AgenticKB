@@ -131,6 +131,10 @@ _KB_DOCUMENT_REFS_DDL = (
 _SNAPSHOT_DEPRECATION_DDL = (
     _REPO_ROOT / "databases" / "asset_core" / "schemas" / "017_snapshot_deprecation.sql"
 )
+# 51号批次1：用户↔domain 绑定表（public 可见性/建库权限依赖）。
+_USER_DOMAINS_DDL = (
+    _REPO_ROOT / "databases" / "kb" / "schemas" / "013_user_domains.sql"
+)
 # KB 硬删任务化（013）：status 加 deleting + kb_purge_tasks 进度表。
 _KB_PURGE_TASKS_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "013_kb_purge_tasks.sql"
@@ -239,6 +243,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _KB_DOCUMENT_REFS_DDL,
         _SNAPSHOT_DEPRECATION_DDL,
         _KB_PURGE_TASKS_DDL,
+        # 51号批次1：用户↔域绑定（public 可见性/建库权限依赖）。
+        _USER_DOMAINS_DDL,
     )
 
 

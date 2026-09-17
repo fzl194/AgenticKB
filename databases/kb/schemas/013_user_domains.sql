@@ -1,6 +1,7 @@
 -- 51号设计批次1：用户↔domain 绑定表。
 -- 可见性判定（public 域内化）与建库权限收敛的数据基础。
 -- domain 为 domain_registry.yaml 合法域（应用层校验，同 knowledge_bases.domain 风格）。
+-- user_id 有意不加 FK：kb_users 走 status 软禁用无硬删路径，孤儿行可容忍（51号裁定）。
 CREATE TABLE IF NOT EXISTS user_domains (
     user_id    TEXT NOT NULL,
     domain     TEXT NOT NULL,

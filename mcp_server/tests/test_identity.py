@@ -88,6 +88,20 @@ def test_validate_domain_mismatch_names_both_domains() -> None:
         validate_domain(KEYED, "odn")
 
 
+def test_validate_domain_empty_key_domain_without_explicit_is_guarded() -> None:
+    """混布窗口（旧 mining 无 key_domain）：不传 domain 不允许静默拿空域打下游。"""
+    bare = Identity(username="alice", user_id="u-1", open_kbs=({"id": "kb-1", "name": "库"},))
+    with pytest.raises(IdentityError, match="缺少钥匙域信息"):
+        validate_domain(bare, None)
+
+
+def test_validate_domain_empty_key_domain_with_explicit_is_guarded() -> None:
+    """空 key_domain + 显式 domain：同样报守卫错误（不是 mismatch 怪话）。"""
+    bare = Identity(username="alice", user_id="u-1", open_kbs=({"id": "kb-1", "name": "库"},))
+    with pytest.raises(IdentityError, match="缺少钥匙域信息"):
+        validate_domain(bare, "odn")
+
+
 # ── require_identity：mock HTTP（批次2 假响应形状） ─────────────────────
 
 
@@ -119,7 +133,7 @@ def test_require_identity_parses_key_domain_fields(monkeypatch) -> None:
     assert ident.key_id == "key-9"
     assert ident.key_domain == "odn"
     assert ident.open_kb_ids == ["kb-1"]
-    assert not hasattr(ident, "domains") or True  # domains 字段已退役
+    assert not hasattr(ident, "domains")  # domains 字段已退役
 
 
 def test_require_identity_403_domain_not_bound_is_human_readable(monkeypatch) -> None:
@@ -135,5 +149,17 @@ def test_require_identity_403_domain_not_bound_is_human_readable(monkeypatch) ->
 
 def test_require_identity_403_without_code_is_generic(monkeypatch) -> None:
     _stub_verify(monkeypatch, _Resp(403, {"detail": "forbidden"}))
+    with pytest.raises(IdentityError, match="身份校验失败"):
+        require_identity(_HEADERS)
+
+
+def test_require_identity_403_non_json_is_generic(monkeypatch) -> None:
+    class _BadJson:
+        status_code = 403
+
+        def json(self):
+            raise ValueError("not JSON")
+
+    _stub_verify(monkeypatch, _BadJson())
     with pytest.raises(IdentityError, match="身份校验失败"):
         require_identity(_HEADERS)

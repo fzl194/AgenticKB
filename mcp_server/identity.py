@@ -113,6 +113,10 @@ class Identity:
 
 def validate_domain(identity: Identity, explicit: str | None) -> str:
     """M3（批次2）：domain 只是校验参数——不传=钥匙域；传了必须等于钥匙域。"""
+    if not identity.key_domain:
+        raise IdentityError(
+            "验钥响应缺少钥匙域信息（key_domain），服务端可能版本不匹配，请联系管理员"
+        )
     if explicit is None or not str(explicit).strip():
         return identity.key_domain
     domain = str(explicit).strip()
@@ -185,10 +189,9 @@ def require_identity(headers) -> Identity:
             "重新生成，并更新 Agent 配置。"
         )
     if resp.status_code == 403:
-        detail = {}
         try:
             detail = resp.json().get("detail") or {}
-        except Exception:  # pragma: no cover - 非 JSON 响应兜底
+        except Exception:  # 非 JSON 响应兜底
             detail = {}
         if isinstance(detail, dict) and detail.get("code") == "domain_not_bound":
             raise IdentityError(

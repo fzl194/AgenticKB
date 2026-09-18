@@ -52,7 +52,6 @@ from knowledge_mining.mining.segment_compiler.service import (  # noqa: E402
     SegmentCompileService,
 )
 from knowledge_mining.mining.shadow_parse.repositories_memory import (  # noqa: E402
-    MemoryParseAttemptRepository,
     MemoryParseRunRepository,
 )
 from knowledge_mining.mining.snapshot_store.repositories_memory import (  # noqa: E402
@@ -79,7 +78,6 @@ async def test_corpus_segments_end_to_end(tmp_path) -> None:
     )
     operator = DocumentParseService(
         object_store=store, parse_runs=MemoryParseRunRepository(),
-        attempts=MemoryParseAttemptRepository(),
         storage_objects=storage_objects, parser_resolver=resolve_pipeline,
         commit_service=commit, quality_gate=QualityGate(),
         reconciler=StructuralReconciler(), bucket_prefix="corpus-m5-",

@@ -1,7 +1,6 @@
 package com.coremasterkb.serving.application;
 
 import com.coremasterkb.serving.domain.ActiveScope;
-import com.coremasterkb.serving.domainpack.DomainRegistry;
 import com.coremasterkb.serving.operator.paradigm.ParadigmGraphs;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import com.coremasterkb.serving.repository.AssetRepository;
@@ -24,16 +23,13 @@ public class ScopeResolver {
     private final AssetRepository assetRepository;
     private final KbAccessService kbAccessService;
     private final ParadigmService paradigmService;
-    private final DomainRegistry domainRegistry;
 
     public ScopeResolver(AssetRepository assetRepository,
                          KbAccessService kbAccessService,
-                         ParadigmService paradigmService,
-                         DomainRegistry domainRegistry) {
+                         ParadigmService paradigmService) {
         this.assetRepository = assetRepository;
         this.kbAccessService = kbAccessService;
         this.paradigmService = paradigmService;
-        this.domainRegistry = domainRegistry;
     }
 
     /**
@@ -42,7 +38,7 @@ public class ScopeResolver {
      * <p>Three sources, and they are not interchangeable: a {@code paradigmId} means "the same
      * knowledge bases that paradigm searched", read out of the stored graph so the caller never
      * gets to widen it; explicit {@code kbIds} means the caller names them and gets authorized;
-     * neither means the ordinary domain-wide active release. Supplying both is rejected rather
+     * neither means all KBs the authorization layer exposes to the caller. Supplying both is rejected rather
      * than silently resolved — picking one would turn a caller's mistake into an access decision
      * nobody reviewed.</p>
      *
@@ -70,12 +66,11 @@ public class ScopeResolver {
         // Authorized even when the ids came from a stored graph: a saved paradigm must not become
         // a way to read a knowledge base the caller cannot open.
         List<String> authorized = kbAccessService.authorize(domain, requested, username);
+        if (authorized.isEmpty()) {
+            throw new IllegalArgumentException("kb_ids_required");
+        }
 
-        String effectiveChannel = (channel != null && !channel.isBlank())
-                ? channel
-                : domainRegistry.getDefaultChannel(domain);
-
-        ActiveScope scope = assetRepository.resolveActiveScope(domain, effectiveChannel, authorized);
+        ActiveScope scope = assetRepository.resolveKbScope(domain, authorized);
         if (scope.snapshotIds().isEmpty()) {
             throw new IllegalArgumentException("empty_scope");
         }

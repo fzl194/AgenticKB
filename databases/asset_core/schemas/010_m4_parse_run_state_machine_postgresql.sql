@@ -56,32 +56,6 @@ DROP INDEX IF EXISTS uq_asset_parse_runs_idem;
 CREATE INDEX IF NOT EXISTS idx_asset_parse_runs_idem
     ON asset_parse_runs(document_id, source_raw_hash, parser_fingerprint);
 
--- -----------------------------------------------------------------------------
--- 2. 新表：asset_parse_run_attempts（backend 尝试事件，SRS §4.6/§9.2）
--- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS asset_parse_run_attempts (
-    id                  TEXT PRIMARY KEY,
-    parse_run_id        TEXT NOT NULL,                  -- M4 补 FK -> asset_parse_runs(id)
-    attempt_index       INTEGER NOT NULL CHECK (attempt_index >= 0),
-    parser_id           TEXT NOT NULL,
-    parser_fingerprint  TEXT NOT NULL,
-    attempt_kind        TEXT NOT NULL CHECK (
-        attempt_kind IN ('primary', 'fallback', 'repair', 'replay')
-    ),
-    outcome             TEXT NOT NULL CHECK (outcome IN ('SUCCEEDED', 'FAILED')),
-    started_at          TIMESTAMPTZ NOT NULL,
-    finished_at         TIMESTAMPTZ,
-    error_message       TEXT,
-    metadata_json       JSONB NOT NULL DEFAULT '{}'::jsonb
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_parse_run_attempts_seq
-    ON asset_parse_run_attempts(parse_run_id, attempt_index);
-
-CREATE INDEX IF NOT EXISTS idx_asset_parse_run_attempts_run
-    ON asset_parse_run_attempts(parse_run_id, outcome);
-
-COMMENT ON TABLE  asset_parse_run_attempts IS 'SRS §4.6/§9.2: 每次 backend 尝试（primary/fallback/repair/replay）一行；重试产生新序号，不覆盖旧事件。';
 COMMENT ON COLUMN asset_parse_runs.snapshot_id IS 'M4: 成功转正的 Document Snapshot；SUPERSEDED（提交前发现输入过期）与 FAILED 恒为 NULL。';
 
 -- -----------------------------------------------------------------------------

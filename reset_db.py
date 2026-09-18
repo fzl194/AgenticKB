@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
+from db_tables import EXPORT_TABLES
+
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = (
@@ -30,78 +32,7 @@ DEFAULT_AUTH_CONFIG_PATH = (
     REPO_ROOT / "main_control_service" / "config" / "system" / "auth.yaml"
 )
 
-_MANAGED_TABLE_NAMES = frozenset(
-    {
-        "agent_llm_attempts",
-        "agent_llm_events",
-        "agent_llm_model_calls",
-        "agent_llm_prompt_templates",
-        "agent_llm_requests",
-        "agent_llm_results",
-        "agent_llm_tasks",
-        "asset_build_document_snapshots",
-        "asset_builds",
-        "asset_document_snapshot_links",
-        "asset_document_snapshots",
-        "asset_documents",
-        "asset_file_audit_events",
-        "asset_parse_run_attempts",
-        "asset_parse_runs",
-        "asset_publish_releases",
-        "asset_raw_segment_relations",
-        "asset_raw_segments",
-        # 历史影子迁移残表：现役代码零引用，但老库里有，清业务数据应一并清空。
-        "asset_raw_segments_staging",
-        "asset_retrieval_embeddings",
-        "asset_retrieval_embeddings_v2",
-        "asset_retrieval_embeddings_v2_staging",
-        "asset_retrieval_units",
-        "asset_retrieval_units_v2",
-        "asset_retrieval_units_v2_staging",
-        "asset_segment_element_links",
-        "asset_segment_entity_mentions",
-        "asset_snapshot_readiness",
-        "asset_snapshot_readiness_staging",
-        "asset_source_batches",
-        "asset_storage_object_refs",
-        "asset_storage_objects",
-        "asset_storage_operations",
-        "asset_storage_quotas",
-        "asset_structure_edges",
-        "asset_structure_edges_staging",
-        "asset_structure_nodes",
-        "asset_structure_nodes_staging",
-        "asset_structured_assets",
-        "asset_structured_assets_staging",
-        "asset_table_cells",
-        "asset_table_cells_staging",
-        "asset_upload_sessions",
-        "kb_folders",
-        "kb_members",
-        "kb_users",
-        "knowledge_bases",
-        "mcp_key_open_kbs",
-        "mcp_keys",
-        "mining_run_documents",
-        "mining_run_stage_events",
-        "mining_runs",
-        "mining_workflow_node_events",
-        "mining_workflow_versions",
-        "mining_workflows",
-        "ontology_alias_dictionary",
-        "ontology_candidates",
-        "ontology_entities",
-        "ontology_entity_relations",
-        "ontology_evidence_nodes",
-        "ontology_node_types",
-        "ontology_relation_types",
-        "ontology_versions",
-        "operator_paradigm",
-        "operator_paradigm_version",
-        "serving_query_cache",
-        "serving_query_logs",
-    }
-)
+_MANAGED_TABLE_NAMES = frozenset(EXPORT_TABLES) - {"cmkb_schema_migrations"}
 
 _DISCOVER_TABLES_SQL = """
 SELECT n.nspname, c.relname

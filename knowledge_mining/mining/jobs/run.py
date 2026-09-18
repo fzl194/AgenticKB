@@ -8,7 +8,7 @@ StreamingPipeline stages per document:
   parse -> segment -> enrich -> discourse -> retrieval_units -> embedding -> db_write
 
 Global stages:
-  assemble_build -> validate_build -> publish_release
+  assemble_build -> validate_build
 """
 from __future__ import annotations
 
@@ -217,13 +217,12 @@ from knowledge_mining.mining.runtime import RuntimeTracker
 from knowledge_mining.mining.ingestion import ingest_directory
 from knowledge_mining.mining.stages.parse import create_parser
 from knowledge_mining.mining.stages.segment import DefaultSegmenter
-from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents, demo_quality_summary, publish_release
+from knowledge_mining.mining.stages.publishing import assemble_build, classify_documents
 from knowledge_mining.mining.infra.domain_pack import DomainProfile, load_domain_pack, resolve_domain, get_default_domain
 from knowledge_mining.mining.pipeline import (
     DocumentContext, PipelineConfig,
     StreamingPipeline,
-    parse_stage, segment_stage, enrich_stage, entity_extract_stage, resolve_stage,
-    entity_relations_stage, discourse_stage, retrieval_units_stage,
+    parse_stage, segment_stage, enrich_stage, discourse_stage, retrieval_units_stage,
     embedding_stage, db_write_stage,
 )
 
@@ -506,12 +505,9 @@ def _run_legacy(
 
         try:
             profile = load_domain_pack(domain)
-            from knowledge_mining.mining.infra.ontology_store import OntologyStore
-            ontology_store = OntologyStore(asset_db.pool)
             llm_services = _init_llm(
                 llm_base_url, profile,
                 knowledge_domain=profile.domain_id,
-                ontology_store=ontology_store,
             )
             embedding_generator = _init_embedding(
                 llm_base_url,
@@ -575,52 +571,9 @@ def _publish_legacy(
     channel: str | None = None,
     released_by: str | None = None,
 ) -> dict[str, Any]:
-    """Publish a completed run's build as an active release.
-
-    Args:
-        run_id: Mining run ID to publish.
-        domain: Domain ID (used to resolve per-domain DB connection).
-        db_config: PostgreSQL config (fallback if registry URL unavailable).
-        channel: Release channel. None = from registry default_channel.
-        released_by: Who triggered the publish.
-    """
-    registry_entry = resolve_domain(domain)
-    resolved_db = resolve_domain_database(
-        registry_entry, db_config or MiningDbConfig()
-    )
-    if channel is None:
-        channel = registry_entry.get("default_channel", "prod")
-
-    asset_db, runtime_db = _create_dbs(resolved_db)
-
-    try:
-        run_data = runtime_db.get_run(run_id)
-        if run_data is None:
-            raise ValueError(f"Run {run_id} not found")
-        if run_data["status"] != "completed":
-            raise ValueError(f"Run {run_id} status is {run_data['status']}, expected completed")
-        if run_data.get("domain") != domain:
-            raise ValueError(
-                f"Run {run_id} belongs to domain {run_data.get('domain')!r}, "
-                f"cannot publish under domain {domain!r}"
-            )
-        build_id = run_data["build_id"]
-        if not build_id:
-            raise ValueError(f"Run {run_id} has no build_id")
-
-        release_id = publish_release(
-            asset_db,
-            build_id=build_id,
-            channel=channel,
-            released_by=released_by,
-            release_notes=f"Published from run {run_id}",
-            domain=domain,
-        )
-
-        return {"run_id": run_id, "build_id": build_id, "release_id": release_id}
-    finally:
-        asset_db.close()
-        runtime_db.close()
+    """Legacy manual publication is unavailable after KB Build convergence."""
+    del run_id, domain, db_config, channel, released_by
+    raise RuntimeError("manual domain release publication is retired")
 
 
 def _resume_legacy(
@@ -630,94 +583,9 @@ def _resume_legacy(
     db_config: MiningDbConfig | None = None,
     publish_on_partial_failure: bool = False,
 ) -> dict[str, Any]:
-    """B6：人审提交后续跑一个 awaiting_review 的 run。
-
-    幂等地重新评估两道 Gate：
-    - 仍有待审本体候选 / pending mention → 保持 awaiting_review，刷新 subloop_stage 后返回；
-    - 两道 Gate 都清空 → 从 graph_write 之后续跑（建库 + 发布），不重抽文档。
-
-    snapshot_decisions / 计数从 mining_run_documents 重建（首跑的内存态已随进程退出丢失）。
-    """
-    registry_entry = resolve_domain(domain)
-    resolved_db = resolve_domain_database(
-        registry_entry, db_config or MiningDbConfig()
-    )
-    asset_db, runtime_db = _create_dbs(resolved_db)
-    try:
-        run_data = runtime_db.get_run(run_id)
-        if run_data is None:
-            raise ValueError(f"Run {run_id} not found")
-        # 可续跑的两种入口：
-        #   ① 人审暂停（awaiting_review）——正常路径；
-        #   ② 收尾阶段中断、卡在 running/done 的恢复——两道 Gate 已审完、stage 推进到 done，
-        #      但 _finalize 过程中进程异常退出（finished_at 仍为空）。允许重新进来把收尾幂等地跑完。
-        status = run_data["status"]
-        stage = run_data.get("subloop_stage")
-        is_resumable = status == "awaiting_review" or (status == "running" and stage == "done")
-        if not is_resumable:
-            raise ValueError(
-                f"Run {run_id} status is {status}"
-                f"{f'/{stage}' if stage else ''}, expected awaiting_review (or running/done for recovery)")
-
-        domain = run_data.get("domain") or domain
-        profile = load_domain_pack(domain)
-        tracker = RuntimeTracker(runtime_db)
-        prev_stage = run_data.get("subloop_stage")
-
-        from knowledge_mining.mining.infra.mining_config import MiningConfig
-        llm_base_url = MiningConfig().llm_service_url
-
-        # 实体确认：仍有 pending mention → 留在 entity_review。
-        if _has_pending_mentions(asset_db, run_id):
-            updated = runtime_db.update_run_status(
-                run_id, "awaiting_review", subloop_stage="entity_review",
-                current_stage="review", domain=domain,
-                expected_statuses=("awaiting_review", "running"),
-            )
-            if not updated:
-                current = runtime_db.get_run(run_id) or {}
-                return {"run_id": run_id, "status": current.get("status", "cancelled")}
-            runtime_db.commit()
-            logger.info("Run %s still awaiting review at gate=entity_review", run_id)
-            return {"run_id": run_id, "status": "awaiting_review", "subloop_stage": "entity_review"}
-
-        # 实体确认刚清空（上一步停在 entity_review）→ 跑全局B 归纳类型候选，再交本体确认。
-        if prev_stage == "entity_review":
-            _run_induction(asset_db, tracker, run_id, profile, llm_base_url)
-
-        # 本体确认：有待审类型候选 → 留在 ontology_review。
-        if _has_proposed_candidates(asset_db, domain):
-            updated = runtime_db.update_run_status(
-                run_id, "awaiting_review", subloop_stage="ontology_review",
-                current_stage="review", domain=domain,
-                expected_statuses=("awaiting_review", "running"),
-            )
-            if not updated:
-                current = runtime_db.get_run(run_id) or {}
-                return {"run_id": run_id, "status": current.get("status", "cancelled")}
-            runtime_db.commit()
-            logger.info("Run %s still awaiting review at gate=ontology_review", run_id)
-            return {"run_id": run_id, "status": "awaiting_review", "subloop_stage": "ontology_review"}
-
-        # 两道 Gate 清完 → 收尾建图（回贴类型 + 建边）+ 建库/发布。
-        if not tracker.resume_running(run_id, subloop_stage="done", domain=domain):
-            current = runtime_db.get_run(run_id) or {}
-            return {"run_id": run_id, "status": current.get("status", "cancelled")}
-        runtime_db.commit()
-        _finalize_graph(asset_db, tracker, run_id, profile)
-        # 36号：_rebuild 返回三分区 index（不再返回二元组）。legacy resume
-        # 走旧整批语义（document_index=None）。
-        index = _rebuild_from_run_documents(runtime_db, run_id)
-        legacy_decisions, legacy_counts = _legacy_finalize_inputs(index)
-        return _finalize_run(
-            asset_db, runtime_db, tracker, run_id, run_data["source_batch_id"],
-            legacy_decisions, legacy_counts, run_data["total_documents"],
-            False, publish_on_partial_failure, profile,
-            channel=run_data["channel"],
-        )
-    finally:
-        asset_db.close()
-        runtime_db.close()
+    """Legacy ontology-review resume is unavailable after convergence."""
+    del run_id, domain, db_config, publish_on_partial_failure
+    raise RuntimeError("legacy ontology review resume is retired")
 
 
 def _persisted_execution_engine(
@@ -910,12 +778,10 @@ class _WorkflowJobServices:
         llm_base_url: str | None,
         max_workers: int,
         execution_mode: str,
-        ontology_version_id: str | None,
         manifest: dict[str, Any],
     ) -> None:
         from types import SimpleNamespace
 
-        from knowledge_mining.mining.infra.ontology_store import GraphStore, OntologyStore
         from knowledge_mining.mining.workflow.handler_registry import builtin_handler_registry
 
         self.action = action
@@ -930,7 +796,6 @@ class _WorkflowJobServices:
         self.llm_base_url = llm_base_url
         self.max_workers = max_workers
         self.execution_mode = execution_mode
-        self.ontology_version_id = ontology_version_id
         self.manifest = manifest
         self.handler_registry = builtin_handler_registry()
         self.input_spec = {
@@ -939,43 +804,23 @@ class _WorkflowJobServices:
                 "uploadBatchId"
             ),
         }
-        self.ontology_store = OntologyStore(asset_db.pool)
-        self.graph_store = GraphStore(asset_db.pool)
         llm = _init_llm(
             llm_base_url,
             profile,
             knowledge_domain=profile.domain_id,
-            ontology_store=self.ontology_store,
-            ontology_version_id=ontology_version_id,
         ) or {}
         # Run 结束时统一释放（duck-typed close，见 self.close()）。
         self._llm_stage_services = llm
         self._owned_llm_generator: Any | None = None
-        has_ontology = (
-            (manifest.get("runtimeBinding") or {}).get("ontologyApplicable")
-            is True
-        )
         self.pipeline_config = PipelineConfig(
             domain=profile.domain_id,
             parser_factory=create_parser,
             segmenter=DefaultSegmenter(),
             enricher=llm.get("enricher"),
-            entity_extractor=llm.get("entity_extractor") if has_ontology else None,
-            resolver=_init_resolver(asset_db, profile) if has_ontology else None,
-            entity_relation_builder=(
-                _init_relation_builder(
-                    asset_db,
-                    profile,
-                    ontology_version_id=ontology_version_id,
-                )
-                if has_ontology
-                else None
-            ),
             question_generator=llm.get("question_generator"),
             embedding_generator=_init_embedding(
                 llm_base_url, knowledge_domain=profile.domain_id
             ),
-            discourse_relation_builder=llm.get("discourse_relation_builder"),
             contextualizer=llm.get("contextualizer"),
             image_captioner=llm.get("image_captioner"),
             domain_profile=profile,
@@ -1094,30 +939,6 @@ class _WorkflowJobServices:
             require_dense=(
                 capabilities is None or "embedding" in capabilities
             ),
-        )
-
-    def count_pending_entity_mentions(self, run_id: str) -> int:
-        return workflow_count_pending_entity_mentions(self.asset_db, run_id)
-
-    def count_pending_ontology_candidates(self, domain: str) -> int:
-        return workflow_count_pending_ontology_candidates(self.asset_db, domain)
-
-    def run_ontology_induction(self, run_id: str, node_id: str):
-        return workflow_run_induction_strict(
-            self.asset_db,
-            run_id=run_id,
-            node_id=node_id,
-            profile=self.profile,
-            llm_base_url=self.llm_base_url,
-            ontology_version_id=self.ontology_version_id,
-        )
-
-    def write_graph_strict(self, run_id: str):
-        return workflow_write_graph_strict(
-            self.asset_db,
-            run_id=run_id,
-            profile=self.profile,
-            ontology_version_id=self.ontology_version_id,
         )
 
     def claim_manual_publish(self) -> bool:
@@ -1663,14 +1484,12 @@ def _execute_workflow_job(
             llm_base_url=llm_base_url or config.llm_service_url,
             max_workers=workers,
             execution_mode=execution_mode,
-            ontology_version_id=binding.get("ontologyVersionId"),
             manifest=manifest,
         )
         context = OperatorRuntimeContext(
             domain=frozen_domain,
             channel=frozen_channel,
             domain_profile=profile,
-            ontology_version_id=binding.get("ontologyVersionId"),
             asset_repository=asset_db,
             runtime_repository=repository,
             tracker=tracker,
@@ -1777,145 +1596,6 @@ def _ensure_completed_status(
         logger.exception("Failed to ensure completed status for run %s", run_id)
 
 
-def _check_review_gate(asset_db: AssetCoreDB, run_id: str, domain_id: str) -> str | None:
-    """B6/N4：返回该 run 当前命中的人审 Gate，都无则 None（快速通道放行）。
-
-    **反转闸序（L2 §15.1）：实体确认在前，本体确认在后。**
-    先把"暂无类型/有歧义"的实体让人确认干净，再用确认过的实体归纳类型给人审，
-    避免在脏实体上提议类型。pending mention 清完才轮到本体候选。
-    """
-    if _has_pending_mentions(asset_db, run_id):
-        return "entity_review"
-    if _has_proposed_candidates(asset_db, domain_id):
-        return "ontology_review"
-    return None
-
-
-def _has_pending_mentions(asset_db: AssetCoreDB, run_id: str) -> bool:
-    """实体确认：该 run 是否还有待人确认的实体 mention。"""
-    from knowledge_mining.mining.infra.ontology_store import GraphStore
-    return GraphStore(asset_db.pool).count_pending_mentions_for_run(run_id) > 0
-
-
-def _has_proposed_candidates(asset_db: AssetCoreDB, domain_id: str) -> bool:
-    """本体确认：该 domain 是否还有待人确认的 node_type 候选。"""
-    from knowledge_mining.mining.infra.ontology_store import OntologyStore
-    return OntologyStore(asset_db.pool).count_proposed_candidates(domain_id) > 0
-
-
-def workflow_count_pending_entity_mentions(
-    asset_db: AssetCoreDB, run_id: str
-) -> int:
-    """Strict Workflow service: count pending mentions in the current Run."""
-    from knowledge_mining.mining.infra.ontology_store import GraphStore
-
-    return GraphStore(asset_db.pool).count_pending_mentions_for_run(run_id)
-
-
-def workflow_count_pending_ontology_candidates(
-    asset_db: AssetCoreDB, domain_id: str
-) -> int:
-    """Strict Workflow service: count all pending candidates in one Domain."""
-    from knowledge_mining.mining.infra.ontology_store import OntologyStore
-
-    return OntologyStore(asset_db.pool).count_proposed_candidates(domain_id)
-
-
-def workflow_run_induction_strict(
-    asset_db: AssetCoreDB,
-    *,
-    run_id: str,
-    node_id: str,
-    profile: DomainProfile,
-    llm_base_url: str | None,
-    ontology_version_id: str | None,
-) -> dict[str, int]:
-    """Run ontology induction without the legacy error-swallowing boundary."""
-    del run_id, node_id
-    if not llm_base_url:
-        return {"candidates": 0}
-    from contextlib import ExitStack
-
-    from knowledge_mining.mining.infra.ontology_store import GraphStore, OntologyStore
-    from knowledge_mining.mining.stages.ontology_induction import OntologyInductor
-
-    ontology_store = OntologyStore(asset_db.pool)
-    graph_store = GraphStore(asset_db.pool)
-    if ontology_version_id is None:
-        return {"candidates": 0}
-    if ontology_store.version(ontology_version_id, profile.domain_id) is None:
-        raise RuntimeError("frozen ontology is no longer available")
-    inductor = OntologyInductor(
-        base_url=llm_base_url,
-        graph_store=graph_store,
-        ontology_store=ontology_store,
-        domain_id=profile.domain_id,
-        knowledge_domain=profile.domain_id,
-        ontology_version_id=ontology_version_id,
-    )
-    with asset_db.transaction():
-        with ExitStack() as participants:
-            participants.enter_context(graph_store.join_transaction(asset_db))
-            participants.enter_context(ontology_store.join_transaction(asset_db))
-            summary = inductor.induce()
-    return dict(summary or {})
-
-
-def workflow_write_graph_strict(
-    asset_db: AssetCoreDB,
-    *,
-    run_id: str,
-    profile: DomainProfile,
-    ontology_version_id: str | None,
-) -> dict[str, int]:
-    """Recount and write the final graph atomically; never swallow failure."""
-    from contextlib import ExitStack
-
-    from knowledge_mining.mining.infra.ontology_store import GraphStore, OntologyStore
-    from knowledge_mining.mining.stages.entity_relations import EntityRelationBuilder
-    from knowledge_mining.mining.stages.graph_write import (
-        persist_edges,
-        reaggregate_edges,
-    )
-
-    ontology_store = OntologyStore(asset_db.pool)
-    graph_store = GraphStore(asset_db.pool)
-    with asset_db.transaction():
-        with ExitStack() as participants:
-            participants.enter_context(graph_store.join_transaction(asset_db))
-            participants.enter_context(ontology_store.join_transaction(asset_db))
-            if ontology_version_id is None or ontology_store.version(
-                ontology_version_id, profile.domain_id
-            ) is None:
-                raise RuntimeError("frozen ontology is no longer available")
-            members = ontology_store.accepted_node_type_members(profile.domain_id)
-            rebound = (
-                graph_store.rebind_untyped_entities(profile.domain_id, members)
-                if members
-                else 0
-            )
-            rows = graph_store.resolved_mentions_for_run(run_id)
-            recounted = _recount_entities(graph_store, rows)
-            relation_builder = EntityRelationBuilder(
-                ontology_store=ontology_store,
-                domain_id=profile.domain_id,
-                ontology_version_id=ontology_version_id,
-            )
-            graph, entity_ids = reaggregate_edges(
-                rows,
-                domain_id=profile.domain_id,
-                relation_builder=relation_builder,
-            )
-            edges = persist_edges(
-                graph_store,
-                graph,
-                entity_ids,
-                domain_id=profile.domain_id,
-                ontology_version_id=ontology_version_id,
-            )
-    return {"rebound": rebound, "recounted": recounted, "edges": edges}
-
-
 def workflow_finalize_mining_strict(
     asset_db: AssetCoreDB,
     runtime_db: MiningRuntimeDB,
@@ -1949,119 +1629,6 @@ def workflow_finalize_mining_strict(
         channel=channel,
         document_index=index,
     )
-
-
-def _run_induction(
-    asset_db: AssetCoreDB,
-    tracker: Any,
-    run_id: str,
-    profile: DomainProfile,
-    llm_base_url: str | None,
-) -> dict[str, int] | None:
-    """全局B（实体确认之后、本体确认之前）：从人确认的 __untyped__ 实体归纳 node_type 候选（N3）。
-
-    无 active 本体 / 无 LLM / 确认实体太少 → 安静跳过。失败不阻断（记日志）。
-    """
-    if not llm_base_url:
-        return None
-    domain_id = profile.domain_id
-    try:
-        from knowledge_mining.mining.infra.ontology_store import OntologyStore, GraphStore
-        from knowledge_mining.mining.stages.ontology_induction import OntologyInductor
-
-        ostore = OntologyStore(asset_db.pool)
-        if ostore.active_version(domain_id) is None:
-            return None
-        evt = tracker.start_stage(run_id, "ontology_induction")
-        inductor = OntologyInductor(
-            base_url=llm_base_url,
-            graph_store=GraphStore(asset_db.pool),
-            ontology_store=ostore,
-            domain_id=domain_id,
-            knowledge_domain=domain_id,
-        )
-        summary = inductor.induce()
-        asset_db.commit()
-        tracker.end_stage(evt, run_id, "ontology_induction", output_summary=str(summary))
-        logger.info("ontology_induction done for %s: %s", domain_id, summary)
-        return summary
-    except Exception:
-        logger.warning("ontology_induction failed for %s; continuing", domain_id, exc_info=True)
-        return None
-
-
-def _finalize_graph(
-    asset_db: AssetCoreDB,
-    tracker: Any,
-    run_id: str,
-    profile: DomainProfile,
-) -> dict[str, int] | None:
-    """收尾建图（本体确认之后，L2 §15.1 末段）：回贴类型 → 关系抽取 + 终态建边。
-
-    1) N5 回贴：把本体确认批准类型的成员实体 __untyped__ → 正式类型名；
-    2) 从 DB 已确认 mention 重聚合候选边（按 active 本体 allowed_pairs + NPMI），落事实边。
-    边只连"已确认且类型已定"的 canonical 对象。无 active 本体则跳过。失败不阻断发布。
-    """
-    domain_id = profile.domain_id
-    try:
-        from knowledge_mining.mining.infra.ontology_store import OntologyStore, GraphStore
-        from knowledge_mining.mining.stages.graph_write import reaggregate_edges, persist_edges
-
-        ostore = OntologyStore(asset_db.pool)
-        active = ostore.active_version(domain_id)
-        if active is None:
-            return None
-        gstore = GraphStore(asset_db.pool)
-
-        # 1) 回贴（N5）：成员实体补绑本体确认批准的正式类型，必须在读 mention 当前类型之前做。
-        members = ostore.accepted_node_type_members(domain_id)
-        n_rebound = gstore.rebind_untyped_entities(domain_id, members) if members else 0
-
-        # 2) 终态建边：从已确认 mention 重聚合（实体当前类型已是回贴后的正式类型）。
-        evt = tracker.start_stage(run_id, "graph_write_final")
-        rel_builder = _init_relation_builder(asset_db, profile)
-        rows = gstore.resolved_mentions_for_run(run_id)
-
-        # 3) 计数权威重算：从全部已确认 mention（auto+human）按实体聚合，mention_count=提及行数、
-        #    document_count=去重文档数，set 置准——把实体确认人审 merge/new 进来的提及也算上，
-        #    并矫正 resolve_mention 的即时 +1（以这里为准，幂等）。
-        n_recounted = _recount_entities(gstore, rows)
-
-        bg, entity_ids = reaggregate_edges(rows, domain_id=domain_id, relation_builder=rel_builder)
-        n_edges = persist_edges(
-            gstore, bg, entity_ids,
-            domain_id=domain_id, ontology_version_id=active["id"],
-        )
-        asset_db.commit()
-        summary = {"rebound": n_rebound, "recounted": n_recounted, "edges": n_edges}
-        tracker.end_stage(evt, run_id, "graph_write_final", output_summary=str(summary))
-        logger.info("graph_write_final done for %s: %s", domain_id, summary)
-        return summary
-    except Exception:
-        logger.warning("graph_write_final failed for %s; continuing", domain_id, exc_info=True)
-        return None
-
-
-def _recount_entities(gstore: Any, mention_rows: list[dict[str, Any]]) -> int:
-    """从全部已确认 mention 按实体聚合重算计数，set 置准。返回被重算的实体数。
-
-    mention_count = 该实体的提及行数；document_count = 去重文档快照数（同文档多条不翻倍）。
-    覆盖全局A的自动计数 + 实体确认人审 merge/new 的提及，是计数的权威终态。
-    """
-    from collections import defaultdict
-    ment: dict[str, int] = defaultdict(int)
-    docs: dict[str, set] = defaultdict(set)
-    for r in mention_rows:
-        eid = r.get("entity_id")
-        if not eid:
-            continue
-        ment[eid] += 1
-        snap = r.get("document_snapshot_id")
-        if snap:
-            docs[eid].add(snap)
-    for eid, mc in ment.items():
-        gstore.set_entity_counts(eid, mention_count=mc, document_count=len(docs[eid]))
-    return len(ment)
 
 
 def _legacy_finalize_inputs(
@@ -2201,8 +1768,6 @@ def _init_llm(
     profile: DomainProfile | None = None,
     *,
     knowledge_domain: str | None = None,
-    ontology_store: Any | None = None,
-    ontology_version_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Initialize LLM services if URL provided.
 
@@ -2243,30 +1808,6 @@ def _init_llm(
             base_url=llm_base_url,
             profile=profile,
             knowledge_domain=knowledge_domain,
-        )
-    except (ImportError, Exception):
-        pass
-
-    # L4 §15: 本体线实体抽取（独立 LLM 调用，双通道，喂 active 本体类型表）
-    try:
-        from knowledge_mining.mining.stages.entity_extract import EntityExtractor
-        result["entity_extractor"] = EntityExtractor(
-            base_url=llm_base_url,
-            profile=profile,
-            knowledge_domain=knowledge_domain,
-            ontology_store=ontology_store,
-            domain_id=knowledge_domain or (profile.domain_id if profile else None),
-            ontology_version_id=ontology_version_id,
-        )
-    except (ImportError, Exception):
-        pass
-
-    # v1.2: Create DiscourseRelationBuilder
-    try:
-        from knowledge_mining.mining.stages.relations import DiscourseRelationBuilder
-        result["discourse_relation_builder"] = DiscourseRelationBuilder(
-            base_url=llm_base_url,
-            knowledge_domain=knowledge_domain, profile=profile,
         )
     except (ImportError, Exception):
         pass
@@ -2335,89 +1876,6 @@ def _close_llm_resources(*objs: Any) -> None:
                 closer()
             except Exception:
                 logger.debug("llm resource close failed", exc_info=True)
-
-
-def _init_resolver(asset_db: AssetCoreDB, profile: DomainProfile | None) -> Any | None:
-    """B3 实体归一器：读领域别名词典建内存索引，与 enrich 共用 asset_db 连接池。"""
-    if profile is None:
-        return None
-    try:
-        from knowledge_mining.mining.infra.ontology_store import OntologyStore
-        from knowledge_mining.mining.stages.resolve import EntityResolver
-        return EntityResolver(
-            ontology_store=OntologyStore(asset_db.pool),
-            domain_id=profile.domain_id,
-        )
-    except Exception:
-        logger.warning("resolver init failed; skipping entity resolution", exc_info=True)
-        return None
-
-
-def _init_relation_builder(
-    asset_db: AssetCoreDB,
-    profile: DomainProfile | None,
-    *,
-    ontology_version_id: str | None = None,
-) -> Any | None:
-    """B4 概念关系抽取器：读 active 本体关系类型拿 allowed_pairs，共用 asset_db 连接池。"""
-    if profile is None:
-        return None
-    try:
-        from knowledge_mining.mining.infra.ontology_store import OntologyStore
-        from knowledge_mining.mining.stages.entity_relations import EntityRelationBuilder
-        return EntityRelationBuilder(
-            ontology_store=OntologyStore(asset_db.pool),
-            domain_id=profile.domain_id,
-            ontology_version_id=ontology_version_id,
-        )
-    except Exception:
-        logger.warning("relation builder init failed; skipping entity relations", exc_info=True)
-        return None
-
-
-def _run_graph_write(
-    asset_db: AssetCoreDB,
-    tracker: Any,
-    run_id: str,
-    ctxs: list,
-    domain_id: str,
-) -> dict[str, int] | None:
-    """B5 全局落图：聚合本 build 所有文档 → 写 canonical 实体/边/出处/mention + 候选。
-
-    仅当该领域已引种本体（有 active 版本）才跑；未引种则跳过（本体能力未启用）。
-    失败不阻断整轮（落图是增量能力，失败只记日志）。
-    """
-    good = [c for c in ctxs if getattr(c, "snapshot_id", None) and not getattr(c, "error", None)]
-    if not good:
-        return None
-    try:
-        from knowledge_mining.mining.infra.ontology_store import OntologyStore, GraphStore
-        from knowledge_mining.mining.stages.graph_write import (
-            aggregate_build, persist_entities_and_mentions,
-        )
-
-        ostore = OntologyStore(asset_db.pool)
-        active = ostore.active_version(domain_id)
-        if active is None:
-            logger.info("no active ontology for %s; skip graph_write (B5)", domain_id)
-            return None
-
-        evt = tracker.start_stage(run_id, "graph_write")
-        gstore = GraphStore(asset_db.pool)
-        bg = aggregate_build(good, domain_id=domain_id)
-        # 全局A（实体确认之前）：只落实体 + mention + 出处 + 关系候选，**不建边**。
-        # 事实边后移到本体确认通过、类型回贴之后由 _finalize_graph 从 DB 重聚合（L2 §15.1）。
-        summary, _entity_ids = persist_entities_and_mentions(
-            gstore, ostore, bg,
-            domain_id=domain_id, ontology_version_id=active["id"],
-        )
-        asset_db.commit()
-        tracker.end_stage(evt, run_id, "graph_write", output_summary=str(summary))
-        logger.info("graph_write (global-A) done for %s: %s", domain_id, summary)
-        return summary
-    except Exception:
-        logger.warning("graph_write (B5) failed for %s; continuing", domain_id, exc_info=True)
-        return None
 
 
 def _init_llm_generator(
@@ -2551,33 +2009,12 @@ def _run_pipeline(
     )
     _check_cancelled(runtime_db, run_id)
 
-    # 本体线总开关（开始时检测一次）：该领域未引种本体（无 active 版本）→
-    # 关掉本体线的所有阶段——每文档的 entity_extract / resolve / entity_relations，
-    # 以及全局的 graph_write / ontology_induction / finalize_graph 和两道人审 Gate。
-    # 篇章线（parse→segment→enrich→discourse→retrieval_units→embedding→db_write）
-    # 不受影响，照常跑出检索库。
-    from knowledge_mining.mining.infra.ontology_store import OntologyStore
-    has_ontology = OntologyStore(asset_db.pool).active_version(profile.domain_id) is not None
-    if not has_ontology:
-        logger.info(
-            "Domain '%s' has no active ontology; skipping all ontology-line stages "
-            "(entity_extract, resolve, entity_relations, graph_write, induction, finalize, review gates).",
-            profile.domain_id,
-        )
-
-    # Build pipeline config with pluggable operators (profile-driven).
-    # 本体线算子在无本体时置 None：对应的 streaming 阶段自带 `if X is None: return ctx`
-    # 的短路，于是退化成零成本的直通，不发起任何 LLM/DB 调用。
+    # Build the legacy pipeline without the retired ontology line.
     pipeline_config = PipelineConfig(
         domain=profile.domain_id,
         parser_factory=create_parser,
         segmenter=DefaultSegmenter(),
         enricher=llm.get("enricher"),
-        entity_extractor=llm.get("entity_extractor") if has_ontology else None,
-        resolver=_init_resolver(asset_db, profile) if has_ontology else None,
-        entity_relation_builder=(
-            _init_relation_builder(asset_db, profile) if has_ontology else None
-        ),
         question_generator=llm.get("question_generator"),
         embedding_generator=embedding_generator,
         discourse_relation_builder=llm.get("discourse_relation_builder"),
@@ -2745,22 +2182,11 @@ def _run_pipeline(
     ctxs: list[DocumentContext] = []
     if work_items:
         config = pipeline_config
-        # 本体线的逐文档阶段（entity_extract / resolve）仅在有 active 本体时入列。
-        # 无本体时直接不挂这两个阶段——否则即便算子为 None 走直通，_worker 仍会发
-        # start/end 事件，UI 会把它们显示成"已完成"（几百毫秒直通），与关系抽取/落图
-        # 的"等待中"不一致。不入列 → 不发事件 → UI 显示"等待中"。
-        ontology_stages: list[tuple] = []
-        if has_ontology:
-            ontology_stages = [
-                ("entity_extract",   lambda ctx: entity_extract_stage(ctx, config),  max_workers),
-                ("resolve",          lambda ctx: resolve_stage(ctx, config),         max_workers),
-            ]
         stages = [
             ("parse",            lambda ctx: parse_stage(ctx, config),           1),
             ("segment",          lambda ctx: segment_stage(ctx, config),         1,
              lambda ctx: f"segments={len(ctx.segments or ())}"),
             ("enrich",           lambda ctx: enrich_stage(ctx, config),          max_workers),
-            *ontology_stages,
             ("discourse",        lambda ctx: discourse_stage(ctx, config),       min(max_workers, 2)),
             ("retrieval_units",  lambda ctx: retrieval_units_stage(ctx, config), max_workers,
              lambda ctx: f"units={len(ctx.retrieval_units or ())}"),
@@ -2795,49 +2221,11 @@ def _run_pipeline(
         else:
             skipped_count += 1
 
-    # Phase 1d: 全局落图（B5）。仅当本领域已引种本体（有 active 版本）才跑，否则跳过。
-    if has_ontology:
-        _run_graph_write(asset_db, tracker, run_id, ctxs, profile.domain_id)
-
     counts = {
         "committed_count": committed_count, "new_count": new_count,
         "updated_count": updated_count, "failed_count": failed_count,
         "skipped_count": skipped_count,
     }
-
-    # Phase 1e: 反转闸序的两检查点编排（L2 §15.1）。phase1_only 跳过全部人审，直接建库。
-    # 无 active 本体时本体线整体关闭：跳过两道 Gate + 归纳 + 终态建图，直接进建库/发布。
-    if not phase1_only and has_ontology:
-
-        def _pause(gate: str) -> dict[str, Any]:
-            av = OntologyStore(asset_db.pool).active_version(profile.domain_id)
-            updated = tracker.pause_for_review(
-                run_id, subloop_stage=gate,
-                ontology_version_id=av["id"] if av else None,
-                domain=profile.domain_id,
-                **counts,
-            )
-            runtime_db.commit()
-            if not updated:
-                current = runtime_db.get_run(run_id) or {}
-                return {"run_id": run_id, "status": current.get("status", "cancelled")}
-            logger.info("Run %s paused for human review at gate=%s", run_id, gate)
-            return {
-                "run_id": run_id, "status": "awaiting_review", "subloop_stage": gate,
-                "total_documents": len(docs), "build_id": None, "release_id": None, **counts,
-            }
-
-        # 实体确认在前：有 pending mention → 先停，等人确认"暂无类型/有歧义"的实体。
-        if _has_pending_mentions(asset_db, run_id):
-            return _pause("entity_review")
-
-        # 无 pending → 直接跑全局B 归纳类型候选，再看本体确认。
-        _run_induction(asset_db, tracker, run_id, profile, llm_base_url)
-        if _has_proposed_candidates(asset_db, profile.domain_id):
-            return _pause("ontology_review")
-
-        # 两道 Gate 都无需人审 → 收尾建图（回贴 + 建边）后再建库。
-        _finalize_graph(asset_db, tracker, run_id, profile)
 
     return _finalize_run(
         asset_db, runtime_db, tracker, run_id, batch_id, snapshot_decisions,
@@ -3116,7 +2504,6 @@ def _finalize_run(
         str(existing_run_build["id"])
         if existing_run_build is not None else None
     )
-    release_id = None
     has_failures = failed_count > 0
 
     # 27号审查修复 B（24号 §5.8/L340）：按冻结 readiness 决定发布——基础
@@ -3211,9 +2598,6 @@ def _finalize_run(
                 readiness_ok = True
                 activate_assets = True
                 activation_blocked_reason = None
-                should_publish = publish and (
-                    not rejection_summary or publish_on_partial_failure
-                )
             elif capabilities is not None:
                 validated_snapshot_ids = sorted({
                     str(d["document_snapshot_id"])
@@ -3284,11 +2668,9 @@ def _finalize_run(
                     has_failures=has_failures,
                     publish_on_partial_failure=publish_on_partial_failure,
                 )
-                should_publish = publish and activate_assets
             else:
                 activate_assets = True
                 activation_blocked_reason = None
-                should_publish = publish
 
             if activate_assets:
                 # staging → final 与 Build 组装在同一事务内；readiness
@@ -3317,21 +2699,6 @@ def _finalize_run(
                     allow_empty=has_kb_removals,
                 )
 
-                # This read must see the build before the outer transaction commits.
-                try:
-                    quality = demo_quality_summary(asset_db, build_id)
-                    logger.info("Demo quality summary: %s", quality)
-                except Exception as e:
-                    logger.warning("Demo quality summary failed: %s", e)
-
-                if should_publish:
-                    release_id = publish_release(
-                        asset_db,
-                        build_id=build_id,
-                        released_by=f"run:{run_id}",
-                        domain=profile.domain_id,
-                        channel=channel,
-                    )
             else:
                 logger.warning(
                     "Run %s produced no Build: assets not eligible for activation "
@@ -3356,14 +2723,6 @@ def _finalize_run(
             evt = tracker.start_stage(run_id, "validate_build")
             tracker.end_stage(
                 evt, run_id, "validate_build", output_summary="passed",
-            )
-        if release_id is not None:
-            evt = tracker.start_stage(run_id, "publish_release")
-            tracker.end_stage(
-                evt,
-                run_id,
-                "publish_release",
-                output_summary=f"release_id={release_id}",
             )
         runtime_db.commit()
 
@@ -3524,7 +2883,6 @@ def _finalize_run(
         "failed_count": failed_count,
         "skipped_count": skipped_count,
         "build_id": build_id,
-        "release_id": release_id,
         "staged_count": (
             len(partition_ready)
             if document_index is not None and phase1_only else 0

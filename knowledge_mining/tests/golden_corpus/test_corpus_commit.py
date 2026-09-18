@@ -40,7 +40,6 @@ from knowledge_mining.mining.parse_operator.service import (  # noqa: E402
 from knowledge_mining.mining.parse_quality.gate import QualityGate  # noqa: E402
 from knowledge_mining.mining.parse_reconciler import StructuralReconciler  # noqa: E402
 from knowledge_mining.mining.shadow_parse.repositories_memory import (  # noqa: E402
-    MemoryParseAttemptRepository,
     MemoryParseRunRepository,
 )
 from knowledge_mining.mining.snapshot_store.repositories_memory import (  # noqa: E402
@@ -69,7 +68,6 @@ def _service(tmp_path):  # noqa: ANN001
     service = DocumentParseService(
         object_store=store,
         parse_runs=MemoryParseRunRepository(),
-        attempts=MemoryParseAttemptRepository(),
         storage_objects=MemoryStorageObjectRepository(),
         parser_resolver=resolve_pipeline,
         commit_service=commit,
@@ -127,10 +125,6 @@ async def test_corpus_commit_end_to_end(tmp_path) -> None:
         if run.status == "SUCCEEDED":
             assert run.snapshot_id, f"{doc.name}: SUCCEEDED without snapshot"
             expected_snapshots += 1
-            events = await service._attempts.list_by_run(run.id)
-            assert len(events) == 1 and events[0].outcome == "SUCCEEDED", (
-                f"{doc.name}: attempt audit missing"
-            )
         else:
             assert run.status == "FAILED", (
                 f"{doc.name}: unexpected terminal {run.status}"

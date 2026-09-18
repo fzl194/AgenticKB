@@ -99,7 +99,7 @@ class OfficialParadigmSeedsTest {
     void hybridGraphUsesOnlyCurrentCatalog() {
         String graph = ParadigmService.OFFICIAL_HYBRID_GRAPH;
         for (String retired : List.of("weighted_rrf", "collect", "query_understanding",
-                "entity_exact", "llm_rerank", "graph_expand", "identity", "hyde", "multi_query",
+                "entity_exact", "entity_graph", "llm_rerank", "graph_expand", "identity", "hyde", "multi_query",
                 "score_rerank", "request_input")) {
             assertThat(graph).doesNotContain("\"operatorType\": \"" + retired + "\"");
         }

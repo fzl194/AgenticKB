@@ -2,7 +2,7 @@
 
 全链 SQLite 加载（001+008+009+010+011），断言：
 1. ``asset_raw_segments.compiler_fingerprint`` 列存在；
-2. ``asset_segment_element_links`` 表形状与索引齐全。
+2. 元素定位仅保留在 ``source_offsets_json``，不再创建重复 link 表。
 """
 from __future__ import annotations
 
@@ -22,34 +22,15 @@ def test_011_files_exist_both_dialects() -> None:
         assert (_SCHEMA_DIR / name).exists(), name
 
 
-def test_segment_links_table_and_column() -> None:
+def test_compiler_fingerprint_is_retained_without_link_table() -> None:
     conn = _load_full_sqlite_chain("011_m5_segment_links.sql")
     seg_cols = {
         row[1] for row in conn.execute("PRAGMA table_info(asset_raw_segments)")
     }
     assert "compiler_fingerprint" in seg_cols
 
-    cols = {
-        row[1] for row in
-        conn.execute("PRAGMA table_info(asset_segment_element_links)")
-    }
-    assert {
-        "id", "document_snapshot_id", "segment_index", "element_id",
-        "evidence_span_ids", "char_start", "char_end", "metadata_json",
-    } <= cols
-    # FK（对抗评审 MEDIUM-8）生效：先插父快照行。
-    conn.execute(
-        "INSERT INTO asset_document_snapshots (id, domain,"
-        " normalized_content_hash, raw_content_hash, mime_type, created_at)"
-        " VALUES ('snap1', 'd', 'nh', 'rh', 'other', 't')"
-    )
-    conn.execute(
-        "INSERT INTO asset_segment_element_links (id, document_snapshot_id,"
-        " segment_index, element_id, evidence_span_ids)"
-        " VALUES ('l1', 'snap1', 0, 'e1', '[\"s1\",\"s2\"]')"
-    )
-    rows = list(conn.execute(
-        "SELECT element_id FROM asset_segment_element_links"
-        " WHERE document_snapshot_id = 'snap1'"
-    ))
-    assert rows == [("e1",)]
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='asset_segment_element_links'"
+    ).fetchone()
+    assert row is None

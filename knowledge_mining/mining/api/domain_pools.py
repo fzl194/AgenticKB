@@ -67,10 +67,9 @@ class DomainPoolManager:
         return resolved, _pool_key(resolved)
 
     def _ensure_once(self, key: PoolKey, resolved: ResolvedDomainDatabase) -> None:
-        """对目标库跑一次全量 DDL（幂等）。按库单飞；DDL 不持有 _state_lock。
+        """对目标库做一次只读 schema contract 校验。按库单飞。
 
-        远端库上一套重放要跑几十秒——若在 _state_lock 内执行，其他协程在
-        fast-path 上的 `with self._state_lock` 会被连带冻住（那可是事件循环线程）。
+        校验连接可能阻塞，仍不得持有 _state_lock，避免冻结事件循环 fast-path。
         """
         with self._state_lock:
             if key in self._ensured:

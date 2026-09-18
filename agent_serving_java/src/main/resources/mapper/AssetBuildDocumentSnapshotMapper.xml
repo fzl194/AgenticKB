@@ -11,13 +11,6 @@
         <result column="selection_status"     property="selectionStatus"/>
     </resultMap>
 
-    <select id="selectByBuildIdAndStatus" resultMap="buildSnapshotResult">
-        SELECT document_snapshot_id, build_id, document_id, selection_status
-        FROM asset_build_document_snapshots
-        WHERE build_id = #{buildId}
-          AND selection_status = #{selectionStatus}
-    </select>
-
     <!--
       KB-narrowed scope resolution. Four things here are load-bearing:
 

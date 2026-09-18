@@ -1,19 +1,17 @@
 -- =============================================================================
 -- 010_m4_parse_run_state_machine.sql — M4 Parse Run 状态机扩列（SQLite）
 -- =============================================================================
--- 文档解析平台化 M4（SRS §9.2 完整 Parse Run 状态机 + §9.5 SUPERSEDED +
--- §4.6 attempt 事件）。ADR-0003 D-003 / D-004（增量幂等，不改读写）。
+-- 文档解析平台化 M4（SRS §9.2 完整 Parse Run 状态机 + §9.5 SUPERSEDED）。
+-- ADR-0003 D-003 / D-004（增量幂等，不改读写）。
 --
 -- 内容：
 --   1. asset_parse_runs.status CHECK 从两态（SUCCEEDED/FAILED）扩到完整
 --      状态机 13 态，与 contracts/state_machines.py 的
 --      VALID_PARSE_RUN_STATES 单一事实源对齐（含 SUPERSEDED 终态）。
---   2. 新表 asset_parse_run_attempts：每个 backend 尝试一行（SRS §2.2
---      「fallback 必须留下原因」/ §9.2「重试创建新的 attempt event」）。
 --
 -- SQLite 不支持修改列级 CHECK，采用标准重建表模式（新建→搬运→删旧→改名
 -- →重建索引）。幂等性：新表名带 _m4 后缀，重跑时旧表已不存在、SELECT
--- 搬运为空操作；attempts 表 CREATE IF NOT EXISTS。
+-- 搬运为空操作。
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -73,32 +71,6 @@ CREATE INDEX IF NOT EXISTS idx_asset_parse_runs_document
 
 CREATE INDEX IF NOT EXISTS idx_asset_parse_runs_parser
     ON asset_parse_runs(parser_fingerprint, status);
-
--- -----------------------------------------------------------------------------
--- 2. 新表：asset_parse_run_attempts（backend 尝试事件，SRS §4.6/§9.2）
--- -----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS asset_parse_run_attempts (
-    id                  TEXT PRIMARY KEY,
-    parse_run_id        TEXT NOT NULL,             -- M4 补 FK -> asset_parse_runs(id)
-    attempt_index       INTEGER NOT NULL CHECK (attempt_index >= 0),
-    parser_id           TEXT NOT NULL,
-    parser_fingerprint  TEXT NOT NULL,
-    attempt_kind        TEXT NOT NULL CHECK (
-        attempt_kind IN ('primary', 'fallback', 'repair', 'replay')
-    ),
-    outcome             TEXT NOT NULL CHECK (outcome IN ('SUCCEEDED', 'FAILED')),
-    started_at          TEXT NOT NULL,
-    finished_at         TEXT,
-    error_message       TEXT,
-    metadata_json       TEXT NOT NULL DEFAULT '{}'
-);
-
--- 幂等：同一 run 的尝试序号唯一（重试必产生新序号，不覆盖旧事件）。
-CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_parse_run_attempts_seq
-    ON asset_parse_run_attempts(parse_run_id, attempt_index);
-
-CREATE INDEX IF NOT EXISTS idx_asset_parse_run_attempts_run
-    ON asset_parse_run_attempts(parse_run_id, outcome);
 
 -- -----------------------------------------------------------------------------
 -- 3. asset_document_snapshots 重建（mime_type CHECK 放宽，对齐 010 PG 第 3 节）

@@ -930,7 +930,7 @@ def persist_document_assets(
 
         # 批次4 修复：检索单元不再挂在「快照无切片」栅栏下。老逻辑在
         # segment_compile 预写切片后恒走 else 分支，units/embeddings/relations
-        # 整批静默丢弃（全量基线挖掘「成功」但 asset_retrieval_units 恒 0）。
+        # 整批静默丢弃（全量基线挖掘「成功」但旧检索单元恒 0）。
         # 现按「本快照是否已有检索单元」独立幂等判断：首跑必插，重跑不重插。
         units_inserted = not asset_db.get_retrieval_units_by_snapshot(snapshot_id)
         if units_inserted:

@@ -21,10 +21,8 @@ from knowledge_mining.mining.workflow.handler_registry import (
     resolve_effective_parameters,
 )
 from knowledge_mining.mining.workflow.handlers import document as handlers
-from knowledge_mining.mining.workflow.handlers import research as research_handlers
 from knowledge_mining.mining.workflow.operators.options import (
     EmbeddingOptions,
-    EntityExtractOptions,
 )
 
 
@@ -247,33 +245,3 @@ def test_m3_degraded_handlers_return_fallback_document_state(
     assert result.status is OperatorStatus.FALLBACK
     assert isinstance(result.outputs, DocumentState)
     assert result.outputs.context.diagnostics
-
-
-def test_research_entity_handler_preserves_param_conversion(
-    monkeypatch,
-) -> None:
-    """研究隔离区的实体 handler 保留参数转换行为，但不进正式注册面。"""
-
-    captured = []
-
-    def stage_fn(ctx, cfg, **kwargs):
-        captured.append(kwargs.get("options"))
-        return ctx
-
-    monkeypatch.setattr(research_handlers, "entity_extract_stage", stage_fn)
-
-    result = research_handlers.entity_extract_handler(
-        state("doc-a"), {"minConfidence": 0.8}, runtime()
-    )
-
-    assert result.status in {OperatorStatus.SUCCESS, OperatorStatus.FALLBACK}
-    assert isinstance(captured[0], EntityExtractOptions)
-
-
-def test_ontology_document_handler_is_not_applicable_without_frozen_ontology() -> None:
-    result = research_handlers.entity_extract_handler(
-        state("doc-a"), {}, runtime(ontology_version_id=None)
-    )
-
-    assert result.status is OperatorStatus.NOT_APPLICABLE
-    assert "ontology_not_applicable" in result.capabilities

@@ -19,10 +19,8 @@ import java.util.Set;
 /**
  * {@code scope_resolve} — resolve the document snapshots a retrieval may see (25 号 §6.2).
  *
- * <p>Default: the domain + channel's active release. With the {@code kbIds} param set, the scope
- * narrows to those knowledge bases and is resolved from their builds instead — KB mining runs
- * {@code publish=false}, so KB content never reaches a release and the default path would always
- * miss it. See {@link AssetRepository#resolveKbScope(String, List)}.</p>
+ * <p>The scope always resolves from authorized knowledge-base builds. There is no domain-release
+ * fallback: an empty authorized KB set fails closed.</p>
  *
  * <p>{@code kbIds} lives in the node params, which is what makes "pick a set of KBs" a
  * design-time property of the paradigm: it is frozen into the stored graph rather than supplied
@@ -79,7 +77,7 @@ public class ScopeResolveOperator implements Operator {
     public OperatorDef definition() {
         return new OperatorDef(
                 "scope_resolve", "scope", "范围解析",
-                "根据 domain/channel 解析当前生效的 release 与文档快照范围；可按知识库收窄；透传请求显式 hard filters",
+                "根据授权知识库的最新有效 Build 解析文档快照范围；透传请求显式 hard filters",
                 List.of(),
                 List.of(SlotDecl.required("scope", SlotType.SCOPE, "检索范围(snapshotIds+hardFilters)")),
                 PARAM_SCHEMA,
@@ -89,7 +87,7 @@ public class ScopeResolveOperator implements Operator {
     @Override
     public SlotValues execute(SlotValues inputs, Params params, ExecContext ctx) {
         // 阶段 A 菜谱+运行时范围：图内写死 kbIds = 专属范式优先（请求值被忽略并留痕）；
-        // 图内留空 = 通用范式，用请求现场指定的库组合；请求也未带 = 域级 release（原语义）。
+        // 图内留空 = 通用范式，用请求现场指定或授权层返回的开放库组合。
         List<String> paramKbIds = params.getStringList("kbIds");
         List<String> requestKbIds = ctx.requestKbIds() == null ? List.of() : ctx.requestKbIds();
         List<String> effectiveKbIds;
@@ -104,8 +102,11 @@ public class ScopeResolveOperator implements Operator {
 
         List<String> kbIds =
                 kbAccessService.authorize(ctx.domain(), effectiveKbIds, ctx.username());
+        if (kbIds.isEmpty()) {
+            throw new IllegalArgumentException("kb_ids_required");
+        }
 
-        ActiveScope scope = assetRepository.resolveActiveScope(ctx.domain(), ctx.channel(), kbIds);
+        ActiveScope scope = assetRepository.resolveKbScope(ctx.domain(), kbIds);
 
         // R1：显式 hard filters 透传（不推断、不改写——规范化归下游算子的确定性映射）。
         // 27号审查修复：①未支持的键（path/date 等 v2 表暂无可下推列）显式 400，
@@ -131,9 +132,7 @@ public class ScopeResolveOperator implements Operator {
         ctx.putAttribute("releaseId", scope.releaseId());
         ctx.putAttribute("buildId", scope.buildId());
         ctx.putAttribute("snapshotCount", scope.snapshotIds().size());
-        if (!kbIds.isEmpty()) {
-            ctx.putAttribute("kbIds", kbIds);
-        }
+        ctx.putAttribute("kbIds", kbIds);
         return SlotValues.of("scope", scope);
     }
 
@@ -148,7 +147,7 @@ public class ScopeResolveOperator implements Operator {
      * <p>解码走 {@link StructureRefService} 的授权枚举（与结构工具同源：开放库求交
      * + 活动/历史快照扫描），非法/越权/失效统一映射 invalid_scope_ref（400）。
      * 明文内部 ref 原样透传（服务端直连 API 的既有契约）。域级 release 范围
-     * （无 kbIds）无法枚举候选——opaque ref 要求请求带库范围。</p>
+     * 空 KB 范围在进入本方法前已经拒绝。</p>
      */
     private Map<String, Object> decodeOpaqueRefs(Map<String, Object> filters,
                                                   String domain, List<String> kbIds,

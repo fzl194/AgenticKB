@@ -66,7 +66,10 @@ def test_document_handlers_only_cover_allowed_operators() -> None:
     assert set(DOCUMENT_HANDLERS) == ALLOWED_DOCUMENT_HANDLER_TYPES
 
 
-def test_research_operators_isolated_in_research_module() -> None:
-    from knowledge_mining.mining.workflow.operators import research
+def test_research_operator_module_is_removed() -> None:
+    from pathlib import Path
 
-    assert set(research.RESEARCH_OPERATOR_TYPES) == RESEARCH_OPERATOR_TYPES
+    assert not (
+        Path(__file__).parents[1]
+        / "mining" / "workflow" / "operators" / "research.py"
+    ).exists()

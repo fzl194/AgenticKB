@@ -1,9 +1,10 @@
-"""Publishing stage: build + release for v1.1.
+"""KB Build assembly and validation.
 
 Two-phase:
 - classify_documents: compare snapshots against previous active build → NEW/UPDATE/SKIP/REMOVE
 - assemble_build: select snapshots, merge with previous active build (incremental or full)
-- publish_release: activate a build as the current active release
+The latest validated Build of a KB is the serving view; there is no separate
+domain/channel release pointer.
 """
 from __future__ import annotations
 
@@ -58,10 +59,9 @@ def classify_documents(
             release；用域级 parent 会把同域其它 KB 的文档误当 prev、且本 KB
             的 carry-forward 永远失效。
     """
-    if kb_id:
-        prev_build = asset_db.get_latest_validated_kb_build(kb_id)
-    else:
-        prev_build = asset_db.get_active_build(domain=domain, channel=channel)
+    if not kb_id:
+        raise ValueError("kb_id is required; domain release scope is retired")
+    prev_build = asset_db.get_latest_validated_kb_build(kb_id)
     prev_snapshots: dict[str, str] = {}  # document_id -> snapshot_id
 
     if prev_build:
@@ -168,17 +168,13 @@ def assemble_build(
         ):
             raise ValueError("domain_mismatch")
 
-        if kb_id:
-            prev_build = asset_db.get_latest_validated_kb_build(kb_id)
-        else:
-            prev_build = asset_db.get_active_build(domain=domain, channel=channel)
+        if not kb_id:
+            raise ValueError("kb_id is required; domain release scope is retired")
+        prev_build = asset_db.get_latest_validated_kb_build(kb_id)
         has_prev = prev_build is not None
         build_mode = determine_build_mode(has_prev)
         parent_build_id = prev_build["id"] if has_prev else None
-        current_loader = (
-            getattr(asset_db, "get_current_kb_build_snapshots", None)
-            if kb_id else None
-        )
+        current_loader = getattr(asset_db, "get_current_kb_build_snapshots", None)
         parent_snapshots = (
             current_loader(kb_id)
             if current_loader is not None
@@ -258,7 +254,6 @@ def assemble_build(
                     reason=parent["reason"],
                     metadata_json=parent.get("metadata_json"),
                 )
-
         # Add current run decisions with their effective source provenance.
         for decision in snapshot_decisions:
             parent = parent_by_document.get(decision["document_id"])
@@ -391,142 +386,3 @@ def validate_build(
                     f"(paradigm requires embedding and no fallback trace "
                     f"is recorded; re-mine after restoring the embedding service)"
                 )
-
-
-def publish_release(
-    asset_db: AssetCoreDB,
-    build_id: str,
-    *,
-    domain: str,
-    channel: str = "prod",
-    released_by: str | None = None,
-    release_notes: str | None = None,
-) -> str:
-    """Publish a validated build as the active release.
-
-    Returns release_id.
-    """
-    with asset_db.transaction():
-        asset_db.acquire_domain_publish_lock(domain)
-
-        # Re-read both build and parent release after acquiring the domain lock.
-        build = asset_db.get_build(build_id)
-        if build is None:
-            raise ValueError(f"Build {build_id} not found")
-        if build["status"] not in ("validated", "published"):
-            raise ValueError(
-                f"Build {build_id} status is {build['status']}, "
-                "expected validated/published"
-            )
-        if build["domain"] != domain:
-            raise ValueError(
-                f"Build {build_id} belongs to domain {build['domain']!r}, "
-                f"cannot publish under domain {domain!r}"
-            )
-
-        # KB-scoped builds must never enter the domain-level active release：active release
-        # 是域级「一域至多一个」，发布 KB build 会 retire 掉同域其它 KB 的 release。
-        # KB 知识走 KB 作用域检索（直接从 build 读），不经过这里。护栏原本只在
-        # kb/routes/mining.py 入口一行 metadata.publish=false，无测试锁；此处下推到
-        # 发布边界强制，任何调用方都无法绕过。
-        if build.get("kb_id"):
-            raise ValueError(
-                f"Build {build_id} is KB-scoped (kb_id={build['kb_id']!r}); "
-                "KB builds must not be published to the domain-level active release."
-            )
-
-        prev_release = asset_db.get_active_release(domain, channel)
-        prev_release_id = prev_release["id"] if prev_release else None
-
-        release_id = uuid.uuid4().hex
-        release_code = f"R-{uuid.uuid4().hex[:8].upper()}"
-
-        asset_db.insert_release(
-            release_id=release_id,
-            release_code=release_code,
-            build_id=build_id,
-            domain=domain,
-            channel=channel,
-            status="staging",
-            previous_release_id=prev_release_id,
-            released_by=released_by,
-            release_notes=release_notes,
-        )
-
-        # Retire the old release and activate the new one on the same connection.
-        asset_db.activate_release(release_id)
-
-        return release_id
-
-
-def demo_quality_summary(asset_db: AssetCoreDB, build_id: str) -> dict[str, Any]:
-    """Generate a demo quality summary for a build.
-
-    Checks:
-    - generated_question count (warns if 0)
-    - Whether question titles still carry Qn prefix
-    - RST discourse relation count and type distribution
-
-    Does NOT block release. Returns a dict to merge into build metadata.
-    """
-    snapshots = asset_db.get_build_snapshots(build_id)
-    active_snap_ids = [s["document_snapshot_id"] for s in snapshots if s["selection_status"] == "active"]
-
-    warnings: list[str] = []
-    summary: dict[str, Any] = {"build_id": build_id}
-
-    # 1. Count retrieval units by type
-    unit_counts: dict[str, int] = {}
-    for snap_id in active_snap_ids:
-        rows = asset_db._fetchall(
-            "SELECT unit_type, COUNT(*) as cnt FROM asset_retrieval_units "
-            "WHERE document_snapshot_id = %s GROUP BY unit_type",
-            (snap_id,),
-        )
-        for r in rows:
-            unit_counts[r["unit_type"]] = unit_counts.get(r["unit_type"], 0) + r["cnt"]
-
-    summary["unit_type_counts"] = unit_counts
-    q_count = unit_counts.get("generated_question", 0)
-    if q_count == 0:
-        warnings.append("No generated_question units found")
-    summary["generated_question_count"] = q_count
-
-    # 2. Check for Qn-prefixed question titles
-    q_prefix_count = 0
-    for snap_id in active_snap_ids:
-        rows = asset_db._fetchall(
-            "SELECT COUNT(*) as cnt FROM asset_retrieval_units "
-            "WHERE document_snapshot_id = %s AND unit_type = 'generated_question' "
-            "AND title LIKE 'Q%%'",
-            (snap_id,),
-        )
-        for r in rows:
-            q_prefix_count += r["cnt"]
-    if q_prefix_count > 0:
-        warnings.append(f"{q_prefix_count} question titles still have Qn prefix")
-    summary["qn_prefix_count"] = q_prefix_count
-
-    # 3. RST discourse relation distribution
-    discourse_counts: dict[str, int] = {}
-    for snap_id in active_snap_ids:
-        rows = asset_db._fetchall(
-            "SELECT relation_type, COUNT(*) as cnt FROM asset_raw_segment_relations "
-            "WHERE document_snapshot_id = %s "
-            "AND (metadata_json::jsonb)->>'source' = 'discourse_llm' "
-            "GROUP BY relation_type",
-            (snap_id,),
-        )
-        for r in rows:
-            discourse_counts[r["relation_type"]] = discourse_counts.get(r["relation_type"], 0) + r["cnt"]
-
-    summary["discourse_relation_counts"] = discourse_counts
-    total_discourse = sum(discourse_counts.values())
-    if total_discourse == 0:
-        warnings.append("No discourse relations found")
-
-    summary["warnings"] = warnings
-    if warnings:
-        logger.warning("Demo quality summary for build %s: %s", build_id[:8], warnings)
-
-    return summary

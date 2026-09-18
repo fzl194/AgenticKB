@@ -19,7 +19,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from knowledge_mining.mining.api.domain_pools import DomainPoolManager
 from knowledge_mining.mining.infra.pg_config import MiningDbConfig
-from knowledge_mining.mining.infra.pg_schema import ensure_primary_schema
+from knowledge_mining.mining.infra.pg_schema import assert_schema_contract
 from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.api.routes.health import router as health_router
 from knowledge_mining.mining.api.routes.runs import router as runs_router
@@ -66,7 +66,7 @@ def _cors_origins() -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize PostgreSQL pool and ensure schema exists."""
+    """Initialize PostgreSQL pool after validating the deployed schema version."""
     # 从主控制服务拉取全部配置并缓存（仿 llm_service）：mining.yaml + database.yaml。
     # 之后 MiningDbConfig/MiningConfig/UploadConfig 无参构造直接读缓存，不再读 .env。
     from knowledge_mining.mining.infra.control_plane import (
@@ -79,8 +79,8 @@ async def lifespan(app: FastAPI):
 
     cfg = MiningDbConfig()
 
-    # Ensure database + schema (sync, runs once at startup)
-    ensure_primary_schema(cfg)
+    # Production startup is read-only. DDL belongs to deploy-sync's migration step.
+    assert_schema_contract(cfg)
 
     pool = AsyncConnectionPool(
         cfg.conninfo,
@@ -201,15 +201,11 @@ async def lifespan(app: FastAPI):
     )
 
     async def _active_ontology_id(domain: str) -> str | None:
-        domain_pool = await app.state.domain_pools.async_pool(domain)
-        async with domain_pool.connection() as conn:
-            cursor = await conn.execute(
-                """SELECT id FROM ontology_versions
-                   WHERE domain_id = %s AND status = 'active' LIMIT 1""",
-                (domain,),
-            )
-            row = await cursor.fetchone()
-            return row["id"] if row else None
+        # Ontology is retired from the production data plane.  Keep the
+        # binding callback temporarily so older frozen workflow manifests can
+        # still be opened without querying a table that no longer exists.
+        del domain
+        return None
 
     pipeline_cfg = MiningConfig()
     llm_url = urlsplit(pipeline_cfg.llm_service_url)

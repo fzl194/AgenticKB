@@ -382,7 +382,7 @@ def _run_finalize(asset_db, *, document_index, run_meta=None,
     profile = SimpleNamespace(domain_id="odn")
     run_row = {
         "id": "run-1",
-        "metadata_json": {"publish": False, **(run_meta or {})},
+        "metadata_json": {"publish": False, "kb_id": "kb-1", **(run_meta or {})},
         "workflow_manifest_json": {
             "nodes": [{"type": t} for t in manifest_nodes],
         },

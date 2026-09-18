@@ -8,19 +8,14 @@ the services rely on.
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 
 from knowledge_mining.mining.contracts.file_management import (
     DocumentRevisionConflict,
-    FileAuditEvent,
-    QuotaExceeded,
     StorageObjectRecord,
 )
 from knowledge_mining.mining.contracts.state_machines import IllegalTransition
 from knowledge_mining.mining.file_management.repositories_memory import (
     MemoryDocumentCurrentContentRepository,
-    MemoryFileAuditRepository,
-    MemoryQuotaRepository,
     MemoryStorageObjectRepository,
 )
 
@@ -132,97 +127,3 @@ async def test_document_create_rejects_duplicate_id():
             document_name="f", document_type=None,
             storage_object_id="o2", source_raw_hash="h2",
         )
-
-
-# ---------------------------------------------------------------------------
-# FileAuditRepository
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_audit_append_assigns_id_and_created_at():
-    repo = MemoryFileAuditRepository()
-    event = await repo.append(
-        FileAuditEvent(
-            id="", kb_id="kb1", document_id="d1", storage_object_id="o1",
-            content_revision=1, actor="u1", action="upload",
-        )
-    )
-    assert event.id  # assigned
-    assert event.created_at  # assigned
-    assert len(repo.all()) == 1
-
-
-@pytest.mark.asyncio
-async def test_audit_by_document_filters():
-    repo = MemoryFileAuditRepository()
-    await repo.append(FileAuditEvent(
-        id="a1", kb_id="kb1", document_id="d1", storage_object_id="o1",
-        content_revision=1, actor="u1", action="upload",
-    ))
-    await repo.append(FileAuditEvent(
-        id="a2", kb_id="kb1", document_id="d2", storage_object_id="o2",
-        content_revision=1, actor="u1", action="upload",
-    ))
-    assert len(repo.by_document("d1")) == 1
-    assert len(repo.by_document("d2")) == 1
-    assert len(repo.by_document("d3")) == 0
-
-
-# ---------------------------------------------------------------------------
-# QuotaRepository
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_quota_get_returns_zero_limit_default_for_unknown_kb():
-    repo = MemoryQuotaRepository()
-    q = await repo.get("unknown")
-    assert q.limit_bytes == 0
-    assert q.version == 1
-
-
-@pytest.mark.asyncio
-async def test_quota_reserve_commit_release_lifecycle():
-    repo = MemoryQuotaRepository()
-    repo.seed("kb1", 1000)
-
-    q1 = await repo.reserve("kb1", 300, expected_version=1)
-    assert q1.reserved_bytes == 300
-    assert q1.version == 2
-
-    q2 = await repo.commit("kb1", 300, 300, expected_version=2)
-    assert q2.reserved_bytes == 0
-    assert q2.used_bytes == 300
-    assert q2.version == 3
-
-    q3 = await repo.reserve("kb1", 100, expected_version=3)
-    assert q3.reserved_bytes == 100
-    q4 = await repo.release("kb1", 100, expected_version=4)
-    assert q4.reserved_bytes == 0
-
-
-@pytest.mark.asyncio
-async def test_quota_reserve_over_limit_raises():
-    repo = MemoryQuotaRepository()
-    repo.seed("kb1", 100)
-    with pytest.raises(QuotaExceeded):
-        await repo.reserve("kb1", 101, expected_version=1)
-
-
-@pytest.mark.asyncio
-async def test_quota_reserve_stale_version_raises_conflict():
-    repo = MemoryQuotaRepository()
-    repo.seed("kb1", 1000)
-    await repo.reserve("kb1", 100, expected_version=1)
-    with pytest.raises(ValueError):
-        await repo.reserve("kb1", 100, expected_version=1)  # stale
-
-
-@pytest.mark.asyncio
-async def test_quota_release_underflow_guarded():
-    repo = MemoryQuotaRepository()
-    repo.seed("kb1", 1000)
-    await repo.reserve("kb1", 50, expected_version=1)
-    with pytest.raises(ValueError):
-        await repo.release("kb1", 100, expected_version=2)  # would go negative

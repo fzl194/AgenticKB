@@ -312,68 +312,6 @@ def test_manual_workflow_publish_claims_completed_assets_run():
     ]
 
 
-@pytest.mark.parametrize("pending_gate", ["entity_review", "ontology_review", None])
-def test_resume_cas_returns_concurrent_cancel_status(monkeypatch, pending_gate):
-    class RuntimeDB:
-        def __init__(self):
-            self.row = {
-                "id": "reviewed-run",
-                "status": "awaiting_review",
-                "subloop_stage": "ontology_review",
-                "domain": "odn",
-                "source_batch_id": "batch-1",
-                "total_documents": 1,
-            }
-            self.calls = []
-
-        def get_run(self, run_id):
-            assert run_id == "reviewed-run"
-            return dict(self.row)
-
-        def update_run_status(self, *args, **kwargs):
-            self.calls.append((args, kwargs))
-            self.row["status"] = "cancelled"
-            return False
-
-        def commit(self):
-            raise AssertionError("a failed resume CAS must not continue")
-
-        def close(self):
-            pass
-
-    runtime_db = RuntimeDB()
-    asset_db = _AssetDB()
-    monkeypatch.setattr(run_job, "resolve_domain", lambda domain: {"id": domain})
-    monkeypatch.setattr(run_job, "resolve_domain_database", lambda entry, config: object())
-    monkeypatch.setattr(run_job, "_create_dbs", lambda resolved: (asset_db, runtime_db))
-    monkeypatch.setattr(run_job, "load_domain_pack", lambda domain: SimpleNamespace(domain_id=domain))
-    monkeypatch.setattr(
-        run_job,
-        "_has_pending_mentions",
-        lambda asset, run_id: pending_gate == "entity_review",
-    )
-    monkeypatch.setattr(
-        run_job,
-        "_has_proposed_candidates",
-        lambda asset, domain: pending_gate == "ontology_review",
-    )
-    monkeypatch.setattr(
-        run_job,
-        "_finalize_graph",
-        lambda *args: (_ for _ in ()).throw(
-            AssertionError("a failed resume CAS must not finalize")
-        ),
-    )
-
-    result = run_job.resume("reviewed-run", domain="odn")
-
-    assert result == {"run_id": "reviewed-run", "status": "cancelled"}
-    assert runtime_db.calls[0][1]["expected_statuses"] == (
-        "awaiting_review",
-        "running",
-    )
-
-
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 @pytest.mark.asyncio

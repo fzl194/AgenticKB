@@ -72,9 +72,7 @@ _OBJECT_REF_SQL = """
           WHERE source_storage_object_id = %(oid)s) AS links,
         (SELECT COUNT(*) FROM asset_parse_runs
           WHERE source_storage_object_id = %(oid)s
-             OR parse_ir_storage_object_id = %(oid)s) AS parse_runs,
-        (SELECT COUNT(*) FROM asset_upload_sessions
-          WHERE committed_storage_object_id = %(oid)s) AS sessions
+             OR parse_ir_storage_object_id = %(oid)s) AS parse_runs
 """
 
 
@@ -196,19 +194,8 @@ class PurgeService:
                 "DELETE FROM mining_run_documents WHERE document_id = ANY(%s)",
                 [doc_ids])
             await conn.execute(
-                """DELETE FROM asset_parse_run_attempts WHERE parse_run_id IN
-                     (SELECT id FROM asset_parse_runs WHERE document_id = ANY(%s))""",
-                [doc_ids])
-            await conn.execute(
                 "DELETE FROM asset_parse_runs WHERE document_id = ANY(%s)", [doc_ids])
-            # 3) 上传会话 / 文件审计（随文档陪葬——硬删语义）
-            await conn.execute(
-                "DELETE FROM asset_upload_sessions WHERE committed_document_id = ANY(%s)",
-                [doc_ids])
-            await conn.execute(
-                "DELETE FROM asset_file_audit_events WHERE document_id = ANY(%s)",
-                [doc_ids])
-            # 4) 文档行（CASCADE 带走 snapshot_links + build 选片行）
+            # 3) 文档行（CASCADE 带走 snapshot_links + build 选片行）
             await conn.execute(
                 "DELETE FROM asset_documents WHERE id = ANY(%s) AND kb_id = %s",
                 [doc_ids, kb_id])
@@ -263,10 +250,6 @@ class PurgeService:
             # 库级残留（无 FK 软引用）+ CASCADE 族（成员/文件夹/开放库随库行走）
             await conn.execute(
                 "DELETE FROM kb_document_refs WHERE kb_id = %s", [kb_id])
-            await conn.execute(
-                "DELETE FROM asset_storage_quotas WHERE kb_id = %s", [kb_id])
-            await conn.execute(
-                "DELETE FROM asset_upload_sessions WHERE kb_id = %s", [kb_id])
             # 一张网公共库连带清理（2026-09-16 用户定稿）：导入记录之外，
             # toc 缓存与拉取工作区一并清——库都删了，重导加速的缓存无意义。
             cur = await conn.execute(
@@ -287,9 +270,6 @@ class PurgeService:
                     shutil.rmtree(
                         Path("runtime") / "onenet" / kb_domain / sid,
                         ignore_errors=True)
-            await conn.execute(
-                """DELETE FROM asset_file_audit_events
-                   WHERE kb_id = %s AND document_id IS NULL""", [kb_id])
             cur = await conn.execute(
                 "DELETE FROM knowledge_bases WHERE id = %s RETURNING id", [kb_id])
             if await cur.fetchone() is None:
@@ -443,9 +423,7 @@ class PurgeService:
                                       WHERE source_storage_object_id = c.oid)
                      AND NOT EXISTS (SELECT 1 FROM asset_parse_runs
                                       WHERE source_storage_object_id = c.oid
-                                         OR parse_ir_storage_object_id = c.oid)
-                     AND NOT EXISTS (SELECT 1 FROM asset_upload_sessions
-                                      WHERE committed_storage_object_id = c.oid)""",
+                                         OR parse_ir_storage_object_id = c.oid)""",
                 [ids])
             free_ids = [r["oid"] for r in await cur.fetchall()]
         out["skipped_shared_objects"] = [o for o in ids if o not in set(free_ids)]

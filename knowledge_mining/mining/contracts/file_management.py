@@ -12,8 +12,8 @@ Design (ADR-0003 D-001, D-022):
   so the full service test suite runs without PostgreSQL.
 - ``@runtime_checkable Protocol`` following the convention used by
   ``contracts/storage/port.py``.
-- Frozen dataclasses; optimistic-concurrency version fields are explicit on
-  ``QuotaRecord.version`` and on ``DocumentCurrentContent.content_revision``.
+- Frozen dataclasses; optimistic concurrency is explicit on
+  ``DocumentCurrentContent.content_revision``.
 
 The storage-object business identity (``storage_object_id``) is owned here, in
 the Repository — the lower ``ObjectStorePort`` (D-020) only knows
@@ -29,8 +29,8 @@ References:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from knowledge_mining.mining.contracts.storage.errors import StorageError
 
@@ -76,32 +76,6 @@ class DocumentRevisionConflict(FileManagementError):
         super().__init__(msg)
 
 
-class UploadSessionExpired(FileManagementError):
-    """The upload session has expired (SRS §C01, 410). Re-initiate required."""
-
-    code = "upload_session_expired"
-
-    def __init__(self, session_id: str, message: str = "") -> None:
-        self.session_id = session_id
-        super().__init__(message or f"upload session {session_id!r} expired")
-
-
-class UploadIncomplete(FileManagementError):
-    """The staged object is incomplete / size mismatched (SRS §C01, 409)."""
-
-    code = "upload_incomplete"
-
-    def __init__(self, session_id: str, message: str = "") -> None:
-        self.session_id = session_id
-        super().__init__(message or f"upload session {session_id!r} incomplete")
-
-
-# ``QuotaExceeded`` is already defined in ``storage.errors`` (code
-# ``quota_exceeded``); we re-export it here so callers import file-management
-# errors from one place. Do NOT redefine the code string.
-from knowledge_mining.mining.contracts.storage.errors import QuotaExceeded  # noqa: E402
-
-
 # ---------------------------------------------------------------------------
 # Frozen records (exchange types between service <-> repository)
 # ---------------------------------------------------------------------------
@@ -131,33 +105,6 @@ class StorageObjectRecord:
     retention_until: str | None = None
     created_at: str = ""
     last_verified_at: str | None = None
-
-
-@dataclass(frozen=True)
-class UploadSessionRecord:
-    """A row in ``asset_upload_sessions`` (SRS §3.1B, §8.5, §9.0A)."""
-
-    id: str
-    kb_id: str
-    folder_id: str | None
-    actor: str
-    original_filename: str
-    expected_size: int | None
-    expected_mime: str | None
-    staging_bucket: str
-    staging_object_key: str
-    idempotency_key: str
-    expires_at: str
-    state: str
-    error_message: str | None = None
-    committed_storage_object_id: str | None = None
-    committed_document_id: str | None = None
-    created_at: str = ""
-    updated_at: str = ""
-
-    def with_updates(self, **changes: Any) -> "UploadSessionRecord":
-        """Return a copy with ``changes`` applied (immutable update)."""
-        return dataclass_replace(self, **changes)
 
 
 @dataclass(frozen=True)
@@ -195,60 +142,6 @@ class DocumentRow:
     source_raw_hash: str | None
     content_revision: int
     deleted_at: str | None = None
-
-
-@dataclass(frozen=True)
-class FileAuditEvent:
-    """Append-only audit row in ``asset_file_audit_events`` (SRS §8.5).
-
-    ``action`` vocabulary: ``upload`` | ``replace_content`` | ``rename`` |
-    ``move`` | ``delete`` | ``restore`` | ... (SRS §8.5 D-table).
-    """
-
-    id: str
-    kb_id: str
-    document_id: str | None
-    storage_object_id: str | None
-    content_revision: int | None
-    actor: str
-    action: str
-    before_json: dict = field(default_factory=dict)
-    after_json: dict = field(default_factory=dict)
-    created_at: str = ""
-
-
-@dataclass(frozen=True)
-class QuotaRecord:
-    """A row in ``asset_storage_quotas`` (SRS §8.5).
-
-    ``version`` is the optimistic-concurrency guard: ``reserve`` / ``commit`` /
-    ``release`` each require ``expected_version`` to match the current row, and
-    bump it on success.
-    """
-
-    kb_id: str
-    limit_bytes: int
-    reserved_bytes: int
-    used_bytes: int
-    version: int
-    updated_at: str = ""
-
-
-@dataclass(frozen=True)
-class CommitResult:
-    """Return value of ``UploadSessionService.complete``.
-
-    Carries everything the API layer needs to respond after a successful (or
-    idempotently-repeated) commit: the resolved storage object id, the logical
-    document id, the content revision assigned, and the verified content hash
-    and size.
-    """
-
-    storage_object_id: str
-    document_id: str
-    content_revision: int
-    sha256: str
-    size: int
 
 
 # ---------------------------------------------------------------------------
@@ -293,39 +186,6 @@ class StorageObjectRepository(Protocol):
 
     async def mark_verified(self, storage_object_id: str, at: str) -> None:
         """Record that the object's bytes were integrity-verified at ``at``."""
-        ...
-
-
-@runtime_checkable
-class UploadSessionRepository(Protocol):
-    """Repository for ``asset_upload_sessions`` (SRS §3.1B, §9.0A)."""
-
-    async def create(self, record: UploadSessionRecord) -> UploadSessionRecord:
-        """Insert a new session row; return the stored record."""
-        ...
-
-    async def get(self, session_id: str) -> UploadSessionRecord | None:
-        """Return the session for ``session_id``, or None."""
-        ...
-
-    async def find_by_idempotency(
-        self,
-        kb_id: str,
-        actor: str,
-        idempotency_key: str,
-    ) -> UploadSessionRecord | None:
-        """Idempotency probe (SRS §9.0A): return the existing session if any."""
-        ...
-
-    async def update(self, session: UploadSessionRecord) -> UploadSessionRecord:
-        """Persist field changes on ``session`` (matched by id).
-
-        The session's ``updated_at`` is refreshed by the implementation.
-        """
-        ...
-
-    async def list_expired(self, now: str) -> list[UploadSessionRecord]:
-        """Return sessions whose ``expires_at`` <= ``now`` and are non-terminal."""
         ...
 
 
@@ -445,105 +305,15 @@ class DocumentCurrentContentRepository(Protocol):
         ...
 
 
-@runtime_checkable
-class FileAuditRepository(Protocol):
-    """Append-only audit stream (SRS §8.5, ``asset_file_audit_events``)."""
-
-    async def append(self, event: FileAuditEvent) -> FileAuditEvent:
-        """Append an audit event; return the stored event (id assigned)."""
-        ...
-
-
-@runtime_checkable
-class QuotaRepository(Protocol):
-    """KB-level storage quota with optimistic concurrency (SRS §8.5).
-
-    The three-phase lifecycle of an upload:
-      1. ``initiate``  -> ``reserve(expected_size)``  (reserves, version+1)
-      2. ``complete``  -> ``commit(reserved, used)``   (reserved-, used+, v+1)
-      3. ``abort``     -> ``release(reserved)``        (reserved-, v+1)
-
-    Each mutating method takes ``expected_version`` and raises
-    :class:`QuotaExceeded` if the new reserved/used total would exceed
-    ``limit_bytes``, or a plain ``ValueError`` (concurrency conflict) if
-    ``expected_version`` does not match the current row.
-    """
-
-    async def get(self, kb_id: str) -> QuotaRecord:
-        """Return the quota row, creating a default (limit=0) row if absent.
-
-        Callers that need a real limit should seed the row first via
-        ``set_limit``. A non-existent KB returns a zero-limit default so the
-        quota check fails closed (``QuotaExceeded``) rather than bypassing.
-        """
-        ...
-
-    async def reserve(
-        self,
-        kb_id: str,
-        bytes_to_reserve: int,
-        expected_version: int,
-    ) -> QuotaRecord:
-        """Add ``bytes_to_reserve`` to ``reserved_bytes`` (SRS §4.1A).
-
-        Fails closed with :class:`QuotaExceeded` if
-        ``reserved + used + bytes_to_reserve > limit_bytes``.
-        """
-        ...
-
-    async def commit(
-        self,
-        kb_id: str,
-        reserved_bytes_to_release: int,
-        used_bytes_to_add: int,
-        expected_version: int,
-    ) -> QuotaRecord:
-        """Transition reserved bytes to used (SRS §4.1A commit step)."""
-        ...
-
-    async def release(
-        self,
-        kb_id: str,
-        bytes_to_release: int,
-        expected_version: int,
-    ) -> QuotaRecord:
-        """Release previously-reserved bytes (abort path)."""
-        ...
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def dataclass_replace(instance: Any, **changes: Any) -> Any:
-    """``dataclasses.replace`` re-export (avoids a second import at call sites)."""
-    from dataclasses import replace
-
-    return replace(instance, **changes)
-
-
 __all__ = [
     # errors
     "FileManagementError",
     "DocumentRevisionConflict",
-    "UploadSessionExpired",
-    "UploadIncomplete",
-    "QuotaExceeded",
     # records
     "StorageObjectRecord",
-    "UploadSessionRecord",
     "DocumentCurrentContent",
     "DocumentRow",
-    "FileAuditEvent",
-    "QuotaRecord",
-    "CommitResult",
     # protocols
     "StorageObjectRepository",
-    "UploadSessionRepository",
     "DocumentCurrentContentRepository",
-    "FileAuditRepository",
-    "QuotaRepository",
-    # helpers
-    "dataclass_replace",
 ]

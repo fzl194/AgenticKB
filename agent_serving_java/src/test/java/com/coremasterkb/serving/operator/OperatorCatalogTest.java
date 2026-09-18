@@ -89,6 +89,22 @@ class OperatorCatalogTest {
         }
     }
 
+    @Test
+    void retiredResearchImplementationsAreDeletedFromTheRuntimeClasspath() {
+        for (String className : List.of(
+                "com.coremasterkb.serving.operator.operators.retrieve.EntityExactOperator",
+                "com.coremasterkb.serving.operator.operators.retrieve.EntityGraphOperator",
+                "com.coremasterkb.serving.retrieval.EntityExactRetriever",
+                "com.coremasterkb.serving.retrieval.EntityGraphRetriever",
+                "com.coremasterkb.serving.mapper.AssetRetrievalUnitMapper",
+                "com.coremasterkb.serving.mapper.AssetRawSegmentRelationMapper",
+                "com.coremasterkb.serving.mapper.OntologyGraphMapper",
+                "com.coremasterkb.serving.mapper.AssetPublishReleaseMapper")) {
+            assertThrows(ClassNotFoundException.class, () -> Class.forName(className),
+                    className + " must be physically removed, not merely left unregistered");
+        }
+    }
+
     /**
      * The registry is fed by Spring constructor injection of every {@code Operator} bean, so the
      * real gate is component scanning: the operators package may carry exactly the eight official

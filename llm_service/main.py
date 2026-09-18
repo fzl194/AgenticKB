@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from llm_service.config import load_llm_config, dig, resolve_active_model_config, fetch_internal_verify_secret
 from llm_service.db import LlmRuntimeDB
 from llm_service.pg_config import load_db_config
-from llm_service.pg_schema import ensure_schema
+from llm_service.pg_schema import assert_schema_contract
 from llm_service.providers.bigmodel_models import BigModelProvider
 from llm_service.providers.model_base import ModelProviderProtocol
 from llm_service.providers.base import ProviderProtocol
@@ -66,8 +66,8 @@ def create_app(
 
         # PostgreSQL — all params from control plane database.yaml
         pg_cfg = load_db_config()
-        logger.info("Ensuring database schema for %s @ %s:%s", pg_cfg.dbname, pg_cfg.host, pg_cfg.port)
-        ensure_schema(pg_cfg)
+        logger.info("Validating database schema for %s @ %s:%s", pg_cfg.dbname, pg_cfg.host, pg_cfg.port)
+        assert_schema_contract(pg_cfg)
 
         db = LlmRuntimeDB.from_conninfo(
             pg_cfg.conninfo,

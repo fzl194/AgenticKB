@@ -27,11 +27,15 @@ class KbAccessServiceTest {
     }
 
     @Test
-    @DisplayName("no kbIds requested — the DB is never touched")
-    void emptyRequestSkipsLookup() {
-        assertThat(service.authorize("cloud_core_network", List.of(), "alice")).isEmpty();
-        assertThat(service.authorize("cloud_core_network", null, "alice")).isEmpty();
-        verifyNoInteractions(mapper);
+    @DisplayName("no kbIds requested — returns every KB visible to the caller")
+    void emptyRequestResolvesAccessibleKbs() {
+        when(mapper.selectAccessibleKbIds(anyString(), any(), any()))
+                .thenReturn(List.of("kb2", "kb1"));
+
+        assertThat(service.authorize("cloud_core_network", List.of(), "alice"))
+                .containsExactly("kb1", "kb2");
+        verify(mapper).selectAccessibleKbIds(
+                eq("cloud_core_network"), eq(List.of()), eq("alice"));
     }
 
     @Test

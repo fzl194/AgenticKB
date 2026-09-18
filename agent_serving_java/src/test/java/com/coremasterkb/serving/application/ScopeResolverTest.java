@@ -1,7 +1,6 @@
 package com.coremasterkb.serving.application;
 
 import com.coremasterkb.serving.domain.ActiveScope;
-import com.coremasterkb.serving.domainpack.DomainRegistry;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import com.coremasterkb.serving.repository.AssetRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,9 +37,7 @@ class ScopeResolverTest {
         repo = mock(AssetRepository.class);
         kbAccess = mock(KbAccessService.class);
         paradigmService = mock(ParadigmService.class);
-        DomainRegistry registry = mock(DomainRegistry.class);
-        when(registry.getDefaultChannel(anyString())).thenReturn("prod");
-        resolver = new ScopeResolver(repo, kbAccess, paradigmService, registry);
+        resolver = new ScopeResolver(repo, kbAccess, paradigmService);
     }
 
     private static ActiveScope scope(List<String> snapshotIds) {
@@ -48,28 +45,28 @@ class ScopeResolverTest {
     }
 
     @Test
-    @DisplayName("no KB named — the ordinary domain-wide release, channel from the registry")
-    void domainWideByDefault() {
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("prod"), any()))
+    @DisplayName("no KB named — resolves all KBs authorized for the caller, never a domain release")
+    void authorizedKbScopeByDefault() {
+        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of("kb-open"));
+        when(repo.resolveKbScope(eq(DOMAIN), any()))
                 .thenReturn(scope(List.of("snap-1")));
 
         ActiveScope result = resolver.resolve(DOMAIN, null, null, null, null, "alice");
 
         assertThat(result.snapshotIds()).containsExactly("snap-1");
-        verify(repo).resolveActiveScope(DOMAIN, "prod", List.of());
+        verify(repo).resolveKbScope(DOMAIN, List.of("kb-open"));
     }
 
     @Test
-    @DisplayName("an explicit channel beats the registry default")
-    void explicitChannelWins() {
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), eq("staging"), any()))
+    @DisplayName("legacy channel input cannot widen the KB-only scope")
+    void channelDoesNotChangeKbScope() {
+        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of("kb-open"));
+        when(repo.resolveKbScope(eq(DOMAIN), any()))
                 .thenReturn(scope(List.of("snap-1")));
 
         resolver.resolve(DOMAIN, "staging", null, null, null, "alice");
 
-        verify(repo).resolveActiveScope(DOMAIN, "staging", List.of());
+        verify(repo).resolveKbScope(DOMAIN, List.of("kb-open"));
     }
 
     @Test
@@ -83,7 +80,7 @@ class ScopeResolverTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("kb_not_found");
 
-        verify(repo, never()).resolveActiveScope(anyString(), anyString(), any());
+        verify(repo, never()).resolveKbScope(anyString(), any());
     }
 
     @Test
@@ -108,7 +105,7 @@ class ScopeResolverTest {
         when(paradigmService.resolveExecutableGraph(eq("p-1"), any()))
                 .thenReturn(new ObjectMapper().readTree(graph));
         when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of("kb-a", "kb-b"));
-        when(repo.resolveActiveScope(eq(DOMAIN), any(), any())).thenReturn(scope(List.of("snap-1")));
+        when(repo.resolveKbScope(eq(DOMAIN), any())).thenReturn(scope(List.of("snap-1")));
 
         resolver.resolve(DOMAIN, null, "p-1", null, null, "alice");
 
@@ -118,28 +115,29 @@ class ScopeResolverTest {
     }
 
     @Test
-    @DisplayName("a paradigm whose scope_resolve names no KB resolves domain-wide, not to nothing")
+    @DisplayName("a paradigm whose scope_resolve names no KB resolves the caller's authorized KBs")
     void paradigmWithoutKbIds() throws Exception {
         String graph = """
                 {"nodes":[{"nodeId":"sr","operatorType":"scope_resolve","params":{}}]}""";
         when(paradigmService.resolveExecutableGraph(eq("p-1"), any()))
                 .thenReturn(new ObjectMapper().readTree(graph));
-        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), any(), any())).thenReturn(scope(List.of("snap-1")));
+        when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of("kb-open"));
+        when(repo.resolveKbScope(eq(DOMAIN), any())).thenReturn(scope(List.of("snap-1")));
 
         resolver.resolve(DOMAIN, null, "p-1", null, null, "alice");
 
         verify(kbAccess).authorize(DOMAIN, List.of(), "alice");
+        verify(repo).resolveKbScope(DOMAIN, List.of("kb-open"));
     }
 
     @Test
-    @DisplayName("a scope with zero snapshots fails instead of becoming an unfiltered read")
-    void emptyScopeIsRejected() {
+    @DisplayName("a caller with no authorized KB is rejected before repository lookup")
+    void emptyAuthorizedKbSetIsRejected() {
         when(kbAccess.authorize(eq(DOMAIN), any(), any())).thenReturn(List.of());
-        when(repo.resolveActiveScope(eq(DOMAIN), any(), any())).thenReturn(scope(List.of()));
 
         assertThatThrownBy(() -> resolver.resolve(DOMAIN, null, null, null, null, "alice"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("empty_scope");
+                .hasMessage("kb_ids_required");
+        verifyNoInteractions(repo);
     }
 }

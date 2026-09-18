@@ -32,10 +32,7 @@ from knowledge_mining.mining.file_management.repositories_memory import (
 from knowledge_mining.mining.segment_compiler.repositories_memory import (
     MemorySegmentStore,
 )
-from knowledge_mining.mining.shadow_parse.repositories_memory import (
-    MemoryParseAttemptRepository,
-    MemoryParseRunRepository,
-)
+from knowledge_mining.mining.shadow_parse.repositories_memory import MemoryParseRunRepository
 from knowledge_mining.mining.snapshot_store.read_service import (
     ParseResultReadService,
 )
@@ -138,12 +135,11 @@ async def test_multi_format_document_to_structured_data(fmt: str, tmp_path):
     objects = MemoryStorageObjectRepository()
     documents = MemoryDocumentCurrentContentRepository()
     parse_runs = MemoryParseRunRepository()
-    attempts = MemoryParseAttemptRepository()
     snapshots = MemorySnapshotRepository()
     segment_store = MemorySegmentStore()
     services = build_new_chain_services(
         bucket_prefix="e2e-", object_store=store, storage_objects=objects,
-        documents=documents, parse_runs=parse_runs, attempts=attempts,
+        documents=documents, parse_runs=parse_runs,
         snapshots=snapshots, segment_store=segment_store,
     )
 

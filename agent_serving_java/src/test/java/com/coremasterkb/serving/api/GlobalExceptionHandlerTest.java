@@ -42,24 +42,6 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    @DisplayName("no_active_release -> 503")
-    void noActiveRelease() {
-        ResponseEntity<Map<String, Object>> resp =
-                handler.handleIllegalArgument(new IllegalArgumentException("no_active_release"));
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
-        assertThat(resp.getBody()).containsEntry("error", "no_active_release");
-    }
-
-    @Test
-    @DisplayName("multiple_active_releases -> 409")
-    void multipleActiveReleases() {
-        ResponseEntity<Map<String, Object>> resp =
-                handler.handleIllegalArgument(new IllegalArgumentException("multiple_active_releases"));
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(resp.getBody()).containsEntry("error", "multiple_active_releases");
-    }
-
-    @Test
     @DisplayName("domain_database_unavailable -> 503")
     void domainDatabaseUnavailable() {
         ResponseEntity<Map<String, Object>> resp =

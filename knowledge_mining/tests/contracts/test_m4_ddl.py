@@ -4,8 +4,7 @@ SQLite 内存库加载 009 + 010，断言：
 
 1. ``asset_parse_runs.status`` CHECK 覆盖完整状态机（12 态 + SUPERSEDED，
    与 ``contracts/state_machines.py`` 单一事实源对齐）；
-2. 新表 ``asset_parse_run_attempts`` 存在，含
-   ``UNIQUE(parse_run_id, attempt_index)`` 与 attempt_kind/outcome CHECK；
+2. 写多读零的 ``asset_parse_run_attempts`` 不再创建；
 3. 非法状态被数据库层拒绝（双保险：应用层 state_machines + DB CHECK）。
 """
 from __future__ import annotations
@@ -164,32 +163,10 @@ def test_parse_runs_rejects_unknown_status() -> None:
         _insert_run(conn, "EXPLODED")
 
 
-def test_attempt_events_table_shape() -> None:
+def test_parse_attempts_table_is_not_created() -> None:
     conn = _load_009_010()
-    cols = {
-        row[1] for row in
-        conn.execute("PRAGMA table_info(asset_parse_run_attempts)")
-    }
-    assert {
-        "id", "parse_run_id", "attempt_index", "parser_id",
-        "parser_fingerprint", "attempt_kind", "outcome", "started_at",
-        "finished_at", "error_message", "metadata_json",
-    } <= cols
-    # 幂等：同一 run 的 attempt 序号唯一。
-    conn.execute(
-        "INSERT INTO asset_parse_run_attempts (id, parse_run_id, attempt_index,"
-        " parser_id, parser_fingerprint, attempt_kind, outcome, started_at)"
-        " VALUES ('a1', 'r1', 0, 'p', 'fp', 'primary', 'FAILED', 't')")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            "INSERT INTO asset_parse_run_attempts (id, parse_run_id,"
-            " attempt_index, parser_id, parser_fingerprint, attempt_kind,"
-            " outcome, started_at)"
-            " VALUES ('a2', 'r1', 0, 'p', 'fp', 'fallback', 'FAILED', 't')")
-    # 非法 attempt_kind 拒绝。
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute(
-            "INSERT INTO asset_parse_run_attempts (id, parse_run_id,"
-            " attempt_index, parser_id, parser_fingerprint, attempt_kind,"
-            " outcome, started_at)"
-            " VALUES ('a3', 'r1', 1, 'p', 'fp', 'magic', 'FAILED', 't')")
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='asset_parse_run_attempts'"
+    ).fetchone()
+    assert row is None

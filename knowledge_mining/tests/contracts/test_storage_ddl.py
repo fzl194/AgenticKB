@@ -3,12 +3,10 @@
 这些测试用 SQLite 在内存里执行 ``001_asset_core.sqlite.sql`` +
 ``008_object_storage_foundation.sql``，断言：
 
-1. 新表存在（asset_storage_objects / asset_upload_sessions / asset_storage_object_refs /
-   asset_file_audit_events / asset_storage_quotas / asset_storage_operations）。
+1. 仅保留 ``asset_storage_objects``；五张未接入正式上传链的空壳表不再创建。
 2. 扩展列存在（asset_documents / asset_document_snapshots / asset_document_snapshot_links）。
 3. 关键 UNIQUE/CHECK 约束生效：
    - storage_object 位置唯一（含 nullable object_version_id 的 COALESCE 归一）。
-   - upload session 幂等键唯一。
    - artifact_class / state 枚举 CHECK。
    - snapshot_fingerprint partial unique。
 
@@ -146,10 +144,17 @@ def _index_exists(connection: sqlite3.Connection, name: str) -> bool:
 
 # ── 表存在性 ─────────────────────────────────────────────────────────────────
 
+def test_storage_objects_table_is_retained() -> None:
+    with _load_schema() as connection:
+        row = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='asset_storage_objects'"
+        ).fetchone()
+    assert row is not None
+
+
 @pytest.mark.parametrize(
     "table",
     [
-        "asset_storage_objects",
         "asset_upload_sessions",
         "asset_storage_object_refs",
         "asset_file_audit_events",
@@ -157,12 +162,12 @@ def _index_exists(connection: sqlite3.Connection, name: str) -> bool:
         "asset_storage_operations",
     ],
 )
-def test_new_tables_exist(table: str) -> None:
+def test_retired_storage_shell_tables_are_not_created(table: str) -> None:
     with _load_schema() as connection:
         row = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
         ).fetchone()
-    assert row is not None, f"table {table} missing after 008"
+    assert row is None, f"retired table {table} must not be recreated"
 
 
 # ── 扩展列存在性 ─────────────────────────────────────────────────────────────
@@ -287,58 +292,7 @@ def test_storage_object_state_check() -> None:
             _insert_storage_object(connection, id_="bad", state="BOGUS", object_version_id=None)
 
 
-def test_upload_session_state_check() -> None:
-    with _load_schema() as connection:
-        with pytest.raises(sqlite3.IntegrityError):
-            connection.execute(
-                """INSERT INTO asset_upload_sessions
-                   (id, kb_id, actor, original_filename, staging_object_key,
-                    idempotency_key, expires_at, state)
-                   VALUES ('s1','kb','u','f.xlsx','stg/k','ik','2099-01-01','NOPE')"""
-            )
-
-
 # ── upload session 幂等键唯一 ────────────────────────────────────────────────
-
-def test_upload_session_idempotency_unique() -> None:
-    with _load_schema() as connection:
-        connection.execute(
-            """INSERT INTO asset_upload_sessions
-               (id, kb_id, actor, original_filename, staging_object_key,
-                idempotency_key, expires_at)
-               VALUES ('s1','kb','u','f.xlsx','stg/k','ik','2099-01-01')"""
-        )
-        with pytest.raises(sqlite3.IntegrityError):
-            connection.execute(
-                """INSERT INTO asset_upload_sessions
-                   (id, kb_id, actor, original_filename, staging_object_key,
-                    idempotency_key, expires_at)
-                   VALUES ('s2','kb','u','g.pdf','stg/k2','ik','2099-01-01')"""
-            )
-
-
-def test_upload_session_idempotency_scoped_to_kb_actor() -> None:
-    """不同 kb_id 或 actor 下相同 idempotency_key 应允许共存。"""
-    with _load_schema() as connection:
-        connection.execute(
-            """INSERT INTO asset_upload_sessions
-               (id, kb_id, actor, original_filename, staging_object_key,
-                idempotency_key, expires_at)
-               VALUES ('s1','kb1','u','f','stg/k','ik','2099-01-01')"""
-        )
-        connection.execute(
-            """INSERT INTO asset_upload_sessions
-               (id, kb_id, actor, original_filename, staging_object_key,
-                idempotency_key, expires_at)
-               VALUES ('s2','kb2','u','f','stg/k','ik','2099-01-01')"""
-        )
-        connection.execute(
-            """INSERT INTO asset_upload_sessions
-               (id, kb_id, actor, original_filename, staging_object_key,
-                idempotency_key, expires_at)
-               VALUES ('s3','kb1','u2','f','stg/k','ik','2099-01-01')"""
-        )
-
 
 # ── snapshot_fingerprint partial unique ──────────────────────────────────────
 
@@ -382,35 +336,12 @@ def test_snapshot_fingerprint_unique_scoped_to_domain() -> None:
 
 # ── quota 乐观锁默认值 ───────────────────────────────────────────────────────
 
-def test_storage_quota_defaults() -> None:
-    with _load_schema() as connection:
-        connection.execute(
-            "INSERT INTO asset_storage_quotas (kb_id, limit_bytes) VALUES ('kb', 1000)"
-        )
-        row = connection.execute(
-            "SELECT reserved_bytes, used_bytes, version FROM asset_storage_quotas WHERE kb_id='kb'"
-        ).fetchone()
-    assert row == (0, 0, 1)
-
-
-def test_storage_quota_kb_unique() -> None:
-    with _load_schema() as connection:
-        connection.execute(
-            "INSERT INTO asset_storage_quotas (kb_id, limit_bytes) VALUES ('kb', 1000)"
-        )
-        with pytest.raises(sqlite3.IntegrityError):
-            connection.execute(
-                "INSERT INTO asset_storage_quotas (kb_id, limit_bytes) VALUES ('kb', 2000)"
-            )
-
-
 # ── 索引存在性 ───────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize(
     "index_name",
     [
         "uq_asset_storage_objects_location",
-        "uq_asset_upload_sessions_idem",
         "uq_asset_snapshot_fingerprint",
     ],
 )

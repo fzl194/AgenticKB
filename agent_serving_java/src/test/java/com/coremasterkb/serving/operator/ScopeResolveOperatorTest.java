@@ -38,7 +38,7 @@ class ScopeResolveOperatorTest {
         assetRepository = mock(AssetRepository.class);
         kbAccessService = mock(KbAccessService.class);
         operator = new ScopeResolveOperator(assetRepository, kbAccessService, null);
-        when(assetRepository.resolveActiveScope(anyString(), anyString(), any()))
+        when(assetRepository.resolveKbScope(anyString(), any()))
                 .thenReturn(new ActiveScope("rel1", "b1", List.of("snap1"), Map.of()));
     }
 
@@ -73,14 +73,15 @@ class ScopeResolveOperatorTest {
     }
 
     @Test
-    @DisplayName("no kbIds param — resolves the domain's release scope")
-    void withoutKbIds() {
+    @DisplayName("no authorized KB — refuses to fall back to a domain release")
+    void withoutAuthorizedKbIds() {
         when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
 
-        var out = operator.execute(new SlotValues(), params("{}"), ctx("alice"));
-
-        assertThat(out.getScope("scope").releaseId()).isEqualTo("rel1");
-        verify(assetRepository).resolveActiveScope("cloud_core_network", "prod", List.of());
+        assertThatThrownBy(() ->
+                operator.execute(new SlotValues(), params("{}"), ctx("alice")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("kb_ids_required");
+        verify(assetRepository, never()).resolveKbScope(anyString(), any());
     }
 
     @Test
@@ -91,7 +92,7 @@ class ScopeResolveOperatorTest {
         operator.execute(new SlotValues(), params("{\"kbIds\":[\"kb1\"]}"), ctx("alice"));
 
         verify(kbAccessService).authorize(eq("cloud_core_network"), eq(List.of("kb1")), eq("alice"));
-        verify(assetRepository).resolveActiveScope("cloud_core_network", "prod", List.of("kb1"));
+        verify(assetRepository).resolveKbScope("cloud_core_network", List.of("kb1"));
     }
 
     @Test
@@ -105,7 +106,7 @@ class ScopeResolveOperatorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("kb_not_found");
 
-        verify(assetRepository, never()).resolveActiveScope(anyString(), anyString(), any());
+        verify(assetRepository, never()).resolveKbScope(anyString(), any());
     }
 
     // ---- R1: explicit hard filters channel (25 号 §6.2) ------------------------------------
@@ -113,7 +114,7 @@ class ScopeResolveOperatorTest {
     @Test
     @DisplayName("R1: supported filter keys pass through verbatim into ActiveScope.hardFilters")
     void requestFiltersPassThroughVerbatim() {
-        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of("kb1"));
         ExecContext c = ctx("alice");
         Map<String, Object> filters = Map.of(
                 "document_refs", List.of("doc-1"),
@@ -131,7 +132,7 @@ class ScopeResolveOperatorTest {
     @Test
     @DisplayName("27fix: unsupported filter keys are rejected explicitly (not silently ignored)")
     void unsupportedFilterKeysAreRejected() {
-        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of("kb1"));
         ExecContext c = ctx("alice");
         c.setRequestFilters(Map.of(
                 "document_refs", List.of("doc-1"),
@@ -179,7 +180,7 @@ class ScopeResolveOperatorTest {
     @Test
     @DisplayName("R1: no request filters — hardFilters stays empty (宽检索)")
     void noFiltersYieldsEmptyHardFilters() {
-        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of("kb1"));
         ExecContext c = ctx("alice");
 
         var out = operator.execute(new SlotValues(), params("{}"), c);
@@ -191,7 +192,7 @@ class ScopeResolveOperatorTest {
     @Test
     @DisplayName("R1: filters are never inferred from the query text")
     void filtersAreNeverInferredFromQuery() {
-        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of());
+        when(kbAccessService.authorize(anyString(), any(), any())).thenReturn(List.of("kb1"));
         ExecContext c = ctx("alice");
         c.setQuery("2026年 规范/接入网 doc-1 的表格");
 

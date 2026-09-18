@@ -1,27 +1,22 @@
 """PostgreSQL repositories for the File Management layer (M1.2, WP1B).
 
-Implements the five Protocols in ``contracts/file_management.py`` over a
+Implements the retained Protocols in ``contracts/file_management.py`` over a
 psycopg ``AsyncConnectionPool`` (the same pool type used by
 ``mining/kb/db.py``). Each method opens its own connection (one logical
-transaction); the optimistic-concurrency fields (``content_revision``,
-``quota.version``) are enforced server-side via ``WHERE ... = %s ... RETURNING``.
+transaction); ``content_revision`` is enforced server-side via
+``WHERE ... = %s ... RETURNING``.
 
 This module is imported lazily and only exercised when a real PostgreSQL test
 DB is available (``KB_RUN_POSTGRES_ACCEPTANCE=1``). Without PG the smoke tests
 in ``tests/file_management/test_repositories_pg.py`` skip. The service test
 suite uses the in-memory fakes and never touches this module.
 
-Column mapping (008 DDL + M1.2 incremental ``staging_bucket`` /
-``committed_storage_object_id`` / ``committed_document_id`` columns):
+Column mapping (008 DDL):
 - ``asset_storage_objects``: id/provider/bucket/object_key/object_version_id/
   sha256/size/mime/etag/artifact_class/encryption/state/retention_until/
   created_at/last_verified_at
 - ``asset_documents``: storage_object_id/source_raw_hash/content_revision/
   content_updated_at/deleted_at/restored_at (added 008)
-- ``asset_file_audit_events``: id/kb_id/document_id/storage_object_id/
-  content_revision/actor/action/before_json/after_json/created_at
-- ``asset_storage_quotas``: kb_id/limit_bytes/reserved_bytes/used_bytes/
-  version/updated_at
 
 References:
 - SRS §4.1A (upload transaction), §4.3A (optimistic concurrency), §8.5 (DDL),
@@ -40,11 +35,7 @@ from knowledge_mining.mining.contracts.file_management import (
     DocumentCurrentContent,
     DocumentRevisionConflict,
     DocumentRow,
-    FileAuditEvent,
-    QuotaExceeded,
-    QuotaRecord,
     StorageObjectRecord,
-    dataclass_replace,
 )
 
 
@@ -98,17 +89,6 @@ def _document_row_from_row(r: dict[str, Any]) -> DocumentRow:
         source_raw_hash=r.get("source_raw_hash"),
         content_revision=int(r.get("content_revision") or 0),
         deleted_at=_iso(r.get("deleted_at")) or None,
-    )
-
-
-def _quota_from_row(r: dict[str, Any]) -> QuotaRecord:
-    return QuotaRecord(
-        kb_id=r["kb_id"],
-        limit_bytes=r["limit_bytes"],
-        reserved_bytes=r["reserved_bytes"],
-        used_bytes=r["used_bytes"],
-        version=r["version"],
-        updated_at=_iso(r.get("updated_at")),
     )
 
 
@@ -394,184 +374,10 @@ class PgDocumentCurrentContentRepository:
         return row
 
 
-# ---------------------------------------------------------------------------
-# FileAuditRepository (PG)
-# ---------------------------------------------------------------------------
-
-
-class PgFileAuditRepository:
-    """PG ``FileAuditRepository`` over ``asset_file_audit_events``."""
-
-    def __init__(self, pool: Any) -> None:
-        self._pool = pool
-
-    async def append(self, event: FileAuditEvent) -> FileAuditEvent:
-        import json
-
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """INSERT INTO asset_file_audit_events
-                       (id, kb_id, document_id, storage_object_id, content_revision,
-                        actor, action, before_json, after_json, created_at)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   RETURNING *""",
-                (
-                    event.id, event.kb_id, event.document_id,
-                    event.storage_object_id, event.content_revision,
-                    event.actor, event.action,
-                    json.dumps(event.before_json, ensure_ascii=False),
-                    json.dumps(event.after_json, ensure_ascii=False),
-                    event.created_at or _utcnow(),
-                ),
-            )
-            row = await cur.fetchone()
-            r = dict(row)
-            return FileAuditEvent(
-                id=r["id"], kb_id=r["kb_id"], document_id=r.get("document_id"),
-                storage_object_id=r.get("storage_object_id"),
-                content_revision=r.get("content_revision"), actor=r["actor"],
-                action=r["action"],
-                before_json=r.get("before_json") or {},
-                after_json=r.get("after_json") or {},
-                created_at=_iso(r.get("created_at")),
-            )
-
-
-# ---------------------------------------------------------------------------
-# QuotaRepository (PG) — optimistic concurrency, server-enforced
-# ---------------------------------------------------------------------------
-
-
-class PgQuotaRepository:
-    """PG ``QuotaRepository`` over ``asset_storage_quotas``."""
-
-    def __init__(self, pool: Any) -> None:
-        self._pool = pool
-
-    async def get(self, kb_id: str) -> QuotaRecord:
-        async with self._pool.connection() as conn:
-            # Upsert a zero-limit default if absent (fail-closed).
-            await conn.execute(
-                """INSERT INTO asset_storage_quotas (kb_id, limit_bytes, updated_at)
-                   VALUES (%s, 0, %s)
-                   ON CONFLICT (kb_id) DO NOTHING""",
-                [kb_id, _utcnow()],
-            )
-            cur = await conn.execute(
-                "SELECT * FROM asset_storage_quotas WHERE kb_id = %s",
-                [kb_id],
-            )
-            row = await cur.fetchone()
-            return _quota_from_row(dict(row))
-
-    async def reserve(
-        self,
-        kb_id: str,
-        bytes_to_reserve: int,
-        expected_version: int,
-    ) -> QuotaRecord:
-        # Enforce limit atomically in the same UPDATE: only advance if the new
-        # reserved+used total stays within limit AND the version matches.
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """UPDATE asset_storage_quotas SET
-                       reserved_bytes = reserved_bytes + %s,
-                       version = version + 1,
-                       updated_at = %s
-                   WHERE kb_id = %s AND version = %s
-                     AND (reserved_bytes + used_bytes + %s) <= limit_bytes
-                   RETURNING *""",
-                [bytes_to_reserve, _utcnow(), kb_id, expected_version, bytes_to_reserve],
-            )
-            row = await cur.fetchone()
-            if row is None:
-                await self._raise_quota_conflict(conn, kb_id, expected_version)
-            return _quota_from_row(dict(row))
-
-    async def commit(
-        self,
-        kb_id: str,
-        reserved_bytes_to_release: int,
-        used_bytes_to_add: int,
-        expected_version: int,
-    ) -> QuotaRecord:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """UPDATE asset_storage_quotas SET
-                       reserved_bytes = reserved_bytes - %s,
-                       used_bytes = used_bytes + %s,
-                       version = version + 1,
-                       updated_at = %s
-                   WHERE kb_id = %s AND version = %s
-                     AND reserved_bytes - %s >= 0
-                     AND (reserved_bytes - %s + used_bytes + %s) <= limit_bytes
-                   RETURNING *""",
-                [
-                    reserved_bytes_to_release, used_bytes_to_add, _utcnow(),
-                    kb_id, expected_version,
-                    reserved_bytes_to_release,
-                    reserved_bytes_to_release, used_bytes_to_add,
-                ],
-            )
-            row = await cur.fetchone()
-            if row is None:
-                await self._raise_quota_conflict(conn, kb_id, expected_version)
-            return _quota_from_row(dict(row))
-
-    async def release(
-        self,
-        kb_id: str,
-        bytes_to_release: int,
-        expected_version: int,
-    ) -> QuotaRecord:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """UPDATE asset_storage_quotas SET
-                       reserved_bytes = reserved_bytes - %s,
-                       version = version + 1,
-                       updated_at = %s
-                   WHERE kb_id = %s AND version = %s
-                     AND reserved_bytes - %s >= 0
-                   RETURNING *""",
-                [bytes_to_release, _utcnow(), kb_id, expected_version, bytes_to_release],
-            )
-            row = await cur.fetchone()
-            if row is None:
-                await self._raise_quota_conflict(conn, kb_id, expected_version)
-            return _quota_from_row(dict(row))
-
-    @staticmethod
-    async def _raise_quota_conflict(conn: Any, kb_id: str, expected_version: int) -> None:
-        """Distinguish version-conflict from limit-overflow and raise."""
-        cur = await conn.execute(
-            "SELECT * FROM asset_storage_quotas WHERE kb_id = %s",
-            [kb_id],
-        )
-        row = await cur.fetchone()
-        if row is None:
-            raise ValueError(f"quota row missing for kb {kb_id!r}")
-        r = dict(row)
-        if r["version"] != expected_version:
-            raise ValueError(
-                f"quota version conflict for kb {kb_id!r}: "
-                f"expected {expected_version}, actual {r['version']}"
-            )
-        # Version matched but the guard failed => limit exceeded.
-        raise QuotaExceeded(
-            f"quota exceeded for kb {kb_id!r}: "
-            f"reserved={r['reserved_bytes']} used={r['used_bytes']} "
-            f"limit={r['limit_bytes']}"
-        )
-
-
 __all__ = [
     "PgDocumentCurrentContentRepository",
-    "PgFileAuditRepository",
-    "PgQuotaRepository",
     "PgStorageObjectRepository",
 ]
 
 
-# Silence unused-import lint for dataclass_replace (re-exported convenience).
-_ = dataclass_replace
 _ = dict_row

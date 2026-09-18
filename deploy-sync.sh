@@ -49,6 +49,7 @@ DEPENDENCY_MANIFESTS="pyproject.toml agent_serving_java/pom.xml kb-ui/package.js
 MANIFEST_BASELINE_DIR="${SYNC_LAST_MANIFEST_DIR:-.cmkb-sync-last}"
 # 发布清单（版本号）：pack 带上，apply 变更时 restart control（主控启动时读它上报版本）。
 RELEASE_MANIFEST="releases.json"
+DEPLOY_SYNC_SCRIPT="deploy-sync.sh"
 APP_CONTAINER_NAME="${APP_CONTAINER_NAME:-cmkb}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-cmkb}"
 
@@ -167,6 +168,8 @@ cmd_pack() {
 
     # 发布清单：随包携带（apply 侧变更检测，变了 restart control）
     [ -f "$RELEASE_MANIFEST" ] && cp -- "$RELEASE_MANIFEST" "$PACK_STAGE/$RELEASE_MANIFEST"
+    # 部署驱动也随包携带，但只在本次 apply 全部成功后同 inode 更新，供后续版本使用。
+    cp -- "$DEPLOY_SYNC_SCRIPT" "$PACK_STAGE/$DEPLOY_SYNC_SCRIPT"
 
     echo "=== 正在打包 ==="
     tar -czf "$archive" -C "$PACK_STAGE" .
@@ -189,10 +192,12 @@ cmd_pack() {
 # ── apply：内网执行 ────────────────────────────────────────
 STAGE_DIR=""
 SWAP_LOG=""   # 已交换目录清单（回滚用）
+DB_CODE_BACKUP_DIR=""
 
 cleanup_apply() {
     [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ] && rm -rf "$STAGE_DIR"
     [ -n "$SWAP_LOG" ] && [ -f "$SWAP_LOG" ] && rm -f "$SWAP_LOG"
+    [ -n "$DB_CODE_BACKUP_DIR" ] && [ -d "$DB_CODE_BACKUP_DIR" ] && rm -rf "$DB_CODE_BACKUP_DIR"
 }
 trap cleanup_apply EXIT
 
@@ -236,6 +241,153 @@ dir_signature() {
 
 # 依赖顺序的全量服务重启序列
 ALL_SERVICES_IN_ORDER="control llm_service mining serving mcp"
+DB_MIGRATION_RAN=false
+
+migration_exec() {
+    local env_args=()
+    if [ -n "${CMKB_MIGRATION_PG_USER:-}" ] || [ -n "${CMKB_MIGRATION_PG_PASSWORD:-}" ]; then
+        [ -n "${CMKB_MIGRATION_PG_USER:-}" ] \
+            && [ -n "${CMKB_MIGRATION_PG_PASSWORD:-}" ] \
+            || die "CMKB_MIGRATION_PG_USER/CMKB_MIGRATION_PG_PASSWORD 必须同时临时提供。"
+        env_args+=("-e" "CMKB_MIGRATION_PG_USER=$CMKB_MIGRATION_PG_USER")
+        env_args+=("-e" "CMKB_MIGRATION_PG_PASSWORD=$CMKB_MIGRATION_PG_PASSWORD")
+    fi
+    compose exec -T "${env_args[@]}" app "$@"
+}
+
+run_database_upgrade_if_needed() {
+    local output status
+
+    # 迁移器位于 knowledge_mining，同普通代码一起同步；Python/psycopg 由现有
+    # app 容器提供，宿主机无需安装 Python，也不要求替换镜像。
+    echo "=== 检查数据库迁移计划 ==="
+    set +e
+    output="$(migration_exec \
+        python -m knowledge_mining.mining.maintenance.database_upgrade plan 2>&1)"
+    status=$?
+    set -e
+    echo "$output"
+
+    if [ "$status" -eq 0 ]; then
+        echo "数据库结构已是目标版本，无需迁移。"
+        return 0
+    fi
+    if [ "$status" -ne 10 ]; then
+        restore_migration_code_backup
+        die "数据库迁移计划失败；未重启新代码，请先排查。"
+    fi
+
+    echo "=== 存在待办数据库迁移：暂停写入与检索服务 ==="
+    # 反向依赖顺序停止；control 保留到配置切换结束，nginx 可继续展示维护态。
+    local svc
+    for svc in mcp serving mining llm_service; do
+        if ! compose exec -T app supervisorctl stop "$svc" >/dev/null 2>&1; then
+            restore_migration_code_backup
+            restart_old_services_after_rollback
+            die "无法停止 $svc，拒绝在未形成停写屏障时迁移数据库。"
+        fi
+        local state
+        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}')"
+        if [ "$state" != "STOPPED" ]; then
+            restore_migration_code_backup
+            restart_old_services_after_rollback
+            die "$svc 未进入 STOPPED（实际：${state:-unknown}），拒绝迁移数据库。"
+        fi
+    done
+
+    echo "=== 在现有容器中执行数据库迁移 ==="
+    if ! migration_exec \
+        python -m knowledge_mining.mining.maintenance.database_upgrade apply; then
+        restore_migration_code_backup
+        restart_old_services_after_rollback
+        die "数据库迁移失败。已恢复旧代码并尝试重启旧服务；目标库保留供排查。"
+    fi
+
+    echo "=== 验证切换后的数据库 ==="
+    if ! migration_exec \
+        python -m knowledge_mining.mining.maintenance.database_upgrade verify; then
+        # apply 已可能切换配置；先用新代码恢复配置，再恢复旧代码并重启旧服务。
+        DB_MIGRATION_RAN=true
+        rollback_database_cutover \
+            || die "数据库验证失败且自动回滚未完成，服务保持停止，需人工介入。"
+        die "数据库迁移后验证失败；已尝试恢复旧配置、旧代码和旧服务。"
+    fi
+    DB_MIGRATION_RAN=true
+}
+
+prepare_migration_code_backup() {
+    [ -f "$STAGE_DIR/databases/migrations/manifest.yaml" ] || return 0
+    DB_CODE_BACKUP_DIR="$(mktemp -d "${PWD}/.cmkb-db-code-backup.XXXXXX")"
+    mkdir -p "$DB_CODE_BACKUP_DIR/tree"
+    local entry dir
+    for entry in "${SYNC_DIRS[@]}"; do
+        dir="${entry%%:*}"
+        [ -d "$STAGE_DIR/$dir" ] || continue
+        [ -d "$dir" ] || continue
+        if [ "$dir" = "main_control_service" ]; then
+            mkdir -p "$DB_CODE_BACKUP_DIR/tree/$dir"
+            find "$dir" -mindepth 1 -maxdepth 1 ! -name config \
+                -exec cp -a {} "$DB_CODE_BACKUP_DIR/tree/$dir/" \;
+        else
+            cp -a "$dir" "$DB_CODE_BACKUP_DIR/tree/$dir"
+        fi
+    done
+    [ -f "$RELEASE_MANIFEST" ] \
+        && cp -- "$RELEASE_MANIFEST" "$DB_CODE_BACKUP_DIR/$RELEASE_MANIFEST"
+    echo "已保存数据库迁移发布的旧代码快照：$DB_CODE_BACKUP_DIR"
+}
+
+restore_migration_code_backup() {
+    [ -n "$DB_CODE_BACKUP_DIR" ] && [ -d "$DB_CODE_BACKUP_DIR/tree" ] || return 0
+    echo "=== 数据库迁移失败：恢复同步前代码 ==="
+    local saved_stage="$STAGE_DIR" entry dir
+    STAGE_DIR="$DB_CODE_BACKUP_DIR/tree"
+    for entry in "${SYNC_DIRS[@]}"; do
+        dir="${entry%%:*}"
+        [ -d "$STAGE_DIR/$dir" ] || continue
+        sync_dir_contents "$dir"
+    done
+    STAGE_DIR="$saved_stage"
+    if [ -f "$DB_CODE_BACKUP_DIR/$RELEASE_MANIFEST" ]; then
+        cat -- "$DB_CODE_BACKUP_DIR/$RELEASE_MANIFEST" > "$RELEASE_MANIFEST"
+    fi
+}
+
+restart_old_services_after_rollback() {
+    local svc
+    compose exec -T app supervisorctl restart control \
+        || return 1
+    for svc in llm_service mining serving mcp; do
+        compose exec -T app supervisorctl start "$svc" \
+            || return 1
+        local state
+        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}')"
+        [ "$state" = "RUNNING" ] || return 1
+    done
+}
+
+rollback_database_cutover() {
+    [ "$DB_MIGRATION_RAN" = true ] || return 0
+    echo "=== 停止已启动的新版本服务 ==="
+    local svc state
+    for svc in mcp serving mining llm_service; do
+        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}')"
+        if [ "$state" != "STOPPED" ]; then
+            compose exec -T app supervisorctl stop "$svc" >/dev/null 2>&1 \
+                || return 1
+            state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}')"
+        fi
+        [ "$state" = "STOPPED" ] || return 1
+    done
+    echo "=== 回滚数据库配置与代码 ==="
+    migration_exec \
+        python -m knowledge_mining.mining.maintenance.database_upgrade rollback-config \
+        || return 1
+    restore_migration_code_backup || return 1
+    DB_MIGRATION_RAN=false
+    restart_old_services_after_rollback || return 1
+    verify_health_by_services "$ALL_SERVICES_IN_ORDER" || return 1
+}
 
 restart_services() {
     local services="$1"
@@ -244,9 +396,21 @@ restart_services() {
     for svc in $ALL_SERVICES_IN_ORDER; do
         case " $services " in
             *" $svc "*)
-                echo "--- supervisorctl restart $svc"
-                compose exec -T app supervisorctl restart "$svc" \
-                    || die "无法重启 $svc。目录已更新；请排查后手动 supervisorctl restart $svc"
+                if [ "$DB_MIGRATION_RAN" = true ] && [ "$svc" != "control" ]; then
+                    echo "--- supervisorctl start $svc"
+                    if ! compose exec -T app supervisorctl start "$svc"; then
+                        rollback_database_cutover \
+                            || die "服务启动失败且自动回滚未完成，需人工介入。"
+                        die "无法启动 $svc；已尝试恢复旧配置、旧代码和旧服务。"
+                    fi
+                else
+                    echo "--- supervisorctl restart $svc"
+                    if ! compose exec -T app supervisorctl restart "$svc"; then
+                        rollback_database_cutover \
+                            || die "服务重启失败且自动回滚未完成，需人工介入。"
+                        die "无法重启 $svc；已尝试恢复旧配置、旧代码和旧服务。"
+                    fi
+                fi
                 ;;
         esac
     done
@@ -256,8 +420,10 @@ health_check() {
     local url="$1" name="$2" deadline=$((SECONDS + 60))
     echo "等待 $name：$url"
     until compose exec -T app curl -fsS --max-time 3 "$url" >/dev/null 2>&1; do
-        if [ "$SECONDS" -ge "$deadline" ]; then
-            die "$name 在 60 秒内未恢复健康。目录已更新；请查 ./logs/ 排查后手动重启"
+            if [ "$SECONDS" -ge "$deadline" ]; then
+                rollback_database_cutover \
+                    || die "健康检查失败且自动回滚未完成，需人工介入。"
+                die "$name 在 60 秒内未恢复健康。目录已更新；请查 ./logs/ 排查后手动重启"
         fi
         sleep 2
     done
@@ -288,8 +454,10 @@ http_responds() {
     local url="$1" name="$2" deadline=$((SECONDS + 60))
     echo "等待 $name 接受 HTTP 请求：$url"
     until compose exec -T app curl -sS --max-time 3 -o /dev/null "$url" >/dev/null 2>&1; do
-        if [ "$SECONDS" -ge "$deadline" ]; then
-            die "$name 在 60 秒内未能接受 HTTP 请求。目录已更新；请查 ./logs/ 排查"
+            if [ "$SECONDS" -ge "$deadline" ]; then
+                rollback_database_cutover \
+                    || die "健康检查失败且自动回滚未完成，需人工介入。"
+                die "$name 在 60 秒内未能接受 HTTP 请求。目录已更新；请查 ./logs/ 排查"
         fi
         sleep 2
     done
@@ -305,10 +473,16 @@ cmd_apply() {
         echo "=== 校验包完整性 ==="
         sha256sum -c "${archive}.sha256" || die "校验失败，请重新传输"
     else
-        echo "警告：未找到 ${archive}.sha256，跳过完整性校验。" >&2
+        die "缺少 ${archive}.sha256，拒绝执行包含数据库迁移能力的增量包。"
     fi
 
-    # 2. 解包到暂存区
+    # 2. 解包到暂存区。先拒绝绝对路径、.. 穿越和链接成员，避免 tar 写出暂存区。
+    if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+        die "增量包含绝对路径或 .. 路径穿越成员，拒绝解包。"
+    fi
+    if tar -tvzf "$archive" | awk '$1 ~ /^[lh]/ { found=1 } END { exit(found ? 0 : 1) }'; then
+        die "增量包含符号链接或硬链接成员，拒绝解包。"
+    fi
     STAGE_DIR="$(mktemp -d "${PWD}/.cmkb-sync-stage.XXXXXX")"
     SWAP_LOG="$(mktemp "${PWD}/.cmkb-sync-swap.XXXXXX")"
     : > "$SWAP_LOG"
@@ -322,6 +496,10 @@ cmd_apply() {
     if find "$STAGE_DIR" -name '.env' | grep -q .; then
         die "包内含 .env 文件，拒绝应用"
     fi
+
+    # 迁移版本在覆盖 bind-mounted 代码前先留本地快照；迁移失败可恢复旧代码
+    # 并继续连接未切换的旧数据库。普通无 migration manifest 的包不产生备份。
+    prepare_migration_code_backup
 
     # 3. 逐目录：变更检测 → 原子交换；汇总需重启的服务
     local entry dir services needed="" sig_file
@@ -377,7 +555,13 @@ cmd_apply() {
         fi
     fi
 
-    # 4. 按依赖顺序重启受影响服务 + 健康检查
+    # 4. 数据库迁移（如有）必须发生在任何新代码重启之前。
+    run_database_upgrade_if_needed
+    if [ "$DB_MIGRATION_RAN" = true ]; then
+        needed="$needed $ALL_SERVICES_IN_ORDER"
+    fi
+
+    # 5. 按依赖顺序重启受影响服务 + 健康检查
     needed="$(printf '%s' "$needed" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
     if [ -z "$(printf '%s' "$needed" | tr -d ' ')" ]; then
         echo "=== 所有目录均无变化，无需重启 ==="
@@ -385,6 +569,10 @@ cmd_apply() {
     fi
     restart_services "$needed"
     verify_health_by_services "$needed"
+    if [ -f "$STAGE_DIR/$DEPLOY_SYNC_SCRIPT" ]; then
+        cat -- "$STAGE_DIR/$DEPLOY_SYNC_SCRIPT" > "$DEPLOY_SYNC_SCRIPT"
+        echo "已更新：$DEPLOY_SYNC_SCRIPT（本次部署成功后生效，供后续同步使用）"
+    fi
     echo "=== 同步完成 ==="
     compose exec -T app supervisorctl status
 }

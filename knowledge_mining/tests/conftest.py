@@ -198,17 +198,11 @@ def _truncate_all(conn):
     conn.execute("TRUNCATE TABLE asset_documents CASCADE")
     conn.execute("TRUNCATE TABLE asset_source_batches CASCADE")
     # 解析运行行（009/010 表）：幂等键跨测试残留会让 upsert 命中旧行。
-    conn.execute("TRUNCATE TABLE asset_parse_run_attempts CASCADE")
     conn.execute("TRUNCATE TABLE asset_parse_runs CASCADE")
 
     # 对象存储地基表：注册行必须与（每进程重建的）测试对象存储同步清空，
     # 否则跨进程复用指向不存在对象的注册行（download/解析全炸）。
-    conn.execute("TRUNCATE TABLE asset_storage_object_refs CASCADE")
-    conn.execute("TRUNCATE TABLE asset_file_audit_events CASCADE")
-    conn.execute("TRUNCATE TABLE asset_upload_sessions CASCADE")
-    conn.execute("TRUNCATE TABLE asset_storage_operations CASCADE")
     conn.execute("TRUNCATE TABLE asset_storage_objects CASCADE")
-    conn.execute("TRUNCATE TABLE asset_storage_quotas CASCADE")
 
     # KB 管理表（asset_documents 已清，knowledge_bases 无 FK 引用残留，安全）。
     # 顺序：子表先（kb_members → knowledge_bases → kb_users）。

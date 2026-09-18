@@ -4,10 +4,10 @@ import javax.sql.DataSource;
 
 /**
  * Hook invoked by {@link DomainPoolManager} once per resolved DataSource so
- * serving-owned tables can be created in whichever database a domain routes to.
+ * its migration-ledger contract can be validated before serving reads.
  *
- * <p>Implementations must never throw — a schema failure degrades an optional
- * feature, it must not stop the domain's pool from serving reads.</p>
+ * <p>Implementations fail closed. Schema changes belong to the deployment
+ * migration command and must never happen while creating a request-time pool.</p>
  */
 @FunctionalInterface
 public interface DomainSchemaEnsurer {

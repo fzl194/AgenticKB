@@ -1,9 +1,8 @@
 """PostgreSQL repository for the Segment Compiler layer (M5).
 
 Implements ``SegmentStore`` over 真实 ``asset_raw_segments``（兼容投影
-写入，+011 的 compiler_fingerprint 列）与 ``asset_segment_element_links``
-（011 新表）。替换语义与 legacy ``delete_segments_by_snapshot`` 惯例一致：
-重切 = 先删该快照全部切片与 links，再整体插入。
+写入，+011 的 compiler_fingerprint 列）。元素/证据定位仅保留在
+``source_offsets_json.element_links``，不再双写独立 link 表。
 
 仅在真实 PG 测试库可用时执行（与 shadow_parse/snapshot_store 的 PG
 仓储同风格：构造只收 pool，每方法一次连接 = 一个逻辑事务）。
@@ -27,7 +26,7 @@ def _new_id(prefix: str) -> str:
 
 
 class PgSegmentStore:
-    """PG ``SegmentStore``：asset_raw_segments（兼容投影）+ element links."""
+    """PG ``SegmentStore``：asset_raw_segments（含 source_offsets_json 定位）。"""
 
     def __init__(self, pool: Any) -> None:
         self._pool = pool
@@ -54,12 +53,7 @@ class PgSegmentStore:
         self, conn, snapshot_id, segments, compiler_fingerprint, *,
         document_key,
     ) -> None:
-        # 替换语义：先删旧切片与 links（legacy db.py:741 惯例）。
-        await conn.execute(
-                "DELETE FROM asset_segment_element_links "
-                "WHERE document_snapshot_id = %s",
-                [snapshot_id],
-        )
+        # 替换语义：先删旧切片，再整体插入。
         await conn.execute(
                 "DELETE FROM asset_raw_segments WHERE document_snapshot_id = %s",
                 [snapshot_id],
@@ -91,22 +85,6 @@ class PgSegmentStore:
                         compiler_fingerprint,
                     ],
                 )
-                for link in seg.links:
-                    await conn.execute(
-                        """INSERT INTO asset_segment_element_links (
-                               id, document_snapshot_id, segment_index,
-                               element_id, evidence_span_ids, char_start,
-                               char_end, metadata_json
-                           ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                        [
-                            _new_id("sel"), snapshot_id, seg.segment_index,
-                            link.element_id,
-                            json.dumps(list(link.evidence_span_ids)),
-                            link.char_range[0] if link.char_range else None,
-                            link.char_range[1] if link.char_range else None,
-                            "{}",
-                        ],
-                    )
 
     async def compiler_fingerprint(self, snapshot_id: str) -> str | None:
         """该快照已落库切片的编译指纹（无切片/未编译 → None）.

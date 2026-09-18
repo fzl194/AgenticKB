@@ -1,7 +1,7 @@
 -- 51号批次2：MCP 多钥匙化——一人多把「单域钥匙」。
 -- mcp_keys 每行一把钥匙：绑定唯一 domain；010 三列语义随行迁移（open_tools NULL=全开）。
 -- 旧 mcp_access/mcp_open_kbs 已于批次3 退役：代码面 008/010 摘除，
--- 数据面由 drop_legacy_mcp_tables.py 手动删除。
+-- 数据面由 databases/migrations 的版本化收敛迁移验证后删除。
 CREATE TABLE IF NOT EXISTS mcp_keys (
     id          TEXT PRIMARY KEY,
     user_id     TEXT NOT NULL REFERENCES kb_users(id) ON DELETE CASCADE,

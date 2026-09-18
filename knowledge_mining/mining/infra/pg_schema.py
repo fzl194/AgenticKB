@@ -10,6 +10,13 @@ from pathlib import Path
 
 import psycopg
 
+from knowledge_mining.mining.maintenance.database_upgrade.contract import (
+    CURRENT_SCHEMA_CHECKSUM,
+    CURRENT_SCHEMA_VERSION,
+    MIGRATION_LEDGER_TABLE,
+    SCHEMA_MARKER_ID,
+)
+
 from .pg_config import MiningDbConfig
 
 logger = logging.getLogger(__name__)
@@ -23,11 +30,9 @@ _RUNTIME_DDL_V5 = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "005
 _RUNTIME_DDL_V6 = _REPO_ROOT / "databases" / "mining_runtime" / "schemas" / "006_mining_run_preflight.sql"
 _ASSET_DOMAIN_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "003_asset_core_domain_isolation.sql"
 _ASSET_WORKFLOW_DDL = _REPO_ROOT / "databases" / "asset_core" / "schemas" / "004_asset_snapshot_workflow_binding.sql"
-# Ontology concept layer — must apply AFTER asset/runtime (FKs target asset_* and mining_runs).
-_ONTOLOGY_DDL = _REPO_ROOT / "databases" / "ontology" / "schemas" / "001_ontology_concept_postgresql.sql"
 # KB management — kb 三表 + asset_documents 004 ALTER。
 # 004_kb_isolation 引用 knowledge_bases（FK），必须在 kb 三表之后；且引用 asset_documents，
-# 必须在 002_asset_core 之后。运行时按序：asset_core → kb 三表 → kb_isolation → runtime → ... → ontology。
+# 必须在 002_asset_core 之后。
 _KB_USERS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "001_kb_users.sql"
 # Phase 2 鉴权：ALTER kb_users 加 password_hash + site_role。必须紧跟 001（ALTER 依赖基表已建）。
 _KB_USERS_AUTH_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "006_kb_users_auth.sql"
@@ -103,7 +108,7 @@ _SECTION_SCOPE_TYPED_CELLS_DDL = (
     / "015_a2a3_section_scope_typed_cells.sql"
 )
 # 库级默认检索范式（008_mcp_access / 010_mcp_access_config 已于批次3 退役：
-# 数据面删除走 drop_legacy_mcp_tables.py，部署清单门禁）。
+# 数据面删除走 databases/migrations 版本化迁移与部署门禁）。
 _KB_DEFAULT_PARADIGM_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "009_kb_default_paradigm.sql"
 )
@@ -205,7 +210,6 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _RUNTIME_DDL_V6,
         _ASSET_DOMAIN_DDL,
         _ASSET_WORKFLOW_DDL,
-        _ONTOLOGY_DDL,
         # KB 中心化挖掘（P2'）：放最后，确保引用的基表（knowledge_bases / asset_builds / mining_runs）都已建。
         _KB_MINING_BINDING_DDL,
         _ASSET_BUILD_KB_DDL,
@@ -300,6 +304,39 @@ def ensure_domain_schema(cfg: MiningDbConfig) -> None:
 def ensure_schema(cfg: MiningDbConfig) -> None:
     """Backward-compatible primary schema initializer."""
     ensure_primary_schema(cfg)
+
+
+def assert_schema_contract(cfg: MiningDbConfig) -> None:
+    """Read-only production startup guard for the versioned migration ledger."""
+
+    conn = _connect_safely(cfg, maintenance=False, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT to_regclass(%s) IS NOT NULL",
+                (f"public.{MIGRATION_LEDGER_TABLE}",),
+            )
+            ledger_row = cur.fetchone()
+            if not ledger_row or not ledger_row[0]:
+                raise RuntimeError(
+                    "database migration required: migration ledger is missing; "
+                    "run deploy-sync.sh apply before starting mining"
+                )
+            cur.execute(
+                f"""SELECT EXISTS (
+                        SELECT 1 FROM {MIGRATION_LEDGER_TABLE}
+                         WHERE migration_id = %s AND checksum = %s
+                           AND details_json->>'schema_version' = %s
+                     )""",
+                (SCHEMA_MARKER_ID, CURRENT_SCHEMA_CHECKSUM, CURRENT_SCHEMA_VERSION),
+            )
+            version_row = cur.fetchone()
+            if not version_row or not version_row[0]:
+                raise RuntimeError(
+                    f"database migration required: expected schema {CURRENT_SCHEMA_VERSION}"
+                )
+    finally:
+        conn.close()
 
 
 def _execute_ddl(conn, ddl: str, *, transactional: bool = False) -> None:

@@ -574,7 +574,7 @@ async def get_run_progress(run_id: str, request: Request, domain: str = Query(..
         current_stage_row = await current_stage_cur.fetchone()
         current_stage = current_stage_row["stage"] if current_stage_row else None
 
-        # 全局尾段（run_document_id IS NULL）：落图 + 建库/发布。这些阶段在所有文档
+        # 全局尾段（run_document_id IS NULL）：建库与校验。这些阶段在所有文档
         # 提交之后才整体跑一次，进度条必须把它们算进去——否则会出现"文档 100%、整轮
         # 其实还在落图/构建"的误导性满格。
         global_cur = await conn.execute(
@@ -603,7 +603,7 @@ async def get_run_progress(run_id: str, request: Request, domain: str = Query(..
 
     # 进度 = 文档单元 + 全局尾段单元。每篇文档算 1 个单元，每个全局尾段也算 1 个单元，
     # 这样"18 篇全提交"只到 ~82%，落图/建库/发布各自完成才继续往上爬到 100%。
-    GLOBAL_TAIL_STAGES = ("graph_write", "assemble_build", "validate_build", "publish_release")
+    GLOBAL_TAIL_STAGES = ("assemble_build", "validate_build")
     done_global = sum(1 for s in GLOBAL_TAIL_STAGES if s in global_done_stages)
     total_units = total + len(GLOBAL_TAIL_STAGES)
     done_units = completed + failed + skipped + done_global
@@ -777,9 +777,9 @@ async def get_run_document_artifacts(
         )
         unit_count = (await unit_cur.fetchone())["c"]
 
-        # Count relations
+        # Count structural relations (v2).
         rel_cur = await conn.execute(
-            "SELECT COUNT(*) as c FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
+            "SELECT COUNT(*) as c FROM asset_structure_edges WHERE snapshot_id = %s",
             [snapshot_id],
         )
         relation_count = (await rel_cur.fetchone())["c"]
@@ -939,8 +939,8 @@ async def get_run_artifacts(run_id: str, request: Request, domain: str = Query(.
         unit_count = (await unit_cur.fetchone())["c"]
 
         rel_cur = await conn.execute(
-            f"SELECT COUNT(*) as c FROM asset_raw_segment_relations "
-            f"WHERE document_snapshot_id IN ({placeholders})", snapshot_ids
+            f"SELECT COUNT(*) as c FROM asset_structure_edges "
+            f"WHERE snapshot_id IN ({placeholders})", snapshot_ids
         )
         relation_count = (await rel_cur.fetchone())["c"]
 
@@ -1023,7 +1023,7 @@ async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., 
 
     async with pool.connection() as conn:
         run_cur = await conn.execute(
-            "SELECT id, domain, status, current_stage, subloop_stage, ontology_version_id, "
+            "SELECT id, domain, status, current_stage, subloop_stage, "
             "total_documents, committed_count, new_count, updated_count, "
             "failed_count, skipped_count, started_at, finished_at, build_id, "
             "execution_engine, workflow_id, workflow_version, workflow_version_id, "

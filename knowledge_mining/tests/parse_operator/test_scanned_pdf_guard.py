@@ -137,5 +137,3 @@ async def test_scanned_pdf_execute_fails_with_ocr_reason(harness) -> None:
     )
     assert run.status == "FAILED"
     assert run.error_message and "OCR" in run.error_message
-    events = await harness.attempts.list_by_run(run.id)
-    assert len(events) == 1 and events[0].outcome == "FAILED"

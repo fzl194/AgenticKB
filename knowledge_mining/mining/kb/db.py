@@ -72,28 +72,13 @@ def derive_readiness_level(
 
 # ── 文档状态派生 SQL 片段（alias d = asset_documents）────────────────────────
 # CASE 在 SELECT；LATERAL 在 FROM。优先级：
-#   published > update_failed > failed > mining > mined > withdrawn(removed) > uploaded
+#   update_failed > failed > mining > mined > uploaded
 # 36号 §九：「已入库（mined）」= 存在于该 KB 最新 validated Build 且
 # selection_status='active'——不再以最近一次 run_document committed 为准
 # （staging 完成不叫已入库）。「update_failed」= 已入库但最近一次更新失败
 # （Build 仍是旧版本，检索不受影响，等待重试）。
 # 折进列表/详情查询，避免对每个文档单独查（N+1，远程库下 2-3s 卡顿的根因）。
 _STATUS_CASE_SQL = """CASE
-    WHEN COALESCE(pub.published, FALSE) THEN 'published'
-    WHEN rs.rd_status = 'failed' AND COALESCE(kbmv.in_active_build, FALSE)
-        THEN 'update_failed'
-    WHEN rs.rd_status = 'failed' THEN 'failed'
-    WHEN rs.rd_status IN ('pending', 'processing') THEN 'mining'
-    WHEN COALESCE(kbmv.in_active_build, FALSE) THEN 'mined'
-    WHEN COALESCE(rm.removed, FALSE) THEN 'withdrawn'
-    ELSE 'uploaded'
-END"""
-
-# 同一套派生，**去掉 release 两档**。给概览统计用：published/withdrawn 要靠
-# _RELEASE_JOIN_SQL 的两次 release⋈snapshot EXISTS（每文档两次），而纯 KB 部署
-# （publish=False，永不产 release）下这两档恒为 0 —— 为一对恒零的桶付全域文档的
-# 扫描代价不值得。域里确实有 active release 时才切回完整版（见 stats_document_status）。
-_STATUS_CASE_NO_RELEASE_SQL = """CASE
     WHEN rs.rd_status = 'failed' AND COALESCE(kbmv.in_active_build, FALSE)
         THEN 'update_failed'
     WHEN rs.rd_status = 'failed' THEN 'failed'
@@ -148,31 +133,8 @@ _KNOWLEDGE_OUTDATED_SQL = """COALESCE(
     AND NULLIF(d.source_raw_hash, '') IS NOT NULL
     AND kbmv.serving_raw_hash <> d.source_raw_hash, FALSE)"""
 
-# published / withdrawn 两档要查 active release，是这段里最贵的部分（每文档两次
-# release⋈snapshot 的 EXISTS）。单独拆出来，好让只关心「挖没挖成」的调用方（概览页聚合）
-# 不必付这笔钱——它每个用户登录后都要跑一次，admin 还要跑全域文档。
-_RELEASE_JOIN_SQL = """
-LEFT JOIN LATERAL (
-    SELECT EXISTS (
-        SELECT 1 FROM asset_publish_releases rel
-        JOIN asset_build_document_snapshots bs ON bs.build_id = rel.build_id
-        WHERE rel.domain = d.domain AND rel.status = 'active'
-          AND bs.document_id = d.id AND bs.selection_status = 'active'
-    ) AS published
-) pub ON TRUE
-LEFT JOIN LATERAL (
-    SELECT EXISTS (
-        SELECT 1 FROM asset_publish_releases rel
-        JOIN asset_build_document_snapshots bs ON bs.build_id = rel.build_id
-        WHERE rel.domain = d.domain AND rel.status = 'active'
-          AND bs.document_id = d.id AND bs.selection_status = 'removed'
-    ) AS removed
-) rm ON TRUE"""
-
-# 完整派生 = 归属收敛的 run 关联 + KB Build 成员关联 + release 关联。列表/详情用它。
-_STATUS_JOIN_SQL = (
-    _RUN_DOC_JOIN_SQL + _KB_BUILD_JOIN_SQL + _RELEASE_JOIN_SQL
-)
+# 完整派生 = 归属收敛的 run 关联 + KB Build 成员关联。
+_STATUS_JOIN_SQL = _RUN_DOC_JOIN_SQL + _KB_BUILD_JOIN_SQL
 
 #: 对外检索单元类型（A0-5 公开九词；与 Java EvidenceTypeVocabulary.PUBLIC_TYPES
 #: 同一套词表——两侧修改必须同步，契约测试各自钉住九词全集）。
@@ -732,7 +694,7 @@ class KbDB:
 
         **只回首页真正渲染的三个数**。曾想过回六态齐全，但 published/withdrawn/uploaded/
         mined 在页面上没有渲染位，而算它们要多挂两条 release⋈snapshot 的 EXISTS
-        （_RELEASE_JOIN_SQL）——这是登录落地页，不值得。所以这里只用 _RUN_DOC_JOIN_SQL。
+        这里不做额外的域级状态扫描，只用 _RUN_DOC_JOIN_SQL。
         """
         if not kb_ids:
             return {}
@@ -803,21 +765,9 @@ class KbDB:
             return [dict(r) for r in await cur.fetchall()]
 
     async def has_active_release(self, *, domain: str) -> bool:
-        """该域有无域级 active release —— 决定检索范围选择器是否呈现「域级发布」项。
-
-        KB 挖掘 publish=False 永不产 release，纯 KB 部署下恒为 False；此时把那个选项
-        摆出来只会让人选中后撞 no_active_release。
-        """
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """SELECT EXISTS (
-                       SELECT 1 FROM asset_publish_releases
-                       WHERE domain = %s AND status = 'active'
-                   ) AS present""",
-                [domain],
-            )
-            row = await cur.fetchone()
-            return bool(row and row["present"])
+        """Compatibility field for older clients; domain releases are retired."""
+        del domain
+        return False
 
     # ------------------------------------------------------------- 概览页统计
     # 概览页的数字与图表（GET /api/kb/stats）。全部按调用方**可见的 kb_ids** 收敛 ——
@@ -862,13 +812,11 @@ WITH latest AS (
         counts = dict.fromkeys(self._STATUS_KEYS, 0)
         if not kb_ids:
             return counts
-        case_sql = _STATUS_CASE_SQL if with_release else _STATUS_CASE_NO_RELEASE_SQL
+        del with_release
+        case_sql = _STATUS_CASE_SQL
         # 36号 §九：两套派生都引用 kbmv（Build membership），NO_RELEASE 分支
         # 也要挂 KB Build 关联。
-        join_sql = (
-            _STATUS_JOIN_SQL if with_release
-            else _RUN_DOC_JOIN_SQL + _KB_BUILD_JOIN_SQL
-        )
+        join_sql = _STATUS_JOIN_SQL
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 f"""SELECT {case_sql} AS status, COUNT(*) AS c
@@ -1045,8 +993,8 @@ WITH latest AS (
     # --------------------------------- 51号批次2：MCP 多钥匙（单域钥匙）
     # mcp_keys 每行一把单域钥匙；key_id 由服务层生成后传入。开放库域防线在 SQL 层
     #（kb.status='active' AND kb.domain = key.domain），应用层校验只是前置提示。
-    # 旧 mcp_access/mcp_open_kbs 表已于批次3 退役（数据面删除由 drop_legacy_mcp_tables.py
-    # 手动执行，部署清单门禁），新代码一律走本方法组。
+    # 旧 mcp_access/mcp_open_kbs 表已退役；数据面由版本化迁移严格校验后删除。
+    # 新代码一律走本方法组。
 
     async def create_mcp_key(self, *, user_id: str, name: str, domain: str,
                              key_hash: str, key_prefix: str, key_id: str) -> dict[str, Any]:

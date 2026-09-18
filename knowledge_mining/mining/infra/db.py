@@ -433,16 +433,17 @@ class AssetCoreDB(_DB):
         storage_path: str,
         normalized_content_hash: str,
     ) -> dict[str, Any] | None:
-        """Return domain-local history and the published active selection.
+        """Return domain-local history and the latest validated KB selection.
 
         按 ``storage_path``（位置）定位身份，而非 ``document_key``。这样文件移动/改名
         后（位置变、document_key 冻结不变）仍能找到同一身份，挖掘历史不断链；且
         storage_path 全库唯一，消解多库同 key 歧义。返回的 ``document_key`` 是冻结键，
         供调用方写入 ``mining_run_documents``。legacy 文档（storage_path NULL）不会被命中。
 
-        The active release is the only source of current truth.  A newer build
-        or link that has not been published must not affect classification.
+        ``channel`` is retained only for call compatibility; KB serving does
+        not use domain release channels.
         """
+        del channel
         return self._fetchone(
             """SELECT documents.id AS document_id,
                       documents.domain AS document_domain,
@@ -453,7 +454,7 @@ class AssetCoreDB(_DB):
                       history.historical_source_batch_id,
                       COALESCE(history.historical_snapshot_complete, FALSE)
                           AS historical_snapshot_complete,
-                      active.active_release_id,
+                      NULL::TEXT AS active_release_id,
                       active.active_build_id,
                       active.active_snapshot_id,
                       active.active_snapshot_hash,
@@ -490,8 +491,7 @@ class AssetCoreDB(_DB):
                    LIMIT 1
                ) AS history ON TRUE
                LEFT JOIN LATERAL (
-                   SELECT releases.id AS active_release_id,
-                          builds.id AS active_build_id,
+                   SELECT builds.id AS active_build_id,
                           active_snapshots.id AS active_snapshot_id,
                           active_snapshots.normalized_content_hash AS active_snapshot_hash,
                           active_batches.id AS active_source_batch_id,
@@ -500,10 +500,7 @@ class AssetCoreDB(_DB):
                               FROM asset_raw_segments AS active_segments
                               WHERE active_segments.document_snapshot_id = active_snapshots.id
                           ) AS active_snapshot_complete
-                   FROM asset_publish_releases AS releases
-                   JOIN asset_builds AS builds
-                     ON builds.id = releases.build_id
-                    AND builds.domain = %s
+                   FROM asset_builds AS builds
                    JOIN asset_build_document_snapshots AS selections
                      ON selections.build_id = builds.id
                     AND selections.document_id = documents.id
@@ -514,13 +511,14 @@ class AssetCoreDB(_DB):
                    LEFT JOIN asset_source_batches AS active_batches
                      ON active_batches.id = selections.source_batch_id
                     AND active_batches.domain = %s
-                   WHERE releases.domain = %s
-                     AND releases.channel = %s
-                     AND releases.status = 'active'
+                   WHERE builds.kb_id = documents.kb_id
+                     AND builds.domain = documents.domain
+                     AND builds.status IN ('validated', 'published')
                      AND (
                          selections.source_batch_id IS NULL
                          OR active_batches.id IS NOT NULL
                      )
+                   ORDER BY builds.created_at DESC, builds.id DESC
                    LIMIT 1
                ) AS active ON TRUE
                WHERE documents.domain = %s
@@ -531,9 +529,6 @@ class AssetCoreDB(_DB):
                 normalized_content_hash,
                 domain,
                 domain,
-                domain,
-                domain,
-                channel,
                 domain,
                 storage_path,
             ),
@@ -757,139 +752,30 @@ class AssetCoreDB(_DB):
         )
         return row["cnt"] if row else 0
 
-    # -- segment relations --
-
-    def insert_segment_relation(
-        self,
-        relation_id: str,
-        document_snapshot_id: str,
-        source_segment_id: str,
-        target_segment_id: str,
-        relation_type: str,
-        weight: float = 1.0,
-        confidence: float = 1.0,
-        distance: int | None = None,
-        metadata_json: dict | None = None,
-    ) -> str:
-        self._execute(
-            """INSERT INTO asset_raw_segment_relations
-                   (id, document_snapshot_id, source_segment_id, target_segment_id,
-                    relation_type, weight, confidence, distance, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-               ON CONFLICT (source_segment_id, target_segment_id, relation_type)
-               DO UPDATE SET
-                   weight = EXCLUDED.weight,
-                   confidence = EXCLUDED.confidence,
-                   distance = EXCLUDED.distance,
-                   metadata_json = EXCLUDED.metadata_json,
-                   document_snapshot_id = EXCLUDED.document_snapshot_id""",
-            (
-                relation_id, document_snapshot_id, source_segment_id, target_segment_id,
-                relation_type, weight, confidence, distance, _json_dumps(metadata_json),
-            ),
-        )
-        return relation_id
-
-    def delete_relations_by_snapshot(self, document_snapshot_id: str) -> int:
-        return self._run(
-            "DELETE FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
-            (document_snapshot_id,),
-            fetch="rowcount",
-        )
-
-    def get_relations_by_snapshot(self, document_snapshot_id: str) -> list[dict[str, Any]]:
-        return self._fetchall(
-            "SELECT * FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
-            (document_snapshot_id,),
-        )
-
-    # -- retrieval units --
-
-    def insert_retrieval_unit(
-        self,
-        unit_id: str,
-        document_snapshot_id: str,
-        unit_key: str,
-        unit_type: str,
-        target_type: str,
-        target_ref_json: dict | None = None,
-        title: str | None = None,
-        text: str = "",
-        search_text: str = "",
-        block_type: str = "unknown",
-        semantic_role: str = "unknown",
-        facets_json: dict | None = None,
-        entity_refs_json: list | None = None,
-        source_refs_json: dict | None = None,
-        llm_result_refs_json: dict | None = None,
-        source_segment_id: str | None = None,
-        weight: float = 1.0,
-        metadata_json: dict | None = None,
-    ) -> str:
-        now = _utcnow()
-        self._execute(
-            """INSERT INTO asset_retrieval_units
-                   (id, document_snapshot_id, unit_key, unit_type, target_type, target_ref_json,
-                    title, text, search_text, block_type, semantic_role,
-                    facets_json, entity_refs_json, source_refs_json, llm_result_refs_json,
-                    source_segment_id, weight, created_at, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                unit_id, document_snapshot_id, unit_key, unit_type, target_type,
-                _json_dumps(target_ref_json), title, text, search_text, block_type, semantic_role,
-                _json_dumps(facets_json), _json_dumps(entity_refs_json),
-                _json_dumps(source_refs_json), _json_dumps(llm_result_refs_json),
-                source_segment_id, weight, now, _json_dumps(metadata_json),
-            ),
-        )
-        return unit_id
-
-    def delete_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> int:
-        return self._run(
-            "DELETE FROM asset_retrieval_units WHERE document_snapshot_id = %s",
-            (document_snapshot_id,),
-            fetch="rowcount",
-        )
-
     def clear_snapshot_derived_assets(self, document_snapshot_id: str) -> None:
-        """清空一个 snapshot 的全部派生资产，保留 snapshot 行本身与 document 身份。
+        """Clear v2 derived assets for a snapshot before an explicit redo."""
+        from knowledge_mining.mining.retrieval_projection.schema import (
+            PROMOTE_TABLE_COLUMNS,
+        )
 
-        用于 force_redo 重跑前清理：persist_document_assets 见 snapshot 已有切片就会跳过持久化、
-        且按 unit_key upsert 不会删除不再生成的旧单元（如 table_row）。先整体清空，重跑才干净。
-        依赖：asset_retrieval_embeddings 由 retrieval_unit_id ON DELETE CASCADE 随单元删；
-        asset_segment_entity_mentions 由 segment_id ON DELETE CASCADE 随切片删。
-        """
-        self._execute(
-            "DELETE FROM asset_retrieval_units WHERE document_snapshot_id = %s",
-            (document_snapshot_id,),
-        )
-        self._execute(
-            "DELETE FROM asset_raw_segment_relations WHERE document_snapshot_id = %s",
-            (document_snapshot_id,),
-        )
+        for table, _columns in PROMOTE_TABLE_COLUMNS:
+            self._execute(
+                f"DELETE FROM {table}_staging WHERE snapshot_id = %s",
+                (document_snapshot_id,),
+            )
+            self._execute(
+                f"DELETE FROM {table} WHERE snapshot_id = %s",
+                (document_snapshot_id,),
+            )
         self._execute(
             "DELETE FROM asset_raw_segments WHERE document_snapshot_id = %s",
             (document_snapshot_id,),
         )
 
-    def get_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> list[dict[str, Any]]:
-        return self._fetchall(
-            "SELECT * FROM asset_retrieval_units WHERE document_snapshot_id = %s",
-            (document_snapshot_id,),
-        )
-
     def count_retrieval_units_by_snapshot(self, document_snapshot_id: str) -> int:
-        # 批次8 M5：优先 v2 表示；存量旧表兜底（clean break 后应为 0）。
         row = self._fetchone(
             "SELECT COUNT(*) AS n FROM asset_retrieval_units_v2 "
             "WHERE snapshot_id = %s",
-            (document_snapshot_id,),
-        )
-        if row and int(row["n"]) > 0:
-            return int(row["n"])
-        row = self._fetchone(
-            "SELECT COUNT(*) AS n FROM asset_retrieval_units "
-            "WHERE document_snapshot_id = %s",
             (document_snapshot_id,),
         )
         return int(row["n"]) if row else 0
@@ -991,50 +877,12 @@ class AssetCoreDB(_DB):
         return len(snapshot_ids)
 
     def count_embeddings_by_snapshot(self, document_snapshot_id: str) -> int:
-        # 批次8 M5：优先 v2 向量资产；存量旧表兜底（clean break 后应为 0）。
         row = self._fetchone(
             """SELECT COUNT(*) AS n FROM asset_retrieval_embeddings_v2
                WHERE snapshot_id = %s""",
             (document_snapshot_id,),
         )
-        if row and int(row["n"]) > 0:
-            return int(row["n"])
-        row = self._fetchone(
-            """SELECT COUNT(*) AS n FROM asset_retrieval_embeddings e
-               JOIN asset_retrieval_units u ON u.id = e.retrieval_unit_id
-               WHERE u.document_snapshot_id = %s""",
-            (document_snapshot_id,),
-        )
         return int(row["n"]) if row else 0
-
-    # -- retrieval embeddings --
-
-    def insert_retrieval_embedding(
-        self,
-        embedding_id: str,
-        retrieval_unit_id: str,
-        embedding_model: str,
-        embedding_provider: str,
-        text_kind: str,
-        embedding_dim: int,
-        embedding_vector: str,
-        content_hash: str = "",
-        metadata_json: dict | None = None,
-    ) -> str:
-        now = _utcnow()
-        self._execute(
-            """INSERT INTO asset_retrieval_embeddings
-                   (id, retrieval_unit_id, embedding_model, embedding_provider,
-                    text_kind, embedding_dim, embedding_vector, content_hash,
-                    created_at, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                embedding_id, retrieval_unit_id, embedding_model, embedding_provider,
-                text_kind, embedding_dim, embedding_vector, content_hash,
-                now, _json_dumps(metadata_json),
-            ),
-        )
-        return embedding_id
 
     # -- builds --
 
@@ -1092,27 +940,10 @@ class AssetCoreDB(_DB):
     def get_build(self, build_id: str) -> dict[str, Any] | None:
         return self._fetchone("SELECT * FROM asset_builds WHERE id = %s", (build_id,))
 
-    def get_active_build(self, *, domain: str, channel: str) -> dict[str, Any] | None:
-        return self._fetchone(
-            """SELECT builds.*
-               FROM asset_publish_releases AS releases
-               JOIN asset_builds AS builds
-                 ON builds.id = releases.build_id
-                AND builds.domain = releases.domain
-               WHERE releases.domain = %s
-                 AND builds.domain = %s
-                 AND releases.channel = %s
-                 AND releases.status = 'active'
-               LIMIT 1""",
-            (domain, domain, channel),
-        )
-
     def get_latest_validated_kb_build(self, kb_id: str) -> dict[str, Any] | None:
         """36号 §七：KB-scoped 最新 validated/published Build（增量 parent 专用）.
 
-        KB 挖掘 publish=False，KB Build 永不进入域级 active release——
-        get_active_build 对 KB 场景永远拿不到 parent（carry-forward 失效、
-        同域其它 KB 的 release 会被误当 parent）。此处只按 kb_id 过滤，
+        只按 kb_id 过滤，
         ``created_at DESC, id DESC`` 稳定排序，同域不同 KB 互不可见。
         """
         return self._fetchone(
@@ -1207,41 +1038,6 @@ class AssetCoreDB(_DB):
             for row in rows
         }
 
-    def get_active_document_ids_by_batch(
-        self,
-        *,
-        domain: str,
-        channel: str,
-        source_batch_id: str,
-    ) -> list[str]:
-        """Return active documents whose current selection came from a batch."""
-        rows = self._fetchall(
-            """SELECT selections.document_id
-               FROM asset_publish_releases AS releases
-               JOIN asset_builds AS builds
-                 ON builds.id = releases.build_id
-                AND builds.domain = releases.domain
-               JOIN asset_build_document_snapshots AS selections
-                 ON selections.build_id = builds.id
-                AND selections.selection_status = 'active'
-               JOIN asset_documents AS documents
-                 ON documents.id = selections.document_id
-                AND documents.domain = builds.domain
-               JOIN asset_document_snapshots AS snapshots
-                 ON snapshots.id = selections.document_snapshot_id
-                AND snapshots.domain = builds.domain
-               JOIN asset_source_batches AS batches
-                 ON batches.id = selections.source_batch_id
-                AND batches.domain = builds.domain
-               WHERE releases.domain = %s
-                 AND builds.domain = %s
-                 AND releases.channel = %s
-                 AND releases.status = 'active'
-                 AND batches.id = %s""",
-            (domain, domain, channel, source_batch_id),
-        )
-        return [row["document_id"] for row in rows]
-
     # -- build document snapshots --
 
     def upsert_build_document_snapshot(
@@ -1298,63 +1094,6 @@ class AssetCoreDB(_DB):
             "SELECT * FROM asset_build_document_snapshots WHERE build_id = %s",
             (build_id,),
         )
-
-    # -- publish releases --
-
-    def insert_release(
-        self,
-        release_id: str,
-        release_code: str,
-        build_id: str,
-        domain: str = "default",
-        channel: str = "prod",
-        status: str = "staging",
-        previous_release_id: str | None = None,
-        released_by: str | None = None,
-        release_notes: str | None = None,
-        metadata_json: dict | None = None,
-    ) -> str:
-        self._execute(
-            """INSERT INTO asset_publish_releases
-                   (id, release_code, build_id, domain, channel, status, previous_release_id,
-                    released_by, release_notes, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                release_id, release_code, build_id, domain, channel, status, previous_release_id,
-                released_by, release_notes, _json_dumps(metadata_json),
-            ),
-        )
-        return release_id
-
-    def activate_release(self, release_id: str) -> None:
-        now = _utcnow()
-        release = self._fetchone(
-            "SELECT domain, channel FROM asset_publish_releases WHERE id = %s", (release_id,)
-        )
-        if release is None:
-            raise ValueError(f"Release {release_id} not found")
-        domain = release["domain"]
-        channel = release["channel"]
-        # Retire previous active release scoped to this domain+channel
-        self._execute(
-            "UPDATE asset_publish_releases SET status = 'retired', deactivated_at = %s "
-            "WHERE domain = %s AND channel = %s AND status = 'active'",
-            (now, domain, channel),
-        )
-        self._execute(
-            "UPDATE asset_publish_releases SET status = 'active', activated_at = %s WHERE id = %s",
-            (now, release_id),
-        )
-
-    def get_active_release(self, domain: str, channel: str = "prod") -> dict[str, Any] | None:
-        return self._fetchone(
-            "SELECT * FROM asset_publish_releases WHERE domain = %s AND channel = %s AND status = 'active'",
-            (domain, channel),
-        )
-
-    def get_release(self, release_id: str) -> dict[str, Any] | None:
-        return self._fetchone("SELECT * FROM asset_publish_releases WHERE id = %s", (release_id,))
-
 
 # ===================================================================
 # MiningRuntimeDB

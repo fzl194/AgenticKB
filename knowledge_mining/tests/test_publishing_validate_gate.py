@@ -48,6 +48,9 @@ class FakeAssetCoreDB:
     def get_active_build(self, *, domain, channel):
         return None
 
+    def get_latest_validated_kb_build(self, kb_id):
+        return None
+
     def get_build(self, build_id):
         return self.builds.get(build_id)
 
@@ -106,7 +109,7 @@ def test_assemble_build_freezes_capability_signature_into_summary() -> None:
 
     assemble_build(
         db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
-        snapshot_decisions=_decisions(), kb_id=None,
+        snapshot_decisions=_decisions(), kb_id="kb-1",
         capabilities=FULL_BASELINE, embedding_fallback=False,
     )
 
@@ -123,7 +126,7 @@ def test_validate_blocks_zero_units_when_paradigm_requires_them() -> None:
     with pytest.raises(ValueError, match="retrieval unit"):
         assemble_build(
             db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
-            snapshot_decisions=_decisions(), kb_id=None,
+            snapshot_decisions=_decisions(), kb_id="kb-1",
             capabilities=FULL_BASELINE, embedding_fallback=True,
         )
     # 校验失败 → build 不得标 validated
@@ -139,7 +142,7 @@ def test_validate_allows_legacy_builds_without_capability_field() -> None:
 
     build_id = assemble_build(
         db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
-        snapshot_decisions=_decisions(), kb_id=None,
+        snapshot_decisions=_decisions(), kb_id="kb-1",
     )
 
     summary = db.inserted_builds[0]["summary_json"]
@@ -157,7 +160,7 @@ def test_validate_blocks_zero_embeddings_without_fallback_trace() -> None:
     with pytest.raises(ValueError, match="embedding"):
         assemble_build(
             db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
-            snapshot_decisions=_decisions(), kb_id=None,
+            snapshot_decisions=_decisions(), kb_id="kb-1",
             capabilities=FULL_BASELINE, embedding_fallback=False,
         )
 
@@ -170,7 +173,7 @@ def test_validate_allows_zero_embeddings_with_fallback_trace() -> None:
 
     assemble_build(
         db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
-        snapshot_decisions=_decisions(), kb_id=None,
+        snapshot_decisions=_decisions(), kb_id="kb-1",
         capabilities=FULL_BASELINE, embedding_fallback=True,
     )
 
@@ -185,7 +188,7 @@ def test_validate_passes_when_units_and_embeddings_present() -> None:
 
     assemble_build(
         db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
-        snapshot_decisions=_decisions(), kb_id=None,
+        snapshot_decisions=_decisions(), kb_id="kb-1",
         capabilities=FULL_BASELINE, embedding_fallback=False,
     )
 
@@ -215,7 +218,7 @@ def test_carry_forward_snapshots_are_not_revalidated_by_new_capabilities() -> No
 
     assemble_build(
         db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
-        snapshot_decisions=decisions, kb_id=None,
+        snapshot_decisions=decisions, kb_id="kb-1",
         capabilities=FULL_BASELINE, embedding_fallback=False,
     )
 

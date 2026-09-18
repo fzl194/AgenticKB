@@ -1,9 +1,8 @@
 """受保护域资产 reset（批次8 M6/R8，24 号 §10.2/§10.3）.
 
 clean break 重建流程的清库步骤：
-- DROP v2 资产表族（让正式 migration 013 按新形态重建；存量 asset_raw_segments
-  是 legacy 形态必须 DROP 而非复用）；
-- TRUNCATE 派生资产/挖掘运行/范式/研究线图谱/旧检索缓存；
+- TRUNCATE v2 final/staging、派生资产、挖掘运行与范式数据；
+- 保留所有表结构与 ``cmkb_schema_migrations``，服务启动不再负责重建 DDL；
 - **保留** control-plane 与存储层（用户/密钥/开放库/域注册/文档记录/
   存储对象/审计/LLM 观测）。
 
@@ -26,9 +25,9 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = REPO_ROOT / "main_control_service" / "config" / "domain_registry.yaml"
 
-# v2 表族：DROP 后由 pg_schema migration 013 重建（新形态）。final 与
-# staging/readiness 必须一起清，避免 reset 后晋升历史残影。
-V2_DROP_TABLES = (
+# v2 表族：服务启动已禁止 DDL，因此 reset 只能清数据、不能 DROP 结构。
+# final 与 staging/readiness 必须一起清，避免 reset 后晋升历史残影。
+V2_TABLES = (
     "asset_raw_segments",
     "asset_structure_nodes",
     "asset_structure_edges",
@@ -48,19 +47,11 @@ V2_DROP_TABLES = (
 
 # 派生资产/运行/范式/研究线/旧缓存：TRUNCATE（RESTART IDENTITY CASCADE）
 TRUNCATE_TABLES = (
-    # 旧派生资产
-    "asset_retrieval_units",
-    "asset_retrieval_embeddings",
-    "asset_raw_segment_relations",
-    "asset_segment_element_links",
-    "asset_segment_entity_mentions",
     "asset_document_snapshots",
     "asset_document_snapshot_links",
     "asset_builds",
     "asset_build_document_snapshots",
-    "asset_publish_releases",
     "asset_parse_runs",
-    "asset_parse_run_attempts",
     # 挖掘运行历史
     "mining_runs",
     "mining_run_documents",
@@ -71,26 +62,13 @@ TRUNCATE_TABLES = (
     "mining_workflow_versions",
     "operator_paradigm",
     "operator_paradigm_version",
-    # 研究线图谱数据（算子保留、数据下线）
-    "ontology_alias_dictionary",
-    "ontology_candidates",
-    "ontology_entities",
-    "ontology_entity_relations",
-    "ontology_evidence_nodes",
-    "ontology_node_types",
-    "ontology_relation_types",
-    "ontology_versions",
-    # 旧检索链缓存（契约随固定链删除）
-    "serving_query_cache",
 )
 
 # 保留白名单（绝不触碰）：control-plane + 存储层 + 审计/观测
 PRESERVED_TABLES = frozenset({
     "kb_users", "kb_folders", "kb_members", "knowledge_bases",
     "mcp_keys", "mcp_key_open_kbs",
-    "asset_documents", "asset_file_audit_events",
-    "asset_storage_objects", "asset_storage_object_refs",
-    "asset_storage_operations", "asset_storage_quotas", "asset_upload_sessions",
+    "asset_documents", "asset_storage_objects",
     "agent_llm_attempts", "agent_llm_events", "agent_llm_model_calls",
     "agent_llm_prompt_templates", "agent_llm_requests", "agent_llm_results",
     "agent_llm_tasks", "serving_query_logs",
@@ -154,11 +132,10 @@ def main() -> int:
             ).fetchall()
         }
 
-        drop_list = [t for t in V2_DROP_TABLES if t in existing]
-        truncate_list = [t for t in TRUNCATE_TABLES if t in existing]
+        truncate_list = [t for t in (*V2_TABLES, *TRUNCATE_TABLES) if t in existing]
 
         # FK 完备性：引用清理清单的表必须全在清单内
-        cleanup_set = set(drop_list) | set(truncate_list)
+        cleanup_set = set(truncate_list)
         referencing = conn.execute(
             """
             SELECT DISTINCT tc.table_name
@@ -187,10 +164,7 @@ def main() -> int:
             print(f"拒绝：保留白名单与清理清单重叠：{sorted(overlap)}")
             return 3
 
-        print("\n=== DROP（v2 表族，由 migration 013 重建新形态） ===")
-        for table in drop_list:
-            print(f"  DROP TABLE {table}")
-        print("\n=== TRUNCATE（派生资产/运行/范式/研究线/缓存） ===")
+        print("\n=== TRUNCATE（v2 资产/运行/范式；结构与迁移账本保留） ===")
         for table in truncate_list:
             print(f"  TRUNCATE {table}")
         print(f"\n=== 保留（不触碰，共 {len(preserved_present)} 张在库） ===")
@@ -200,9 +174,6 @@ def main() -> int:
             print("\n[dry-run] 未执行。加 --execute 落地。")
             return 0
 
-        for table in drop_list:
-            conn.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
-            print(f"DROPED {table}")
         if truncate_list:
             joined = ", ".join(f'"{t}"' for t in truncate_list)
             conn.execute(f"TRUNCATE {joined} RESTART IDENTITY CASCADE")

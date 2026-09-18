@@ -1,4 +1,4 @@
-"""Domain-scoped, read-only knowledge asset routes.
+"""KB-scoped, read-only knowledge asset routes.
 
 代码瘦身批次4：旧全局读取面（documents/batches/segments/units 等 7 端点）
 已随 KB 化收口退役——它们没有 KB membership/owner 授权，与 kb/routes 的
@@ -11,62 +11,59 @@ from fastapi import APIRouter, Query, Request
 
 from knowledge_mining.mining.api.deps import get_domain_async_pool
 from knowledge_mining.mining.api.domain_scope import require_domain
-from knowledge_mining.mining.infra.domain_pack import resolve_domain
 
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 
-# Every knowledge query starts from the one active release for a domain/channel.
-# DISTINCT makes the boundary robust even if corrupt historical data contains a
-# duplicate release/selection row; downstream resources are never duplicated.
+# Every knowledge query starts from the latest validated Build of one KB.
+# Build is already the complete serving view, so a release/channel indirection
+# is neither needed nor safe in a multi-KB domain.
 _ACTIVE_SCOPE_CTE = """
-WITH active_scope AS (
+WITH latest_build AS (
+    SELECT b.id
+    FROM asset_builds b
+    WHERE b.kb_id = %s
+      AND b.domain = %s
+      AND b.status IN ('validated', 'published')
+    ORDER BY b.created_at DESC, b.id DESC
+    LIMIT 1
+), active_scope AS (
     SELECT DISTINCT
-        r.id AS release_id,
-        r.build_id,
-        r.domain,
-        r.channel,
+        b.id AS build_id,
+        b.domain,
+        b.kb_id,
         bs.document_id,
         bs.document_snapshot_id,
         bs.source_batch_id
-    FROM asset_publish_releases r
+    FROM latest_build lb
+    JOIN asset_builds b ON b.id = lb.id
     JOIN asset_build_document_snapshots bs
-      ON bs.build_id = r.build_id
+      ON bs.build_id = b.id
      AND bs.selection_status = 'active'
     JOIN asset_documents d
       ON d.id = bs.document_id
-     AND d.domain = %s
+     AND d.domain = b.domain
+     AND d.kb_id = b.kb_id
     JOIN asset_document_snapshots s
       ON s.id = bs.document_snapshot_id
-     AND s.domain = %s
-    WHERE r.domain = %s
-      AND r.channel = %s
-      AND r.status = 'active'
+     AND s.domain = b.domain
 )
 """
 
 
-def _active_scope_params(domain: str, channel: str) -> list[str]:
-    return [domain, domain, domain, channel]
-
-
-def _resolve_channel(domain: str, requested: str | None) -> str:
-    if requested is not None and requested.strip():
-        return requested.strip()
-    entry = resolve_domain(domain)
-    return str(entry.get("default_channel") or "prod").strip() or "prod"
+def _active_scope_params(kb_id: str, domain: str) -> list[str]:
+    return [kb_id, domain]
 
 
 @router.get("/stats")
 async def knowledge_stats(
     request: Request,
     domain: str = Query(...),
-    channel: str | None = Query(None),
+    kb_id: str = Query(..., min_length=1),
 ) -> dict:
-    """Return statistics for assets in the current active release only."""
+    """Return statistics for the latest validated Build of one KB."""
     domain = require_domain(domain)
-    channel = _resolve_channel(domain, channel)
     pool = await get_domain_async_pool(request, domain)
 
     async with pool.connection() as conn:
@@ -80,10 +77,10 @@ SELECT
        FROM asset_raw_segments seg
        JOIN active_scope scope
          ON scope.document_snapshot_id = seg.document_snapshot_id) AS segments,
-    (SELECT COUNT(DISTINCT rel.id)
-       FROM asset_raw_segment_relations rel
+    (SELECT COUNT(*)
+       FROM asset_structure_edges rel
        JOIN active_scope scope
-         ON scope.document_snapshot_id = rel.document_snapshot_id) AS relations,
+         ON scope.document_snapshot_id = rel.snapshot_id) AS relations,
     (SELECT COUNT(DISTINCT u.representation_id)
        FROM asset_retrieval_units_v2 u
        JOIN active_scope scope
@@ -93,7 +90,7 @@ SELECT
        JOIN active_scope scope
          ON scope.document_snapshot_id = e.snapshot_id) AS embeddings
 """,
-            _active_scope_params(domain, channel),
+            _active_scope_params(kb_id, domain),
         )
         counts = dict(await cur.fetchone())
 
@@ -105,31 +102,12 @@ SELECT
             "JOIN active_scope scope "
             "  ON scope.document_snapshot_id = u.snapshot_id "
             "GROUP BY u.representation_type",
-            _active_scope_params(domain, channel),
+            _active_scope_params(kb_id, domain),
         )
         type_dist = {row["unit_type"]: row["c"] for row in await cur.fetchall()}
-
-        # Release/build lifecycle exists independently of selections. In
-        # particular, withdrawing the final document publishes an empty active
-        # build which must remain distinguishable from "no active release".
-        cur = await conn.execute(
-            "SELECT DISTINCT r.id, r.build_id, r.domain, r.channel "
-            "FROM asset_publish_releases r "
-            "JOIN asset_builds b ON b.id = r.build_id AND b.domain = r.domain "
-            "WHERE r.domain = %s AND b.domain = %s AND r.channel = %s "
-            "AND r.status = 'active' ORDER BY r.id",
-            [domain, domain, channel],
-        )
-        release_rows = [dict(row) for row in await cur.fetchall()]
-        counts["builds"] = len({row["build_id"] for row in release_rows})
-        counts["releases"] = len(release_rows)
-        active_releases = [
-            {key: row[key] for key in ("id", "domain", "channel")}
-            for row in release_rows
-        ]
+        counts["builds"] = 1 if counts["documents"] else 0
 
     return {
         **counts,
         "retrieval_units_by_type": type_dist,
-        "active_releases": active_releases,
     }

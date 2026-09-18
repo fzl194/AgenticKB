@@ -416,7 +416,6 @@ def build_new_chain_services(
     storage_objects: Any | None = None,
     documents: Any | None = None,
     parse_runs: Any | None = None,
-    attempts: Any | None = None,
     snapshots: Any | None = None,
     segment_store: Any | None = None,
     representation_store: Any | None = None,
@@ -448,10 +447,7 @@ def build_new_chain_services(
         from knowledge_mining.mining.segment_compiler.repositories_pg import (
             PgSegmentStore,
         )
-        from knowledge_mining.mining.shadow_parse.repositories_pg import (
-            PgParseAttemptRepository,
-            PgParseRunRepository,
-        )
+        from knowledge_mining.mining.shadow_parse.repositories_pg import PgParseRunRepository
         from knowledge_mining.mining.snapshot_store.repositories_pg import (
             PgSnapshotRepository,
         )
@@ -467,7 +463,6 @@ def build_new_chain_services(
         storage_objects = storage_objects or PgStorageObjectRepository(repository_pool)
         documents = documents or PgDocumentCurrentContentRepository(repository_pool)
         parse_runs = parse_runs or PgParseRunRepository(repository_pool)
-        attempts = attempts or PgParseAttemptRepository(repository_pool)
         snapshots = snapshots or PgSnapshotRepository(repository_pool)
         segment_store = segment_store or PgSegmentStore(repository_pool)
         representation_store = representation_store or PgRepresentationStore(
@@ -483,10 +478,7 @@ def build_new_chain_services(
         from knowledge_mining.mining.segment_compiler.repositories_memory import (
             MemorySegmentStore,
         )
-        from knowledge_mining.mining.shadow_parse.repositories_memory import (
-            MemoryParseAttemptRepository,
-            MemoryParseRunRepository,
-        )
+        from knowledge_mining.mining.shadow_parse.repositories_memory import MemoryParseRunRepository
         from knowledge_mining.mining.snapshot_store.repositories_memory import (
             MemorySnapshotRepository,
         )
@@ -501,7 +493,6 @@ def build_new_chain_services(
         storage_objects = storage_objects or MemoryStorageObjectRepository()
         documents = documents or MemoryDocumentCurrentContentRepository()
         parse_runs = parse_runs or MemoryParseRunRepository()
-        attempts = attempts or MemoryParseAttemptRepository()
         snapshots = snapshots or MemorySnapshotRepository()
         segment_store = segment_store or MemorySegmentStore()
         representation_store = representation_store or MemoryRepresentationStore()
@@ -571,7 +562,7 @@ def build_new_chain_services(
         storage_objects=storage_objects, object_store=object_store,
     )
     operator = DocumentParseService(
-        object_store=object_store, parse_runs=parse_runs, attempts=attempts,
+        object_store=object_store, parse_runs=parse_runs,
         storage_objects=storage_objects, parser_resolver=resolve_pipeline,
         commit_service=commit, quality_gate=QualityGate(),
         reconciler=StructuralReconciler(), snapshots=snapshots,

@@ -8,23 +8,18 @@ import java.util.TreeSet;
 /**
  * Represents the active scoping context for a retrieval operation.
  *
- * <p>Two ways a scope gets built:</p>
- * <ul>
- *   <li><b>Release scope</b> (default): the domain's single active release →
- *       {@code releaseId}/{@code buildId} are real ids.</li>
- *   <li><b>KB scope</b>: narrowed to one or more knowledge bases, resolved from KB builds
- *       directly because KB mining runs {@code publish=false} and therefore never produce a
- *       release. There is no single release/build, so {@code releaseId} carries the synthetic
- *       key from {@link #kbScopeKey(List)} and {@code buildId} is {@code null}.</li>
- * </ul>
+ * <p>A scope is always narrowed to one or more authorized knowledge bases and resolved from their
+ * current validated Builds. There is no domain-release fallback. Because a request can span KBs,
+ * {@code releaseId} carries the synthetic key from {@link #kbScopeKey(List)} and
+ * {@code buildId} is {@code null}.</p>
  *
  * <p><b>{@code releaseId} is also the semantic-cache partition key</b> (see
  * {@code SemanticCacheService#lookup}/{@code #store}). That is why the KB path must not leave it
  * null: two different KB selections would otherwise share one cache bucket and serve each other's
  * results — a cross-KB leak, not just a stale hit.</p>
  *
- * @param releaseId           release identifier, or the synthetic KB scope key
- * @param buildId             build identifier; null for KB scope (spans multiple builds)
+ * @param releaseId           legacy field name carrying the synthetic KB scope/cache key
+ * @param buildId             null because one request may span multiple KB Builds
  * @param snapshotIds         snapshot identifiers; defaults to empty list
  * @param documentSnapshotMap mapping from document id to snapshot id; defaults to empty map
  * @param hardFilters         请求显式传入的 hard constraints（25 号 §6.2/§7.1：document_refs/

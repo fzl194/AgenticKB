@@ -11,6 +11,7 @@ import org.springframework.test.context.ActiveProfiles;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -42,10 +43,15 @@ public abstract class AbstractPgIntegrationTest {
         boolean connectionOk = checkConnection();
         assumeTrue(connectionOk, "PostgreSQL not reachable — skipping PG integration test");
 
-        try {
-            this.activeScope = assetRepository.resolveActiveScope("cloud_core_network");
+        try (Connection conn = dataSource.getConnection();
+             var stmt = conn.prepareStatement(
+                     "SELECT id, domain FROM knowledge_bases WHERE status = 'active' ORDER BY id LIMIT 1");
+             var rs = stmt.executeQuery()) {
+            assumeTrue(rs.next(), "No active KB found — skipping");
+            this.activeScope = assetRepository.resolveKbScope(
+                    rs.getString("domain"), List.of(rs.getString("id")));
         } catch (Exception e) {
-            assumeTrue(false, "Cannot resolve active scope for cloud_core_network: " + e.getMessage());
+            assumeTrue(false, "Cannot resolve an active KB scope: " + e.getMessage());
         }
 
         assumeTrue(activeScope.snapshotIds() != null && !activeScope.snapshotIds().isEmpty(),

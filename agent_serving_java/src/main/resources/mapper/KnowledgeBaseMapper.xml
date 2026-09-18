@@ -17,10 +17,12 @@
               AND u.status = 'active'
         WHERE kb.status = 'active'
           AND kb.domain = #{domain}
-          AND kb.id IN
-          <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">
-              #{kbId}
-          </foreach>
+          <if test="kbIds != null and !kbIds.isEmpty()">
+              AND kb.id IN
+              <foreach collection="kbIds" item="kbId" open="(" separator="," close=")">
+                  #{kbId}
+              </foreach>
+          </if>
           AND (
                 kb.owner_id = u.id
                 OR EXISTS (

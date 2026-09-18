@@ -35,8 +35,8 @@ public class KbAccessService {
     /**
      * Normalize and authorize the requested KB ids.
      *
-     * <p>An empty request is the ordinary domain-wide search — no KB is involved, so nothing is
-     * checked and an empty list comes back.</p>
+     * <p>An empty request means "all KBs visible to this caller in the selected domain". The
+     * mapper applies the same owner/member/admin/domain-public predicate used for explicit ids.</p>
      *
      * <p>Any requested id the caller cannot read fails the <em>whole</em> request rather than
      * being dropped: silently returning a subset would look identical to "that KB has no
@@ -44,19 +44,19 @@ public class KbAccessService {
      * never reveals which knowledge bases exist.</p>
      *
      * @param username caller identity from {@code X-KB-User}; null means anonymous (public only)
-     * @return the normalized, authorized kb ids (empty when none were requested)
+     * @return the normalized, authorized kb ids
      * @throws IllegalArgumentException("kb_not_found") if any requested id is not readable
      */
     public List<String> authorize(String domain, List<String> requestedKbIds, String username) {
         List<String> normalized = ActiveScope.normalizeKbIds(requestedKbIds);
-        if (normalized.isEmpty()) {
-            return List.of();
-        }
-
         String effectiveDomain = (domain != null) ? domain : "default";
         List<String> accessible =
                 knowledgeBaseMapper.selectAccessibleKbIds(effectiveDomain, normalized, username);
         Set<String> allowed = new HashSet<>(accessible != null ? accessible : List.of());
+
+        if (normalized.isEmpty()) {
+            return allowed.stream().sorted().toList();
+        }
 
         if (!allowed.containsAll(normalized)) {
             Set<String> denied = new HashSet<>(normalized);

@@ -1,0 +1,8 @@
+schema_version: 2026.09.converged-v1
+migrations:
+  - id: core/20260918_repair_51_indexes
+    path: core/20260918_000_repair_51_indexes.sql
+    checksum: 87b73676c57dbbe9affb848b3601615c18031c79715743f3c54bceca236b6e04
+  - id: core/20260918_drop_retired_tables
+    path: core/20260918_001_drop_retired_tables.sql
+    checksum: fb6569a9120be5bc0743de758ba244affd724ad91f6694faf7186dea6802c314

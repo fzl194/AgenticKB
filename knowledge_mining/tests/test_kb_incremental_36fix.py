@@ -13,6 +13,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any
 
+import pytest
+
 # ───────────────────────── A. 增量判定状态机（纯函数） ─────────────────────────
 
 
@@ -571,7 +573,7 @@ def test_assemble_build_uses_kb_parent_and_never_carries_cross_kb():
     assert "doc-other-kb" not in carried
 
 
-def test_assemble_build_without_kb_id_keeps_domain_parent():
+def test_assemble_build_rejects_retired_domain_scope():
     from knowledge_mining.mining.stages.publishing import assemble_build
 
     db = _PublishingFakeDB(
@@ -583,15 +585,15 @@ def test_assemble_build_without_kb_id_keeps_domain_parent():
         ]},
         domain_build=_DOMAIN_BUILD,
     )
-    assemble_build(
-        db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
-        snapshot_decisions=[{
-            "document_id": "doc-1", "document_snapshot_id": "snap-new",
-            "action": "NEW", "reason": "add", "selection_status": "active",
-        }],
-        kb_id=None,
-    )
-    assert db.inserted_builds[0]["parent_build_id"] == "build-domain"
+    with pytest.raises(ValueError, match="kb_id is required"):
+        assemble_build(
+            db, domain="odn", channel="prod", run_id="run-1", batch_id=None,
+            snapshot_decisions=[{
+                "document_id": "doc-1", "document_snapshot_id": "snap-new",
+                "action": "NEW", "reason": "add", "selection_status": "active",
+            }],
+            kb_id=None,
+        )
 
 
 def test_assemble_build_carries_per_document_history_from_sparse_builds():

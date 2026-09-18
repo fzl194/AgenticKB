@@ -2,10 +2,10 @@
 
 Canonical form is the uppercase verb (third-person singular) matching how
 domain.yaml prompts ask the LLM to label relations. The lowercase form is
-what gets persisted in asset_raw_segment_relations.relation_type.
+what the retired discourse projection used as relation types.
 
 When adding a new relation here, also extend the DB CHECK constraint on
-asset_raw_segment_relations.relation_type (databases/asset_core/schemas/
+the legacy relation projection
 002_asset_core_postgresql.sql) and the structural-relation portion of
 VALID_RELATION_TYPES in models.py stays untouched.
 """

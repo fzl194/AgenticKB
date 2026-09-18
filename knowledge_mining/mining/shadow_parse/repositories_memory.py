@@ -1,7 +1,7 @@
 """In-memory fake repositories for the Shadow Parse layer (M2 → M4).
 
-Implements ``ParseRunRepository`` 与 ``ParseAttemptRepository``
-（``shadow_parse/contracts.py``），backed by plain ``dict`` stores，供服务
+Implements ``ParseRunRepository``（``shadow_parse/contracts.py``），
+backed by plain ``dict`` stores，供服务
 测试与本地开发使用——整套解析链路无需 PostgreSQL 即可跑通
 （ADR-0003 D-006 / D-022，与 file_management 的 ``repositories_memory``
 同风格）。
@@ -21,10 +21,7 @@ from knowledge_mining.mining.contracts.state_machines import (
     IllegalTransition,
     assert_transition,
 )
-from knowledge_mining.mining.shadow_parse.contracts import (
-    ParseAttemptRecord,
-    ParseRunRecord,
-)
+from knowledge_mining.mining.shadow_parse.contracts import ParseRunRecord
 
 _IdemKey = tuple[str, str, str]
 
@@ -141,38 +138,4 @@ class MemoryParseRunRepository:
         return len(self._by_id)
 
 
-class MemoryParseAttemptRepository:
-    """In-memory ``ParseAttemptRepository``（list 存储，序号唯一）."""
-
-    def __init__(self) -> None:
-        self._events: list[ParseAttemptRecord] = []
-
-    async def append(self, record: ParseAttemptRecord) -> ParseAttemptRecord:
-        dup = any(
-            e.parse_run_id == record.parse_run_id
-            and e.attempt_index == record.attempt_index
-            for e in self._events
-        )
-        if dup:
-            raise ValueError(
-                f"attempt_index {record.attempt_index} already exists for run "
-                f"{record.parse_run_id!r}"
-            )
-        self._events.append(record)
-        return record
-
-    async def list_by_run(
-        self, parse_run_id: str
-    ) -> tuple[ParseAttemptRecord, ...]:
-        return tuple(
-            sorted(
-                (e for e in self._events if e.parse_run_id == parse_run_id),
-                key=lambda e: e.attempt_index,
-            )
-        )
-
-
-__all__ = [
-    "MemoryParseAttemptRepository",
-    "MemoryParseRunRepository",
-]
+__all__ = ["MemoryParseRunRepository"]

@@ -3,7 +3,7 @@
 -- Lives in the defaultDataSource DB (PG_DBNAME, default test_db) — a shared/control
 -- store, NOT a per-domain DB. Paradigm CRUD/reads run with no DomainContext set, so the
 -- routing DataSource falls back here; paradigms are domain-agnostic global config.
--- Idempotent (CREATE TABLE IF NOT EXISTS) — applied on startup by ParadigmSchemaInitializer.
+-- Bootstrap-only DDL. Production startup validates cmkb_schema_migrations and never runs DDL.
 -- =============================================================================
 
 -- Paradigm definition (mutable metadata + editable draft)

@@ -1,7 +1,8 @@
-"""PostgreSQL schema initialization for llm_service.
+"""Explicit LLM bootstrap helpers and production schema-contract validation.
 
-Ensures the target database exists (creates if needed),
-then applies DDL for agent_llm_runtime tables.
+Production startup is read-only.  ``ensure_schema`` remains available only to
+explicit bootstrap/test fixtures; deployments run the versioned container
+migration command before services start.
 """
 from __future__ import annotations
 
@@ -9,6 +10,13 @@ import logging
 from pathlib import Path
 
 import psycopg
+
+from knowledge_mining.mining.maintenance.database_upgrade.contract import (
+    CURRENT_SCHEMA_CHECKSUM,
+    CURRENT_SCHEMA_VERSION,
+    MIGRATION_LEDGER_TABLE,
+    SCHEMA_MARKER_ID,
+)
 
 from .pg_config import LlmDbConfig
 
@@ -40,17 +48,8 @@ def ensure_database(cfg: LlmDbConfig) -> None:
 
 
 def ensure_schema(cfg: LlmDbConfig) -> None:
-    """Ensure database exists, then execute DDL file (idempotent).
-
-    Before applying DDL, terminate stale "idle in transaction" connections
-    left by previously killed processes to avoid lock contention.
-    """
+    """Explicitly bootstrap LLM tables for tests/new empty databases."""
     ensure_database(cfg)
-
-    # Terminate stale "idle in transaction" connections that may hold locks
-    # from a previously SIGKILL'd process
-    _cleanup_stale_connections(cfg)
-
     conn = psycopg.connect(cfg.conninfo, autocommit=True)
     try:
         for ddl_path in _DDL_PATHS:
@@ -61,35 +60,31 @@ def ensure_schema(cfg: LlmDbConfig) -> None:
         conn.close()
 
 
-def _cleanup_stale_connections(cfg: LlmDbConfig) -> None:
-    """Kill "idle in transaction" and long-running "active" connections to avoid lock waits."""
-    conn = psycopg.connect(cfg.maintenance_conninfo, autocommit=True)
-    try:
-        with conn.cursor() as cur:
-            # Terminate idle-in-transaction connections (these hold locks from crashed processes)
-            cur.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s AND state = 'idle in transaction' AND pid <> pg_backend_pid()",
-                (cfg.dbname,),
-            )
-            killed_idle = sum(1 for r in cur.fetchall() if r[0])
-            if killed_idle:
-                logger.warning("Terminated %d stale 'idle in transaction' connections", killed_idle)
+def assert_schema_contract(cfg: LlmDbConfig) -> None:
+    """Fail closed unless the container migration reached this release version."""
 
-            # Terminate long-running active queries on our DB (stuck > 30s)
-            cur.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s AND state = 'active' AND query_start < now() - interval '30 seconds' "
-                "AND pid <> pg_backend_pid()",
-                (cfg.dbname,),
+    with psycopg.connect(cfg.conninfo, autocommit=True) as conn:
+        ledger_row = conn.execute(
+            "SELECT to_regclass(%s) IS NOT NULL",
+            (f"public.{MIGRATION_LEDGER_TABLE}",),
+        ).fetchone()
+        if not ledger_row or not ledger_row[0]:
+            raise RuntimeError(
+                "database migration required: migration ledger is missing; "
+                "run deploy-sync.sh apply before starting llm_service"
             )
-            killed_active = sum(1 for r in cur.fetchall() if r[0])
-            if killed_active:
-                logger.warning("Terminated %d stuck active queries (>30s)", killed_active)
-    except Exception:
-        logger.exception("Failed to cleanup stale connections (non-fatal)")
-    finally:
-        conn.close()
+        version_row = conn.execute(
+            f"""SELECT EXISTS (
+                    SELECT 1 FROM {MIGRATION_LEDGER_TABLE}
+                     WHERE migration_id = %s AND checksum = %s
+                       AND details_json->>'schema_version' = %s
+                 )""",
+            (SCHEMA_MARKER_ID, CURRENT_SCHEMA_CHECKSUM, CURRENT_SCHEMA_VERSION),
+        ).fetchone()
+        if not version_row or not version_row[0]:
+            raise RuntimeError(
+                f"database migration required: expected schema {CURRENT_SCHEMA_VERSION}"
+            )
 
 
 def _execute_ddl(conn, ddl: str) -> None:

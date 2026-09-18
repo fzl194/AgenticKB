@@ -48,12 +48,7 @@ from knowledge_mining.mining.parse_quality.gate import (
     QualityDecision,
     QualityGate,
 )
-from knowledge_mining.mining.shadow_parse.contracts import (
-    ParseAttemptRecord,
-    ParseAttemptRepository,
-    ParseRunRecord,
-    ParseRunRepository,
-)
+from knowledge_mining.mining.shadow_parse.contracts import ParseRunRecord, ParseRunRepository
 from knowledge_mining.mining.shadow_parse.service import ShadowParseService
 from knowledge_mining.mining.snapshot_store.service import SnapshotCommitService
 
@@ -78,7 +73,6 @@ class DocumentParseService:
         *,
         object_store: ObjectStorePort,
         parse_runs: ParseRunRepository,
-        attempts: ParseAttemptRepository,
         storage_objects: StorageObjectRepository,
         parser_resolver: ParserResolver,
         commit_service: SnapshotCommitService,
@@ -90,7 +84,6 @@ class DocumentParseService:
     ) -> None:
         self._store = object_store
         self._parse_runs = parse_runs
-        self._attempts = attempts
         self._storage_objects = storage_objects
         self._resolver = parser_resolver
         self._commit = commit_service
@@ -178,7 +171,6 @@ class DocumentParseService:
             kind = "primary" if attempt_index == 0 else "fallback"
             shadow = self._shadow_for(parser_id, plan.quality_profile)
             await self._advance(rid, "PARSING")
-            attempt_started = _utcnow()
             try:
                 outcome = await shadow.execute(
                     frozen,
@@ -192,11 +184,7 @@ class DocumentParseService:
                     budget=budget,
                     backend_attempts_used=attempt_index + 1,
                 )
-            except Exception as exc:  # noqa: BLE001 —— attempt 失败必须留档
-                await self._attempts.append(self._attempt(
-                    rid, attempt_index, parser_id, kind, "FAILED",
-                    attempt_started, error_message=f"{type(exc).__name__}: {exc}",
-                ))
+            except Exception as exc:  # noqa: BLE001
                 if attempt_index + 1 < len(chain) and attempt_index + 1 < budget.max_backend_attempts:
                     await self._advance(rid, "FALLING_BACK")
                     attempt_index += 1
@@ -229,10 +217,6 @@ class DocumentParseService:
             )
 
             if effective.decision in ("PASS", "WARN"):
-                await self._attempts.append(self._attempt(
-                    rid, attempt_index, parser_id, kind, "SUCCEEDED",
-                    attempt_started,
-                ))
                 committed = await self._commit_or_supersede(
                     frozen, outcome, effective, rid, domain, title,
                 )
@@ -244,14 +228,6 @@ class DocumentParseService:
                 )
                 return await self._final(rid)
 
-            # FALLBACK / REPAIR / FAIL：attempt 本身按失败留档（质量拒绝）。
-            await self._attempts.append(self._attempt(
-                rid, attempt_index, parser_id, kind, "FAILED",
-                attempt_started,
-                error_message=f"quality: {effective.decision}"
-                              + (f" ({'; '.join(i.code for i in effective.issues)})"
-                                 if effective.issues else ""),
-            ))
             if effective.decision in ("FALLBACK", "REPAIR"):
                 if attempt_index + 1 < len(chain) and attempt_index + 1 < budget.max_backend_attempts:
                     await self._advance(rid, "FALLING_BACK")
@@ -332,7 +308,6 @@ class DocumentParseService:
         await self._advance(rid, "INSPECTING")
         await self._advance(rid, "PLANNED")
         await self._advance(rid, "PARSING")  # 重放无 parse 工作，状态如实走过
-        attempt_started = _utcnow()
         shadow = self._shadow_for(parser_id)
         try:
             outcome = await shadow.replay(
@@ -342,10 +317,6 @@ class DocumentParseService:
                 source_text=source_text,
             )
         except Exception as exc:  # noqa: BLE001
-            await self._attempts.append(self._attempt(
-                rid, 0, parser_id, "replay", "FAILED", attempt_started,
-                error_message=f"{type(exc).__name__}: {exc}",
-            ))
             await self._advance(
                 rid, "FAILED", error_message=f"{type(exc).__name__}: {exc}"
             )
@@ -364,9 +335,6 @@ class DocumentParseService:
             container_count=len(outcome.document.containers),
             relation_count=len(outcome.document.relations),
         )
-        await self._attempts.append(self._attempt(
-            rid, 0, parser_id, "replay", "SUCCEEDED", attempt_started,
-        ))
         effective = self._resolve_decision(outcome.quality_decision)
         if effective.decision not in ("PASS", "WARN"):
             await self._advance(
@@ -569,10 +537,6 @@ class DocumentParseService:
         await self._advance(rid, "INSPECTING")
         await self._advance(rid, "PLANNED")
         await self._advance(rid, "PARSING")  # 状态机：FAILED 只能从 PARSING 进入
-        await self._attempts.append(self._attempt(
-            rid, 0, plan.primary_parser_id, "primary", "FAILED", _utcnow(),
-            error_message=f"{guard}: {message}",
-        ))
         await self._advance(rid, "FAILED", error_message=message,
                             finished_at=_utcnow())
         return await self._final(rid)
@@ -718,32 +682,6 @@ class DocumentParseService:
             chunks.append(chunk)
         payload = b"".join(chunks)
         return BackendParseArtifact.from_dict(json.loads(payload))
-
-    def _attempt(
-        self,
-        rid: str,
-        index: int,
-        parser_id: str,
-        kind: str,
-        outcome: str,
-        started_at: str,
-        *,
-        error_message: str | None = None,
-    ) -> ParseAttemptRecord:
-        return ParseAttemptRecord(
-            id=_new_id("att"),
-            parse_run_id=rid,
-            attempt_index=index,
-            parser_id=parser_id,
-            parser_fingerprint=(
-                self._resolver(parser_id)[0].descriptor.parser_fingerprint
-            ),
-            attempt_kind=kind,
-            outcome=outcome,
-            started_at=started_at,
-            finished_at=_utcnow(),
-            error_message=error_message,
-        )
 
     async def _advance(
         self,

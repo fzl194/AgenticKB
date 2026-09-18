@@ -7,6 +7,8 @@ TRUNCATE 顺序：反序（先清子表，再清父表）。
 from __future__ import annotations
 
 EXPORT_TABLES = [
+    # 版本化迁移账本（结构与数据必须一起恢复）
+    "cmkb_schema_migrations",
     # mining_control（全局 Workflow 定义）
     "mining_workflows",
     "mining_workflow_versions",
@@ -23,47 +25,57 @@ EXPORT_TABLES = [
     "mining_run_documents",
     "mining_run_stage_events",
     "mining_workflow_node_events",
-    # serving_runtime（检索服务运行态）——见 OPTIONAL_TABLES
-    "serving_query_logs",
-    "serving_query_cache",
-    # asset_core
+    # 身份与 KB
+    "kb_users",
+    "knowledge_bases",
+    "kb_members",
+    "kb_folders",
+    "user_domains",
+    "mcp_keys",
+    "mcp_key_open_kbs",
+    "kb_document_refs",
+    "kb_purge_tasks",
+    # asset_core 核心身份、对象与版本
     "asset_source_batches",
+    "asset_storage_objects",
     "asset_documents",
     "asset_document_snapshots",
     "asset_document_snapshot_links",
-    "asset_builds",
-    "asset_publish_releases",
-    "asset_build_document_snapshots",
+    "asset_parse_runs",
     "asset_raw_segments",
-    "asset_raw_segment_relations",
-    "asset_retrieval_units",
-    "asset_retrieval_embeddings",
-    # ontology（本体概念层）——须排在 asset_core 之后：
-    # ontology_evidence_nodes / asset_segment_entity_mentions 的 FK
-    # 指向 asset_document_snapshots / asset_raw_segments。
-    "ontology_versions",
-    "ontology_node_types",
-    "ontology_relation_types",
-    "ontology_entities",
-    "ontology_entity_relations",
-    "ontology_alias_dictionary",
-    "ontology_evidence_nodes",
-    "asset_segment_entity_mentions",
-    "ontology_candidates",
+    "asset_builds",
+    "asset_build_document_snapshots",
+    # v2 正式资产
+    "asset_structure_nodes",
+    "asset_structure_edges",
+    "asset_structured_assets",
+    "asset_table_cells",
+    "asset_retrieval_units_v2",
+    "asset_retrieval_embeddings_v2",
+    "asset_snapshot_readiness",
+    "asset_source_locators",
+    # v2 staging
+    "asset_structure_nodes_staging",
+    "asset_structure_edges_staging",
+    "asset_structured_assets_staging",
+    "asset_table_cells_staging",
+    "asset_retrieval_units_v2_staging",
+    "asset_retrieval_embeddings_v2_staging",
+    "asset_snapshot_readiness_staging",
+    "asset_source_locators_staging",
+    # 功能面
+    "onenet_imports",
+    "onenet_toc_cache",
     # operator（检索范式）——见 OPTIONAL_TABLES
     "operator_paradigm",
     "operator_paradigm_version",
+    # serving_runtime（检索服务运行态）——见 OPTIONAL_TABLES
+    "serving_query_logs",
 ]
 
-# 可能不存在的表：全部由 agent_serving_java 自己创建，Python 侧 reset_db.py 不建。
-#   - operator_paradigm*        ParadigmSchemaInitializer，启动时建在非路由的 defaultDataSource 上
-#   - serving_query_logs/cache  ServingRuntimeSchemaInitializer，启动时建默认库、
-#                               并在 DomainPoolManager 每次建池时建到该域自己的库上
-# 因此 Java 从未启动过的库里没有这几张表，export/import 必须容忍其缺失，
-# 否则会在纯挖掘库上直接报错。
+# 兼容尚未完成 52 号 bootstrap 的测试/旧库；生产收敛库验证要求这些表存在。
 OPTIONAL_TABLES = {
     "operator_paradigm",
     "operator_paradigm_version",
     "serving_query_logs",
-    "serving_query_cache",
 }

@@ -185,23 +185,6 @@ class AssetRepositoryKbScopeIT {
     }
 
     @Test
-    @DisplayName("empty kbIds on the 3-arg overload delegates to the release path unchanged")
-    void emptyKbIdsDelegatesToReleasePath() {
-        // A domain with no release must fail the same way through both entry points — proof the
-        // overload delegates rather than quietly resolving an empty KB scope.
-        String unknownDomain = "domain_without_release_" + token;
-
-        assertThatThrownBy(() -> assetRepository.resolveActiveScope(unknownDomain, "prod", List.of()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("no_active_release");
-        assertThatThrownBy(() -> assetRepository.resolveActiveScope(unknownDomain, "prod", null))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("no_active_release");
-        assertThatThrownBy(() -> assetRepository.resolveActiveScope(unknownDomain, "prod"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("no_active_release");
-    }
-
     // -------------------------------------------------------------------------
     // Fixture
     // -------------------------------------------------------------------------

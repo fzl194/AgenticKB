@@ -28,10 +28,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from knowledge_mining.mining.shadow_parse.contracts import (
-    ParseAttemptRecord,
-    ParseRunRecord,
-)
+from knowledge_mining.mining.shadow_parse.contracts import ParseRunRecord
 from knowledge_mining.mining.contracts.state_machines import (
     IllegalTransition,
     assert_transition,
@@ -273,70 +270,4 @@ class PgParseRunRepository:
             return _parse_run_from_row(dict(row))
 
 
-def _attempt_from_row(r: dict[str, Any]) -> ParseAttemptRecord:
-    return ParseAttemptRecord(
-        id=r["id"],
-        parse_run_id=r["parse_run_id"],
-        attempt_index=r["attempt_index"],
-        parser_id=r["parser_id"],
-        parser_fingerprint=r["parser_fingerprint"],
-        attempt_kind=r["attempt_kind"],
-        outcome=r["outcome"],
-        started_at=r["started_at"].isoformat()
-        if hasattr(r["started_at"], "isoformat")
-        else str(r["started_at"]),
-        finished_at=r["finished_at"].isoformat()
-        if hasattr(r["finished_at"], "isoformat")
-        else (str(r["finished_at"]) if r.get("finished_at") is not None else None),
-        error_message=r.get("error_message"),
-        metadata_json=_metadata_json_str(r.get("metadata_json")),
-    )
-
-
-class PgParseAttemptRepository:
-    """PG ``ParseAttemptRepository`` over ``asset_parse_run_attempts``（010）."""
-
-    def __init__(self, pool: Any) -> None:
-        self._pool = pool
-
-    async def append(self, record: ParseAttemptRecord) -> ParseAttemptRecord:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """INSERT INTO asset_parse_run_attempts (
-                       id, parse_run_id, attempt_index, parser_id,
-                       parser_fingerprint, attempt_kind, outcome, started_at,
-                       finished_at, error_message, metadata_json
-                   ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (parse_run_id, attempt_index) DO NOTHING
-                   RETURNING *""",
-                (
-                    record.id, record.parse_run_id, record.attempt_index,
-                    record.parser_id, record.parser_fingerprint,
-                    record.attempt_kind, record.outcome, record.started_at,
-                    record.finished_at, record.error_message,
-                    json.dumps(json.loads(record.metadata_json or "{}"),
-                               ensure_ascii=False),
-                ),
-            )
-            row = await cur.fetchone()
-            if row is None:
-                raise ValueError(
-                    f"attempt_index {record.attempt_index} already exists for "
-                    f"run {record.parse_run_id!r}"
-                )
-            return _attempt_from_row(dict(row))
-
-    async def list_by_run(
-        self, parse_run_id: str
-    ) -> tuple[ParseAttemptRecord, ...]:
-        async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """SELECT * FROM asset_parse_run_attempts
-                   WHERE parse_run_id = %s ORDER BY attempt_index""",
-                [parse_run_id],
-            )
-            rows = await cur.fetchall()
-            return tuple(_attempt_from_row(dict(r)) for r in rows)
-
-
-__all__ = ["PgParseAttemptRepository", "PgParseRunRepository"]
+__all__ = ["PgParseRunRepository"]

@@ -262,7 +262,7 @@ class RawSegmentData:
 
 @dataclass(frozen=True)
 class SegmentRelationData:
-    """Segment relation — aligned with asset_raw_segment_relations."""
+    """Legacy in-memory segment relation."""
 
     source_segment_key: str
     target_segment_key: str
@@ -279,7 +279,7 @@ class SegmentRelationData:
 
 @dataclass(frozen=True)
 class RetrievalUnitData:
-    """Retrieval unit — aligned with asset_retrieval_units."""
+    """Legacy in-memory retrieval unit."""
 
     segment_key: str
     unit_key: str

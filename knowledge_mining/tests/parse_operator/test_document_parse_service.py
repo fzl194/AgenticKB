@@ -59,7 +59,6 @@ from knowledge_mining.mining.infra.object_store.fake import FakeObjectStore  # n
 from knowledge_mining.mining.parse_quality.gate import QualityGate  # noqa: E402
 from knowledge_mining.mining.parse_reconciler import StructuralReconciler  # noqa: E402
 from knowledge_mining.mining.shadow_parse.repositories_memory import (  # noqa: E402
-    MemoryParseAttemptRepository,
     MemoryParseRunRepository,
 )
 from knowledge_mining.mining.snapshot_store.repositories_memory import (  # noqa: E402
@@ -167,7 +166,6 @@ class Harness:
     def __init__(self, tmp_path):  # noqa: ANN001
         self.store = FakeObjectStore(str(tmp_path / "objects"))
         self.parse_runs = MemoryParseRunRepository()
-        self.attempts = MemoryParseAttemptRepository()
         self.storage_objects = MemoryStorageObjectRepository()
         self.snapshots = MemorySnapshotRepository()
         self.parsers: dict[str, StubParser] = {}
@@ -202,7 +200,6 @@ class Harness:
         return DocumentParseService(
             object_store=self.store,
             parse_runs=self.parse_runs,
-            attempts=self.attempts,
             storage_objects=self.storage_objects,
             parser_resolver=resolver,
             commit_service=commit,
@@ -258,7 +255,7 @@ def harness(tmp_path):  # noqa: ANN001
 # ---------------------------------------------------------------------------
 
 
-async def test_happy_path_commits_snapshot_and_audits_attempt(harness) -> None:
+async def test_happy_path_commits_snapshot(harness) -> None:
     service = harness.make_service()
     frozen = _frozen()
     await harness.seed_source(frozen, "line one\nline two\n".encode())
@@ -267,10 +264,6 @@ async def test_happy_path_commits_snapshot_and_audits_attempt(harness) -> None:
                                 source_text="line one\nline two\n")
     assert run.status == "SUCCEEDED"
     assert run.snapshot_id is not None
-    events = await harness.attempts.list_by_run(run.id)
-    assert len(events) == 1
-    assert events[0].attempt_kind == "primary"
-    assert events[0].outcome == "SUCCEEDED"
     snap = await harness.snapshots.get(run.snapshot_id)
     assert snap is not None and snap.quality_status == "PASS"
 
@@ -291,7 +284,7 @@ async def test_idempotent_rerun_reuses_run(harness) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_a05_primary_failure_falls_back_and_audits(harness) -> None:
+async def test_a05_primary_failure_falls_back(harness) -> None:
     harness.register(StubParser("bad", text="x", fail=True))
     service = harness.make_service()
     frozen = _frozen()
@@ -299,10 +292,6 @@ async def test_a05_primary_failure_falls_back_and_audits(harness) -> None:
 
     run = await service.execute(frozen, _plan("bad", "good"), domain="default")
     assert run.status == "SUCCEEDED"
-    events = await harness.attempts.list_by_run(run.id)
-    assert [(e.attempt_kind, e.outcome) for e in events] == [
-        ("primary", "FAILED"), ("fallback", "SUCCEEDED"),
-    ]
     assert harness.parsers["good"].parse_calls == 1
     assert run.snapshot_id is not None
 
@@ -336,8 +325,8 @@ async def test_a06_all_backends_fail_no_snapshot(harness) -> None:
     assert run.snapshot_id is None
     assert harness.snapshots.count() == 0
     assert "boom" in (run.error_message or "")
-    events = await harness.attempts.list_by_run(run.id)
-    assert len(events) == 2
+    assert harness.parsers["bad1"].parse_calls == 1
+    assert harness.parsers["bad2"].parse_calls == 1
 
 
 async def test_quality_fallback_on_low_coverage(harness) -> None:
@@ -352,9 +341,8 @@ async def test_quality_fallback_on_low_coverage(harness) -> None:
         source_text="line one\nline two\n",
     )
     assert run.status == "SUCCEEDED"
-    events = await harness.attempts.list_by_run(run.id)
-    kinds = [(e.attempt_kind, e.outcome) for e in events]
-    assert kinds == [("primary", "FAILED"), ("fallback", "SUCCEEDED")]
+    assert harness.parsers["partial"].parse_calls == 1
+    assert harness.parsers["good"].parse_calls == 1
 
 
 async def test_frozen_text_baseline_and_quality_metrics_are_persisted(harness) -> None:
@@ -432,10 +420,7 @@ async def test_repair_uses_real_fallback_when_plan_has_next_backend(harness) -> 
     service._shadow_for = shadow_for
     run = await service.execute(frozen, _plan("empty_page", "good"), domain="default")
     assert run.status == "SUCCEEDED"
-    events = await harness.attempts.list_by_run(run.id)
-    assert [(e.attempt_kind, e.outcome) for e in events] == [
-        ("primary", "FAILED"), ("fallback", "SUCCEEDED"),
-    ]
+    assert calls == 2
 
 
 async def test_plan_quality_profile_selects_lenient_or_strict_gate(harness) -> None:
@@ -486,9 +471,6 @@ async def test_stale_input_marks_run_superseded_no_snapshot(harness) -> None:
     assert run.status == "SUPERSEDED"
     assert run.snapshot_id is None
     assert harness.snapshots.count() == 0
-    # attempt 本身成功留档（解析没错，只是输入过期）。
-    events = await harness.attempts.list_by_run(run.id)
-    assert events[0].outcome == "SUCCEEDED"
 
 
 async def test_empty_parse_fails_without_snapshot(harness) -> None:
@@ -545,8 +527,6 @@ async def test_a09_replay_from_raw_artifact_without_parser(harness) -> None:
     assert replay_run.status == "SUCCEEDED"
     assert replay_run.snapshot_id != run.snapshot_id  # 新指纹 → 新快照
     assert harness.parsers["good"].parse_calls == before_calls
-    events = await harness.attempts.list_by_run(replay_run.id)
-    assert events[0].attempt_kind == "replay"
 
 
 async def test_commit_infrastructure_failure_fails_run_not_stuck(harness) -> None:

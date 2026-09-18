@@ -102,8 +102,8 @@ def resolve_domain_database(
 
 
 def ensure_domain_database_schema(resolved: ResolvedDomainDatabase) -> None:
-    """Run Domain-safe schemas for a resolved database."""
-    from .pg_schema import ensure_domain_schema
+    """Read-only schema contract check for a resolved database."""
+    from .pg_schema import assert_schema_contract
 
     values = conninfo_to_dict(resolved.conninfo)
     dbname = values.get("dbname")
@@ -114,4 +114,4 @@ def ensure_domain_database_schema(resolved: ResolvedDomainDatabase) -> None:
         maintenance_conninfo=make_conninfo(resolved.conninfo, dbname="postgres"),
         pg_dbname=dbname,
     )
-    ensure_domain_schema(cfg)
+    assert_schema_contract(cfg)

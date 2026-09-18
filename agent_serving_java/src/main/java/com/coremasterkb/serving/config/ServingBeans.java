@@ -6,9 +6,7 @@ import com.coremasterkb.serving.domainpack.DomainRoutingDataSource;
 import com.coremasterkb.serving.infrastructure.EmbeddingClient;
 import com.coremasterkb.serving.infrastructure.LlmClient;
 import com.coremasterkb.serving.infrastructure.MainControlClient;
-import com.coremasterkb.serving.mapper.AssetRetrievalUnitMapper;
 import com.coremasterkb.serving.rerank.LlmServiceReranker;
-import com.coremasterkb.serving.retrieval.EntityExactRetriever;
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -222,18 +220,6 @@ public class ServingBeans {
     public EmbeddingClient embeddingClient(LlmClient llmClient) {
         return new EmbeddingClient(llmClient);
     }
-
-    // -------------------------------------------------------------------------
-    // Retrieval layer
-    // -------------------------------------------------------------------------
-
-    @Bean
-    public EntityExactRetriever entityExactRetriever(AssetRetrievalUnitMapper retrievalUnitMapper) {
-        return new EntityExactRetriever(retrievalUnitMapper);
-    }
-
-    // 批次8 R6：GraphExpander（旧 segment relation expander）随 ContextAssembler 一起删除
-    // （25 号 §11.1——assemble 不再做关系扩展）。
 
     @Bean
     public Executor pipelineExecutor() {

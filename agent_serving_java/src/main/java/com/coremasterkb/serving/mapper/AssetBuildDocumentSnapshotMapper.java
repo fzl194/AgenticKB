@@ -7,10 +7,6 @@ import java.util.List;
 
 public interface AssetBuildDocumentSnapshotMapper {
 
-    List<AssetBuildDocumentSnapshot> selectByBuildIdAndStatus(
-            @Param("buildId") String buildId,
-            @Param("selectionStatus") String selectionStatus);
-
     /**
      * Resolve the current snapshot of every document owned by the given knowledge bases.
      *

@@ -32,14 +32,6 @@ public class GlobalExceptionHandler {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "domain_disabled", "message", "This domain is currently disabled"));
         }
-        if ("no_active_release".equals(ex.getMessage())) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(Map.of("error", "no_active_release", "message", "No active release found for the requested domain"));
-        }
-        if ("multiple_active_releases".equals(ex.getMessage())) {
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(Map.of("error", "multiple_active_releases", "message", "Multiple active releases found"));
-        }
         // Forbidden and nonexistent knowledge bases deliberately share this response, so a caller
         // cannot probe for which ids exist.
         if ("kb_not_found".equals(ex.getMessage())) {

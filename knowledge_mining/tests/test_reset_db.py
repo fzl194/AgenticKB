@@ -8,9 +8,10 @@ import pytest
 import reset_db
 
 
-def test_managed_table_names_covers_known_residual_shadow_tables() -> None:
-    """历史残表必须进白名单：否则真库上 reset 连 dry-run 都会被 unknown-table 拒绝。"""
-    assert reset_db._is_managed_table("asset_raw_segments_staging")
+def test_managed_table_names_rejects_legacy_residual_and_preserves_ledger() -> None:
+    """收敛库只接受53表契约；历史残表与迁移账本都不得被业务 reset 清空。"""
+    assert not reset_db._is_managed_table("asset_raw_segments_staging")
+    assert not reset_db._is_managed_table("cmkb_schema_migrations")
     assert not reset_db._is_managed_table("another_product_orders")
 
 

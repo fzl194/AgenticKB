@@ -1,11 +1,9 @@
-"""M4.3 WP7 切片：Parse Run 完整状态机接线 + attempt 事件（RED 先行）.
+"""M4.3 WP7 切片：Parse Run 完整状态机接线。
 
 - ParseRunRecord.status 接受 ``contracts/state_machines.py`` 的全部状态
   （单一事实源），含 SUPERSEDED；新增 ``snapshot_id`` 关联列。
 - ``set_status`` 按 LEGAL_TRANSITIONS 前进；非法跳转（终态回退/跳阶段）
   抛 ``IllegalTransition``。
-- ``ParseAttemptRepository``：每个 backend 尝试一行，按 run 列出，
-  ``(parse_run_id, attempt_index)`` 幂等。
 """
 from __future__ import annotations
 
@@ -17,14 +15,8 @@ from knowledge_mining.mining.contracts.state_machines import (
     IllegalTransition,
     VALID_PARSE_RUN_STATES,
 )
-from knowledge_mining.mining.shadow_parse.contracts import (
-    ParseAttemptRecord,
-    ParseRunRecord,
-)
-from knowledge_mining.mining.shadow_parse.repositories_memory import (
-    MemoryParseAttemptRepository,
-    MemoryParseRunRepository,
-)
+from knowledge_mining.mining.shadow_parse.contracts import ParseRunRecord
+from knowledge_mining.mining.shadow_parse.repositories_memory import MemoryParseRunRepository
 
 
 def _run(**overrides) -> ParseRunRecord:
@@ -87,60 +79,3 @@ async def test_set_status_unknown_run_raises() -> None:
     repo = MemoryParseRunRepository()
     with pytest.raises(KeyError):
         await repo.set_status("missing", "SUCCEEDED")
-
-
-# ---------------------------------------------------------------------------
-# attempt 事件
-# ---------------------------------------------------------------------------
-
-
-def _attempt(**overrides) -> ParseAttemptRecord:
-    defaults = dict(
-        id="att_1",
-        parse_run_id="run_1",
-        attempt_index=0,
-        parser_id="stub_a",
-        parser_fingerprint="fp-a",
-        attempt_kind="primary",
-        outcome="FAILED",
-        started_at="2026-08-18T00:00:00+00:00",
-        finished_at="2026-08-18T00:00:01+00:00",
-        error_message="boom",
-    )
-    defaults.update(overrides)
-    return ParseAttemptRecord(**defaults)
-
-
-async def test_attempt_append_and_list_by_run() -> None:
-    repo = MemoryParseAttemptRepository()
-    await repo.append(_attempt())
-    await repo.append(_attempt(
-        id="att_2", attempt_index=1, parser_id="stub_b",
-        parser_fingerprint="fp-b", attempt_kind="fallback",
-        outcome="SUCCEEDED", error_message=None,
-    ))
-    events = await repo.list_by_run("run_1")
-    assert [e.attempt_index for e in events] == [0, 1]
-    assert events[0].attempt_kind == "primary"
-    assert events[1].attempt_kind == "fallback"
-    assert events[1].outcome == "SUCCEEDED"
-
-
-async def test_attempt_duplicate_index_rejected() -> None:
-    repo = MemoryParseAttemptRepository()
-    await repo.append(_attempt())
-    with pytest.raises(ValueError, match="attempt_index"):
-        await repo.append(_attempt(id="att_2"))
-
-
-async def test_attempt_validates_kind_and_outcome() -> None:
-    with pytest.raises(ValueError, match="attempt_kind"):
-        _attempt(attempt_kind="magic")
-    with pytest.raises(ValueError, match="outcome"):
-        _attempt(outcome="EXPLODED")
-
-
-async def test_attempt_list_other_run_empty() -> None:
-    repo = MemoryParseAttemptRepository()
-    await repo.append(_attempt())
-    assert await repo.list_by_run("run_other") == ()

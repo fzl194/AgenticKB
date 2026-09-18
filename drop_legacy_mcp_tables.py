@@ -121,8 +121,11 @@ def main() -> int:
                 print(f"[WARN] 异常态：{missing} 不存在而另一张仍在"
                       "（两表理论上同生共死）——继续删除存在的那张。")
 
-            # 门禁 b：计数比对
-            assert counts["mcp_keys"] is not None  # 门禁 a 已保证存在
+            # 门禁 b：计数比对（mcp_keys 非 None 已由门禁 a 保证——显式判断防 -O 失效）
+            if counts["mcp_keys"] is None:
+                conn.close()
+                print("[ERROR] mcp_keys 不存在（内部状态不一致），拒绝删除。")
+                return 1
             access_n = counts["mcp_access"] or 0
             ok, msg = _gate_counts(counts["mcp_keys"], access_n, args.force)
             print(f"计数门禁: {msg}")
@@ -139,11 +142,14 @@ def main() -> int:
                 print("[dry-run] 未写任何 DDL。")
                 return 0
 
-            # 实删：先 mcp_open_kbs（FK 依赖）→ mcp_access；RESTRICT（不用 CASCADE）
+            # 实删：先 mcp_open_kbs（FK 依赖）→ mcp_access；显式 RESTRICT（不用 CASCADE）。
+            # 循环内不打印成功——第二张失败回滚时终端不能留下第一张假 [OK]；
+            # commit() 之后统一打印，保证 [OK] 只在事务真正提交后出现。
             for tbl in to_drop:
-                cur.execute(f"DROP TABLE IF EXISTS {tbl}")
-                print(f"[OK] DROP TABLE {tbl} 成功")
+                cur.execute(f"DROP TABLE IF EXISTS {tbl} RESTRICT")
             conn.commit()
+            for tbl in to_drop:
+                print(f"[OK] DROP TABLE {tbl} 成功（已提交）")
 
             # 复核
             for tbl in to_drop:
@@ -158,6 +164,15 @@ def main() -> int:
         except Exception:
             pass
         print(f"[ERROR] database failure (rolled back): {exc}")
+        return 1
+    except Exception as exc:
+        # 非 psycopg 异常兜底：同样回滚关闭，单行报错而非裸栈崩
+        try:
+            conn.rollback()
+            conn.close()
+        except Exception:
+            pass
+        print(f"[ERROR] unexpected failure (rolled back): {exc!r}")
         return 1
 
 

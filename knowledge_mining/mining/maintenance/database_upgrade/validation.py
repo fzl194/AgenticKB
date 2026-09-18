@@ -11,9 +11,11 @@ from psycopg import sql
 from .contract import (
     EXPECTED_FORMAL_TABLES,
     EXPECTED_PHYSICAL_TABLES,
+    BRIDGE_51_TABLES,
+    FORMAL_TABLES,
     MIGRATION_LEDGER_TABLE,
     LEGACY_COMPAT_TABLES,
-    MINIMUM_REBASE_TABLES,
+    PRE51_REQUIRED_TABLES,
     RETIRED_TABLES,
 )
 from .manifest import MigrationManifest, pending_migrations
@@ -43,16 +45,17 @@ REQUIRED_INDEXES: dict[str, tuple[bool, tuple[str, ...]]] = {
 }
 
 
+def expected_rebase_target_tables(source_tables: set[str]) -> set[str]:
+    del source_tables
+    return set(FORMAL_TABLES)
+
+
 def compare_retained_table_counts(source: Any, target: Any) -> dict[str, int]:
     """Compare every retained table by count and deterministic row-content digest."""
 
     source_tables = set(fetch_public_tables(source))
-    expected = (
-        source_tables
-        - set(RETIRED_TABLES)
-        - set(LEGACY_COMPAT_TABLES)
-        - {MIGRATION_LEDGER_TABLE}
-    )
+    source_retained = source_tables & set(PRE51_REQUIRED_TABLES)
+    expected = expected_rebase_target_tables(source_tables)
     target_tables = set(fetch_public_tables(target)) - {MIGRATION_LEDGER_TABLE}
     if expected != target_tables:
         missing = sorted(expected - target_tables)
@@ -61,7 +64,7 @@ def compare_retained_table_counts(source: Any, target: Any) -> dict[str, int]:
             f"目标表集合不一致：missing={missing}, extra={extra}"
         )
     counts: dict[str, int] = {}
-    for table in sorted(expected):
+    for table in sorted(source_retained):
         statement = sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
         source_count = int(source.execute(statement).fetchone()[0])
         target_count = int(target.execute(statement).fetchone()[0])
@@ -76,6 +79,9 @@ def compare_retained_table_counts(source: Any, target: Any) -> dict[str, int]:
                 f"表 {table} 内容校验和不一致（行数相同但数据发生变化）"
             )
         counts[table] = target_count
+    for table in sorted(set(BRIDGE_51_TABLES) - source_retained):
+        statement = sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
+        counts[table] = int(target.execute(statement).fetchone()[0])
     return counts
 
 
@@ -106,13 +112,30 @@ def fetch_public_tables(connection: Any) -> tuple[str, ...]:
 
 
 def validate_supported_rebase_source(connection: Any) -> tuple[str, ...]:
-    """Fail closed for pre-51 databases whose authorization mapping is ambiguous."""
+    """Accept only the complete immediate pre-51/51 schema family.
+
+    Retired and legacy compatibility tables may still be present because the
+    migration owns their removal.  Any other table means the source is outside
+    the tested one-hop contract and must be assessed before a target is cloned.
+    """
 
     tables = fetch_public_tables(connection)
-    missing = sorted(MINIMUM_REBASE_TABLES - set(tables))
+    table_set = set(tables)
+    missing = sorted(PRE51_REQUIRED_TABLES - table_set)
     if missing:
         raise SchemaValidationError(
-            "源库早于自动收敛支持基线，缺少：" + ", ".join(missing)
+            "源库不属于受支持的 pre-51 基线，缺少表：" + ", ".join(missing)
+        )
+    allowed = (
+        set(FORMAL_TABLES)
+        | set(RETIRED_TABLES)
+        | set(LEGACY_COMPAT_TABLES)
+        | {MIGRATION_LEDGER_TABLE}
+    )
+    unknown = sorted(table_set - allowed)
+    if unknown:
+        raise SchemaValidationError(
+            "源库存在52迁移未声明的未知表：" + ", ".join(unknown)
         )
     return tables
 
@@ -180,6 +203,7 @@ __all__ = [
     "SchemaValidationReport",
     "compare_retained_table_counts",
     "fetch_public_tables",
+    "expected_rebase_target_tables",
     "validate_schema",
     "validate_supported_rebase_source",
 ]

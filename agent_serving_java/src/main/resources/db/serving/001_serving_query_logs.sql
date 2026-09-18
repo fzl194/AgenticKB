@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS serving_query_logs (
 -- CREATE TABLE IF NOT EXISTS matches on the table NAME only — on a database that
 -- already carries an older shape of this table it is skipped silently and the
 -- missing column is never added. `domain` was added after the table shipped
--- (see db/migrate_v1_to_zdy.sql step 6), so repair it explicitly. Must run AFTER
+-- Older installations may still have a same-named non-vector column, so repair it
+-- explicitly. Must run AFTER
 -- the CREATE (ALTER on a nonexistent table would abort the script) and BEFORE
 -- any index that references the column.
 ALTER TABLE serving_query_logs

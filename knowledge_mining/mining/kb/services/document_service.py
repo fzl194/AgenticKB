@@ -927,17 +927,3 @@ class DocumentService:
         if not p.exists():
             raise NotFound(document_id)
         return p
-
-    async def withdraw(self, *, document_id: str, user_id: str) -> None:
-        """软撤回文档（clone build + publish_release，走 release 机制）。
-
-        TODO(P4+): 复用 stages/withdrawal.withdraw_document。涉及 sync AssetCoreDB +
-        advisory lock，待单独接（设计 §10 待定）。当前权限已校验，仅返回 NotImplemented。
-        """
-        doc = await self._db.get_document_identity(document_id)
-        if doc is None:
-            raise NotFound(document_id)
-        await self._svc._assert_write(doc["kb_id"], user_id)
-        raise NotImplementedError(
-            "document withdraw pending release-machinery wiring (design §10)"
-        )

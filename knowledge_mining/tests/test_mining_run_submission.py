@@ -207,16 +207,13 @@ def test_resume_running_moves_run_phase_back_to_mining():
             calls.append((args, kwargs))
             return True
 
-    updated = RuntimeTracker(DB()).resume_running(
-        "reviewed-run", subloop_stage="done", domain="odn"
-    )
+    updated = RuntimeTracker(DB()).resume_running("reviewed-run", domain="odn")
 
     assert updated is True
     assert calls == [
         (
             ("reviewed-run", "running"),
             {
-                "subloop_stage": "done",
                 "current_stage": "mining",
                 "domain": "odn",
                 "expected_statuses": ("awaiting_review", "running"),
@@ -226,25 +223,23 @@ def test_resume_running_moves_run_phase_back_to_mining():
 
 
 @pytest.mark.parametrize(
-    ("engine", "status", "stage", "finished_at", "expected"),
+    ("engine", "status", "finished_at", "expected"),
     [
-        ("workflow", "awaiting_review", "entity_review", None, True),
-        ("workflow", "failed", "mining", "2026-07-25T00:00:00Z", True),
-        ("workflow", "interrupted", "mining", "2026-07-25T00:00:00Z", True),
-        ("workflow", "running", "graph_write", None, True),
-        ("legacy", "failed", "mining", "2026-07-25T00:00:00Z", False),
-        ("legacy", "running", "graph_write", None, False),
-        ("legacy", "running", "done", None, True),
-        ("workflow", "cancelled", "mining", None, False),
+        ("workflow", "awaiting_review", None, False),
+        ("workflow", "failed", "2026-07-25T00:00:00Z", True),
+        ("workflow", "interrupted", "2026-07-25T00:00:00Z", True),
+        ("workflow", "running", None, True),
+        ("legacy", "failed", "2026-07-25T00:00:00Z", False),
+        ("legacy", "running", None, False),
+        ("workflow", "cancelled", None, False),
     ],
 )
 def test_public_resume_policy_exposes_workflow_crash_recovery(
-    engine, status, stage, finished_at, expected
+    engine, status, finished_at, expected
 ):
     assert runs._is_run_resumable(
         execution_engine=engine,
         status=status,
-        subloop_stage=stage,
         finished_at=finished_at,
     ) is expected
 
@@ -259,7 +254,6 @@ def test_workflow_recovery_claim_clears_terminal_fields_and_accepts_failed():
 
     updated = RuntimeTracker(DB()).resume_running(
         "failed-run",
-        subloop_stage="graph_write",
         domain="odn",
         recover_workflow=True,
     )
@@ -269,7 +263,6 @@ def test_workflow_recovery_claim_clears_terminal_fields_and_accepts_failed():
         (
             ("failed-run", "running"),
             {
-                "subloop_stage": "graph_write",
                 "current_stage": "mining",
                 "domain": "odn",
                 "expected_statuses": (

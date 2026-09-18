@@ -32,7 +32,10 @@ class MigrationManifest:
 
 
 def _file_checksum(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Git may check out SQL as CRLF on Windows and LF in the Linux container.
+    # Migration identity is content-based, not checkout-line-ending based.
+    normalized = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def manifest_checksum(manifest: MigrationManifest) -> str:

@@ -86,19 +86,27 @@ public class DomainPoolManager {
         HikariDataSource ds = createHikariPool(domain, db);
         ownedPools.put(domain, ds);
         poolSignatures.put(domain, db.signature());
-        ensureSchema(ds, domain);
+        try {
+            ensureSchema(ds, domain);
+        } catch (RuntimeException e) {
+            ownedPools.remove(domain, ds);
+            poolSignatures.remove(domain, db.signature());
+            ds.close();
+            throw e;
+        }
         return ds;
     }
 
     /**
-     * Create serving-owned tables in the resolved DB. Never propagates: a domain whose
-     * optional tables cannot be created must still serve reads.
+     * Verify the immutable database contract before this domain serves reads.
+     * A schema mismatch is not optional: continuing would expose a partially migrated DB.
      */
     private void ensureSchema(DataSource dataSource, String domain) {
         try {
             schemaEnsurer.ensure(dataSource, domain);
         } catch (Exception e) {
-            log.warn("Schema ensure failed for domain '{}': {}", domain, e.getMessage());
+            log.error("Schema contract failed for domain '{}': {}", domain, e.getMessage());
+            throw new IllegalStateException("domain_schema_contract_failed", e);
         }
     }
 

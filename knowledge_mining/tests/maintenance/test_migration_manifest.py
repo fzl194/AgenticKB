@@ -20,7 +20,8 @@ from knowledge_mining.mining.maintenance.database_upgrade.contract import (
 
 
 def _sha(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    normalized = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def test_manifest_loads_ordered_checksum_verified_migrations(tmp_path: Path) -> None:
@@ -124,5 +125,6 @@ def test_repository_manifest_drops_every_retired_table_without_cascade() -> None
         assert f"DROP TABLE IF EXISTS {table} RESTRICT;" in sql
     for table in LEGACY_COMPAT_TABLES:
         assert f"DROP TABLE IF EXISTS {table} RESTRICT;" in sql
-    assert "old_key.key_hash" in sql
-    assert "new_open.key_id = new_key.id" in sql
+    assert "new_key.user_id = old_key.user_id" in sql
+    assert "new_key.id = new_open.key_id" in sql or "new_key.id = grant_row.key_id" in sql
+    assert "kb.domain IS DISTINCT FROM new_key.domain" in sql

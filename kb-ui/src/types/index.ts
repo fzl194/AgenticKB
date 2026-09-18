@@ -45,8 +45,6 @@ export interface KnowledgeStats {
 export interface MiningRun {
   id: string
   status: 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'awaiting_review'
-  subloop_stage?: string | null
-  ontology_version_id?: string | null
   input_path?: string
   domain?: string
   started_at?: string
@@ -241,7 +239,6 @@ export interface RunTrace {
   domain: string
   status: string
   current_stage?: string | null
-  subloop_stage?: string | null
   awaiting_review: boolean
   counts: {
     total_documents: number

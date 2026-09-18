@@ -8,6 +8,7 @@ import javax.sql.DataSource;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -114,8 +115,8 @@ class DomainPoolManagerTest {
         }
 
         @Test
-        @DisplayName("a failing ensurer never breaks pool resolution")
-        void survivesFailingEnsurer() {
+        @DisplayName("a failing schema contract prevents the domain from serving")
+        void rejectsFailingEnsurer() {
             when(registry.isLoaded()).thenReturn(true);
             when(registry.findEntry("cloud_core_network")).thenReturn(Optional.of(entryWith(null)));
             DomainSchemaEnsurer ensurer = mock(DomainSchemaEnsurer.class);
@@ -124,7 +125,11 @@ class DomainPoolManagerTest {
 
             DomainPoolManager mgr = new DomainPoolManager(registry, defaultDs, ensurer);
 
-            assertThat(mgr.getDataSource("cloud_core_network")).isSameAs(defaultDs);
+            assertThatThrownBy(() -> mgr.getDataSource("cloud_core_network"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("domain_schema_contract_failed")
+                    .cause()
+                    .hasMessage("relation does not exist");
         }
     }
 

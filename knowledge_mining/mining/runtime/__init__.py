@@ -77,33 +77,14 @@ class RuntimeTracker:
     def interrupt_run(self, run_id: str, **counters: int) -> None:
         self._db.update_run_status(run_id, "interrupted", finished_at=_utcnow(), **counters)
 
-    def pause_for_review(
-        self, run_id: str, *, subloop_stage: str,
-        ontology_version_id: str | None = None,
-        domain: str | None = None,
-        **counters: int,
-    ) -> bool:
-        """B6：把 run 置入人审暂停态（awaiting_review）并记下卡在哪道 Gate。
-
-        不写 finished_at——run 还没结束，只是等人拍板后 resume 续跑。
-        """
-        return self._db.update_run_status(
-            run_id, "awaiting_review", subloop_stage=subloop_stage,
-            ontology_version_id=ontology_version_id, current_stage="review",
-            domain=domain,
-            expected_statuses=("queued", "running") if domain else None,
-            **counters,
-        )
-
     def resume_running(
         self,
         run_id: str,
         *,
-        subloop_stage: str | None = None,
         domain: str | None = None,
         recover_workflow: bool = False,
     ) -> bool:
-        """B6：人审提交后把 run 拨回 running，subloop_stage 推进到下一检查点。"""
+        """Resume an interrupted/failed workflow run without ontology checkpoints."""
         expected_statuses = (
             ("awaiting_review", "running", "failed", "interrupted")
             if recover_workflow and domain
@@ -112,7 +93,6 @@ class RuntimeTracker:
         return self._db.update_run_status(
             run_id,
             "running",
-            subloop_stage=subloop_stage,
             current_stage="mining",
             domain=domain,
             expected_statuses=expected_statuses,

@@ -64,7 +64,7 @@ def _manifest(tmp_path: Path):
         rows.append(
             f"  - id: core/{index:03}\n"
             f"    path: {index:03}.sql\n"
-            f"    checksum: {hashlib.sha256(sql.read_bytes()).hexdigest()}\n"
+            f"    checksum: {hashlib.sha256(sql.read_text(encoding='utf-8').encode('utf-8')).hexdigest()}\n"
         )
     manifest = tmp_path / "manifest.yaml"
     manifest.write_text(

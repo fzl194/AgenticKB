@@ -1459,7 +1459,6 @@ def _execute_workflow_job(
         if action == "resume":
             if not tracker.resume_running(
                 run_id,
-                subloop_stage=run_data.get("subloop_stage"),
                 domain=frozen_domain,
                 recover_workflow=True,
             ):
@@ -1507,7 +1506,6 @@ def _execute_workflow_job(
             runtime_db.update_run_status(
                 run_id,
                 "awaiting_review",
-                subloop_stage=result.paused_at,
                 current_stage="review",
                 domain=frozen_domain,
                 expected_statuses=("queued", "running", "awaiting_review"),
@@ -1521,7 +1519,6 @@ def _execute_workflow_job(
         return {
             "run_id": run_id,
             "status": result.status,
-            "subloop_stage": result.paused_at,
             "capabilities": sorted(result.capabilities),
             "publish_on_partial_failure": partial,
         }

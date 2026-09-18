@@ -30,6 +30,7 @@ _RETIRED_ONTOLOGY_MODULES = (
     "knowledge_mining/mining/stages/resolve/__init__.py",
     "knowledge_mining/mining/workflow/handlers/research.py",
     "knowledge_mining/mining/workflow/operators/research.py",
+    "knowledge_mining/mining/stages/withdrawal.py",
 )
 
 
@@ -65,3 +66,24 @@ def test_retired_ontology_modules_are_removed() -> None:
     present = [path for path in _RETIRED_ONTOLOGY_MODULES if (_ROOT / path).exists()]
 
     assert present == []
+
+
+def test_runtime_pipeline_has_no_retired_graph_write_hook() -> None:
+    pipeline = (_ROOT / "knowledge_mining/mining/pipeline.py").read_text(
+        encoding="utf-8"
+    )
+
+    for retired in (
+        "entity_extractor",
+        "entity_relation_builder",
+        "graph_store",
+        "ontology_store",
+        "stages.graph_write",
+    ):
+        assert retired not in pipeline
+
+
+def test_java_legacy_schema_migration_resource_is_removed() -> None:
+    assert not (
+        _ROOT / "agent_serving_java/src/main/resources/db/migrate_v1_to_zdy.sql"
+    ).exists()

@@ -7,6 +7,7 @@ from knowledge_mining.mining.infra.pg_schema import primary_schema_paths
 from knowledge_mining.mining.maintenance.database_upgrade.bootstrap import JAVA_BOOTSTRAP_SQL
 from knowledge_mining.mining.maintenance.database_upgrade.contract import (
     EXPECTED_FORMAL_TABLES,
+    FORMAL_TABLES,
     RETIRED_TABLES,
 )
 
@@ -38,6 +39,7 @@ def test_current_bootstrap_has_exactly_52_formal_tables() -> None:
     tables = {table for path in paths for table in _created_tables(path)}
 
     assert len(tables) == EXPECTED_FORMAL_TABLES
+    assert tables == FORMAL_TABLES
     assert tables.isdisjoint(RETIRED_TABLES)
 
 

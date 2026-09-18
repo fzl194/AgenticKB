@@ -249,8 +249,14 @@ migration_exec() {
         [ -n "${CMKB_MIGRATION_PG_USER:-}" ] \
             && [ -n "${CMKB_MIGRATION_PG_PASSWORD:-}" ] \
             || die "CMKB_MIGRATION_PG_USER/CMKB_MIGRATION_PG_PASSWORD 必须同时临时提供。"
-        env_args+=("-e" "CMKB_MIGRATION_PG_USER=$CMKB_MIGRATION_PG_USER")
-        env_args+=("-e" "CMKB_MIGRATION_PG_PASSWORD=$CMKB_MIGRATION_PG_PASSWORD")
+        # Pass only variable names on the command line. docker compose reads
+        # their values from this process environment, so the password is not
+        # exposed in the host process argv/ps output.
+        env_args+=("-e" "CMKB_MIGRATION_PG_USER")
+        env_args+=("-e" "CMKB_MIGRATION_PG_PASSWORD")
+    fi
+    if [ -n "${CMKB_MIGRATION_FALLBACK_DOMAIN:-}" ]; then
+        env_args+=("-e" "CMKB_MIGRATION_FALLBACK_DOMAIN")
     fi
     compose exec -T "${env_args[@]}" app "$@"
 }

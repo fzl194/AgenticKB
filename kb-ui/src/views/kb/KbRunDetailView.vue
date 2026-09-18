@@ -81,24 +81,6 @@
         </div>
       </div>
 
-      <!-- 收尾中断恢复横幅：两道评审已审完、stage 推进到 done，但建库/发布过程异常退出，
-           run 卡在 running 不动（finished_at 仍为空）。给一个重试入口幂等地把收尾跑完。 -->
-      <div
-        v-else-if="miningStore.currentRun.status === 'running' && miningStore.currentRun.subloop_stage === 'done' && !miningStore.currentRun.finished_at"
-        class="run-detail__review-banner"
-      >
-        <div class="review-banner__main">
-          <div class="review-banner__icon">⚠</div>
-          <div class="review-banner__text">
-            <div class="review-banner__title">评审已完成，但建库收尾似乎中断了</div>
-            <div class="review-banner__sub">点「继续挖掘」可重新把建库与发布跑完（可安全重试）</div>
-          </div>
-        </div>
-        <div class="review-banner__actions">
-          <el-button type="success" :loading="resuming" @click="handleResume">继续挖掘</el-button>
-        </div>
-      </div>
-
       <!-- Progress Overview Card -->
       <div v-if="miningStore.progress" class="run-detail__progress-card">
         <div class="progress-card__row">

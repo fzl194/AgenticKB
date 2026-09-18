@@ -44,3 +44,11 @@ def test_cutover_rollback_stops_new_processes_before_restoring_config_and_code()
     code_at = rollback.index("restore_migration_code_backup")
     start_at = rollback.index("restart_old_services_after_rollback")
     assert stop_at < config_at < code_at < start_at
+
+
+def test_migration_admin_password_is_not_embedded_in_process_arguments() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+
+    assert '"CMKB_MIGRATION_PG_PASSWORD=$CMKB_MIGRATION_PG_PASSWORD"' not in script
+    assert 'env_args+=("-e" "CMKB_MIGRATION_PG_PASSWORD")' in script

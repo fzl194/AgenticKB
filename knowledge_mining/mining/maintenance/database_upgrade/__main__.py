@@ -12,6 +12,11 @@ import sys
 import psycopg
 
 from .bootstrap import bootstrap_empty_database
+from .bridge_51 import (
+    apply_51_bridge,
+    load_bridge_51_policy,
+    preflight_51_bridge,
+)
 from .config import restore_config_backup, write_converged_config
 from .database import (
     DatabaseEndpoint,
@@ -90,6 +95,8 @@ def _plan(args: argparse.Namespace) -> int:
         return PENDING_EXIT_CODE
     with psycopg.connect(endpoint.conninfo, autocommit=True) as connection:
         if not ledger_exists(connection):
+            validate_supported_rebase_source(connection)
+            preflight_51_bridge(connection, load_bridge_51_policy(config_dir))
             admin = migration_admin_endpoint(endpoint)
             with psycopg.connect(admin.maintenance_conninfo, autocommit=True) as maintenance:
                 privilege = maintenance.execute(
@@ -108,6 +115,9 @@ def _plan(args: argparse.Namespace) -> int:
             return PENDING_EXIT_CODE
         pending = pending_migrations(manifest, load_applied(connection))
         complete = schema_complete(connection, checksum=manifest_checksum(manifest))
+        if pending:
+            validate_supported_rebase_source(connection)
+            preflight_51_bridge(connection, load_bridge_51_policy(config_dir))
     if pending or not complete:
         print(json.dumps({
             "action": "rebase" if pending else "complete_marker_recovery",
@@ -150,6 +160,7 @@ def _apply(args: argparse.Namespace) -> int:
     source = load_default_endpoint(config_dir)
     manifest = load_manifest(manifest_path)
     app_version = _release_version(repo_root)
+    bridge_policy = load_bridge_51_policy(config_dir)
 
     if not _configured_database_exists(source):
         result = bootstrap_empty_database(
@@ -193,8 +204,8 @@ def _apply(args: argparse.Namespace) -> int:
                     "schema_version": result.schema_version,
                 }, ensure_ascii=False))
                 return 0
-        else:
-            validate_supported_rebase_source(source_connection)
+        validate_supported_rebase_source(source_connection)
+        preflight_51_bridge(source_connection, bridge_policy)
 
     target_dbname = args.target_db or _default_target(source.dbname)
     admin = migration_admin_endpoint(source)
@@ -214,6 +225,13 @@ def _apply(args: argparse.Namespace) -> int:
                 psycopg.connect(target.conninfo, autocommit=True) as target_connection,
             ):
                 verified_counts: dict[str, int] = {}
+                bridge_report = apply_51_bridge(
+                    target_connection,
+                    repo_root=repo_root,
+                    default_domain=bridge_policy.default_domain,
+                    fallback_domain=bridge_policy.fallback_domain,
+                    allowed_domains=bridge_policy.allowed_domains,
+                )
 
                 def validate_rebase_before_complete() -> None:
                     validate_schema(
@@ -256,6 +274,11 @@ def _apply(args: argparse.Namespace) -> int:
         "applied": result.applied_ids,
         "schema_version": report.schema_version,
         "verified_tables": len(verified_counts),
+        "bridge_51": {
+            "user_domain_rows": bridge_report.user_domain_rows,
+            "migrated_keys": bridge_report.migrated_keys,
+            "migrated_grants": bridge_report.migrated_grants,
+        },
         "config_backup": backup,
         "config_switched": not args.no_config_switch,
     }, ensure_ascii=False))

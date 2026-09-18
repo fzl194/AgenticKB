@@ -30,8 +30,6 @@ from knowledge_mining.mining.workflow.operators.options import (
     DiscourseOptions,
     EmbeddingOptions,
     EnrichOptions,
-    EntityExtractOptions,
-    EntityResolveOptions,
     ParseSegmentOptions,
     RetrievalUnitOptions,
 )
@@ -129,9 +127,6 @@ class PipelineConfig:
     parser_factory: Callable[[str], Any] = field(default=None)
     segmenter: Segmenter | None = None
     enricher: Any | None = None  # Enricher Protocol（篇章本职：语义角色 + 内容质量）
-    entity_extractor: Any | None = None  # EntityExtractor（本体线：双通道实体抽取，L4 §15）
-    resolver: Any | None = None  # EntityResolver (B3 实体归一 + 人审分流)
-    entity_relation_builder: Any | None = None  # EntityRelationBuilder (B4 概念关系抽取)
     question_generator: Any | None = None  # QuestionGenerator Protocol
     embedding_generator: Any | None = None  # EmbeddingGenerator Protocol
     discourse_relation_builder: Any | None = None  # DiscourseRelationBuilder
@@ -217,30 +212,6 @@ class MiningPipeline:
         if enricher is not None and ctx.segments:
             enriched = enricher.enrich_batch(list(ctx.segments))
             ctx = ctx.with_updates(segments=tuple(enriched))
-
-        # Stage 3a: Entity extract (本体线：双通道实体抽取，独立 LLM 调用)
-        extractor = cfg.entity_extractor
-        if extractor is not None and ctx.segments:
-            if stage_callback:
-                stage_callback("entity_extract", ctx)
-            extracted = extractor.extract_batch(list(ctx.segments))
-            ctx = ctx.with_updates(segments=tuple(extracted))
-
-        # Stage 3b: Resolve (实体归一 + 人审分流)
-        resolver = cfg.resolver
-        if resolver is not None and ctx.segments:
-            if stage_callback:
-                stage_callback("resolve", ctx)
-            resolved = resolver.resolve_batch(list(ctx.segments))
-            ctx = ctx.with_updates(segments=tuple(resolved))
-
-        # Stage 3c: Entity relations (pattern 约束抽概念关系)
-        rel_builder = cfg.entity_relation_builder
-        if rel_builder is not None and ctx.segments:
-            if stage_callback:
-                stage_callback("entity_relations", ctx)
-            built = rel_builder.build_batch(list(ctx.segments))
-            ctx = ctx.with_updates(segments=tuple(built))
 
         # Stage 4: Assign segment UUIDs
         if ctx.segments:
@@ -590,67 +561,6 @@ def enrich_stage(
     ))
 
 
-def entity_extract_stage(
-    ctx: DocumentContext,
-    cfg: PipelineConfig,
-    *,
-    options: EntityExtractOptions | None = None,
-) -> DocumentContext:
-    """Stage 3a: 本体线实体抽取（双通道，独立 LLM 调用，L4 §15）。"""
-    extractor = cfg.entity_extractor
-    if extractor is None or not ctx.segments:
-        return ctx
-    kwargs = {}
-    if options is not None:
-        kwargs = {
-            "min_confidence": options.min_confidence,
-            "allow_out_of_schema": options.allow_out_of_schema,
-            "max_entities_per_segment": options.max_entities_per_segment,
-        }
-    extracted = extractor.extract_batch(list(ctx.segments), **kwargs)
-    return ctx.with_updates(segments=tuple(extracted))
-
-
-def resolve_stage(
-    ctx: DocumentContext,
-    cfg: PipelineConfig,
-    *,
-    options: EntityResolveOptions | None = None,
-) -> DocumentContext:
-    """Stage 3b: 实体归一 + 人审分流（给每个 mention 打 canonical_name + resolve_status）。"""
-    resolver = cfg.resolver
-    if resolver is None or not ctx.segments:
-        return ctx
-    if options is not None and not options.auto_resolve_aliases:
-        pending = []
-        for segment in ctx.segments:
-            refs = []
-            for ref in segment.entity_refs_json:
-                copied = dict(ref)
-                copied["canonical_name"] = None
-                copied["resolve_status"] = "pending"
-                refs.append(copied)
-            pending.append(replace(segment, entity_refs_json=refs))
-        return ctx.with_updates(segments=tuple(pending))
-    resolved = resolver.resolve_batch(list(ctx.segments))
-    return ctx.with_updates(segments=tuple(resolved))
-
-
-def entity_relations_stage(
-    ctx: DocumentContext,
-    cfg: PipelineConfig,
-    *,
-    options: Any | None = None,
-) -> DocumentContext:
-    """Stage 3c: 概念关系抽取（pattern 约束，产候选边写进 segment metadata）。"""
-    del options
-    builder = cfg.entity_relation_builder
-    if builder is None or not ctx.segments:
-        return ctx
-    built = builder.build_batch(list(ctx.segments))
-    return ctx.with_updates(segments=tuple(built))
-
-
 def discourse_stage(
     ctx: DocumentContext,
     cfg: PipelineConfig,
@@ -850,17 +760,12 @@ def persist_document_assets(
     cfg: PipelineConfig,
     *,
     strict_embeddings: bool,
-    graph_store: Any | None = None,
-    ontology_store: Any | None = None,
-    run_id: str | None = None,
-    node_id: str = "asset_persist",
 ) -> DocumentContext:
     """Persist one document through one Domain-database transaction.
 
-    Workflow mode passes ``strict_embeddings=True`` and the graph stores, making
-    snapshot/link, content, retrieval, embeddings, mentions, candidates, and the
-    committed document marker one atomic boundary.  Legacy callers keep their
-    historical best-effort embedding behavior by passing ``False``.
+    Workflow mode passes ``strict_embeddings=True`` so snapshot/link, content,
+    retrieval and embeddings share one atomic boundary. Legacy callers keep
+    their historical best-effort embedding behavior by passing ``False``.
     """
     if ctx.error:
         raise ValueError(ctx.error)
@@ -981,29 +886,6 @@ def persist_document_assets(
             snapshot_id=snapshot_id,
             seg_ids=segment_ids,
         )
-        if graph_store is not None and ontology_store is not None:
-            from contextlib import ExitStack
-
-            from knowledge_mining.mining.stages.graph_write import (
-                aggregate_build,
-                persist_document_mentions,
-            )
-
-            graph = aggregate_build([output], domain_id=cfg.domain)
-            with ExitStack() as participants:
-                for store in (graph_store, ontology_store):
-                    join = getattr(store, "join_transaction", None)
-                    if join is not None:
-                        participants.enter_context(join(asset_db))
-                persist_document_mentions(
-                    graph_store,
-                    ontology_store,
-                    graph,
-                    domain_id=cfg.domain,
-                    run_id=run_id or "",
-                    node_id=node_id,
-                    run_document_id=ctx.run_document_id or "",
-                )
         if cfg.tracker is not None and ctx.run_document_id:
             runtime_join = getattr(cfg.runtime_db, "join_transaction", None)
             if runtime_join is None:

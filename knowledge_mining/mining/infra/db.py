@@ -1184,8 +1184,6 @@ class MiningRuntimeDB(_DB):
         error_summary: str | None = None,
         build_id: str | None = None,
         metadata_json: dict | None = None,
-        subloop_stage: str | None = None,
-        ontology_version_id: str | None = None,
         current_stage: str | None = None,
         domain: str | None = None,
         expected_statuses: tuple[str, ...] | None = None,
@@ -1211,12 +1209,6 @@ class MiningRuntimeDB(_DB):
         if metadata_json is not None:
             parts.append("metadata_json = %s")
             params.append(_json_dumps(metadata_json))
-        if subloop_stage is not None:
-            parts.append("subloop_stage = %s")
-            params.append(subloop_stage)
-        if ontology_version_id is not None:
-            parts.append("ontology_version_id = %s")
-            params.append(ontology_version_id)
         if current_stage is not None:
             parts.append("current_stage = %s")
             params.append(current_stage)

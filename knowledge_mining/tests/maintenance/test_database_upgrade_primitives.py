@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from knowledge_mining.mining.maintenance.database_upgrade.contract import (
+    BRIDGE_51_TABLES,
+    FORMAL_TABLES,
     MIGRATION_LEDGER_TABLE,
+    PRE51_REQUIRED_TABLES,
 )
 from knowledge_mining.mining.maintenance.database_upgrade.database import (
     DatabaseUpgradeError,
@@ -15,6 +18,7 @@ from knowledge_mining.mining.maintenance.database_upgrade.database import (
 from knowledge_mining.mining.maintenance.database_upgrade.manifest import load_manifest
 from knowledge_mining.mining.maintenance.database_upgrade.validation import (
     SchemaValidationError,
+    expected_rebase_target_tables,
     validate_schema,
     validate_supported_rebase_source,
 )
@@ -62,7 +66,7 @@ class _ValidationConnection:
 def _manifest(tmp_path: Path):
     sql = tmp_path / "001.sql"
     sql.write_text("SELECT 1;\n", encoding="utf-8")
-    checksum = hashlib.sha256(sql.read_bytes()).hexdigest()
+    checksum = hashlib.sha256(sql.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
     manifest = tmp_path / "manifest.yaml"
     manifest.write_text(
         "schema_version: test-v1\nmigrations:\n"
@@ -111,13 +115,60 @@ def test_schema_validation_rejects_retired_table(tmp_path: Path) -> None:
         validate_schema(connection, manifest, enforce_exact_count=False)
 
 
-def test_rebase_source_requires_51_authorization_tables(tmp_path: Path) -> None:
+def test_rebase_source_requires_the_complete_supported_pre51_schema(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     connection = _ValidationConnection(
-        tables=["kb_users", "knowledge_bases"],
+        tables=["kb_users", "knowledge_bases", "kb_members", "asset_documents"],
         extensions=["pg_trgm", "vector"],
         migration=manifest.migrations[0],
     )
 
-    with pytest.raises(SchemaValidationError, match="源库早于自动收敛支持基线"):
+    with pytest.raises(SchemaValidationError, match="不属于受支持的 pre-51 基线"):
         validate_supported_rebase_source(connection)
+
+
+def test_rebase_source_accepts_complete_pre51_schema_without_51_tables(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    tables = sorted(PRE51_REQUIRED_TABLES)
+    connection = _ValidationConnection(
+        tables=tables,
+        extensions=["pg_trgm", "vector"],
+        migration=manifest.migrations[0],
+    )
+
+    assert validate_supported_rebase_source(connection) == tuple(tables)
+
+
+def test_rebase_source_rejects_unknown_historical_table_before_clone(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    tables = sorted(PRE51_REQUIRED_TABLES | {"unclaimed_historical_table"})
+    connection = _ValidationConnection(
+        tables=tables,
+        extensions=["pg_trgm", "vector"],
+        migration=manifest.migrations[0],
+    )
+
+    with pytest.raises(SchemaValidationError, match="未知表"):
+        validate_supported_rebase_source(connection)
+
+
+def test_pre51_contract_is_exactly_formal_tables_without_bridge_tables() -> None:
+    assert PRE51_REQUIRED_TABLES == FORMAL_TABLES - BRIDGE_51_TABLES
+
+
+def test_pre51_rebase_target_adds_51_tables_without_requiring_them_in_source() -> None:
+    source = {
+        "kb_users",
+        "knowledge_bases",
+        "kb_members",
+        "asset_documents",
+        "asset_builds",
+        "mcp_access",
+        "mcp_open_kbs",
+    }
+
+    target = expected_rebase_target_tables(source)
+
+    assert {"user_domains", "mcp_keys", "mcp_key_open_kbs", "kb_purge_tasks"} <= target
+    assert "mcp_access" not in target
+    assert "mcp_open_kbs" not in target

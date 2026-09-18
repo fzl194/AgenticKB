@@ -14,76 +14,35 @@ BEGIN
         IF EXISTS (
             SELECT 1
               FROM mcp_access old_key
-              LEFT JOIN kb_users old_user ON old_user.id = old_key.user_id
-              LEFT JOIN mcp_keys new_key ON new_key.key_hash = old_key.key_hash
-             WHERE old_user.id IS NULL
-                OR new_key.id IS NULL
-                OR new_key.user_id IS DISTINCT FROM old_key.user_id
-                OR new_key.key_prefix IS DISTINCT FROM old_key.key_prefix
-                OR new_key.status IS DISTINCT FROM old_key.status
-                OR new_key.open_tools IS DISTINCT FROM old_key.open_tools
-                OR new_key.instructions IS DISTINCT FROM old_key.instructions
-                OR new_key.tool_descriptions IS DISTINCT FROM old_key.tool_descriptions
-                OR (
-                    COALESCE(
-                        (SELECT kb.domain
-                           FROM mcp_open_kbs old_open
-                           JOIN knowledge_bases kb ON kb.id = old_open.kb_id
-                          WHERE old_open.user_id = old_key.user_id
-                            AND kb.status = 'active'
-                          GROUP BY kb.domain
-                          ORDER BY count(*) DESC, kb.domain ASC LIMIT 1),
-                        (SELECT min(ud.domain) FROM user_domains ud
-                          WHERE ud.user_id = old_key.user_id)
-                    ) IS NOT NULL
-                    AND new_key.domain IS DISTINCT FROM COALESCE(
-                        (SELECT kb.domain
-                           FROM mcp_open_kbs old_open
-                           JOIN knowledge_bases kb ON kb.id = old_open.kb_id
-                          WHERE old_open.user_id = old_key.user_id
-                            AND kb.status = 'active'
-                          GROUP BY kb.domain
-                          ORDER BY count(*) DESC, kb.domain ASC LIMIT 1),
-                        (SELECT min(ud.domain) FROM user_domains ud
-                          WHERE ud.user_id = old_key.user_id)
-                    )
-                )
+              LEFT JOIN mcp_keys new_key ON new_key.user_id = old_key.user_id
+             WHERE new_key.id IS NULL
         ) THEN
-            RAISE EXCEPTION 'legacy mcp_access key identity/config is not preserved in mcp_keys';
+            RAISE EXCEPTION 'legacy mcp_access contains users missing from mcp_keys';
         END IF;
+    END IF;
 
-        IF to_regclass('public.mcp_open_kbs') IS NOT NULL AND EXISTS (
-            SELECT 1
-              FROM mcp_open_kbs old_open
-              JOIN mcp_access old_key ON old_key.user_id = old_open.user_id
-              JOIN mcp_keys new_key ON new_key.key_hash = old_key.key_hash
-              JOIN knowledge_bases kb ON kb.id = old_open.kb_id
-             WHERE kb.status = 'active'
-               AND kb.domain = new_key.domain
-               AND NOT EXISTS (
-                   SELECT 1 FROM mcp_key_open_kbs new_open
-                    WHERE new_open.key_id = new_key.id
-                      AND new_open.kb_id = old_open.kb_id
-               )
-        ) THEN
-            RAISE EXCEPTION 'legacy mcp_open_kbs contains same-domain active grants missing from mcp_key_open_kbs';
-        END IF;
-
-        IF EXISTS (
-            SELECT 1
-              FROM mcp_key_open_kbs new_open
-              JOIN mcp_keys new_key ON new_key.id = new_open.key_id
-              JOIN knowledge_bases kb ON kb.id = new_open.kb_id
-             WHERE kb.domain IS DISTINCT FROM new_key.domain
-        ) THEN
-            RAISE EXCEPTION 'mcp_key_open_kbs contains cross-domain grants';
-        END IF;
+    IF EXISTS (
+        SELECT 1
+          FROM mcp_key_open_kbs new_open
+          JOIN mcp_keys new_key ON new_key.id = new_open.key_id
+          JOIN knowledge_bases kb ON kb.id = new_open.kb_id
+         WHERE kb.domain IS DISTINCT FROM new_key.domain
+    ) THEN
+        RAISE EXCEPTION 'mcp_key_open_kbs contains cross-domain grants';
     END IF;
 END
 $$;
 
 DROP TABLE IF EXISTS mcp_open_kbs RESTRICT;
 DROP TABLE IF EXISTS mcp_access RESTRICT;
+
+-- Retired ontology review checkpoints: preserve the Run but make it resumable
+-- by the generic workflow recovery path before removing the two legacy columns.
+UPDATE mining_runs
+   SET status = 'interrupted', current_stage = 'mining', pause_step = NULL
+ WHERE status = 'awaiting_review';
+ALTER TABLE mining_runs DROP COLUMN IF EXISTS subloop_stage;
+ALTER TABLE mining_runs DROP COLUMN IF EXISTS ontology_version_id;
 
 DROP TABLE IF EXISTS asset_storage_operations RESTRICT;
 DROP TABLE IF EXISTS asset_file_audit_events RESTRICT;
@@ -109,3 +68,4 @@ DROP TABLE IF EXISTS ontology_node_types RESTRICT;
 DROP TABLE IF EXISTS ontology_versions RESTRICT;
 
 DROP TABLE IF EXISTS asset_publish_releases RESTRICT;
+DROP TABLE IF EXISTS serving_query_cache RESTRICT;

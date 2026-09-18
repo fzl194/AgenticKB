@@ -1013,17 +1013,13 @@ async def publish_run(
 
 @router.get("/{run_id}/trace", dependencies=[Depends(require_run_read)])
 async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., min_length=1)) -> dict:
-    """B7 挖掘过程透视：在常规 run 详情之上叠加本体/图谱视角的概览。
-
-    返回 run 状态（含 awaiting_review 的 subloop_stage）+ 两道检查点的待办数 +
-    该 run 落图的对象/边规模，供前端"透明前端"页一屏看清这次挖掘干了什么。
-    """
+    """挖掘过程透视：返回 Run、文档、阶段和 Workflow 节点事件。"""
     pool = await request.app.state.domain_pools.async_pool(require_domain(domain))
     await _require_run_domain(pool, run_id, domain)
 
     async with pool.connection() as conn:
         run_cur = await conn.execute(
-            "SELECT id, domain, status, current_stage, subloop_stage, "
+            "SELECT id, domain, status, current_stage, "
             "total_documents, committed_count, new_count, updated_count, "
             "failed_count, skipped_count, started_at, finished_at, build_id, "
             "execution_engine, workflow_id, workflow_version, workflow_version_id, "
@@ -1084,7 +1080,6 @@ async def get_run_trace(run_id: str, request: Request, domain: str = Query(..., 
         "domain": run_domain,
         "status": run["status"],
         "current_stage": run.get("current_stage"),
-        "subloop_stage": run["subloop_stage"],
         "awaiting_review": run["status"] == "awaiting_review",
         "counts": {
             "total_documents": run["total_documents"],
@@ -1116,16 +1111,13 @@ def _is_run_resumable(
     *,
     execution_engine: str,
     status: str,
-    subloop_stage: str | None,
     finished_at: Any,
 ) -> bool:
-    if status == "awaiting_review":
-        return True
-    if execution_engine == "workflow":
-        return status in {"failed", "interrupted"} or (
-            status == "running" and finished_at is None
-        )
-    return status == "running" and subloop_stage == "done" and finished_at is None
+    if execution_engine != "workflow":
+        return False
+    return status in {"failed", "interrupted"} or (
+        status == "running" and finished_at is None
+    )
 
 
 @router.post("/{run_id}/resume", dependencies=[Depends(require_run_write)])
@@ -1134,10 +1126,7 @@ async def resume_run(
     domain: str = Query(..., min_length=1),
     body: ResumeRunRequest | None = None,
 ) -> dict:
-    """Resume a review-paused or recoverable interrupted mining Run.
-
-    重新评估两道检查点：仍有待办 → 保持 awaiting_review 刷新 subloop_stage；
-    都清空 → 从 graph_write 之后续跑（建库 + 发布），不重抽文档。
+    """Resume a recoverable interrupted/failed mining Run.
 
     **异步执行**：续跑要跑 LLM 归纳 + 建库发布，可能耗时数分钟。若同步等结果，
     上游网关会先超时（504），用户重试又撞上已变更的状态（400）。所以这里只做快速校验，
@@ -1150,7 +1139,7 @@ async def resume_run(
     # 快速读当前 run 状态（同时拿 domain，避免再查一次）
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT domain, status, subloop_stage, finished_at, execution_engine "
+            "SELECT domain, status, finished_at, execution_engine "
             "FROM mining_runs WHERE id = %s",
             [run_id],
         )
@@ -1160,7 +1149,6 @@ async def resume_run(
 
     resume_domain = require_domain(domain)
     status = row["status"]
-    stage = row["subloop_stage"]
     finished = row["finished_at"]
 
     # 已完成：别报错，直接告诉前端"无需继续"——重试已跑完的 run 不应是错误。
@@ -1172,12 +1160,11 @@ async def resume_run(
     resumable = _is_run_resumable(
         execution_engine=str(row.get("execution_engine") or "legacy"),
         status=status,
-        subloop_stage=stage,
         finished_at=finished,
     )
     if not resumable:
         raise HTTPException(
-            400, f"Run {run_id} 当前状态为 {status}{f'/{stage}' if stage else ''}，无法继续挖掘")
+            400, f"Run {run_id} 当前状态为 {status}，无法继续挖掘")
 
     publish_partial = body.publish_on_partial_failure if body else False
 

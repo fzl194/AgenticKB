@@ -1045,7 +1045,8 @@ WITH latest AS (
     # --------------------------------- 51号批次2：MCP 多钥匙（单域钥匙）
     # mcp_keys 每行一把单域钥匙；key_id 由服务层生成后传入。开放库域防线在 SQL 层
     #（kb.status='active' AND kb.domain = key.domain），应用层校验只是前置提示。
-    # 旧 mcp_access 表保留至批次3（T9 backfill 的迁移源+回滚窗口），新代码一律走本方法组。
+    # 旧 mcp_access/mcp_open_kbs 表已于批次3 退役（数据面删除由 drop_legacy_mcp_tables.py
+    # 手动执行，部署清单门禁），新代码一律走本方法组。
 
     async def create_mcp_key(self, *, user_id: str, name: str, domain: str,
                              key_hash: str, key_prefix: str, key_id: str) -> dict[str, Any]:

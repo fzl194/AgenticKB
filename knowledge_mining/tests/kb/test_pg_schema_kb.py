@@ -62,6 +62,16 @@ def test_knowledge_bases_soft_delete_columns(db_config, _ensure_schema):
             assert names == {"status", "deleted_at"}
 
 
+def test_legacy_mcp_ddl_unregistered():
+    """批次3：旧 mcp_access DDL 不再注册——新装环境不建旧表。"""
+    from mining.infra import pg_schema
+
+    paths = [str(p) for p in pg_schema.domain_schema_paths()]
+    assert not any("008_mcp_access" in p or "010_mcp_access_config" in p for p in paths)
+    # 顺带钉住新表注册仍在（防误删）
+    assert any("014_mcp_keys" in p for p in paths)
+
+
 def test_visibility_check_is_private_public(db_config, _ensure_schema):
     """007 收口:visibility 命名 CHECK 存在且仅允许 private/public;shared 插入被拒。"""
     with _connect(db_config) as conn:

@@ -102,14 +102,10 @@ _SECTION_SCOPE_TYPED_CELLS_DDL = (
     / "schemas"
     / "015_a2a3_section_scope_typed_cells.sql"
 )
-# 阶段 A（批次5）：用户级 MCP 接入（一人一钥 + 开放库清单）与库级默认检索范式。
-_MCP_ACCESS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "008_mcp_access.sql"
+# 库级默认检索范式（008_mcp_access / 010_mcp_access_config 已于批次3 退役：
+# 数据面删除走 drop_legacy_mcp_tables.py，部署清单门禁）。
 _KB_DEFAULT_PARADIGM_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "009_kb_default_paradigm.sql"
-)
-# 批次7：MCP 用户配置扩展（工具开关/提示词/工具描述）。
-_MCP_ACCESS_CONFIG_DDL = (
-    _REPO_ROOT / "databases" / "kb" / "schemas" / "010_mcp_access_config.sql"
 )
 _KB_LIFECYCLE_DDL = (
     _REPO_ROOT
@@ -234,10 +230,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _SOURCE_LOCATORS_DDL,
         # A2/A3：013 表的幂等 ALTER（依赖 units/nodes/cells 表已存在）。
         _SECTION_SCOPE_TYPED_CELLS_DDL,
-        # 阶段 A（批次5）：MCP 用户接入（依赖 kb_users/knowledge_bases，链尾安全）。
-        _MCP_ACCESS_DDL,
+        # 库级默认检索范式（依赖 knowledge_bases，链尾安全）。
         _KB_DEFAULT_PARADIGM_DDL,
-        _MCP_ACCESS_CONFIG_DDL,
         # Active KB names are owner-scoped; migrate the retired default workflow.
         _KB_LIFECYCLE_DDL,
         # 一张网接入（链尾：016 自包含；012 仅依赖 knowledge_bases）。

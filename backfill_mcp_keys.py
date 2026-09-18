@@ -28,6 +28,8 @@ mcp_key_open_kbs 开放库勾选。规则：
     python backfill_mcp_keys.py --fallback-domain X    # 空开放库用户的兜底域
 
 --dry-run 严格只读。运维脚本，可能对生产库跑；出错打印清晰信息而非栈崩。
+
+批次3：源表 mcp_access 已退役/不存在的环境上跑本脚本 → 检测后优雅退出（exit 0）。
 """
 from __future__ import annotations
 
@@ -147,6 +149,12 @@ def main() -> int:
 
     try:
         with conn.cursor() as cur:
+            # 批次3：源表已退役/不存在 → 优雅退出（无需迁移）。
+            cur.execute("SELECT to_regclass('mcp_access') IS NOT NULL AS ok")
+            if not cur.fetchone()[0]:
+                conn.close()
+                print("[INFO] 旧表 mcp_access 已退役/不存在，无需迁移")
+                return 0
             # 旧表全行（active+revoked 都迁，保状态）。LEFT JOIN：孤儿行
             # （kb_users 无此用户）告警跳过，不进 total。
             cur.execute(

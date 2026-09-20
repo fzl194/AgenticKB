@@ -234,7 +234,10 @@ const selectedFiles = computed<OnenetTocFile[]>(() =>
 const selectedSliceCount = computed(() =>
   selectedFiles.value.reduce((sum, f) => sum + f.slice_count, 0))
 const pagedFiles = computed<OnenetTocFile[]>(() => {
-  const start = (filesPage.value - 1) * filesPageSize.value
+  // 尺寸下拉放大 page size 时当前页可能越界出空页；只读钳制，不改 filesPage
+  const maxPage = Math.max(1, Math.ceil(selectedFiles.value.length / filesPageSize.value))
+  const page = Math.min(filesPage.value, maxPage)
+  const start = (page - 1) * filesPageSize.value
   return selectedFiles.value.slice(start, start + filesPageSize.value)
 })
 

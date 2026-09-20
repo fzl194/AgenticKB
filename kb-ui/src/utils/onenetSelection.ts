@@ -1,3 +1,5 @@
+import type { OnenetTocFile, OnenetTocNode } from '@/api/onenet'
+
 /**
  * 章节树勾选 → 导入子树路径集合（2026-09-16 事故修复）。
  *
@@ -13,4 +15,67 @@ export function minimalSubtreePaths(paths: string[]): string[] {
     const parent = p.includes(' > ') ? p.slice(0, p.lastIndexOf(' > ')) : ''
     return !parent || !set.has(parent)
   })
+}
+
+/**
+ * 53 号 §六：勾选联动过滤——与后端导入语义精确等价的两规则。
+ * 规则1 段前缀：勾选子树 p 按段是 file_path 的前缀（含相等）→ 文件在勾选
+ * 章节之下（方向与后端 Selection.matches 一致）。
+ * 规则2 父文件：p 节点 direct_slice_count>0 → 直属切片归树结构父节点的文件
+ * （父路径取树结构 Map，规避 ' > ' 字符串歧义）。
+ * 空 selection = 整包全显。
+ */
+export function splitSegments(path: string): string[] {
+  return path.split('>').map((p) => p.trim()).filter(Boolean)
+}
+
+function isPrefixSegments(subtree: string[], filePath: string): boolean {
+  const segs = splitSegments(filePath)
+  if (subtree.length > segs.length) return false
+  return subtree.every((seg, i) => segs[i] === seg)
+}
+
+export function filterFilesBySelection(
+  files: OnenetTocFile[],
+  subtreePaths: string[],
+  nodesByPath: Map<string, OnenetTocNode>,
+  parentByPath: Map<string, string>,
+): OnenetTocFile[] {
+  if (!subtreePaths.length) return files
+  const subtrees = subtreePaths.map(splitSegments)
+  const shown = new Set<string>()
+  for (const f of files) {
+    if (subtrees.some((p) => isPrefixSegments(p, f.file_path))) shown.add(f.file_path)
+  }
+  for (const p of subtreePaths) {
+    if ((nodesByPath.get(p)?.direct_slice_count ?? 0) > 0) {
+      const parent = parentByPath.get(p)
+      if (parent) shown.add(parent)
+    }
+  }
+  return files.filter((f) => shown.has(f.file_path))
+}
+
+/** 树 → childPath → parentPath（父路径以树结构为准，不做字符串推导） */
+export function buildParentPathMap(nodes: OnenetTocNode[]): Map<string, string> {
+  const map = new Map<string, string>()
+  const walk = (children: OnenetTocNode[], parentPath: string) => {
+    for (const c of children) {
+      map.set(c.path, parentPath)
+      walk(c.children, c.path)
+    }
+  }
+  walk(nodes, '')
+  return map
+}
+
+/** 树 → path → node 索引（查 direct_slice_count 用） */
+export function buildNodeIndex(
+  nodes: OnenetTocNode[], map: Map<string, OnenetTocNode> = new Map(),
+): Map<string, OnenetTocNode> {
+  for (const n of nodes) {
+    map.set(n.path, n)
+    buildNodeIndex(n.children, map)
+  }
+  return map
 }

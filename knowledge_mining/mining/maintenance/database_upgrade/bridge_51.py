@@ -1,14 +1,14 @@
 """Compatibility bridge for production databases that have not deployed design 51.
 
-The bridge runs only on the freshly cloned target.  It reproduces the approved
-51 backfill rules before the 52 convergence migrations remove legacy MCP data.
+The bridge runs only on the freshly cloned target. It accepts only unambiguous
+authorization data, pins it to the current three-tool contract, and refuses to
+discard or invent permissions before 52 removes the legacy MCP tables.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import os
 from typing import Any
 import uuid
 
@@ -27,14 +27,65 @@ class Bridge51Report:
     user_domain_rows: int
     migrated_keys: int
     migrated_grants: int
-    dropped_cross_domain_grants: tuple[tuple[str, str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Bridge51PreflightReport:
+    legacy_source: bool
+    cross_domain_keys: int
+    zero_binding_users: int
+    retired_tool_config_keys: int
+    discarded_open_grants: int
+
+    @classmethod
+    def clean(cls, *, legacy_source: bool) -> "Bridge51PreflightReport":
+        return cls(legacy_source, 0, 0, 0, 0)
+
+    def to_dict(self) -> dict[str, bool | int]:
+        return {
+            "legacy_source": self.legacy_source,
+            "cross_domain_keys": self.cross_domain_keys,
+            "zero_binding_users": self.zero_binding_users,
+            "retired_tool_config_keys": self.retired_tool_config_keys,
+            "discarded_open_grants": self.discarded_open_grants,
+        }
 
 
 @dataclass(frozen=True, slots=True)
 class Bridge51Policy:
     default_domain: str
-    fallback_domain: str | None
     allowed_domains: frozenset[str]
+
+
+_CURRENT_MCP_TOOLS = frozenset({
+    "search_knowledge",
+    "get_knowledge",
+    "upload_document",
+})
+_LEGACY_TOOL_RENAMES = {
+    "get_evidence": "get_knowledge",
+    "get_document": "get_knowledge",
+    "list_knowledge_bases": "get_knowledge",
+    "list_documents": "get_knowledge",
+    "get_content": "get_knowledge",
+    "browse_knowledge": "get_knowledge",
+    "inspect_knowledge": "get_knowledge",
+    "navigate_structure": "get_knowledge",
+    "query_structured_asset": "get_knowledge",
+}
+
+
+def _normalize_bridge_open_tools(open_tools: Any) -> list[str] | None:
+    """Pin legacy tool names to the release's three public MCP permissions."""
+
+    if open_tools is None:
+        return None
+    normalized: list[str] = []
+    for raw_name in open_tools:
+        name = _LEGACY_TOOL_RENAMES.get(str(raw_name), str(raw_name))
+        if name in _CURRENT_MCP_TOOLS and name not in normalized:
+            normalized.append(name)
+    return normalized
 
 
 def load_bridge_51_policy(config_dir: Path) -> Bridge51Policy:
@@ -51,17 +102,13 @@ def load_bridge_51_policy(config_dir: Path) -> Bridge51Policy:
     )
     if not default_domain or default_domain not in allowed:
         raise Bridge51Error("default_domain 不存在或未启用")
-    fallback = os.getenv("CMKB_MIGRATION_FALLBACK_DOMAIN")
-    if fallback and fallback not in allowed:
-        raise Bridge51Error(f"CMKB_MIGRATION_FALLBACK_DOMAIN 未启用：{fallback}")
-    return Bridge51Policy(default_domain, fallback, allowed)
+    return Bridge51Policy(default_domain, allowed)
 
 
 def derive_legacy_key_domain(
     *,
     open_kbs: list[tuple[str, str, str]],
     bindings: list[str],
-    fallback_domain: str | None,
     is_admin: bool,
     default_domain: str,
 ) -> tuple[str, str]:
@@ -70,8 +117,6 @@ def derive_legacy_key_domain(
         raise Bridge51Error("旧 MCP 钥匙开放库跨多个 domain，无法无损自动迁移")
     if active_domains:
         return active_domains[0], "open-kbs"
-    if fallback_domain:
-        return fallback_domain, "fallback"
     normalized_bindings = sorted(set(bindings))
     if len(normalized_bindings) > 1:
         raise Bridge51Error("旧 MCP 钥匙无开放库但用户绑定多个 domain，无法自动选择")
@@ -86,14 +131,13 @@ def derive_user_domains(
     *,
     existing: list[str],
     owned_or_member: list[str],
-    fallback_domain: str,
     existing_is_authoritative: bool,
 ) -> list[str]:
     existing_domains = sorted(set(existing))
     if existing_domains and existing_is_authoritative:
         return existing_domains
     inferred = sorted(set(existing_domains) | set(owned_or_member))
-    return inferred or [fallback_domain]
+    return inferred
 
 
 def _table_exists(connection: Any, table: str) -> bool:
@@ -142,7 +186,9 @@ def _validate_legacy_key_coverage(connection: Any) -> None:
         raise Bridge51Error("51 新钥匙表只迁了一部分旧用户，拒绝猜测续跑")
 
 
-def preflight_51_bridge(connection: Any, policy: Bridge51Policy) -> None:
+def preflight_51_bridge(
+    connection: Any, policy: Bridge51Policy
+) -> Bridge51PreflightReport:
     old_access = _table_exists(connection, "mcp_access")
     old_open = _table_exists(connection, "mcp_open_kbs")
     new_keys = _table_exists(connection, "mcp_keys")
@@ -160,8 +206,6 @@ def preflight_51_bridge(connection: Any, policy: Bridge51Policy) -> None:
         raise Bridge51Error(
             f"active KB 属于未知或禁用 domain：{unknown_kb_domains}"
         )
-    if new_keys and new_open:
-        _validate_new_mcp_scope(connection, policy.allowed_domains)
     existing_binding_rows: list[tuple[Any, Any]] = []
     if _table_exists(connection, "user_domains"):
         existing_binding_rows = connection.execute(
@@ -175,29 +219,80 @@ def preflight_51_bridge(connection: Any, policy: Bridge51Policy) -> None:
             raise Bridge51Error(
                 f"user_domains 含未知或禁用 domain：{unknown_bindings}"
             )
+    owned_rows = connection.execute(
+        """SELECT DISTINCT u.id, kb.domain
+             FROM kb_users u JOIN knowledge_bases kb
+               ON (kb.owner_id = u.id OR EXISTS (
+                   SELECT 1 FROM kb_members m
+                    WHERE m.kb_id = kb.id AND m.user_id = u.id))
+            WHERE u.status = 'active' AND kb.status = 'active'"""
+    ).fetchall()
+    bindings: dict[str, set[str]] = {}
+    for user_id, domain in owned_rows:
+        bindings.setdefault(str(user_id), set()).add(str(domain))
+    for user_id, domain in existing_binding_rows:
+        bindings.setdefault(str(user_id), set()).add(str(domain))
+    active_members = connection.execute(
+        """SELECT id, username FROM kb_users
+            WHERE status = 'active' AND site_role <> 'admin'
+            ORDER BY username"""
+    ).fetchall()
+    zero_binding_users = [
+        str(username)
+        for user_id, username in active_members
+        if not bindings.get(str(user_id))
+    ]
+    if zero_binding_users:
+        raise Bridge51Error(
+            "普通用户必须已有可推导 domain，零绑定用户："
+            + ", ".join(zero_binding_users[:20])
+        )
     if new_keys and new_open:
+        _validate_new_mcp_scope(connection, policy.allowed_domains)
         if old_access:
             _validate_legacy_key_coverage(connection)
-        return
+        return Bridge51PreflightReport.clean(legacy_source=False)
     if not old_access:
-        return
+        return Bridge51PreflightReport.clean(legacy_source=False)
 
     access_users = connection.execute(
-        """SELECT a.user_id, u.username, u.site_role
+        """SELECT a.user_id, u.username, u.site_role, a.key_prefix, a.open_tools
              FROM mcp_access a LEFT JOIN kb_users u ON u.id = a.user_id"""
     ).fetchall()
-    if any(username is None for _, username, _ in access_users):
+    if any(username is None for _, username, _, _, _ in access_users):
         raise Bridge51Error("旧 MCP 钥匙存在孤儿用户")
     open_rows = connection.execute(
-        """SELECT o.user_id, kb.domain
-             FROM mcp_open_kbs o JOIN knowledge_bases kb ON kb.id = o.kb_id
-            WHERE kb.status = 'active'"""
+        """SELECT o.user_id, o.kb_id, kb.domain, kb.name, kb.status
+             FROM mcp_open_kbs o JOIN knowledge_bases kb ON kb.id = o.kb_id"""
     ).fetchall()
     open_domains: dict[str, set[str]] = {}
-    for user_id, domain in open_rows:
-        open_domains.setdefault(str(user_id), set()).add(str(domain))
-    if any(len(domains) > 1 for domains in open_domains.values()):
-        raise Bridge51Error("旧 MCP 钥匙开放库跨多个 domain，需显式处理后再迁移")
+    discarded_grants: list[str] = []
+    for user_id, kb_id, domain, name, status in open_rows:
+        if status == "active":
+            open_domains.setdefault(str(user_id), set()).add(str(domain))
+        else:
+            discarded_grants.append(
+                f"user={user_id}, kb={name or kb_id}, status={status}"
+            )
+    usernames = {
+        str(user_id): str(username)
+        for user_id, username, _, _, _ in access_users
+    }
+    cross_domain_users = [
+        f"{usernames.get(user_id, user_id)}={sorted(domains)}"
+        for user_id, domains in open_domains.items()
+        if len(domains) > 1
+    ]
+    if cross_domain_users:
+        raise Bridge51Error(
+            "旧 MCP 钥匙开放库跨多个 domain："
+            + "; ".join(cross_domain_users[:20])
+        )
+    if discarded_grants:
+        raise Bridge51Error(
+            "存在迁移后会被丢弃的旧开放库授权："
+            + "; ".join(discarded_grants[:20])
+        )
     unknown_open = sorted(
         {domain for domains in open_domains.values() for domain in domains}
         - policy.allowed_domains
@@ -205,33 +300,35 @@ def preflight_51_bridge(connection: Any, policy: Bridge51Policy) -> None:
     if unknown_open:
         raise Bridge51Error(f"旧 MCP 开放库属于未知或禁用 domain：{unknown_open}")
 
-    owned_rows = connection.execute(
-        """SELECT DISTINCT u.id, kb.domain
-             FROM kb_users u JOIN knowledge_bases kb
-               ON (kb.owner_id = u.id OR EXISTS (
-                   SELECT 1 FROM kb_members m
-                    WHERE m.kb_id = kb.id AND m.user_id = u.id))
-            WHERE kb.status = 'active'"""
-    ).fetchall()
-    bindings: dict[str, set[str]] = {}
-    for user_id, domain in owned_rows:
-        bindings.setdefault(str(user_id), set()).add(str(domain))
-    for user_id, domain in existing_binding_rows:
-        bindings.setdefault(str(user_id), set()).add(str(domain))
+    retired_tool_keys: list[str] = []
+    allowed_legacy_names = _CURRENT_MCP_TOOLS | frozenset(_LEGACY_TOOL_RENAMES)
+    for _, username, _, key_prefix, open_tools in access_users:
+        if open_tools is None:
+            continue
+        if not isinstance(open_tools, list) or any(
+            str(name) not in allowed_legacy_names for name in open_tools
+        ):
+            retired_tool_keys.append(f"{username}({key_prefix})")
+    if retired_tool_keys:
+        raise Bridge51Error(
+            "旧 MCP 钥匙含无法映射到当前三类工具的配置："
+            + ", ".join(retired_tool_keys[:20])
+        )
     duplicate_hash = connection.execute(
         """SELECT key_hash FROM mcp_access GROUP BY key_hash
              HAVING count(*) > 1 LIMIT 1"""
     ).fetchone()
     if duplicate_hash:
         raise Bridge51Error("旧 MCP 存在重复 key_hash，无法安全迁移")
-    for user_id, username, site_role in access_users:
+    for user_id, username, site_role, _, _ in access_users:
         if open_domains.get(str(user_id)) or site_role == "admin":
             continue
         candidates = bindings.get(str(user_id), set())
-        if len(candidates) > 1 and not policy.fallback_domain:
+        if len(candidates) > 1:
             raise Bridge51Error(
                 f"用户 {username!r} 的旧 MCP 钥匙无开放库且候选 domain 超过一个"
             )
+    return Bridge51PreflightReport.clean(legacy_source=True)
 
 
 def _ensure_51_tables(connection: Any, repo_root: Path) -> None:
@@ -247,7 +344,6 @@ def _ensure_51_tables(connection: Any, repo_root: Path) -> None:
 def _backfill_user_domains(
     connection: Any,
     *,
-    fallback_domain: str,
     allowed_domains: frozenset[str],
     existing_is_authoritative: bool,
 ) -> int:
@@ -272,9 +368,6 @@ def _backfill_user_domains(
         "SELECT user_id, domain FROM user_domains ORDER BY user_id, domain"
     ).fetchall():
         existing_by_user.setdefault(str(user_id), []).append(str(domain))
-    if fallback_domain not in allowed_domains:
-        raise Bridge51Error(f"fallback domain 未启用或不存在：{fallback_domain}")
-
     inserted = 0
     for user_id, username, site_role in users:
         if site_role == "admin":
@@ -282,11 +375,10 @@ def _backfill_user_domains(
         domains = derive_user_domains(
             existing=existing_by_user.get(str(user_id), []),
             owned_or_member=domains_by_user.get(str(user_id), []),
-            fallback_domain=fallback_domain,
             existing_is_authoritative=existing_is_authoritative,
         )
         if not domains:
-            domains = [fallback_domain]
+            raise Bridge51Error(f"用户 {username!r} 没有可推导的 domain")
         unknown = sorted(set(domains) - allowed_domains)
         if unknown:
             raise Bridge51Error(f"用户 {username!r} 绑定未知或禁用 domain：{unknown}")
@@ -312,19 +404,18 @@ def _backfill_mcp_keys(
     connection: Any,
     *,
     default_domain: str,
-    fallback_domain: str | None,
     allowed_domains: frozenset[str],
     new_tables_authoritative: bool,
-) -> tuple[int, int, tuple[tuple[str, str, str], ...]]:
+) -> tuple[int, int]:
     access_exists = _table_exists(connection, "mcp_access")
     open_exists = _table_exists(connection, "mcp_open_kbs")
     if access_exists != open_exists:
         raise Bridge51Error("旧 MCP 表处于只剩一张的异常状态")
     if not access_exists:
-        return 0, 0, ()
+        return 0, 0
     if new_tables_authoritative:
         _validate_legacy_key_coverage(connection)
-        return 0, 0, ()
+        return 0, 0
 
     connection.execute("ALTER TABLE mcp_access ADD COLUMN IF NOT EXISTS open_tools JSONB")
     connection.execute("ALTER TABLE mcp_access ADD COLUMN IF NOT EXISTS instructions TEXT")
@@ -359,7 +450,6 @@ def _backfill_mcp_keys(
 
     migrated_keys = 0
     migrated_grants = 0
-    dropped: list[tuple[str, str, str]] = []
     for row in access_rows:
         (
             user_id,
@@ -378,11 +468,10 @@ def _backfill_mcp_keys(
         if username is None:
             raise Bridge51Error(f"旧 MCP 钥匙引用不存在的用户：{user_id}")
         user_open = open_by_user.get(str(user_id), [])
-        domain, domain_source = derive_legacy_key_domain(
+        domain, _ = derive_legacy_key_domain(
             open_kbs=[(kb_id, kb_domain, kb_status)
                       for kb_id, kb_domain, kb_status, _ in user_open],
             bindings=bindings_by_user.get(str(user_id), []),
-            fallback_domain=fallback_domain,
             is_admin=site_role == "admin",
             default_domain=default_domain,
         )
@@ -395,7 +484,7 @@ def _backfill_mcp_keys(
                 (user_id, domain),
             )
         key_id = uuid.uuid5(uuid.NAMESPACE_URL, f"agentickb:mcp:{key_hash}").hex
-        normalized_tools = open_tools
+        normalized_tools = _normalize_bridge_open_tools(open_tools)
         existing = connection.execute(
             """SELECT id, user_id, domain, key_prefix, status, open_tools,
                       instructions, tool_descriptions, created_at, rotated_at, last_used_at
@@ -413,14 +502,14 @@ def _backfill_mcp_keys(
             if actual != expected:
                 raise Bridge51Error(f"已存在 key_hash 的字段与旧钥匙不一致：{username}")
             key_id = str(existing[0])
-            # Repair the old 51 backfill: it did not preserve timestamps and
-            # could normalize an all-retired tool list to NULL (= allow all).
+            # Repair old 51 timestamps while pinning tool permissions to the
+            # current three-tool contract; [] deliberately means no tools.
             connection.execute(
                 """UPDATE mcp_keys SET open_tools = %s,
                           created_at = %s, rotated_at = %s, last_used_at = %s
                      WHERE id = %s""",
                 (
-                    Jsonb(open_tools) if open_tools is not None else None,
+                    Jsonb(normalized_tools) if normalized_tools is not None else None,
                     created_at,
                     rotated_at,
                     last_used_at,
@@ -473,10 +562,14 @@ def _backfill_mcp_keys(
                     )
                     migrated_grants += max(int(cursor.rowcount or 0), 0)
                 else:
-                    dropped.append((str(username), kb_id, kb_domain))
+                    raise Bridge51Error(
+                        "拒绝删除旧开放库授权："
+                        f"user={username}, kb_id={kb_id}, domain={kb_domain}, "
+                        f"status={kb_status}"
+                    )
         if not existing:
             migrated_keys += 1
-    return migrated_keys, migrated_grants, tuple(dropped)
+    return migrated_keys, migrated_grants
 
 
 def apply_51_bridge(
@@ -484,9 +577,12 @@ def apply_51_bridge(
     *,
     repo_root: Path,
     default_domain: str,
-    fallback_domain: str | None = None,
     allowed_domains: frozenset[str],
 ) -> Bridge51Report:
+    preflight_51_bridge(
+        connection,
+        Bridge51Policy(default_domain, allowed_domains),
+    )
     old_access = _table_exists(connection, "mcp_access")
     old_open = _table_exists(connection, "mcp_open_kbs")
     new_keys = _table_exists(connection, "mcp_keys")
@@ -505,7 +601,6 @@ def apply_51_bridge(
     with connection.transaction():
         domain_rows = _backfill_user_domains(
             connection,
-            fallback_domain=fallback_domain or default_domain,
             allowed_domains=allowed_domains,
             existing_is_authoritative=new_keys and new_open,
         )
@@ -517,18 +612,18 @@ def apply_51_bridge(
         )
         if unknown:
             raise Bridge51Error(f"user_domains 含未知或禁用 domain：{unknown}")
-    keys, grants, dropped = _backfill_mcp_keys(
+    keys, grants = _backfill_mcp_keys(
         connection,
         default_domain=default_domain,
-        fallback_domain=fallback_domain,
         allowed_domains=allowed_domains,
         new_tables_authoritative=new_keys and new_open,
     )
-    return Bridge51Report(domain_rows, keys, grants, dropped)
+    return Bridge51Report(domain_rows, keys, grants)
 
 
 __all__ = [
     "Bridge51Error",
+    "Bridge51PreflightReport",
     "Bridge51Report",
     "Bridge51Policy",
     "apply_51_bridge",

@@ -52,3 +52,4 @@ def test_migration_admin_password_is_not_embedded_in_process_arguments() -> None
 
     assert '"CMKB_MIGRATION_PG_PASSWORD=$CMKB_MIGRATION_PG_PASSWORD"' not in script
     assert 'env_args+=("-e" "CMKB_MIGRATION_PG_PASSWORD")' in script
+    assert "CMKB_MIGRATION_FALLBACK_DOMAIN" not in script

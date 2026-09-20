@@ -61,7 +61,6 @@ def test_prepare_document_states_runs_without_signature_error(
         llm_base_url=None,  # 分类阶段不需 LLM；_init_llm(None) 优雅降级
         max_workers=1,
         execution_mode="publish",
-        ontology_version_id=None,
         manifest=manifest,
     )
 
@@ -129,7 +128,6 @@ def test_prepare_document_states_filters_to_selected_document_ids(
         llm_base_url=None,  # 分类/过滤阶段不需 LLM
         max_workers=1,
         execution_mode="publish",
-        ontology_version_id=None,
         manifest=manifest,
     )
 

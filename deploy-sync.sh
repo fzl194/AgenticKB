@@ -255,9 +255,6 @@ migration_exec() {
         env_args+=("-e" "CMKB_MIGRATION_PG_USER")
         env_args+=("-e" "CMKB_MIGRATION_PG_PASSWORD")
     fi
-    if [ -n "${CMKB_MIGRATION_FALLBACK_DOMAIN:-}" ]; then
-        env_args+=("-e" "CMKB_MIGRATION_FALLBACK_DOMAIN")
-    fi
     compose exec -T "${env_args[@]}" app "$@"
 }
 

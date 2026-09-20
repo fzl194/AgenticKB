@@ -96,7 +96,9 @@ def _plan(args: argparse.Namespace) -> int:
     with psycopg.connect(endpoint.conninfo, autocommit=True) as connection:
         if not ledger_exists(connection):
             validate_supported_rebase_source(connection)
-            preflight_51_bridge(connection, load_bridge_51_policy(config_dir))
+            preflight_report = preflight_51_bridge(
+                connection, load_bridge_51_policy(config_dir)
+            )
             admin = migration_admin_endpoint(endpoint)
             with psycopg.connect(admin.maintenance_conninfo, autocommit=True) as maintenance:
                 privilege = maintenance.execute(
@@ -111,20 +113,27 @@ def _plan(args: argparse.Namespace) -> int:
                 "source": _safe_summary(endpoint),
                 "target_db": target,
                 "schema_version": manifest.schema_version,
+                "bridge_preflight": preflight_report.to_dict(),
             }, ensure_ascii=False))
             return PENDING_EXIT_CODE
         pending = pending_migrations(manifest, load_applied(connection))
         complete = schema_complete(connection, checksum=manifest_checksum(manifest))
+        preflight_report = None
         if pending:
             validate_supported_rebase_source(connection)
-            preflight_51_bridge(connection, load_bridge_51_policy(config_dir))
+            preflight_report = preflight_51_bridge(
+                connection, load_bridge_51_policy(config_dir)
+            )
     if pending or not complete:
-        print(json.dumps({
+        payload = {
             "action": "rebase" if pending else "complete_marker_recovery",
             "database": _safe_summary(endpoint),
             "migrations": [item.migration_id for item in pending],
             "completion_marker_missing": not complete,
-        }, ensure_ascii=False))
+        }
+        if preflight_report is not None:
+            payload["bridge_preflight"] = preflight_report.to_dict()
+        print(json.dumps(payload, ensure_ascii=False))
         return PENDING_EXIT_CODE
     print(json.dumps({
         "action": "none",
@@ -229,7 +238,6 @@ def _apply(args: argparse.Namespace) -> int:
                     target_connection,
                     repo_root=repo_root,
                     default_domain=bridge_policy.default_domain,
-                    fallback_domain=bridge_policy.fallback_domain,
                     allowed_domains=bridge_policy.allowed_domains,
                 )
 

@@ -17,14 +17,7 @@ export function minimalSubtreePaths(paths: string[]): string[] {
   })
 }
 
-/**
- * 53 号 §六：勾选联动过滤——与后端导入语义精确等价的两规则。
- * 规则1 段前缀：勾选子树 p 按段是 file_path 的前缀（含相等）→ 文件在勾选
- * 章节之下（方向与后端 Selection.matches 一致）。
- * 规则2 父文件：p 节点 direct_slice_count>0 → 直属切片归树结构父节点的文件
- * （父路径取树结构 Map，规避 ' > ' 字符串歧义）。
- * 空 selection = 整包全显。
- */
+/** 路径按 '>' 切段：trim 并丢弃空段（分隔语义，与标题内含 '>' 无关） */
 export function splitSegments(path: string): string[] {
   return path.split('>').map((p) => p.trim()).filter(Boolean)
 }
@@ -35,6 +28,14 @@ function isPrefixSegments(subtree: string[], filePath: string): boolean {
   return subtree.every((seg, i) => segs[i] === seg)
 }
 
+/**
+ * 53 号 §六：勾选联动过滤——与后端导入语义精确等价的两规则。
+ * 规则1 段前缀：勾选子树 p 按段是 file_path 的前缀（含相等）→ 文件在勾选
+ * 章节之下（方向与后端 Selection.matches 一致）。
+ * 规则2 父文件：p 节点 direct_slice_count>0 → 直属切片归树结构父节点的文件
+ * （父路径取树结构 Map，规避 ' > ' 字符串歧义）。
+ * 空 selection = 整包全显。
+ */
 export function filterFilesBySelection(
   files: OnenetTocFile[],
   subtreePaths: string[],
@@ -70,12 +71,14 @@ export function buildParentPathMap(nodes: OnenetTocNode[]): Map<string, string> 
 }
 
 /** 树 → path → node 索引（查 direct_slice_count 用） */
-export function buildNodeIndex(
-  nodes: OnenetTocNode[], map: Map<string, OnenetTocNode> = new Map(),
-): Map<string, OnenetTocNode> {
-  for (const n of nodes) {
-    map.set(n.path, n)
-    buildNodeIndex(n.children, map)
+export function buildNodeIndex(nodes: OnenetTocNode[]): Map<string, OnenetTocNode> {
+  const map = new Map<string, OnenetTocNode>()
+  const walk = (children: OnenetTocNode[]) => {
+    for (const c of children) {
+      map.set(c.path, c)
+      walk(c.children)
+    }
   }
+  walk(nodes)
   return map
 }

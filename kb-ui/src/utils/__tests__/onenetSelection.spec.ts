@@ -103,12 +103,16 @@ describe('filterFilesBySelection', () => {
     expect(out).toHaveLength(3)
   })
 
-  it('composite: descendant file + own direct slices together (审查建议)', () => {
+  it('composite: two subtrees at once, both rules per subtree (审查建议)', () => {
+    // 同时勾「包 > 接口管理」(direct=1) 与「包 > 性能指标」(direct=0)
     const out = filterFilesBySelection(
-      files, ['包 > 接口管理'], nodesByPath, parentByPath)
+      files, ['包 > 接口管理', '包 > 性能指标'], nodesByPath, parentByPath)
     const paths = out.map((f) => f.file_path)
-    expect(paths).toContain('包 > 接口管理 > 告警 > 处理建议')  // 规则1
-    expect(paths).toContain('包')                               // 规则2
+    expect(paths).toContain('包 > 接口管理 > 告警 > 处理建议')  // 子树1 规则1
+    expect(paths).toContain('包')                               // 子树1 规则2（direct=1 → 父文件）
+    expect(paths).toContain('包 > 性能指标 > 定位思路')         // 子树2 规则1
+    expect(paths).not.toContain('包 > 性能指标')                // 子树2 direct=0 → 不触发规则2
+    expect(out).toHaveLength(4)
   })
 
   it('non-minimal subtree inputs still exact (级联子孙已收编)', () => {

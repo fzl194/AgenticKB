@@ -295,5 +295,6 @@ __all__ = [
     "build_calibration", "build_path_tree", "clean_content",
     "render_file_markdown",
     "render_markdown", "restore_files", "sanitize_folder_path",
-    "sanitize_folder_segment", "split_path", "top_folder_segment",
+    "sanitize_folder_segment", "split_path", "split_path_calibrated",
+    "top_folder_segment",
 ]

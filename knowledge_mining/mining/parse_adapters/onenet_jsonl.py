@@ -119,7 +119,8 @@ class OnenetJsonlParser:
                 continue
             rows.append(row)
 
-        # beta-3：同 path 单一切法（行序=part 序，与后端 restore 一致）
+        # beta-3：同 path 单一切法——part_id 升序首个 title 决定（build_calibration
+        # 内部排序，行序无关），与后端 restore 同源
         calib = build_calibration(rows)
 
         blocks: list[BackendBlock] = []
@@ -135,7 +136,8 @@ class OnenetJsonlParser:
                 native_ref["part_id"] = int(part_id)
 
             # 1) path 层级 → heading（仅新进入层级时产出；beta-3 走校准切分）
-            segs = calib.get(str(row.get("path") or "")) or split_path(row.get("path"))
+            raw_path = row.get("path")
+            segs = calib.get(str(raw_path or "")) or split_path(raw_path)
             if segs and segs != last_heading_segs:
                 common = 0
                 for a, b in zip(last_heading_segs, segs):

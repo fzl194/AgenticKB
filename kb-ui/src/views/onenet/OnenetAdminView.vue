@@ -89,11 +89,14 @@
       </template>
       <el-row :gutter="14">
         <el-col :span="12">
+          <el-input v-model="treeFilter" placeholder="按章节名过滤（保留命中祖先链）"
+                    size="small" clearable style="margin-bottom: 8px" />
           <div class="onenet-admin__treewrap">
             <!-- 大文档 5000+ 节点：默认只展开根层、层层点开（V1.2 原型教训） -->
             <el-tree ref="tocTreeRef" :data="toc.tree" node-key="path" show-checkbox
                      :props="{ label: 'title', children: 'children' }"
-                     :default-expanded-keys="rootKeys">
+                     :default-expanded-keys="rootKeys"
+                     :filter-node-method="filterTreeNode" @check="onTreeCheck">
               <template #default="{ data }">
                 <span class="onenet-admin__node">
                   {{ data.title }}
@@ -108,15 +111,16 @@
           <div class="onenet-admin__treewrap onenet-admin__treewrap--col">
             <el-table :data="pagedFiles" size="small">
               <el-table-column prop="file_title" label="β 文件（导入单位）" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="heading_title" label="首标题" min-width="130" show-overflow-tooltip />
               <el-table-column prop="folder_path" label="目录" min-width="130" show-overflow-tooltip />
               <el-table-column prop="slice_count" label="切片" width="60" />
               <el-table-column label="part 范围" width="110">
                 <template #default="{ row }">{{ row.part_min }}~{{ row.part_max }}</template>
               </el-table-column>
             </el-table>
-            <el-pagination v-if="(toc.files?.length ?? 0) > filesPageSize" small
+            <el-pagination v-if="selectedFiles.length > filesPageSize" small
                            layout="total, sizes, prev, pager, next"
-                           :total="toc.files?.length ?? 0"
+                           :total="selectedFiles.length"
                            v-model:current-page="filesPage" v-model:page-size="filesPageSize"
                            :page-sizes="[50, 100, 200]" />
           </div>
@@ -127,6 +131,10 @@
         <el-button type="primary" :loading="starting" @click="confirmSelection">
           {{ editing ? '合并勾选并重同步' : '确认导入（勾选子树过滤，不勾=整包）' }}
         </el-button>
+        <span class="onenet-admin__hint">
+          将导入 <b>{{ selectedFiles.length }}</b> 文件 /
+          <b>{{ selectedSliceCount }}</b> 切片{{ checkedPaths.length ? '' : '（未勾选=整包）' }}
+        </span>
       </div>
     </el-card>
 
@@ -170,15 +178,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
-import { minimalSubtreePaths } from '@/utils/onenetSelection'
+import { buildNodeIndex, buildParentPathMap, filterFilesBySelection, minimalSubtreePaths } from '@/utils/onenetSelection'
 import { useOnenetApi } from '@/api/onenet'
 import type {
   OnenetCondition, OnenetImport, OnenetImportStatus, OnenetProbe,
-  OnenetSearchResult, OnenetToc, OnenetTocFile,
+  OnenetSearchResult, OnenetToc, OnenetTocFile, OnenetTocNode,
 } from '@/api/onenet'
 
 const domainStore = useDomainStore()
@@ -213,11 +221,33 @@ const starting = ref(false)
 // V1.3 · 文件清单分页（千级文件全量渲染卡死浏览器）
 const filesPage = ref(1)
 const filesPageSize = ref(50)
+
+// 53 号 §六：勾选联动（不勾=整包全显）；过滤规则与导入语义精确等价
+const checkedPaths = ref<string[]>([])
+const treeFilter = ref('')
+
+const nodesByPath = computed(() => buildNodeIndex(toc.value?.tree ?? []))
+const parentByPath = computed(() => buildParentPathMap(toc.value?.tree ?? []))
+const selectedFiles = computed<OnenetTocFile[]>(() =>
+  filterFilesBySelection(
+    toc.value?.files ?? [], checkedPaths.value, nodesByPath.value, parentByPath.value))
+const selectedSliceCount = computed(() =>
+  selectedFiles.value.reduce((sum, f) => sum + f.slice_count, 0))
 const pagedFiles = computed<OnenetTocFile[]>(() => {
-  const files = toc.value?.files ?? []
   const start = (filesPage.value - 1) * filesPageSize.value
-  return files.slice(start, start + filesPageSize.value)
+  return selectedFiles.value.slice(start, start + filesPageSize.value)
 })
+
+function onTreeCheck() {
+  checkedPaths.value = checkedSubtreePaths()
+  filesPage.value = 1
+}
+
+function filterTreeNode(value: string, data: OnenetTocNode): boolean {
+  return !value || (data.title ?? '').includes(value)
+}
+
+watch(treeFilter, (v) => tocTreeRef.value?.filter(v))
 
 // V1.3 · 从记录继续：编辑已导入 source 的勾选范围（合并 + 重同步）
 const editing = ref<OnenetImport | null>(null)
@@ -285,10 +315,13 @@ async function loadToc(refresh = false) {
   try {
     toc.value = await api.toc(domainStore.currentDomain, probe.value.source_id, { refresh })
     filesPage.value = 1
+    checkedPaths.value = []
     if (editing.value) {
       // 回显当前导入范围（树数据已全量在内存，collapsed 不影响 setCheckedKeys）
       await nextTick()
       tocTreeRef.value?.setCheckedKeys(editing.value.selection_json?.subtrees ?? [])
+      // 程序化设勾不触发 check 事件，手动联动（回显即出统计）
+      onTreeCheck()
     }
   } catch (e) {
     handleError(e)

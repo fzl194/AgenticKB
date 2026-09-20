@@ -103,6 +103,22 @@ def test_scan_files_preview_prefixed_with_top_doc_segment():
     assert all(not n["path"].startswith(top) for n in out["tree"])
 
 
+def test_toc_files_preview_reflects_calibration():
+    """跨段标题在预览 files/tree 中已合并（预览=落库同源，53 号 §五-1）."""
+    rows = [
+        {"path": "包 > 接口管理 > 告警 > 处理建议", "title": "告警 > 处理建议",
+         "part_id": 1},
+        {"path": "包 > 接口管理 > 定位思路", "title": "定位思路", "part_id": 2},
+    ]
+    toc = scan_toc(_client(FakeScan(rows, total=2, part_max=2)), "SRC1")
+    assert toc["rule_version"] == "beta-3"
+    assert toc["file_count"] == 1
+    assert toc["files"][0]["file_path"] == "包 > 接口管理"
+    assert toc["files"][0]["heading_title"] == "告警 > 处理建议"
+    # 树上无假层级「告警」节点
+    assert "告警" not in [c["title"] for c in toc["tree"][0]["children"][0]["children"]]
+
+
 def test_scan_empty_source_raises():
     fake = FakeScan([], total=0, part_max=0)
     with pytest.raises(ValueError, match="source 无切片"):

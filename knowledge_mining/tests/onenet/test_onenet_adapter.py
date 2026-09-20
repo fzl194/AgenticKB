@@ -153,6 +153,27 @@ def test_normalizer_deep_heading_chain_10_levels():
     assert levels == list(range(1, 12))
 
 
+def test_heading_chain_merges_spanning_title():
+    """标题含 > ：heading 链输出单层「告警 > 处理建议」，不产假层级."""
+    rows = [
+        {"nid": "a", "part_id": 1, "path": "包 > 接口管理 > 告警 > 处理建议",
+         "title": "告警 > 处理建议", "content": "正文A"},
+        {"nid": "b", "part_id": 2, "path": "包 > 接口管理 > 定位思路",
+         "title": "定位思路", "content": "正文B"},
+    ]
+    art = OnenetJsonlParser().parse(_jsonl(rows), mime=ONENET_JSONL_MIME)
+    headings = [b.text for b in art.blocks if b.block_type == "heading"]
+    assert headings == ["包", "接口管理", "告警 > 处理建议", "定位思路"]
+
+
+def test_fingerprint_version_bumped():
+    from knowledge_mining.mining.parse_adapters.onenet_jsonl import (
+        ONENET_JSONL_FINGERPRINT, ONENET_JSONL_VERSION,
+    )
+    assert ONENET_JSONL_VERSION == "1.1.1"
+    assert ONENET_JSONL_FINGERPRINT.startswith("onenet_jsonl@1.1.1")
+
+
 # ------------------------------------------------------------- registry 路由
 
 

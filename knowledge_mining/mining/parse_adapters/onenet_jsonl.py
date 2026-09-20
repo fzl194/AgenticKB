@@ -30,11 +30,13 @@ from knowledge_mining.mining.contracts.parser_adapter import (
     ParserAdapterError,
     UnsupportedFormat,
 )
-from knowledge_mining.mining.onenet.restore import clean_content, split_path
+from knowledge_mining.mining.onenet.restore import (
+    build_calibration, clean_content, split_path,
+)
 
 ONENET_JSONL_PARSER_ID = "onenet_jsonl"
-#: beta-2（1.1.0）：path 原样出标题链（不再剔首段）——指纹变化触发新快照重挖。
-ONENET_JSONL_VERSION = "1.1.0"
+#: beta-3（1.1.1）：title 校准切分——跨段标题合并为单 heading，指纹变化触发新快照重挖。
+ONENET_JSONL_VERSION = "1.1.1"
 #: 规则常量进指纹：β 还原规则或块产出规则变化 → 指纹变化 → 新快照。
 ONENET_JSONL_FINGERPRINT = (
     f"{ONENET_JSONL_PARSER_ID}@{ONENET_JSONL_VERSION}"
@@ -101,10 +103,8 @@ class OnenetJsonlParser:
         except UnicodeDecodeError as e:
             raise ParserAdapterError(f"{ONENET_JSONL_PARSER_ID}: utf-8 decode 失败") from e
 
-        blocks: list[BackendBlock] = []
-        warnings: list[str] = []
+        rows: list[dict[str, Any]] = []
         bad_lines = 0
-        last_heading_segs: list[str] = []
         for line in text.splitlines():
             line = line.strip()
             if not line:
@@ -117,6 +117,15 @@ class OnenetJsonlParser:
             if not isinstance(row, dict):
                 bad_lines += 1
                 continue
+            rows.append(row)
+
+        # beta-3：同 path 单一切法（行序=part 序，与后端 restore 一致）
+        calib = build_calibration(rows)
+
+        blocks: list[BackendBlock] = []
+        warnings: list[str] = []
+        last_heading_segs: list[str] = []
+        for row in rows:
             nid = str(row.get("nid") or "")
             part_id = row.get("part_id")
             native_ref: dict[str, Any] = {}
@@ -125,8 +134,8 @@ class OnenetJsonlParser:
             if part_id is not None:
                 native_ref["part_id"] = int(part_id)
 
-            # 1) path 层级 → heading（仅新进入层级时产出；原样不剔段，beta-2）
-            segs = split_path(row.get("path"))
+            # 1) path 层级 → heading（仅新进入层级时产出；beta-3 走校准切分）
+            segs = calib.get(str(row.get("path") or "")) or split_path(row.get("path"))
             if segs and segs != last_heading_segs:
                 common = 0
                 for a, b in zip(last_heading_segs, segs):

@@ -136,7 +136,9 @@ Expected: FAIL（ImportError: split_path_calibrated / 断言失败）
 
 - [ ] **Step 3: 实现 restore.py**
 
-3a. 模块 docstring 的规则说明追加一行（β 规则清单后）：
+3a. 模块 docstring：β 规则清单后追加校准规则说明（见下方文本）；并把文末
+「边界归并（更深层标题向上归并）留作 beta-3」的过期前向引用改为
+「留作后续版本（beta-3 已用于 title 校准切分）」：
 
 ```
 - beta-3：title 校准切分——``title`` 恒等于 ``path[-1]``（32 样例实证），
@@ -241,14 +243,17 @@ Expected: PASS（restore_files 已校准，预览自动一致）
 
 - [ ] **Step 2: 在 test_toc_scan.py 增补校准断言**
 
-读该文件现有 fake client/slices 写法后在合适位置追加（保持既有风格；若已有含 title 的切片构造，仿照）：
+该文件无 pytest fixture——用其现有 `FakeScan` + `_client()` 模式（名以现文件实际为准）构造含下述两条切片的 source 后追加：
 
 ```python
-def test_toc_files_preview_reflects_calibration(fake_client):  # fixture 名以现文件为准
+def test_toc_files_preview_reflects_calibration():
     """跨段标题在预览 files/tree 中已合并（预览=落库同源，53 号 §五-1）."""
-    ...  # 仿现有用例构造 client，返回含下述两条切片的 source
-    # {"path": "包 > 接口管理 > 告警 > 处理建议", "title": "告警 > 处理建议", "part_id": 1},
-    # {"path": "包 > 接口管理 > 定位思路", "title": "定位思路", "part_id": 2}
+    rows = [
+        {"path": "包 > 接口管理 > 告警 > 处理建议", "title": "告警 > 处理建议",
+         "part_id": 1},
+        {"path": "包 > 接口管理 > 定位思路", "title": "定位思路", "part_id": 2},
+    ]
+    client = _client(FakeScan(rows, total=2, part_max=2))   # 构造参数以现文件为准
     toc = scan_toc(client, "SRC1")
     assert toc["rule_version"] == "beta-3"
     assert toc["file_count"] == 1
@@ -258,7 +263,7 @@ def test_toc_files_preview_reflects_calibration(fake_client):  # fixture 名以�
     assert "告警" not in [c["title"] for c in toc["tree"][0]["children"][0]["children"]]
 ```
 
-（fixture/构造名以现有文件实际为准调整；断言意图不变。）
+（FakeScan/_client 的真实签名以现有文件为准调整；断言意图不变。）
 
 - [ ] **Step 3: 跑之，确认先失败后实现——本任务无实现（toc_scan 零改动），失败即说明 Task 1 接线有漏，回头修 restore.py**
 
@@ -267,7 +272,7 @@ Expected: PASS（若 FAIL，修 restore.py 直到绿）
 
 - [ ] **Step 4: 适配器——先写失败测试**
 
-在 `test_onenet_adapter.py` 追加（读现有构造辅助后仿写）：
+在 `test_onenet_adapter.py` 追加（用其现有 `_jsonl()` 辅助与直调解析器惯用法——该文件无 `_parse`）：
 
 ```python
 def test_heading_chain_merges_spanning_title():
@@ -278,8 +283,7 @@ def test_heading_chain_merges_spanning_title():
         {"nid": "b", "part_id": 2, "path": "包 > 接口管理 > 定位思路",
          "title": "定位思路", "content": "正文B"},
     ]
-    data = ("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n").encode()
-    art = _parse(data)   # 现有测试的解析辅助（名字以现文件为准）
+    art = OnenetJsonlParser().parse(_jsonl(rows), mime=ONENET_JSONL_MIME)
     headings = [b.text for b in art.blocks if b.block_type == "heading"]
     assert headings == ["包", "接口管理", "告警 > 处理建议", "定位思路"]
 
@@ -409,11 +413,12 @@ describe('filterFilesBySelection', () => {
     // 勾「包 > 接口管理」（直属1片）→ 其直属切片归父文件「包」，且子树文件都显示
     const out = filterFilesBySelection(
       files, ['包 > 接口管理'], nodesByPath, parentByPath)
-    expect(out.map((f) => f.file_path)).toEqual([
+    // 实现按 files 原序过滤——两侧都 sort 后比较，避免顺序耦合
+    expect(out.map((f) => f.file_path).sort()).toEqual([
       '包 > 接口管理',                        // 恰等（规则1）
       '包 > 接口管理 > 告警 > 处理建议',      // 之下（规则1）
       '包',                                   // 直属切片宿主（规则2）
-    ].sort())  // sort 后比较，避免顺序耦合；实际实现按 files 原序过滤
+    ].sort())
     expect(out).toHaveLength(3)
   })
 
@@ -520,7 +525,7 @@ export function buildNodeIndex(
 - [ ] **Step 4: 跑测试**
 
 Run: `cd kb-ui && npm run test -- src/utils/__tests__/onenetSelection.spec.ts`
-Expected: 全 PASS（旧 4 + 新 8）
+Expected: 全 PASS（旧 4 + 新 7：splitSegments 1 + filterFilesBySelection 5 + build 1）
 
 - [ ] **Step 5: 提交**
 
@@ -633,7 +638,7 @@ Expected: 全 PASS + 构建成功
 
 - [ ] **Step 3: 链路级 E2E（本地模拟全链）**
 
-写一次性脚本（不入库）串联：构造含跨段标题的切片集 → `scan_toc`（fake client）→ 拿 files/tree → `Selection(subtrees=[勾选节点])` → `fetch_selection`（fake client）→ `restore_files` → 断言：①导入文件与预览 files 一致 ②勾选「包 > 接口管理」时父文件「包」也在结果中 ③标题串完整保留。跑完删除脚本。
+写一次性脚本（不入库）串联：构造含跨段标题的切片集 → `scan_toc`（fake client）→ 拿 files/tree → `Selection(subtrees=[勾选节点])` → `fetch_selection`（fake client）→ `restore_files` → 断言：①导入文件与预览 files 一致 ②勾选「包 > 接口管理」时父文件「包」也在结果中 ③标题串完整保留 ④`OnenetJsonlParser().parse` 的 heading 链同样输出合并标题「告警 > 处理建议」（第三个消费方）。跑完删除脚本。
 
 - [ ] **Step 4: 真库 E2E（如环境可用）**
 

@@ -284,13 +284,11 @@ run_database_upgrade_if_needed() {
     # 反向依赖顺序停止；control 保留到配置切换结束，nginx 可继续展示维护态。
     local svc
     for svc in mcp serving mining llm_service; do
-        if ! compose exec -T app supervisorctl stop "$svc" >/dev/null 2>&1; then
-            restore_migration_code_backup
-            restart_old_services_after_rollback
-            die "无法停止 $svc，拒绝在未形成停写屏障时迁移数据库。"
-        fi
+        # stop 对已 STOPPED 的服务返回非零（中断重跑场景），忽略退出码；
+        # 真实停不掉由下面的 STOPPED 状态断言拦截。
+        compose exec -T app supervisorctl stop "$svc" >/dev/null 2>&1 || true
         local state
-        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}')"
+        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}' || true)"
         if [ "$state" != "STOPPED" ]; then
             restore_migration_code_backup
             restart_old_services_after_rollback
@@ -364,7 +362,7 @@ restart_old_services_after_rollback() {
         compose exec -T app supervisorctl start "$svc" \
             || return 1
         local state
-        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}')"
+        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}' || true)"
         [ "$state" = "RUNNING" ] || return 1
     done
 }
@@ -374,11 +372,11 @@ rollback_database_cutover() {
     echo "=== 停止已启动的新版本服务 ==="
     local svc state
     for svc in mcp serving mining llm_service; do
-        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}')"
+        state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}' || true)"
         if [ "$state" != "STOPPED" ]; then
             compose exec -T app supervisorctl stop "$svc" >/dev/null 2>&1 \
                 || return 1
-            state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}')"
+            state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}' || true)"
         fi
         [ "$state" = "STOPPED" ] || return 1
     done

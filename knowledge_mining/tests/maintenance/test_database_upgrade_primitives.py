@@ -172,3 +172,37 @@ def test_pre51_rebase_target_adds_51_tables_without_requiring_them_in_source() -
     assert {"user_domains", "mcp_keys", "mcp_key_open_kbs", "kb_purge_tasks"} <= target
     assert "mcp_access" not in target
     assert "mcp_open_kbs" not in target
+
+
+def test_content_digest_exempt_tables_are_exactly_migration_mutated_ones() -> None:
+    """001 合法改写 mining_runs（删列+awaiting_review 改写），指纹豁免清单不得漂移。"""
+    from knowledge_mining.mining.maintenance.database_upgrade.validation import (
+        CONTENT_DIGEST_EXEMPT_TABLES,
+    )
+
+    assert CONTENT_DIGEST_EXEMPT_TABLES == frozenset({"mining_runs"})
+
+
+def test_shared_columns_intersect_in_target_order() -> None:
+    """源库被删列（subloop_stage 等）不参与指纹：取交集并按目标列序。"""
+    from knowledge_mining.mining.maintenance.database_upgrade.validation import (
+        _shared_columns,
+    )
+
+    class _ColsConnection:
+        def __init__(self, names):
+            self.names = names
+
+        def execute(self, query, params=None):
+            class _Result:
+                def __init__(self, rows):
+                    self.rows = rows
+
+                def fetchall(self):
+                    return self.rows
+
+            return _Result([(name,) for name in self.names])
+
+    source = _ColsConnection(["id", "status", "subloop_stage", "ontology_version_id"])
+    target = _ColsConnection(["id", "status", "build_id"])
+    assert _shared_columns(source, target, "mining_runs") == ("id", "status")

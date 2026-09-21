@@ -50,6 +50,12 @@ def expected_rebase_target_tables(source_tables: set[str]) -> set[str]:
     return set(FORMAL_TABLES)
 
 
+# 001 迁移合法改写 mining_runs（删除 subloop_stage/ontology_version_id 两列，
+# 并把 awaiting_review 状态改写为 interrupted）：共享列内容指纹对这张表失真，
+# 只保留行数比对；其余保留表仍做逐行内容校验。
+CONTENT_DIGEST_EXEMPT_TABLES: frozenset[str] = frozenset({"mining_runs"})
+
+
 def compare_retained_table_counts(source: Any, target: Any) -> dict[str, int]:
     """Compare every retained table by count and deterministic row-content digest."""
 
@@ -72,8 +78,15 @@ def compare_retained_table_counts(source: Any, target: Any) -> dict[str, int]:
             raise SchemaValidationError(
                 f"表 {table} 行数不一致：source={source_count}, target={target_count}"
             )
-        source_digest = _table_digest(source, table)
-        target_digest = _table_digest(target, table)
+        # 迁移可能合法删除保留表的列（如 mining_runs 的本体遗留列）：
+        # 内容校验只比对源/目标共享列，被删列不参与指纹；
+        # 被 001 改写行内容的表（mining_runs）豁免内容指纹，仅行数比对。
+        if table in CONTENT_DIGEST_EXEMPT_TABLES:
+            counts[table] = target_count
+            continue
+        shared = _shared_columns(source, target, table)
+        source_digest = _table_digest(source, table, shared)
+        target_digest = _table_digest(target, table, shared)
         if source_digest != target_digest:
             raise SchemaValidationError(
                 f"表 {table} 内容校验和不一致（行数相同但数据发生变化）"
@@ -85,12 +98,33 @@ def compare_retained_table_counts(source: Any, target: Any) -> dict[str, int]:
     return counts
 
 
-def _table_digest(connection: Any, table: str) -> str:
+def _shared_columns(source: Any, target: Any, table: str) -> tuple[str, ...]:
+    """Columns present on both sides, in the target's physical order."""
+
+    query = (
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = %s "
+        "ORDER BY ordinal_position"
+    )
+    source_columns = {
+        str(row[0]) for row in source.execute(query, (table,)).fetchall()
+    }
+    target_columns = [
+        str(row[0]) for row in target.execute(query, (table,)).fetchall()
+    ]
+    shared = tuple(name for name in target_columns if name in source_columns)
+    if not shared:
+        raise SchemaValidationError(f"表 {table} 在源/目标没有共享列")
+    return shared
+
+
+def _table_digest(connection: Any, table: str, columns: tuple[str, ...]) -> str:
     digest = hashlib.sha256()
+    projection = sql.SQL(",").join(sql.Identifier(name) for name in columns)
     statement = sql.SQL(
-        "SELECT to_jsonb(row_data)::text FROM {} AS row_data "
+        "SELECT to_jsonb(row_data)::text FROM (SELECT {} FROM {}) AS row_data "
         "ORDER BY to_jsonb(row_data)::text"
-    ).format(sql.Identifier(table))
+    ).format(projection, sql.Identifier(table))
     with connection.cursor() as cursor:
         cursor.execute(statement)
         while True:

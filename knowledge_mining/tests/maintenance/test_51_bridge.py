@@ -58,11 +58,12 @@ class _PreflightConnection:
         *,
         owned=(("u-1", "generic"),),
         tools=("search_knowledge",),
+        raw_tools=None,
         open_rows=(("u-1", "kb-1", "generic", "KB 1", "active"),),
     ):
         self.tables = {"mcp_access", "mcp_open_kbs"}
         self.owned = list(owned)
-        self.tools = list(tools)
+        self.tools = list(tools) if raw_tools is None else raw_tools
         self.open_rows = list(open_rows)
 
     def execute(self, query, params=None):
@@ -101,14 +102,24 @@ def test_legacy_key_domain_uses_the_single_active_open_kb_domain() -> None:
     ) == ("odn", "open-kbs")
 
 
-def test_legacy_key_domain_rejects_cross_domain_open_grants() -> None:
-    with pytest.raises(Bridge51Error, match="跨多个 domain"):
-        derive_legacy_key_domain(
-            open_kbs=[("kb-1", "odn", "active"), ("kb-2", "generic", "active")],
-            bindings=[],
-            is_admin=False,
-            default_domain="cloud_core_network",
-        )
+def test_legacy_key_domain_cross_domain_uses_majority_then_alphabetical() -> None:
+    # 并列（1:1）取字典序第一；多数域优先。
+    assert derive_legacy_key_domain(
+        open_kbs=[("kb-1", "odn", "active"), ("kb-2", "generic", "active")],
+        bindings=[],
+        is_admin=False,
+        default_domain="cloud_core_network",
+    ) == ("generic", "open-kbs")
+    assert derive_legacy_key_domain(
+        open_kbs=[
+            ("kb-1", "odn", "active"),
+            ("kb-2", "odn", "active"),
+            ("kb-3", "generic", "active"),
+        ],
+        bindings=[],
+        is_admin=False,
+        default_domain="cloud_core_network",
+    ) == ("odn", "open-kbs")
 
 
 def test_legacy_key_domain_uses_single_existing_binding() -> None:
@@ -126,27 +137,27 @@ def test_legacy_admin_without_open_kbs_uses_registry_default() -> None:
         bindings=[],
         is_admin=True,
         default_domain="cloud_core_network",
-    ) == ("cloud_core_network", "admin-default")
+    ) == ("cloud_core_network", "default-fallback")
 
 
-def test_legacy_member_without_any_domain_fails_closed() -> None:
-    with pytest.raises(Bridge51Error, match="无法推导"):
-        derive_legacy_key_domain(
-            open_kbs=[],
-            bindings=[],
-            is_admin=False,
-            default_domain="cloud_core_network",
-        )
+def test_legacy_member_without_any_domain_falls_back_to_default() -> None:
+    # 2026-09-21 裁定：推导不出任何 domain 的用户（含普通用户）一律默认 domain 兜底。
+    assert derive_legacy_key_domain(
+        open_kbs=[],
+        bindings=[],
+        is_admin=False,
+        default_domain="cloud_core_network",
+    ) == ("cloud_core_network", "default-fallback")
 
 
-def test_legacy_key_without_open_grants_rejects_multiple_bindings() -> None:
-    with pytest.raises(Bridge51Error, match="多个 domain"):
-        derive_legacy_key_domain(
-            open_kbs=[],
-            bindings=["generic", "odn"],
-            is_admin=False,
-            default_domain="cloud_core_network",
-        )
+def test_legacy_key_without_open_grants_multiple_bindings_pick_first() -> None:
+    # 多绑定时取字典序第一，不再要求唯一。
+    assert derive_legacy_key_domain(
+        open_kbs=[],
+        bindings=["generic", "odn"],
+        is_admin=False,
+        default_domain="cloud_core_network",
+    ) == ("generic", "user_domains")
 
 
 def test_existing_user_domain_bindings_are_authoritative_and_not_expanded() -> None:
@@ -160,12 +171,13 @@ def test_existing_user_domain_bindings_are_authoritative_and_not_expanded() -> N
     _backfill_user_domains(
         connection,
         allowed_domains=frozenset({"generic", "odn", "cloud_core_network"}),
+        default_domain="generic",
         existing_is_authoritative=True,
     )
     assert connection.inserted == [("u-1", "generic")]
 
 
-def test_zero_binding_user_infers_owned_domains_but_never_gets_default_grant() -> None:
+def test_zero_binding_user_falls_back_to_default_domain() -> None:
     assert derive_user_domains(
         existing=[],
         owned_or_member=["odn", "generic"],
@@ -176,6 +188,25 @@ def test_zero_binding_user_infers_owned_domains_but_never_gets_default_grant() -
         owned_or_member=[],
         existing_is_authoritative=False,
     ) == []
+
+    class _ZeroBindingConnection(_UserDomainConnection):
+        def execute(self, query, params=None):
+            sql = " ".join(str(query).split())
+            if sql.startswith("SELECT DISTINCT u.id, kb.domain"):
+                return _Rows([])
+            if sql.startswith("SELECT user_id, domain FROM user_domains"):
+                return _Rows([])
+            return super().execute(query, params)
+
+    connection = _ZeroBindingConnection()
+    inserted, fallback_binds = _backfill_user_domains(
+        connection,
+        allowed_domains=frozenset({"generic", "odn"}),
+        default_domain="generic",
+        existing_is_authoritative=False,
+    )
+    assert connection.inserted == [("u-1", "generic")]
+    assert fallback_binds == 1
 
 
 def test_partial_51_user_domain_rows_are_completed_from_membership() -> None:
@@ -217,22 +248,30 @@ def test_preflight_clean_legacy_source_reports_all_zero() -> None:
 
 
 @pytest.mark.parametrize(
-    ("connection", "message"),
+    ("connection", "counter"),
     [
-        (_PreflightConnection(owned=()), "零绑定用户"),
-        (_PreflightConnection(tools=("retired_tool",)), "当前三类工具"),
+        (_PreflightConnection(owned=()), "zero_binding_users"),
+        (_PreflightConnection(tools=("retired_tool",)), "retired_tool_config_keys"),
         (_PreflightConnection(open_rows=(
             ("u-1", "kb-1", "generic", "KB 1", "active"),
             ("u-1", "kb-2", "odn", "KB 2", "active"),
-        )), "跨多个 domain"),
+        )), "cross_domain_keys"),
         (_PreflightConnection(open_rows=(
             ("u-1", "kb-1", "generic", "KB 1", "deleted"),
-        )), "会被丢弃"),
+        )), "discarded_open_grants"),
     ],
 )
-def test_preflight_rejects_every_permission_guess(connection, message) -> None:
-    with pytest.raises(Bridge51Error, match=message):
-        preflight_51_bridge(connection, _POLICY)
+def test_preflight_counts_ambiguity_instead_of_blocking(connection, counter) -> None:
+    # 2026-09-21 裁定：四类歧义计数上报、兜底迁移，不再拒绝。
+    report = preflight_51_bridge(connection, _POLICY)
+    assert report.to_dict()[counter] == 1
+
+
+def test_preflight_still_rejects_malformed_open_tools() -> None:
+    with pytest.raises(Bridge51Error, match="结构损坏"):
+        preflight_51_bridge(
+            _PreflightConnection(raw_tools={"search_knowledge": 1}), _POLICY
+        )
 
 
 def test_bridge_tool_normalization_only_emits_current_three_tools() -> None:
@@ -241,7 +280,8 @@ def test_bridge_tool_normalization_only_emits_current_three_tools() -> None:
     assert _normalize_bridge_open_tools(["get_content", "get_evidence"]) == [
         "get_knowledge"
     ]
-    assert _normalize_bridge_open_tools(["retired_tool_name"]) == []
+    # 全退役名单按 51 号原裁定映射为 NULL（全部开放），不是零工具空列表。
+    assert _normalize_bridge_open_tools(["retired_tool_name"]) is None
 
 
 def test_upgrade_apply_runs_51_bridge_before_52_manifest() -> None:
@@ -261,15 +301,43 @@ def test_51_bridge_is_first_versioned_migration_and_pins_all_four_tables() -> No
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
 
 
-def test_mcp_bridge_preserves_timestamps_and_never_silently_drops_grants() -> None:
+def test_mcp_bridge_preserves_timestamps_and_reports_dropped_grants() -> None:
     source = inspect.getsource(_backfill_mcp_keys)
 
     for field in ("created_at", "rotated_at", "last_used_at", "granted_at"):
         assert field in source
     assert "_normalize_bridge_open_tools" in source
-    assert "dropped.append" not in source
-    assert "拒绝删除旧开放库授权" in source
+    # 2026-09-21 裁定：跨域/失活授权丢弃但逐条留档，不再拒绝迁移。
+    assert "dropped_grants.append" in source
+    assert "拒绝删除旧开放库授权" not in source
     assert "uuid.uuid5" in source
+
+
+def test_policy_defaults_to_first_enabled_domain_when_unset(tmp_path) -> None:
+    from knowledge_mining.mining.maintenance.database_upgrade.bridge_51 import (
+        load_bridge_51_policy,
+    )
+
+    (tmp_path / "domain_registry.yaml").write_text(
+        "domains:\n  odn:\n    enabled: true\n  generic:\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    policy = load_bridge_51_policy(tmp_path)
+    assert policy.default_domain == "odn"
+    assert policy.allowed_domains == frozenset({"odn", "generic"})
+
+    (tmp_path / "domain_registry.yaml").write_text(
+        "default_domain: generic\n"
+        "domains:\n  odn:\n    enabled: true\n  generic:\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    assert load_bridge_51_policy(tmp_path).default_domain == "generic"
+
+
+def test_apply_output_reports_fallback_binds_and_dropped_grants() -> None:
+    source = inspect.getsource(upgrade_main._apply)
+    assert "fallback_domain_binds" in source
+    assert "dropped_grants" in source
 
 
 def test_51_operational_drift_uses_owner_lineage_not_frozen_key_hash() -> None:

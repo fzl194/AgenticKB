@@ -213,7 +213,8 @@ class GlobalExecutor:
         frozen = binding.get("ontologyApplicable")
         if frozen is not None:
             return bool(frozen)
-        return self.runtime.ontology_version_id is not None
+        # 本体线已退役：无冻结标记时一律不适用。
+        return False
 
     def _check_cancellation(self) -> None:
         check = self.runtime.cancellation_check

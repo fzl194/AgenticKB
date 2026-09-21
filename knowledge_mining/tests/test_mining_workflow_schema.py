@@ -54,3 +54,27 @@ def test_runtime_schema_has_no_cross_database_workflow_foreign_key() -> None:
     assert "references mining_workflow_versions" not in ddl
     assert "'not_applicable'" in ddl
     assert "'fallback'" in ddl
+
+
+def test_operator_runtime_context_constructs_as_jobs_run_does() -> None:
+    """52 收敛回归：jobs/run.py 构造 OperatorRuntimeContext 不传本体字段。
+
+    本体退役清理曾删掉构造点传参而类仍声明必填 ontology_version_id，
+    挖掘执行即 TypeError（内网 2026-09-21 实发）。本测试锁住构造签名。
+    """
+    from knowledge_mining.mining.workflow.core import OperatorRuntimeContext
+
+    context = OperatorRuntimeContext(
+        domain="odn",
+        channel="default",
+        domain_profile=None,
+        asset_repository=None,
+        runtime_repository=None,
+        tracker=None,
+        services=None,
+        publish_lock_provider=None,
+        cancellation_check=None,
+        manifest={},
+    )
+    assert context.domain == "odn"
+    assert not hasattr(context, "ontology_version_id")

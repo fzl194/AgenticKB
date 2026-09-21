@@ -292,7 +292,6 @@ class OperatorRuntimeContext:
     domain: str
     channel: str
     domain_profile: Any
-    ontology_version_id: str | None
     asset_repository: Any
     runtime_repository: Any
     tracker: Any

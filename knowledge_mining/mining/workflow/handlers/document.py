@@ -112,7 +112,8 @@ def _document_handler(
     error_code: str,
     ontology_required: bool = False,
 ) -> OperatorResult:
-    if ontology_required and runtime.ontology_version_id is None:
+    # 本体线已退役：声明需要本体的算子一律按不适用处理。
+    if ontology_required:
         return _not_applicable(state)
     options = options_type.model_validate(dict(params))
     try:

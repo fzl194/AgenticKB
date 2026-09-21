@@ -260,9 +260,13 @@ def create_app(
         if user is None or user.get("role") == "admin":
             return {"items": service.list_domains()}
         internal_secret = getattr(request.app.state, "internal_verify_secret", "") or ""
-        bound = await service.bound_domains_for(str(user.get("username") or ""), internal_secret)
+        bound, reason = await service.bound_domains_for(
+            str(user.get("username") or ""), internal_secret
+        )
         if bound is None:
-            raise HTTPException(status_code=503, detail="mining_unavailable")
+            raise HTTPException(
+                status_code=503, detail=f"mining_unavailable:{reason or 'unknown'}"
+            )
         return {"items": [d for d in service.list_domains() if d.get("domain_id") in bound]}
 
     @app.get("/api/v1/domains/{domain_id}")

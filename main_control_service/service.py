@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 from fastapi import HTTPException
 
+
+logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class YamlConfigService:
@@ -327,15 +331,24 @@ class YamlConfigService:
                 return base
         return None
 
-    async def bound_domains_for(self, username: str, internal_secret: str) -> set[str] | None:
-        """问 mining 拿用户绑定域；不可达返回 None（调用方 503，不降级全量）。"""
+    async def bound_domains_for(
+        self, username: str, internal_secret: str
+    ) -> tuple[set[str] | None, str]:
+        """问 mining 拿用户绑定域；不可达返回 (None, 原因)（调用方 503，不降级全量）。
+
+        原因同时进日志与 503 detail——此前静默吞异常，现场只看到 503 无从排查
+        （内网 2026-09-21 实发）。
+        """
         from main_control_service.proxy import get_proxy_client
 
-        if not username or not internal_secret:
-            return None
+        if not username:
+            return None, "empty_username"
+        if not internal_secret:
+            return None, "no_internal_secret"
         base = self.mining_internal_base_url()
         if not base:
-            return None
+            return None, "no_mining_url_in_registry"
+        reason = ""
         try:
             resp = await get_proxy_client().get(
                 f"{base}/api/kb/internal/users/{username}/domains",
@@ -343,9 +356,18 @@ class YamlConfigService:
                 timeout=10.0,
             )
             resp.raise_for_status()
-            return set(resp.json().get("domains", []))
-        except Exception:  # noqa: BLE001 — fail-closed 由调用方处理
-            return None
+            return set(resp.json().get("domains", [])), ""
+        except httpx.HTTPStatusError as exc:
+            reason = f"http_{exc.response.status_code}"
+        except httpx.TimeoutException:
+            reason = "timeout"
+        except Exception as exc:  # noqa: BLE001 — fail-closed 由调用方处理
+            reason = type(exc).__name__
+        logger.warning(
+            "mining user-domains query failed (%s): user=%s base=%s",
+            reason, username, base,
+        )
+        return None, reason
 
     async def kb_count_for(self, domain_id: str, internal_secret: str) -> int | None:
         """51号批次1：删域保护；不可达返回 None（调用方 503）。"""

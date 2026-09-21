@@ -284,16 +284,21 @@ run_database_upgrade_if_needed() {
     # 反向依赖顺序停止；control 保留到配置切换结束，nginx 可继续展示维护态。
     local svc
     for svc in mcp serving mining llm_service; do
-        # stop 对已 STOPPED 的服务返回非零（中断重跑场景），忽略退出码；
-        # 真实停不掉由下面的 STOPPED 状态断言拦截。
+        # stop 对已 STOPPED/FATAL 的服务返回非零（中断重跑/崩溃放弃场景），忽略退出码。
+        # 门禁本质是「进程不在运行、不占数据库」：STOPPED/EXITED/FATAL 都满足；
+        # 崩溃放弃（FATAL）的服务只有成功 start 一次才能回 STOPPED，恰恰起不来，
+        # 只认 STOPPED 会把连续失败后的重试永久堵死。仍在 RUNNING/STARTING 才拦截。
         compose exec -T app supervisorctl stop "$svc" >/dev/null 2>&1 || true
         local state
         state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}' || true)"
-        if [ "$state" != "STOPPED" ]; then
-            restore_migration_code_backup
-            restart_old_services_after_rollback
-            die "$svc 未进入 STOPPED（实际：${state:-unknown}），拒绝迁移数据库。"
-        fi
+        case "$state" in
+            STOPPED|EXITED|FATAL) ;;
+            *)
+                restore_migration_code_backup
+                restart_old_services_after_rollback
+                die "$svc 未停止（实际：${state:-unknown}），拒绝迁移数据库。"
+                ;;
+        esac
     done
 
     echo "=== 在现有容器中执行数据库迁移 ==="

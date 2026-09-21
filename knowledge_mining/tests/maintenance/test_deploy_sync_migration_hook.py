@@ -30,7 +30,8 @@ def test_database_upgrade_stops_writers_but_keeps_control_for_config_cutover() -
     assert 'supervisorctl stop "$svc"' in hook
     # stop 退出码被豁免（重跑时已停服务会报非零），真实停不掉由 STOPPED 断言拦截。
     assert 'supervisorctl stop "$svc" >/dev/null 2>&1 || true' in hook
-    assert '"$state" != "STOPPED"' in hook
+    # 门禁只拦 RUNNING/STARTING：FATAL/EXITED（崩溃放弃）同样满足停写屏障。
+    assert 'STOPPED|EXITED|FATAL) ;;' in hook
     assert "supervisorctl stop control" not in hook
     # pipefail 下 supervisorctl status 对非 RUNNING 态可能返回非零，读取必须豁免退出码。
     assert "supervisorctl status \"$svc\" 2>/dev/null | awk '{print $2}' || true" in hook

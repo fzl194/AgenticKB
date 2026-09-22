@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useDomainStore } from '@/stores/domain'
 
@@ -111,8 +111,7 @@ const ADMIN_ROUTES = new Set([
   'onenet-admin',
 ])
 
-let domainsInitialized = false
-router.beforeEach(async (to) => {
+export async function authAndDomainGuard(to: RouteLocationNormalized) {
   const auth = useAuthStore()
   // 等 auth 启动完成（restore + fetchMe）。初始导航在 app.use(router) 时触发，早于 fetchMe，
   // 不等的话 user 还没拿到 → isAuthenticated 假 → 误判未登录跳 /login（刷新即登出的根因）。
@@ -129,12 +128,14 @@ router.beforeEach(async (to) => {
   if (ADMIN_ROUTES.has(to.name as string) && auth.siteRole !== 'admin') {
     return { name: 'dashboard' }
   }
-  // 首次登录态导航时加载域列表（原来的 beforeEach 职责）
-  if (!domainsInitialized && auth.isAuthenticated) {
-    domainsInitialized = true
+  // 域缓存必须属于当前登录用户。store 会对同一用户复用成功结果；换用户或上次失败
+  // 都会重新请求，避免把旧账号的 currentDomain/raw id 带进新会话。
+  if (auth.isAuthenticated && auth.user?.username) {
     const domainStore = useDomainStore()
-    await domainStore.fetchDomains()
+    await domainStore.fetchDomains(auth.user.username)
   }
-})
+}
+
+router.beforeEach(authAndDomainGuard)
 
 export default router

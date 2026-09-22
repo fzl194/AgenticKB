@@ -6,7 +6,7 @@
 
     <div class="header__right">
       <el-select
-        v-model="domainStore.currentDomain"
+        :model-value="domainStore.currentDomain"
         class="header__domain-select"
         size="default"
         @change="onDomainChange"
@@ -14,7 +14,7 @@
         <el-option
           v-for="d in domainStore.enabledDomains"
           :key="d.domain_id"
-          :label="d.display_name"
+          :label="d.display_name || d.domain_id"
           :value="d.domain_id"
         />
       </el-select>
@@ -94,7 +94,8 @@ const displayName = computed(
 const allHealthy = ref(true)
 const someHealthy = ref(true)
 
-function onDomainChange() {
+function onDomainChange(domainId: string) {
+  domainStore.switchDomain(domainId)
   allHealthy.value = true
   someHealthy.value = true
 }

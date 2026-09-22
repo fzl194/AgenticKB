@@ -131,6 +131,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
+import { useAuthStore } from '@/stores/auth'
 import type { McpKeyItem } from '@/types/kb'
 import McpKeyConfigPanel from '@/components/mcp/McpKeyConfigPanel.vue'
 
@@ -140,6 +141,7 @@ const MAX_KEYS = 10
 
 const kbApi = useKbApi()
 const domainStore = useDomainStore()
+const auth = useAuthStore()
 
 const keys = ref<McpKeyItem[]>([])
 const loading = ref(false)
@@ -321,7 +323,7 @@ function fmtTime(v?: string | null): string {
 }
 
 onMounted(() => {
-  void domainStore.fetchDomains()
+  if (auth.user?.username) void domainStore.fetchDomains(auth.user.username)
   reload()
 })
 </script>

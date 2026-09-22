@@ -253,7 +253,12 @@ class KbDB:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT id, username, display_name, status, site_role,
-                          (password_hash IS NOT NULL) AS has_password, created_at
+                          (password_hash IS NOT NULL) AS has_password, created_at,
+                          ARRAY(
+                              SELECT ud.domain FROM user_domains ud
+                               WHERE ud.user_id = kb_users.id
+                               ORDER BY ud.domain
+                          ) AS domains
                    FROM kb_users ORDER BY created_at""",
             )
             return [dict(r) for r in await cur.fetchall()]

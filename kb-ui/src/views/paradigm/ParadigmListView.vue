@@ -82,11 +82,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useOperatorApi } from '@/api/operator'
 import { useDomainStore } from '@/stores/domain'
+import { useAuthStore } from '@/stores/auth'
 import type { ParadigmView } from '@/types/operator'
 import { PARADIGM_TEMPLATES } from './templates'
 
 const router = useRouter()
 const api = useOperatorApi()
+const auth = useAuthStore()
 
 const paradigms = ref<ParadigmView[]>([])
 const loading = ref(false)
@@ -181,7 +183,7 @@ function errMsg(e: unknown): string {
 }
 
 onMounted(async () => {
-  await useDomainStore().fetchDomains()
+  if (auth.user?.username) await useDomainStore().fetchDomains(auth.user.username)
   await load()
 })
 </script>

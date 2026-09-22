@@ -16,14 +16,16 @@ _AUTH = (
 )
 
 
-def _client(tmp_path: Path) -> TestClient:
+def _client(tmp_path: Path, *, registry: str | None = None) -> TestClient:
     d = tmp_path / "system"
     d.mkdir(parents=True, exist_ok=True)
     (d / "auth.yaml").write_text(_AUTH, encoding="utf-8")
     # login 端点要遍历 list_domains 找 mining_url —— 写一份最小 registry
     (tmp_path / "domain_registry.yaml").write_text(
-        "default_domain: d\ndomains:\n  d:\n    display_name: D\n    enabled: true\n"
-        "    services:\n      mining_url: http://mining:8901\n",
+        registry or (
+            "default_domain: d\ndomains:\n  d:\n    display_name: D\n    enabled: true\n"
+            "    services:\n      mining_url: http://mining:8901\n"
+        ),
         encoding="utf-8",
     )
     return TestClient(create_app(config_dir=tmp_path))
@@ -69,6 +71,33 @@ def test_me_returns_claims(tmp_path):
 def test_me_without_token_401(tmp_path):
     with _client(tmp_path) as c:
         assert c.get("/api/v1/auth/me").status_code == 401
+
+
+def test_member_domain_filter_preserves_display_name(tmp_path):
+    registry = (
+        "default_domain: cloud_core_network\ndomains:\n"
+        "  cloud_core_network:\n    display_name: Cloud Core Network\n    enabled: true\n"
+        "    services:\n      mining_url: http://mining:8901\n"
+        "  domain_a:\n    display_name: Domain A\n    enabled: true\n"
+        "    services:\n      mining_url: http://mining:8901\n"
+    )
+    token = encode({"sub": "alice", "role": "member", "name": "Alice"}, "s", ttl=3600)
+    with _client(tmp_path, registry=registry) as c:
+        with patch(
+            "main_control_service.service.YamlConfigService.bound_domains_for",
+            new_callable=AsyncMock,
+        ) as bound:
+            bound.return_value = ({"domain_a"}, "")
+            r = c.get("/api/v1/domains", headers={"Authorization": f"Bearer {token}"})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["items"] == [{
+        "domain_id": "domain_a",
+        "display_name": "Domain A",
+        "enabled": True,
+        "default_channel": "prod",
+        "scenario_pack_ref": "domain_a",
+    }]
 
 
 def test_identify_returns_mode(tmp_path):

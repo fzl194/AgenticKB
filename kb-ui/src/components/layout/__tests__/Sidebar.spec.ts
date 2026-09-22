@@ -14,6 +14,7 @@ vi.mock('@/stores/auth', () => ({
 import Sidebar from '../Sidebar.vue'
 import ReleaseVersion from '../ReleaseVersion.vue'
 import { useBrandStore } from '@/stores/brand'
+import { useDomainStore } from '@/stores/domain'
 
 describe('Sidebar navigation', () => {
   beforeEach(() => {
@@ -49,6 +50,16 @@ describe('Sidebar navigation', () => {
     expect(wrapper.text()).not.toContain('检索范式')
     expect(wrapper.text()).not.toContain('挖掘范式')
     expect(wrapper.text()).not.toContain('系统设置')
+  })
+
+  it('does not present an unmatched raw domain id as a display name', () => {
+    const domains = useDomainStore()
+    domains.currentDomain = 'cloud_core_network'
+
+    const wrapper = shallowMount(Sidebar)
+
+    expect(wrapper.text()).toContain('未选择知识域')
+    expect(wrapper.text()).not.toContain('cloud_core_network')
   })
 })
 

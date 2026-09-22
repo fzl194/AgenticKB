@@ -55,6 +55,22 @@ async def test_list_and_set_user_domains(kbdb):
 
 
 @pytest.mark.asyncio
+async def test_list_users_includes_bound_domains(kbdb):
+    """管理列表一次返回绑定域，页面首次加载即可稳定回显。"""
+    s = _suffix()
+    user = await kbdb.create_user(username=f"list_domains_{s}", site_role="member")
+    unbound = await kbdb.create_user(username=f"list_unbound_{s}", site_role="member")
+    await kbdb.set_user_domains(user_id=user["id"], domains=["generic", "odn"])
+
+    listed = await kbdb.list_users()
+    row = next(item for item in listed if item["id"] == user["id"])
+    unbound_row = next(item for item in listed if item["id"] == unbound["id"])
+
+    assert row["domains"] == ["generic", "odn"]
+    assert unbound_row["domains"] == []
+
+
+@pytest.mark.asyncio
 async def test_bind_domain_idempotent(kbdb):
     s = _suffix()
     async with kbdb._pool.connection() as conn:

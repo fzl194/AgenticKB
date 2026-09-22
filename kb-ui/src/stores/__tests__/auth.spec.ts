@@ -19,6 +19,7 @@ vi.mock('@/api/auth', () => ({
 }))
 
 import { useAuthStore } from '@/stores/auth'
+import { useDomainStore } from '@/stores/domain'
 
 describe('auth store', () => {
   beforeEach(() => {
@@ -46,12 +47,22 @@ describe('auth store', () => {
       user: { username: 'a', display_name: 'A', site_role: 'member' },
     })
     const s = useAuthStore()
+    const domains = useDomainStore()
     await s.login('a', 'p')
+    domains.domains = [{
+      domain_id: 'domain_a', display_name: 'Domain A', enabled: true,
+      default_channel: 'prod', scenario_pack_ref: 'domain_a',
+    }]
+    domains.currentDomain = 'domain_a'
+    domains.loaded = true
     s.logout()
     expect(s.isAuthenticated).toBe(false)
     expect(s.token).toBe(null)
     expect(s.user).toBe(null)
     expect(storage.clearToken).toHaveBeenCalled()
+    expect(domains.domains).toEqual([])
+    expect(domains.currentDomain).toBe('')
+    expect(domains.loaded).toBe(false)
   })
 
   it('fetchMe populates from token', async () => {

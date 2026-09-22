@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useAuthApi, loadToken, saveToken, clearToken } from '@/api/auth'
 import type { AuthUser, SiteRole } from '@/types/auth'
+import { useDomainStore } from '@/stores/domain'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(null)
@@ -24,12 +25,14 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(username: string, password?: string): Promise<void> {
     const api = useAuthApi()
     const res = await api.login(username, password)
+    useDomainStore().resetDomains()
     token.value = res.token
     user.value = res.user
     saveToken(res.token)
   }
 
   function logout(): void {
+    useDomainStore().resetDomains()
     token.value = null
     user.value = null
     clearToken()

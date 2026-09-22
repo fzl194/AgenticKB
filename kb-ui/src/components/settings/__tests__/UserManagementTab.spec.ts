@@ -7,11 +7,16 @@ const api = vi.hoisted(() => ({
   createUser: vi.fn(),
   resetPassword: vi.fn(),
   updateUser: vi.fn(),
+  getUserDomains: vi.fn(),
+  setUserDomains: vi.fn(),
 }))
 const ui = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }))
 
 vi.mock('@/api/auth', () => ({ useAuthApi: () => api }))
-vi.mock('@/api/proxyClient', () => ({ apiErrorDetail: async () => '失败' }))
+vi.mock('@/api/proxyClient', () => ({
+  apiErrorDetail: async () => '失败',
+  installAuthInterceptors: vi.fn(),
+}))
 vi.mock('element-plus', () => ({
   ElMessage: { success: ui.success, error: ui.error, warning: ui.warning },
   ElMessageBox: { prompt: vi.fn().mockRejectedValue('cancel') },
@@ -35,6 +40,47 @@ describe('UserManagementTab', () => {
     expect(api.listUsers).toHaveBeenCalled()
     expect(w.vm.users.length).toBe(1)
     expect(w.vm.users[0].username).toBe('admin')
+  })
+
+  it('hydrates bound domains from the initial user list without opening the dialog', async () => {
+    api.listUsers.mockResolvedValue([
+      {
+        id: '2', username: 'alice', site_role: 'member', status: 'active',
+        display_name: 'Alice', domains: ['domain_a', 'domain_b'],
+      },
+    ])
+
+    const w = mount(UserManagementTab, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+
+    expect(w.vm.users[0].domains).toEqual(['domain_a', 'domain_b'])
+    expect(w.vm.userDomains).toEqual({ 2: ['domain_a', 'domain_b'] })
+    expect(api.getUserDomains).not.toHaveBeenCalled()
+  })
+
+  it('keeps the newer domain dialog loading until its own request finishes', async () => {
+    api.listUsers.mockResolvedValue([
+      { id: '1', username: 'alice', site_role: 'member', status: 'active', domains: ['domain_a'] },
+      { id: '2', username: 'bob', site_role: 'member', status: 'active', domains: ['domain_b'] },
+    ])
+    let resolveAlice!: (domains: string[]) => void
+    let resolveBob!: (domains: string[]) => void
+    api.getUserDomains
+      .mockReturnValueOnce(new Promise(resolve => { resolveAlice = resolve }))
+      .mockReturnValueOnce(new Promise(resolve => { resolveBob = resolve }))
+
+    const w = mount(UserManagementTab, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    const aliceLoad = w.vm.openDomains(w.vm.users[0])
+    const bobLoad = w.vm.openDomains(w.vm.users[1])
+
+    resolveAlice(['domain_a'])
+    await aliceLoad
+    expect(w.vm.domainsLoading).toBe(true)
+
+    resolveBob(['domain_b'])
+    await bobLoad
+    expect(w.vm.domainsLoading).toBe(false)
   })
 
   it('createUser calls api with form values', async () => {

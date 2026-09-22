@@ -27,7 +27,12 @@ export function useAuthApi() {
       return data as AuthUser
     },
     /** 用户管理走 mining 代理（/api/kb/users）。 */
-    async listUsers(): Promise<Array<AuthUser & { id: string; status: string; has_password?: boolean }>> {
+    async listUsers(): Promise<Array<AuthUser & {
+      id: string
+      status: string
+      has_password?: boolean
+      domains: string[]
+    }>> {
       const { data } = await mining.get('/api/kb/users')
       return Array.isArray(data) ? data : (data?.items ?? [])
     },

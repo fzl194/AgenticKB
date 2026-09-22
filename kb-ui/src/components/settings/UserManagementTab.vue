@@ -120,7 +120,12 @@
       <div class="um__hint">member 用户只能访问被分配的知识域；管理员默认全域通行。</div>
       <template #footer>
         <el-button @click="domainsVisible = false">取消</el-button>
-        <el-button type="primary" :loading="domainsSaving" @click="confirmDomains">保存</el-button>
+        <el-button
+          type="primary"
+          :loading="domainsSaving"
+          :disabled="domainsLoading"
+          @click="confirmDomains"
+        >保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -139,6 +144,7 @@ interface UserRow extends AuthUser {
   id: string
   status: string
   has_password?: boolean
+  domains: string[]
 }
 
 const api = useAuthApi()
@@ -146,7 +152,7 @@ const auth = useAuthStore()
 const domainStore = useDomainStore()
 const users = ref<UserRow[]>([])
 
-/** 51号批次1：用户已绑定的知识域（打开分配弹窗时拉取缓存，列表接口不带域数据避免 N 次请求）。 */
+/** 用户列表一次带回绑定域；弹窗打开时再校验一次，保存后同步更新。 */
 const userDomains = ref<Record<string, string[]>>({})
 const domainOptions = computed(() =>
   domainStore.domains.map(d => ({ value: d.domain_id, label: d.display_name || d.domain_id }))
@@ -160,24 +166,31 @@ function domainLabel(domainId: string): string {
 const domainsVisible = ref(false)
 const domainsLoading = ref(false)
 const domainsSaving = ref(false)
+let domainsLoadVersion = 0
 const domainsForm = ref<{ id: string; username: string; selected: string[] }>({
   id: '', username: '', selected: [],
 })
 
 async function openDomains(row: UserRow): Promise<void> {
+  const loadVersion = ++domainsLoadVersion
   domainsForm.value = { id: row.id, username: row.username, selected: [] }
   domainsVisible.value = true
-  if (domainStore.domains.length === 0) await domainStore.fetchDomains()
+  if (domainStore.domains.length === 0 && auth.user?.username) {
+    await domainStore.fetchDomains(auth.user.username)
+  }
   domainsLoading.value = true
   try {
     const domains = await api.getUserDomains(row.id)
     userDomains.value = { ...userDomains.value, [row.id]: domains }
+    users.value = users.value.map(user =>
+      user.id === row.id ? { ...user, domains: [...domains] } : user
+    )
     // 仅当仍在该行弹窗时回显，避免竞态覆盖
     if (domainsForm.value.id === row.id) domainsForm.value.selected = [...domains]
   } catch (e) {
     ElMessage.error((await apiErrorDetail(e)) || '加载用户域失败')
   } finally {
-    domainsLoading.value = false
+    if (loadVersion === domainsLoadVersion) domainsLoading.value = false
   }
 }
 
@@ -186,6 +199,9 @@ async function confirmDomains(): Promise<void> {
     domainsSaving.value = true
     const saved = await api.setUserDomains(domainsForm.value.id, domainsForm.value.selected)
     userDomains.value = { ...userDomains.value, [domainsForm.value.id]: saved }
+    users.value = users.value.map(user =>
+      user.id === domainsForm.value.id ? { ...user, domains: [...saved] } : user
+    )
     domainsVisible.value = false
     ElMessage.success('已保存')
   } catch (e) {
@@ -232,7 +248,13 @@ async function confirmEdit(): Promise<void> {
 
 async function load(): Promise<void> {
   try {
-    users.value = await api.listUsers()
+    const listed = await api.listUsers()
+    users.value = listed.map(user => ({ ...user, domains: [...(user.domains ?? [])] }))
+    userDomains.value = Object.fromEntries(
+      users.value
+        .filter(user => user.site_role !== 'admin')
+        .map(user => [user.id, [...user.domains]])
+    )
   } catch (e) {
     ElMessage.error((await apiErrorDetail(e)) || '加载失败')
   }
@@ -319,7 +341,14 @@ async function toggleRole(row: UserRow): Promise<void> {
 }
 
 onMounted(load)
-defineExpose({ load, createUser, users })
+defineExpose({
+  load,
+  createUser,
+  openDomains,
+  users,
+  userDomains,
+  domainsLoading,
+})
 </script>
 
 <style scoped>

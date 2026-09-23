@@ -370,7 +370,7 @@ async def test_document_metadata_mapping_and_raw(tmp_path):
     assert meta["source_system"] == "onenet"
     assert meta["logical"] is True
     assert meta["source_id"] == "DOC1"
-    assert meta["rule_version"] == "beta-2"
+    assert meta["rule_version"] == "beta-3"
     assert meta["onenet"]["url"] == "https://support/x"
     assert meta["onenet"]["public_level"] == "C"
     assert meta["onenet"]["product_line"] == ["云核心网"]

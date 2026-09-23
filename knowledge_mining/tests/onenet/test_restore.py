@@ -85,7 +85,7 @@ def test_build_tree_package_segment_kept():
 
 def test_real_sample_grouping_pinned(sample):
     result = restore_files(sample)
-    assert result.rule_version == RULE_VERSION == "beta-2"
+    assert result.rule_version == RULE_VERSION == "beta-3"
     assert result.unassigned == 0
     assert result.slice_count == 32
     assert len(result.files) == 7
@@ -230,3 +230,100 @@ def test_restore_folder_path_sanitized_but_file_path_raw():
     f = result.files[0]
     assert f.folder_path == f"{PKG}/备份_恢复"
     assert f.file_path == PKG + " > 备份/恢复 > 场景A" + bs + "B"  # key 哈希锚不动
+
+
+# ---------------------------------------------------------------- beta-3 校准
+
+
+def _cal(path: str, title: str):
+    from knowledge_mining.mining.onenet.restore import split_path_calibrated
+    return split_path_calibrated(path, title)
+
+
+def test_calibrated_merge_when_title_spans_segments():
+    """标题含 >：path 尾部与 title 段对上 → 尾段合并为一个标题段."""
+    assert _cal("包 > 接口管理 > 告警 > 处理建议", "告警 > 处理建议") == [
+        "包", "接口管理", "告警 > 处理建议"]
+    # 普通数据（title 单段）行为不变
+    assert _cal("包 > 接口管理 > 实现原理", "实现原理") == ["包", "接口管理", "实现原理"]
+    # title 缺失 / 空 → 原行为
+    assert _cal("包 > A > B", None) == ["包", "A", "B"]
+    assert _cal(None, "A") == []
+
+
+def test_calibrated_fallback_when_tail_mismatch():
+    """title 对不上 path 尾部 → 回退 raw 切分（不劣化）."""
+    assert _cal("包 > 接口管理 > 告警", "不相关标题") == ["包", "接口管理", "告警"]
+    assert _cal("包 > 接口管理 > 告警 > 处理建议", "告警 > 其他建议") == [
+        "包", "接口管理", "告警", "处理建议"]
+
+
+def test_restore_title_with_gt_splits_file_correctly():
+    """Bug 主修复：标题含 > 不再产出假文件「告警」."""
+    slices = [
+        {"nid": "a", "part_id": 1,
+         "path": "包 > 接口管理 > 告警 > 处理建议", "title": "告警 > 处理建议",
+         "content": "c1"},
+        {"nid": "b", "part_id": 2,
+         "path": "包 > 接口管理 > 定位思路", "title": "定位思路", "content": "c2"},
+    ]
+    result = restore_files(slices)
+    assert len(result.files) == 1                      # 只有「接口管理」一个文件
+    f = result.files[0]
+    assert f.file_path == "包 > 接口管理"
+    assert f.file_title == "接口管理"
+    assert f.heading_title == "告警 > 处理建议"          # 首切片标题=跨段合并串
+    assert len(f.slices) == 2
+
+
+def test_restore_whole_path_is_title_alpha():
+    """path 整串即 title（两者均 A > B）→ 合并单段走 α：自身即文件."""
+    slices = [{"nid": "x", "part_id": 1, "path": "A > B", "title": "A > B",
+               "content": "c"}]
+    result = restore_files(slices)
+    assert len(result.files) == 1
+    f = result.files[0]
+    assert f.file_path == "A > B"                      # 合并后的完整标题串
+    assert f.heading_title == "A > B"
+    assert f.folder_path == ""
+
+
+def test_calibration_single_segmentation_per_path():
+    """同 path 不同 title（罕见）：part 序首个 title 决定，单一切法."""
+    slices = [
+        {"nid": "first", "part_id": 1,
+         "path": "包 > 告警 > 处理建议", "title": "告警 > 处理建议", "content": "c"},
+        {"nid": "second", "part_id": 2,
+         "path": "包 > 告警 > 处理建议", "title": "处理建议", "content": "c"},
+    ]
+    result = restore_files(slices)
+    assert len(result.files) == 1                      # 不允许两种切法分裂
+    assert result.files[0].file_path == "包"
+    assert result.files[0].heading_title == "告警 > 处理建议"
+
+
+def test_tree_merges_title_gt_no_duplicate_keys():
+    """章节树：跨段标题显示为单节点；全树 path 键无重复."""
+    slices = [
+        {"nid": "a", "part_id": 1,
+         "path": "包 > 接口管理 > 告警 > 处理建议", "title": "告警 > 处理建议"},
+        {"nid": "b", "part_id": 2,
+         "path": "包 > 接口管理 > 定位思路", "title": "定位思路"},
+    ]
+    root = build_path_tree(slices)
+    pkg = root.children["包"]
+    node = pkg.children["接口管理"]
+    assert "告警 > 处理建议" in node.children           # 单节点，title 含 " > "
+    assert "告警" not in node.children                  # 不再有假层级
+    assert node.children["告警 > 处理建议"].path == \
+        "包 > 接口管理 > 告警 > 处理建议"                 # 键=原样串，勾选兼容
+
+    paths: list[str] = []
+
+    def _walk(nodes):
+        for n in nodes.values():      # children 是 dict[str, TreeNode]
+            paths.append(n.path)
+            _walk(n.children)
+
+    _walk(root.children)
+    assert len(paths) == len(set(paths))               # 无重复键

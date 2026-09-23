@@ -16,9 +16,13 @@
 - 规则 α 兜底：path 仅一段（path=X）→ X 自身即文件（根级孤页）；
 - 文件内容 = 归属该文件的切片按 part_id 升序；
 - 文件排序 = min(part_id) 升序；文件之上层级 = 目录（"/" 连接）。
+- beta-3：title 校准切分——``title`` 恒等于 ``path[-1]``（32 样例实证），
+  标题自身含 ``>`` 时尾部多切出假段致文件错分；path 尾部各段与 title
+  切段严格相等时合并为一个标题段，其余回退 raw 切分（53 号 §四）。
 
-边界归并（更深层标题向上归并）留作 beta-3：beta 系在真实 HWICS 数据上
-每个 path 节点本身即页面，纯 β 分组即成立（样例回归见 test_restore.py）。
+边界归并（更深层标题向上归并）留作后续版本（beta-3 已用于 title 校准切分）：
+beta 系在真实 HWICS 数据上每个 path 节点本身即页面，纯 β 分组即成立
+（样例回归见 test_restore.py）。
 """
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 #: 还原规则版本（47 号：rule_version 版本化，规则不对调参数不改正代码）。
-RULE_VERSION = "beta-2"
+RULE_VERSION = "beta-3"
 
 #: 表格预测标记（content 内管道表格块边界）。
 TBL_RE = re.compile(r"\[tbl_predict_(?:start|end)\]")
@@ -45,6 +49,37 @@ def clean_content(content: str | None) -> str:
 def split_path(path: str | None) -> list[str]:
     """path → 段列表（剔空段）；返回 [包名, L1, ..., 叶子]."""
     return [p.strip() for p in (path or "").split(">") if p.strip()]
+
+
+def split_path_calibrated(path: str | None, title: str | None) -> list[str]:
+    """path + title → 校准段列表（beta-3：标题跨段时尾部合并为一段）.
+
+    仅当 title 切出多于一段且 path 尾部与 title 段严格相等（strip 后逐段
+    比）才合并；普通数据与 raw 切分完全一致。合并段用 `` > `` 规范连接
+    （与树节点路径的既有规范化一致）。
+    """
+    segs = split_path(path)
+    tsegs = split_path(title)
+    if (len(tsegs) > 1 and len(segs) >= len(tsegs)
+            and segs[-len(tsegs):] == tsegs):
+        return segs[:-len(tsegs)] + [" > ".join(tsegs)]
+    return segs
+
+
+def build_calibration(
+    slices: Iterable[dict[str, Any]],
+) -> dict[str, list[str]]:
+    """path 字符串 → 校准段（同 path 单一切法，part_id 升序首个 title 决定）.
+
+    同一 path 不同 title 的罕见数据取其一——否则建树会产生重复节点键
+    （el-tree node-key 崩坏）且分组分裂（53 号 §四-2）。
+    """
+    calib: dict[str, list[str]] = {}
+    for s in sorted(slices, key=lambda x: int(x.get("part_id") or 0)):
+        key = str(s.get("path") or "")
+        if key and key not in calib:
+            calib[key] = split_path_calibrated(key, s.get("title"))
+    return calib
 
 
 def sanitize_folder_segment(name: str, *, max_len: int = 120) -> str:
@@ -122,10 +157,13 @@ class TreeNode:
 
 
 def build_path_tree(slices: Iterable[dict[str, Any]]) -> TreeNode:
-    """按 path 建树（原样、不剔段；切片挂在其完整 path 的叶子节点）."""
+    """按校准段建树（beta-3；切片挂在其完整 path 的叶子节点）."""
     root = TreeNode(title="__ROOT__", path="", depth=0)
+    slices = list(slices)               # calib 与建树两次遍历，防生成器耗尽
+    calib = build_calibration(slices)
     for s in slices:
-        segs = split_path(s.get("path"))
+        key = str(s.get("path") or "")
+        segs = calib.get(key) or split_path(key)
         if not segs:
             continue
         node = root
@@ -173,12 +211,15 @@ class RestoreResult:
 def restore_files(slices: Iterable[dict[str, Any]]) -> RestoreResult:
     """β 规则还原：切片集合 → 文件集合 + 目录集合."""
     materialized = list(slices)
+    calib = build_calibration(materialized)
     by_file: dict[str, list[dict[str, Any]]] = {}
     headings: dict[str, str] = {}       # file_path -> 首切片直属标题
+    segs_map: dict[str, list[str]] = {}  # file_path -> 校准段（folder 推导用）
     unassigned = 0
 
     for s in sorted(materialized, key=lambda x: int(x.get("part_id") or 0)):
-        segs = split_path(s.get("path"))
+        key = str(s.get("path") or "")
+        segs = calib.get(key) or split_path(key)
         if not segs:
             unassigned += 1
             continue
@@ -190,19 +231,21 @@ def restore_files(slices: Iterable[dict[str, Any]]) -> RestoreResult:
             heading = segs[0]
         by_file.setdefault(file_path, []).append(s)
         headings.setdefault(file_path, heading)
+        segs_map.setdefault(file_path, segs)
 
     folders: set[str] = set()
     files: list[RestoredFile] = []
     for file_path, file_slices in by_file.items():
-        file_segs = file_path.split(" > ")
-        for i in range(1, len(file_segs)):
-            folders.add(sanitize_folder_path(file_segs[:i]))
+        # folder 链按校准段推导（合并段不可再按 " > " 拆）
+        segs = segs_map[file_path]
+        for i in range(1, max(len(segs) - 1, 0)):
+            folders.add(sanitize_folder_path(segs[:i]))
         parts = [int(s.get("part_id") or 0) for s in file_slices]
         files.append(RestoredFile(
             file_path=file_path,
-            file_title=file_segs[-1],
+            file_title=segs[-2] if len(segs) >= 2 else segs[0],
             heading_title=headings[file_path],
-            folder_path=sanitize_folder_path(file_segs[:-1]),
+            folder_path=sanitize_folder_path(segs[:-2]),
             slices=tuple(file_slices),  # 已按 part_id 升序（外层排序）
             part_min=min(parts), part_max=max(parts),
         ))
@@ -249,7 +292,9 @@ def sanitize_folder_path(segs: list[str]) -> str:
 
 __all__ = [
     "RULE_VERSION", "RestoredFile", "RestoreResult", "TreeNode",
-    "build_path_tree", "clean_content", "render_file_markdown",
+    "build_calibration", "build_path_tree", "clean_content",
+    "render_file_markdown",
     "render_markdown", "restore_files", "sanitize_folder_path",
-    "sanitize_folder_segment", "split_path", "top_folder_segment",
+    "sanitize_folder_segment", "split_path", "split_path_calibrated",
+    "top_folder_segment",
 ]

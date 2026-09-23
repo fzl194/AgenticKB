@@ -287,7 +287,7 @@ def test_toc_stale_rule_version_not_reused(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["cached"] is False            # 旧规则 → 重扫
-    assert body["rule_version"] == "beta-2"   # 新树落新规则并覆盖缓存
+    assert body["rule_version"] == "beta-3"   # 新树落新规则并覆盖缓存
 
 
 def test_toc_missing_source_404(monkeypatch):

@@ -50,6 +50,11 @@ def _client(*, authenticated_user: dict[str, Any] | None = None) -> TestClient:
         _require_internal(request)
         return {"ok": True}
 
+    @app.get("/api/kb/internal/users/{username}/domains")
+    async def internal_user_domains(username: str, request: Request) -> dict[str, Any]:
+        _require_internal(request)
+        return {"domains": ["cloud_core_network"]}
+
     app.add_middleware(MiningApiAuthMiddleware, authenticate=authenticate)
     return TestClient(app)
 
@@ -97,6 +102,27 @@ def test_service_only_paths_bypass_user_authentication(path: str) -> None:
     with _client() as client:
         response = client.post(path, headers={"X-Internal-Auth": "test-ivs"})
     assert response.status_code == 200
+
+
+def test_internal_domain_queries_bypass_user_authentication() -> None:
+    """51号批次1回归：域过滤/删域保护的内部 GET 只带 X-Internal-Auth 即可放行。
+
+    中间件此前遗漏该前缀的豁免，导致内网（启用 auth 的环境）登录后主控查
+    绑定域被抢先 401 → 普通用户域列表 503（2026-09-23 实发）。路由内自验
+    暗号语义不变：错误暗号仍 401。
+    """
+    with _client() as client:
+        ok = client.get(
+            "/api/kb/internal/users/00803409/domains",
+            headers={"X-Internal-Auth": "test-ivs"},
+        )
+        wrong = client.get(
+            "/api/kb/internal/users/00803409/domains",
+            headers={"X-Internal-Auth": "wrong"},
+        )
+    assert ok.status_code == 200
+    assert ok.json() == {"domains": ["cloud_core_network"]}
+    assert wrong.status_code == 401
 
 
 @pytest.mark.parametrize(

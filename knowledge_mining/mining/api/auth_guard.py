@@ -29,11 +29,20 @@ _SERVICE_ONLY_ROUTES = frozenset({
 #: 直传 PUT 是动态票据路径（内部密钥 + 票据 + 用户绑定三重校验在路由内）。
 _UPLOAD_DIRECT_PREFIX = "PUT:/api/kb/mcp-tools/upload-direct/"
 
+#: 51号批次1：main_control 域过滤/删域保护的内部只读查询（路由内自验
+#: X-Internal-Auth）。带路径参数无法精确枚举，按前缀豁免——该前缀下只有
+#: internal_user_domains / internal_kb_count 两个自验端点。遗漏此豁免会让
+#: 中间件抢先 401（内网 2026-09-23 实发：登录 verify 放行、查绑定 401）。
+_INTERNAL_GET_PREFIX = "GET:/api/kb/internal/"
+
 
 def _is_exempt(method: str, path: str) -> bool:
     if (method, path) in _PUBLIC_ROUTES | _SERVICE_ONLY_ROUTES:
         return True
-    return f"{method}:{path}".startswith(_UPLOAD_DIRECT_PREFIX)
+    scoped = f"{method}:{path}"
+    return scoped.startswith(_UPLOAD_DIRECT_PREFIX) or scoped.startswith(
+        _INTERNAL_GET_PREFIX
+    )
 
 
 class MiningApiAuthMiddleware(BaseHTTPMiddleware):

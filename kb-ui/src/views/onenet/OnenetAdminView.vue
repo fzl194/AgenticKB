@@ -82,11 +82,23 @@
           （从记录继续：已勾选 = 当前导入范围，新勾选章节将合并并重同步落库）
         </span>
         <span v-else class="onenet-admin__hint">
-          （{{ toc.nodes }} 节点 · β 预计 <b>{{ toc.file_count }}</b> 文件 ·
+          （{{ toc.nodes }} 节点 · 预计 <b>{{ activePreview.file_count }}</b> 文件 ·
           规则 {{ toc.rule_version }}{{ toc.cached ? ' · 已用缓存' : '' }}；
           不勾选任何节点 = 整包导入）
         </span>
       </template>
+      <div class="onenet-admin__mode">
+        <span>还原方式</span>
+        <el-radio-group v-model="restoreModeChoice" size="small" :disabled="Boolean(editing)">
+          <el-radio-button value="auto">自动推荐</el-radio-button>
+          <el-radio-button value="product_document">产品文档</el-radio-button>
+          <el-radio-button value="file_anchor">文件后缀锚点</el-radio-button>
+        </el-radio-group>
+        <span class="onenet-admin__hint">{{ restoreModeHint }}</span>
+      </div>
+      <el-alert v-if="fileAnchorWarning" class="onenet-admin__mode-alert"
+                :type="allSlicesUnassigned ? 'error' : 'warning'"
+                :closable="false" show-icon :title="fileAnchorWarning" />
       <el-row :gutter="14">
         <el-col :span="12">
           <el-input v-model="treeFilter" placeholder="按章节名过滤（保留命中祖先链）"
@@ -128,12 +140,13 @@
       </el-row>
       <div class="onenet-admin__actions">
         <el-button v-if="editing" :loading="starting" @click="exitEditing">退出继续模式</el-button>
-        <el-button type="primary" :loading="starting" @click="confirmSelection">
+        <el-button type="primary" :loading="starting" :disabled="allSlicesUnassigned"
+                   @click="confirmSelection">
           {{ editing ? '合并勾选并重同步' : '确认导入（勾选子树过滤，不勾=整包）' }}
         </el-button>
         <span class="onenet-admin__hint">
           将导入 <b>{{ selectedFiles.length }}</b> 文件 /
-          <b>{{ selectedSliceCount }}</b> 切片{{ checkedPaths.length ? '' : '（未勾选=整包）' }}
+          <b>{{ selectedSliceCount }}</b> 切片{{ selectionScopeNote }}
         </span>
       </div>
     </el-card>
@@ -178,14 +191,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ElTree } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
-import { buildNodeIndex, buildParentPathMap, filterFilesBySelection, minimalSubtreePaths } from '@/utils/onenetSelection'
+import { useTreeFilterSync } from '@/composables/useTreeFilterSync'
+import {
+  buildNodeIndex, buildParentPathMap, buildPathHints, countUnassignedFileAnchorSlices,
+  effectivePreviewPaths, filterFilesBySelection, minimalSubtreePaths, resolveRestoreMode,
+} from '@/utils/onenetSelection'
 import { useOnenetApi } from '@/api/onenet'
 import type {
   OnenetCondition, OnenetImport, OnenetImportStatus, OnenetProbe,
+  OnenetRestoreMode, OnenetRestoreModeChoice, OnenetRestorePreview,
   OnenetSearchResult, OnenetToc, OnenetTocFile, OnenetTocNode,
 } from '@/api/onenet'
 
@@ -225,14 +243,85 @@ const filesPageSize = ref(50)
 // 53 号 §六：勾选联动（不勾=整包全显）；过滤规则与导入语义精确等价
 const checkedPaths = ref<string[]>([])
 const treeFilter = ref('')
+const restoreModeChoice = ref<OnenetRestoreModeChoice>('auto')
+
+// V1.3 · 从记录继续：编辑已导入 source 的勾选范围（合并 + 重同步）
+const editing = ref<OnenetImport | null>(null)
 
 const nodesByPath = computed(() => buildNodeIndex(toc.value?.tree ?? []))
 const parentByPath = computed(() => buildParentPathMap(toc.value?.tree ?? []))
+useTreeFilterSync(treeFilter, () => toc.value?.tree, () => tocTreeRef.value)
+const recommendedRestoreMode = computed<OnenetRestoreMode>(
+  () => toc.value?.recommended_restore_mode ?? 'product_document',
+)
+const effectiveRestoreMode = computed<OnenetRestoreMode>(() =>
+  resolveRestoreMode(restoreModeChoice.value, recommendedRestoreMode.value))
+const activePreview = computed<OnenetRestorePreview>(() => {
+  const current = toc.value
+  const preview = current?.restore_previews?.[effectiveRestoreMode.value]
+  if (preview) return preview
+  const files = current?.files ?? []
+  const unassigned = current?.unassigned ?? 0
+  return {
+    restore_mode: effectiveRestoreMode.value,
+    files,
+    file_count: current?.file_count ?? files.length,
+    folder_count: current?.folder_count ?? 0,
+    slice_count: files.reduce((sum, file) => sum + file.slice_count, 0),
+    unassigned,
+  }
+})
+const previewPaths = computed(() => effectivePreviewPaths(
+  checkedPaths.value,
+  editing.value?.selection_json?.subtrees ?? [],
+  Boolean(editing.value),
+))
 const selectedFiles = computed<OnenetTocFile[]>(() =>
   filterFilesBySelection(
-    toc.value?.files ?? [], checkedPaths.value, nodesByPath.value, parentByPath.value))
+    activePreview.value.files, previewPaths.value, nodesByPath.value, parentByPath.value,
+    effectiveRestoreMode.value))
 const selectedSliceCount = computed(() =>
   selectedFiles.value.reduce((sum, f) => sum + f.slice_count, 0))
+const anchorCoveragePercent = computed(() => {
+  const raw = toc.value?.anchor_coverage?.ratio ?? 0
+  return Math.round((raw <= 1 ? raw * 100 : raw) * 10) / 10
+})
+const restoreModeHint = computed(() => {
+  const label = effectiveRestoreMode.value === 'file_anchor' ? '文件后缀锚点' : '产品文档'
+  if (editing.value) return `已锁定为${label}（已有导入不可切换）`
+  if (restoreModeChoice.value === 'auto') {
+    return `推荐：${label}（文件锚点覆盖率 ${anchorCoveragePercent.value}%）`
+  }
+  return effectiveRestoreMode.value === 'file_anchor'
+    ? '按路径中最近的文件后缀节点聚合'
+    : '按产品文档章节层级还原'
+})
+const fileAnchorUnassignedCount = computed(() => {
+  if (effectiveRestoreMode.value !== 'file_anchor') return 0
+  return countUnassignedFileAnchorSlices(
+    previewPaths.value,
+    nodesByPath.value,
+    selectedFiles.value,
+    activePreview.value.unassigned,
+  )
+})
+const allSlicesUnassigned = computed(() =>
+  effectiveRestoreMode.value === 'file_anchor'
+  && fileAnchorUnassignedCount.value > 0
+  && selectedSliceCount.value === 0)
+const fileAnchorWarning = computed(() => {
+  const unassigned = fileAnchorUnassignedCount.value
+  if (!unassigned) return ''
+  if (allSlicesUnassigned.value) {
+    return `全部 ${unassigned} 个切片都找不到文件后缀锚点，无法按此模式导入`
+  }
+  return `${unassigned} 个切片找不到文件后缀锚点，将不会导入`
+})
+const selectionScopeNote = computed(() => {
+  if (checkedPaths.value.length) return ''
+  if (editing.value?.selection_json?.subtrees?.length) return '（未新增=保留当前范围）'
+  return '（未勾选=整包）'
+})
 const pagedFiles = computed<OnenetTocFile[]>(() => {
   // 尺寸下拉放大 page size 时当前页可能越界出空页；只读钳制，不改 filesPage
   const maxPage = Math.max(1, Math.ceil(selectedFiles.value.length / filesPageSize.value))
@@ -249,11 +338,6 @@ function onTreeCheck() {
 function filterTreeNode(value: string, data: OnenetTocNode): boolean {
   return !value || (data.title ?? '').includes(value)
 }
-
-watch(treeFilter, (v) => tocTreeRef.value?.filter(v))
-
-// V1.3 · 从记录继续：编辑已导入 source 的勾选范围（合并 + 重同步）
-const editing = ref<OnenetImport | null>(null)
 
 const imports = ref<OnenetImport[]>([])
 const importsLoading = ref(false)
@@ -301,6 +385,7 @@ async function doSearch(target?: number) {
 function onPickHit(row: { source_id: string } | null) {
   if (!row) return
   editing.value = null
+  restoreModeChoice.value = 'auto'
   probe.value = null
   toc.value = null
   void (async () => {
@@ -320,6 +405,7 @@ async function loadToc(refresh = false) {
     filesPage.value = 1
     checkedPaths.value = []
     if (editing.value) {
+      restoreModeChoice.value = editing.value.selection_json?.restore_mode ?? 'product_document'
       // 回显当前导入范围（树数据已全量在内存，collapsed 不影响 setCheckedKeys）
       await nextTick()
       tocTreeRef.value?.setCheckedKeys(editing.value.selection_json?.subtrees ?? [])
@@ -336,6 +422,7 @@ async function loadToc(refresh = false) {
 /** 从记录继续：拉缓存树 + 回显已勾选，新勾选走「合并 + 重同步」 */
 async function continueFromRecord(row: OnenetImport) {
   editing.value = row
+  restoreModeChoice.value = row.selection_json?.restore_mode ?? 'product_document'
   detail.value = null
   probe.value = {
     source_id: row.source_id,
@@ -352,12 +439,17 @@ async function continueFromRecord(row: OnenetImport) {
 
 function exitEditing() {
   editing.value = null
+  restoreModeChoice.value = 'auto'
   toc.value = null
   probe.value = null
 }
 
 /** ③ 确认按钮：新导入 / 从记录继续（合并+重同步）两路分派 */
 async function confirmSelection() {
+  if (allSlicesUnassigned.value) {
+    ElMessage.error('当前模式下全部切片均未归属，请改用产品文档模式')
+    return
+  }
   if (editing.value) {
     await mergeAndResync()
     return
@@ -368,12 +460,16 @@ async function confirmSelection() {
 async function startImport() {
   if (!probe.value) return
   const subtrees = checkedSubtreePaths()
+  const pathHints = buildPathHints(subtrees, nodesByPath.value, parentByPath.value)
   starting.value = true
   try {
     await api.startImport({
       domain: domainStore.currentDomain,
       source_id: probe.value.source_id,
-      selection: subtrees.length ? { subtrees } : {},
+      selection: {
+        restore_mode: effectiveRestoreMode.value,
+        ...(subtrees.length ? { subtrees, path_hints: pathHints } : {}),
+      },
       doc_name: probe.value.doc_name ?? undefined,
       parsed_version: probe.value.parsed_version ?? undefined,
       total_slices: probe.value.total_slices,
@@ -391,11 +487,16 @@ async function mergeAndResync() {
   const row = editing.value
   if (!row) return
   const subtrees = checkedSubtreePaths()
+  const pathHints = buildPathHints(subtrees, nodesByPath.value, parentByPath.value)
   starting.value = true
   try {
     // PATCH 为合并语义（服务端 union）；发全量勾选 = 旧范围 + 新增。
     // resync 必须 force：三信号未变时短路返回，勾选扩大的新文件拉不到。
-    await api.updateSelection(row.id, { subtrees })
+    await api.updateSelection(row.id, {
+      subtrees,
+      path_hints: pathHints,
+      restore_mode: effectiveRestoreMode.value,
+    })
     const out = await api.resync(row.id, { force: true })
     if (out.changed) {
       ElMessage.success(
@@ -419,7 +520,7 @@ function checkedSubtreePaths(): string[] {
   // 会让 selection 退化成整本导入（2026-09-16 内网事故）
   const checked = (tocTreeRef.value?.getCheckedNodes(false, false) ?? []) as Array<{ path?: string }>
   const paths = checked.map((n) => n.path).filter((p): p is string => Boolean(p))
-  return minimalSubtreePaths(paths)
+  return minimalSubtreePaths(paths, parentByPath.value)
 }
 
 async function reloadImports() {
@@ -543,6 +644,8 @@ onMounted(reloadImports)
 .onenet-admin__hint { color: var(--el-text-color-secondary); font-size: 12px; font-weight: normal; }
 .onenet-admin__notice { margin-top: 8px; color: var(--el-text-color-secondary); font-size: 12px; }
 .onenet-admin__warn { color: var(--el-color-warning); }
+.onenet-admin__mode { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.onenet-admin__mode-alert { margin-bottom: 10px; }
 .onenet-admin__actions { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
 .onenet-admin__detail { margin-top: 10px; }
 .onenet-admin__treewrap { height: 420px; overflow: auto; border: 1px solid var(--el-border-color-lighter);

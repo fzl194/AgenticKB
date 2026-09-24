@@ -272,6 +272,19 @@ def test_toc_scan_then_cache(monkeypatch):
     assert resp3.json()["cached"] is True
 
 
+def test_toc_returns_both_restore_previews(monkeypatch):
+    c, _ = _client(monkeypatch)
+    resp = c.post("/api/onenet/toc", json={
+        "domain": "cloud_core_network", "source_id": "DOC1",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["recommended_restore_mode"] == "product_document"
+    assert body["restore_previews"]["product_document"]["file_count"] == 2
+    assert body["restore_previews"]["file_anchor"]["file_count"] == 0
+    assert body["restore_previews"]["file_anchor"]["unassigned"] == 3
+
+
 def test_toc_stale_rule_version_not_reused(monkeypatch):
     """beta-2 守卫：缓存树是旧还原规则（rule_version 不匹配）时必须重扫，
     旧树不得复活。"""
@@ -287,7 +300,7 @@ def test_toc_stale_rule_version_not_reused(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["cached"] is False            # 旧规则 → 重扫
-    assert body["rule_version"] == "beta-3"   # 新树落新规则并覆盖缓存
+    assert body["rule_version"] == "beta-5"   # 新树落新规则并覆盖缓存
 
 
 def test_toc_missing_source_404(monkeypatch):
@@ -306,8 +319,7 @@ def test_toc_missing_source_404(monkeypatch):
 def test_start_import_202_then_duplicate_409(monkeypatch):
     c, repo = _client(monkeypatch)
     resp = c.post("/api/onenet/imports", json={
-        "domain": "cloud_core_network", "source_id": "DOC1",
-        "selection": {"subtrees": ["A"]}})
+        "domain": "cloud_core_network", "source_id": "DOC1"})
     assert resp.status_code == 202
     assert resp.json()["status"] == "queued"
     assert resp.json()["kb_id"] == "kb-pub"
@@ -315,6 +327,66 @@ def test_start_import_202_then_duplicate_409(monkeypatch):
     resp2 = c.post("/api/onenet/imports", json={
         "domain": "cloud_core_network", "source_id": "DOC1"})
     assert resp2.status_code == 409
+
+
+def test_start_import_rejects_path_hint_that_does_not_match_raw_path(monkeypatch):
+    c, _ = _client(monkeypatch)
+    resp = c.post("/api/onenet/imports", json={
+        "domain": "cloud_core_network", "source_id": "DOC1",
+        "selection": {
+            "subtrees": ["包 > 告警 > 处理建议"],
+            "path_hints": {
+                "包 > 告警 > 处理建议": ["包", "错误标题"],
+            },
+        },
+    })
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "invalid selection"
+
+
+def test_start_import_requires_current_toc_for_subtree_selection(monkeypatch):
+    c, _ = _client(monkeypatch)
+    resp = c.post("/api/onenet/imports", json={
+        "domain": "cloud_core_network", "source_id": "DOC1",
+        "selection": {"subtrees": ["Pkg > A > B"]},
+    })
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "current toc scan required before subtree import"
+
+
+def test_start_import_validates_path_hint_against_current_toc_tree(monkeypatch):
+    c, repo = _client(monkeypatch)
+    assert c.post("/api/onenet/toc", json={
+        "domain": "cloud_core_network", "source_id": "DOC1",
+    }).status_code == 200
+
+    raw_path = "Pkg > A > B"
+    wrong_but_flatten_equal = ["Pkg > A", "B"]
+    resp = c.post("/api/onenet/imports", json={
+        "domain": "cloud_core_network", "source_id": "DOC1",
+        "selection": {
+            "subtrees": [raw_path],
+            "path_hints": {raw_path: wrong_but_flatten_equal},
+        },
+    })
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "path_hints do not match current toc"
+
+
+def test_start_import_generates_authoritative_path_hint_from_toc(monkeypatch):
+    c, repo = _client(monkeypatch)
+    assert c.post("/api/onenet/toc", json={
+        "domain": "cloud_core_network", "source_id": "DOC1",
+    }).status_code == 200
+
+    raw_path = "Pkg > A > B"
+    resp = c.post("/api/onenet/imports", json={
+        "domain": "cloud_core_network", "source_id": "DOC1",
+        "selection": {"subtrees": [raw_path]},
+    })
+    assert resp.status_code == 202
+    stored = repo.imports["imp-1"]["selection"]
+    assert stored.path_hints_map == {raw_path: ("Pkg", "A", "B")}
 
 
 def test_list_and_detail_imports(monkeypatch):

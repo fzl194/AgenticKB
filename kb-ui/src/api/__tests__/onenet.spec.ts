@@ -66,6 +66,19 @@ describe('onenet api client', () => {
     expect(state.requests[0].body).toEqual({ domain: 'cloud_core_network', source_id: 'DOC1' })
   })
 
+  it('startImport sends the concrete restore mode', async () => {
+    state.responses['post /api/onenet/imports'] = { id: 'i1', status: 'queued' }
+    const api = useOnenetApi()
+    await api.startImport({
+      domain: 'cloud_core_network', source_id: 'DOC1',
+      selection: { restore_mode: 'file_anchor' },
+    })
+    expect(state.requests[0].body).toEqual({
+      domain: 'cloud_core_network', source_id: 'DOC1',
+      selection: { restore_mode: 'file_anchor' },
+    })
+  })
+
   it('startImport sends empty selection object when no subtrees', async () => {
     state.responses['post /api/onenet/imports'] = { id: 'i1', status: 'queued' }
     const api = useOnenetApi()

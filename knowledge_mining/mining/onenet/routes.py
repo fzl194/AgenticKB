@@ -225,6 +225,62 @@ def _cached_rule_version(cached: dict[str, Any]) -> str | None:
     return None
 
 
+def _path_hints_from_tree(
+    tree: list[dict[str, Any]], subtrees: tuple[str, ...],
+) -> dict[str, tuple[str, ...]]:
+    """从服务端 TOC 树生成 raw path → 语义标题段链。"""
+    wanted = set(subtrees)
+    found: dict[str, tuple[str, ...]] = {}
+
+    def walk(nodes: list[dict[str, Any]], ancestors: tuple[str, ...]) -> None:
+        for node in nodes:
+            title = str(node.get("title") or "").strip()
+            path = str(node.get("path") or "").strip()
+            segments = (*ancestors, title)
+            if path in wanted:
+                previous = found.get(path)
+                if previous is not None and previous != segments:
+                    raise HTTPException(409, "toc contains duplicate path keys")
+                found[path] = segments
+            children = node.get("children") or []
+            if isinstance(children, list):
+                walk(children, segments)
+
+    walk(tree, ())
+    missing = wanted - set(found)
+    if missing:
+        raise HTTPException(422, "selection subtree not found in current toc")
+    return found
+
+
+async def _with_authoritative_path_hints(
+    repo: Any, domain: str, source_id: str, selection: Selection,
+) -> Selection:
+    """用当前规则版本 TOC 校验并替换客户端 path_hints。"""
+    if not selection.subtrees:
+        return Selection(
+            max_part_id=selection.max_part_id,
+            restore_mode=selection.restore_mode,
+        )
+    cached = await repo.get_toc_cache(domain, source_id)
+    if cached is None or _cached_rule_version(cached) != RULE_VERSION:
+        raise HTTPException(409, "current toc scan required before subtree import")
+    payload = _toc_payload(cached)
+    tree = payload.get("tree") or []
+    if not isinstance(tree, list):
+        raise HTTPException(409, "current toc cache is invalid")
+    generated = _path_hints_from_tree(tree, selection.subtrees)
+    supplied = selection.path_hints_map
+    if any(generated.get(path) != segments for path, segments in supplied.items()):
+        raise HTTPException(422, "path_hints do not match current toc")
+    return Selection(
+        subtrees=selection.subtrees,
+        max_part_id=selection.max_part_id,
+        path_hints=tuple(sorted(generated.items())),
+        restore_mode=selection.restore_mode,
+    )
+
+
 # ------------------------------------------------------------ 导入记录
 
 
@@ -240,6 +296,10 @@ async def onenet_start_import(
         selection = Selection.from_dict(body.get("selection") or {})
     except (TypeError, ValueError):
         raise HTTPException(422, "invalid selection") from None
+    repo = _repo(request)
+    selection = await _with_authoritative_path_hints(
+        repo, domain, source_id, selection,
+    )
     svc = await _import_service(request)
     try:
         record = await svc.start_import(
@@ -512,8 +572,22 @@ async def onenet_update_selection(
     if import_row.get("status") not in ("done", "failed"):
         raise HTTPException(409, f"import_busy: {import_row.get('status')}")
     current = Selection.from_dict(import_row.get("selection_json") or {})
-    incoming = Selection.from_dict(body.get("selection") or {})
-    merged = current.merge(incoming)
+    raw_incoming = body.get("selection") or {}
+    if not isinstance(raw_incoming, dict):
+        raise HTTPException(422, "invalid selection")
+    raw_incoming = {
+        **raw_incoming,
+        "restore_mode": raw_incoming.get(
+            "restore_mode", current.restore_mode),
+    }
+    try:
+        incoming = Selection.from_dict(raw_incoming)
+        merged = current.merge(incoming)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "restore_mode cannot change") from None
+    merged = await _with_authoritative_path_hints(
+        repo, import_row["domain"], import_row["source_id"], merged,
+    )
     await repo.update_import(import_id, selection_json=merged.to_dict())
     return {"selection": merged.to_dict()}
 

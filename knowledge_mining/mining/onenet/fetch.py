@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any
 
 from knowledge_mining.mining.onenet.client import OnenetClient
-from knowledge_mining.mining.onenet.restore import split_path
+from knowledge_mining.mining.onenet.restore import (
+    RESTORE_MODE_PRODUCT_DOCUMENT, RESTORE_MODES, split_path,
+)
 
 PARTS_DIR = "parts"
 DATA_NAME = "slices.jsonl"
@@ -35,29 +37,109 @@ class Selection:
 
     subtrees: tuple[str, ...] = ()    # path 前缀（" > " 连接，原样含首段）；空 = 整包
     max_part_id: int | None = None    # 子集抽查
+    path_hints: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    restore_mode: str = RESTORE_MODE_PRODUCT_DOCUMENT
+
+    def __post_init__(self) -> None:
+        if self.restore_mode not in RESTORE_MODES:
+            raise ValueError(f"invalid restore_mode: {self.restore_mode!r}")
+
+    @property
+    def path_hints_map(self) -> dict[str, tuple[str, ...]]:
+        return dict(self.path_hints)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "subtrees": list(self.subtrees),
             "max_part_id": self.max_part_id,
+            "restore_mode": self.restore_mode,
         }
+        if self.path_hints:
+            out["path_hints"] = {
+                key: list(segments) for key, segments in self.path_hints
+            }
+        return out
 
     def merge(self, other: "Selection") -> "Selection":
         """合并勾选范围（重同步前追加子树用，47 号 L1）：
-        subtrees 并集去重；max_part_id 取更宽者（None=整包优先）。"""
+        当前为空子树表示已是整包，不能被追加操作缩窄；空 incoming 表示无新增。
+        有界 part 范围取更大值，任一明确扩到 None 时以整段优先。
+        """
+        if other.restore_mode != self.restore_mode:
+            raise ValueError("restore_mode cannot change for an existing import")
+        if not other.subtrees:
+            return self
+        if not self.subtrees:
+            if self.max_part_id is None:
+                return self
+            widened_max = (
+                None if other.max_part_id is None
+                else max(self.max_part_id, other.max_part_id)
+            )
+            return Selection(
+                max_part_id=widened_max, restore_mode=self.restore_mode,
+            )
         merged = tuple(sorted(set(self.subtrees) | set(other.subtrees)))
-        maxes = [m for m in (self.max_part_id, other.max_part_id) if m]
-        return Selection(subtrees=merged, max_part_id=min(maxes) if maxes else None)
+        if self.max_part_id is None or other.max_part_id is None:
+            merged_max = None
+        else:
+            merged_max = max(self.max_part_id, other.max_part_id)
+        hints = self.path_hints_map
+        hints.update(other.path_hints_map)
+        return Selection(
+            subtrees=merged,
+            max_part_id=merged_max,
+            path_hints=tuple(sorted(hints.items())),
+            restore_mode=self.restore_mode,
+        )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "Selection":
-        data = data or {}
-        subtrees = tuple(str(s) for s in (data.get("subtrees") or []) if str(s).strip())
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise ValueError("invalid selection: expected object")
+        raw_subtrees = data.get("subtrees") or []
+        if (not isinstance(raw_subtrees, (list, tuple))
+                or any(not isinstance(value, str) for value in raw_subtrees)):
+            raise ValueError("invalid selection: subtrees must be a string array")
+        subtrees = tuple(value.strip() for value in raw_subtrees if value.strip())
         mpi = data.get("max_part_id")
+        if (mpi is not None and
+                (isinstance(mpi, bool) or not isinstance(mpi, int) or mpi <= 0)):
+            raise ValueError("invalid max_part_id: expected a positive integer or null")
+        restore_mode = str(
+            data.get("restore_mode") or RESTORE_MODE_PRODUCT_DOCUMENT)
         try:
-            return cls(subtrees=subtrees, max_part_id=int(mpi) if mpi else None)
+            raw_hints = data.get("path_hints") or {}
+            if not isinstance(raw_hints, dict):
+                raise ValueError("path_hints must be an object")
+            hints: list[tuple[str, tuple[str, ...]]] = []
+            for raw_path, raw_segments in raw_hints.items():
+                key = str(raw_path)
+                if key not in subtrees or not isinstance(raw_segments, (list, tuple)):
+                    raise ValueError(f"invalid path_hint: {key!r}")
+                segments = tuple(
+                    segment.strip() for segment in raw_segments
+                    if isinstance(segment, str) and segment.strip()
+                )
+                flattened = tuple(
+                    raw for segment in segments for raw in split_path(segment)
+                )
+                if (len(segments) != len(raw_segments)
+                        or flattened != tuple(split_path(key))):
+                    raise ValueError(f"invalid path_hint: {key!r}")
+                hints.append((key, segments))
+            return cls(
+                subtrees=subtrees,
+                max_part_id=mpi,
+                path_hints=tuple(sorted(hints)),
+                restore_mode=restore_mode,
+            )
         except (TypeError, ValueError) as e:
-            raise ValueError(f"invalid max_part_id: {mpi!r}") from e
+            raise ValueError(
+                f"invalid selection: max_part_id={mpi!r}; "
+                f"restore_mode={restore_mode!r}; {e}") from e
 
     def matches(self, slice_row: dict[str, Any]) -> bool:
         """切片是否落在勾选子树内（前缀匹配按段比较；空 = 整包全收）.
@@ -137,6 +219,24 @@ def fetch_selection(
     parts_dir = workspace / PARTS_DIR
     parts_dir.mkdir(exist_ok=True)
 
+    # part 文件已经按 selection 过滤；选择范围/上限/还原模式变化时不可复用。
+    manifest_path = workspace / MANIFEST_NAME
+    reset_parts = False
+    if manifest_path.exists():
+        try:
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+        if previous.get("selection") != selection.to_dict():
+            reset_parts = True
+    elif any(parts_dir.iterdir()):
+        # 无 manifest 无法证明这些过滤后分段属于当前 selection，保守重拉。
+        reset_parts = True
+    if reset_parts:
+        import shutil
+        shutil.rmtree(parts_dir)
+        parts_dir.mkdir()
+
     total = client.count_source(source_id)
     if total <= 0:
         raise FetchVerifyError(f"source 无切片: {source_id}")
@@ -193,7 +293,7 @@ def fetch_selection(
         "verify": verify_result,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    (workspace / MANIFEST_NAME).write_text(
+    manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return FetchOutcome(manifest=manifest, slices_path=data_path, slice_count=lines)
 

@@ -111,12 +111,24 @@ def test_toc_files_preview_reflects_calibration():
         {"path": "包 > 接口管理 > 定位思路", "title": "定位思路", "part_id": 2},
     ]
     toc = scan_toc(_client(FakeScan(rows, total=2, part_max=2)), "SRC1")
-    assert toc["rule_version"] == "beta-3"
+    assert toc["rule_version"] == "beta-5"
     assert toc["file_count"] == 1
     assert toc["files"][0]["file_path"] == "包 > 接口管理"
     assert toc["files"][0]["heading_title"] == "告警 > 处理建议"
     # 树上无假层级「告警」节点
     assert "告警" not in [c["title"] for c in toc["tree"][0]["children"][0]["children"]]
+
+
+def test_toc_exposes_both_restore_previews_and_recommends_file_anchor():
+    rows = [
+        {"path": "资料 > 手册.pdf > 第一章", "title": "第一章", "part_id": 1},
+        {"path": "资料 > 手册.pdf > 第二章", "title": "第二章", "part_id": 2},
+    ]
+    toc = scan_toc(_client(FakeScan(rows, total=2, part_max=2)), "SRC1")
+    assert toc["recommended_restore_mode"] == "file_anchor"
+    assert toc["restore_previews"]["file_anchor"]["file_count"] == 1
+    assert toc["restore_previews"]["file_anchor"]["unassigned"] == 0
+    assert toc["restore_previews"]["product_document"]["file_count"] == 1
 
 
 def test_scan_empty_source_raises():

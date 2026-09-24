@@ -19,7 +19,8 @@ from typing import Any, Callable
 
 from knowledge_mining.mining.onenet.fetch import Selection, fetch_selection, load_slices
 from knowledge_mining.mining.onenet.restore import (
-    RULE_VERSION, restore_files, top_folder_segment,
+    ONENET_PATH_SEGMENTS_FIELD, RESTORE_MODE_FILE_ANCHOR, RULE_VERSION,
+    restore_files, top_folder_segment,
 )
 from knowledge_mining.mining.parse_adapters.onenet_jsonl import ONENET_JSONL_MIME
 
@@ -41,6 +42,7 @@ _DOC_META_FIELDS = (
 _RAW_EXCLUDE = frozenset({
     "content", "table", "media", "sample_slices", "path", "title",
     "nid", "id", "part_id", "source_id",
+    ONENET_PATH_SEGMENTS_FIELD,
 })
 
 _FILENAME_SANITIZE_RE = re.compile(r'[\\/:*?"<>|\r\n\t]')
@@ -321,7 +323,14 @@ class OnenetImportService:
 
             # ---- restoring
             await self._repo.update_import(import_id, status="restoring")
-            result = await asyncio.to_thread(restore_files, slices)
+            result = await asyncio.to_thread(
+                restore_files, slices, path_hints=selection.path_hints_map,
+                restore_mode=selection.restore_mode,
+            )
+            if (selection.restore_mode == RESTORE_MODE_FILE_ANCHOR
+                    and not result.files):
+                raise OnenetImportError(
+                    "file_anchor_no_assignable_slices: 所选切片未识别到文件后缀")
 
             # ---- importing
             await self._repo.update_import(import_id, status="importing")

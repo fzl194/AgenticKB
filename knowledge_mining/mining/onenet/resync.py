@@ -19,7 +19,9 @@ from knowledge_mining.mining.onenet.fetch import (
     Selection, fetch_selection, load_slices,
 )
 from knowledge_mining.mining.onenet.import_service import OnenetRepo
-from knowledge_mining.mining.onenet.restore import restore_files
+from knowledge_mining.mining.onenet.restore import (
+    RESTORE_MODE_FILE_ANCHOR, restore_files,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,8 +169,22 @@ async def _resync_inner(
 
     diff = diff_slices(old_slices, new_slices)
     touched_nids = set(diff["added"]) | set(diff["removed"]) | set(diff["changed"])
-    new_result = restore_files(new_slices)
-    old_result = restore_files(old_slices) if old_slices else None
+    path_hints = selection.path_hints_map
+    new_result = restore_files(
+        new_slices, path_hints=path_hints,
+        restore_mode=selection.restore_mode,
+    )
+    if (selection.restore_mode == RESTORE_MODE_FILE_ANCHOR
+            and not new_result.files):
+        raise ResyncError(
+            "file_anchor_no_assignable_slices: 所选切片未识别到文件后缀")
+    old_result = (
+        restore_files(
+            old_slices, path_hints=path_hints,
+            restore_mode=selection.restore_mode,
+        )
+        if old_slices else None
+    )
 
     updated_documents: list[str] = []
     removed_documents: list[str] = []

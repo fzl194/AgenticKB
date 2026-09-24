@@ -31,12 +31,12 @@ from knowledge_mining.mining.contracts.parser_adapter import (
     UnsupportedFormat,
 )
 from knowledge_mining.mining.onenet.restore import (
-    build_calibration, clean_content, split_path,
+    ONENET_PATH_SEGMENTS_FIELD, build_calibration, clean_content, split_path,
 )
 
 ONENET_JSONL_PARSER_ID = "onenet_jsonl"
-#: beta-3（1.1.1）：title 校准切分——跨段标题合并为单 heading，指纹变化触发新快照重挖。
-ONENET_JSONL_VERSION = "1.1.1"
+#: beta-4（1.1.2）：跨段标题边界向后代传播，指纹变化触发新快照重挖。
+ONENET_JSONL_VERSION = "1.1.2"
 #: 规则常量进指纹：β 还原规则或块产出规则变化 → 指纹变化 → 新快照。
 ONENET_JSONL_FINGERPRINT = (
     f"{ONENET_JSONL_PARSER_ID}@{ONENET_JSONL_VERSION}"
@@ -119,9 +119,12 @@ class OnenetJsonlParser:
                 continue
             rows.append(row)
 
-        # beta-3：同 path 单一切法——part_id 升序首个 title 决定（build_calibration
-        # 内部排序，行序无关），与后端 restore 同源
-        calib = build_calibration(rows)
+        # beta-4：同 path 单一切法并继承祖先边界；内部字段承接子集导入提示。
+        path_hints = {
+            str(row.get("path") or ""): row[ONENET_PATH_SEGMENTS_FIELD]
+            for row in rows if row.get(ONENET_PATH_SEGMENTS_FIELD)
+        }
+        calib = build_calibration(rows, seed_segments=path_hints)
 
         blocks: list[BackendBlock] = []
         warnings: list[str] = []
@@ -135,7 +138,7 @@ class OnenetJsonlParser:
             if part_id is not None:
                 native_ref["part_id"] = int(part_id)
 
-            # 1) path 层级 → heading（仅新进入层级时产出；beta-3 走校准切分）
+            # 1) path 层级 → heading（仅新进入层级时产出；beta-4 走校准切分）
             raw_path = row.get("path")
             segs = calib.get(str(raw_path or "")) or split_path(raw_path)
             if segs and segs != last_heading_segs:

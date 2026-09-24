@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 from knowledge_mining.mining.onenet.restore import (
-    RULE_VERSION, build_path_tree, clean_content, render_markdown,
+    RESTORE_MODE_AUTO, RESTORE_MODE_FILE_ANCHOR,
+    RESTORE_MODE_PRODUCT_DOCUMENT, RULE_VERSION,
+    build_calibration, build_path_tree, clean_content, render_markdown,
     restore_files, split_path,
 )
 
@@ -85,7 +87,7 @@ def test_build_tree_package_segment_kept():
 
 def test_real_sample_grouping_pinned(sample):
     result = restore_files(sample)
-    assert result.rule_version == RULE_VERSION == "beta-3"
+    assert result.rule_version == RULE_VERSION == "beta-5"
     assert result.unassigned == 0
     assert result.slice_count == 32
     assert len(result.files) == 7
@@ -327,3 +329,144 @@ def test_tree_merges_title_gt_no_duplicate_keys():
 
     _walk(root.children)
     assert len(paths) == len(set(paths))               # 无重复键
+
+
+def test_calibration_propagates_spanning_parent_title_to_descendants():
+    """含 > 的标题成为父节点时，后代必须继承同一段边界。"""
+    slices = [
+        # 故意让后代 part_id 更小：传播应由路径层级决定，而非阅读顺序。
+        {"nid": "child", "part_id": 1,
+         "path": "包 > 告警 > 处理建议 > 操作步骤", "title": "操作步骤",
+         "content": "child"},
+        {"nid": "parent", "part_id": 2,
+         "path": "包 > 告警 > 处理建议", "title": "告警 > 处理建议",
+         "content": "parent"},
+    ]
+
+    calibration = build_calibration(slices)
+    assert calibration["包 > 告警 > 处理建议"] == ["包", "告警 > 处理建议"]
+    assert calibration["包 > 告警 > 处理建议 > 操作步骤"] == [
+        "包", "告警 > 处理建议", "操作步骤"]
+
+    root = build_path_tree(slices)
+    title_node = root.children["包"].children["告警 > 处理建议"]
+    assert list(title_node.children) == ["操作步骤"]
+    paths: list[str] = []
+
+    def _walk(nodes):
+        for node in nodes.values():
+            paths.append(node.path)
+            _walk(node.children)
+
+    _walk(root.children)
+    assert len(paths) == len(set(paths))
+
+    result = restore_files(slices)
+    by_nid = {f.slices[0]["nid"]: f for f in result.files}
+    assert by_nid["child"].file_title == "告警 > 处理建议"
+    assert by_nid["child"].folder_path == "包"
+
+
+def test_tree_serializes_direct_part_range_separately_from_descendants():
+    root = build_path_tree([
+        {"nid": "parent", "part_id": 10, "path": "包 > 父", "title": "父"},
+        {"nid": "child", "part_id": 2, "path": "包 > 父 > 子", "title": "子"},
+    ])
+    parent = root.children["包"].children["父"].to_dict()
+    assert parent["part_min"] == 2                    # 整棵子树
+    assert parent["part_max"] == 10
+    assert parent["direct_part_min"] == 10            # 仅直属切片
+    assert parent["direct_part_max"] == 10
+
+
+def test_seeded_calibration_keeps_parent_boundary_when_parent_slice_is_filtered_out():
+    """只勾后代时父切片不在批次内，selection hint 仍须保留祖先标题边界。"""
+    from knowledge_mining.mining.onenet.restore import ONENET_PATH_SEGMENTS_FIELD
+
+    path = "包 > 告警 > 处理建议 > 操作步骤"
+    result = restore_files([
+        {"nid": "child", "part_id": 2, "path": path, "title": "操作步骤",
+         "content": "child"},
+    ], path_hints={path: ["包", "告警 > 处理建议", "操作步骤"]})
+
+    assert len(result.files) == 1
+    restored = result.files[0]
+    assert restored.file_path == "包 > 告警 > 处理建议"
+    assert restored.file_title == "告警 > 处理建议"
+    assert restored.folder_path == "包"
+    assert restored.slices[0][ONENET_PATH_SEGMENTS_FIELD] == [
+        "包", "告警 > 处理建议", "操作步骤"]
+
+
+# ---------------------------------------------------------------- beta-5 双还原模式
+
+
+def test_file_anchor_mode_keeps_all_descendants_in_explicit_file():
+    slices = [
+        {"nid": "a", "part_id": 1,
+         "path": "资料 > 安装手册.pdf > 第一章 > 环境准备", "title": "环境准备"},
+        {"nid": "b", "part_id": 2,
+         "path": "资料 > 安装手册.pdf > 第二章 > 安装步骤", "title": "安装步骤"},
+    ]
+    result = restore_files(slices, restore_mode=RESTORE_MODE_FILE_ANCHOR)
+    assert result.restore_mode == RESTORE_MODE_FILE_ANCHOR
+    assert result.unassigned == 0
+    assert len(result.files) == 1
+    restored = result.files[0]
+    assert restored.file_path == "资料 > 安装手册.pdf"
+    assert restored.file_title == "安装手册.pdf"
+    assert restored.folder_path == "资料"
+    assert restored.heading_title == "环境准备"
+    assert restored.slice_nids == ("a", "b")
+
+
+def test_file_anchor_mode_uses_deepest_supported_file_segment():
+    result = restore_files([{
+        "nid": "a", "part_id": 1,
+        "path": "资料包.zip > 附件 > 安装手册.pdf > 第一章",
+        "title": "第一章",
+    }], restore_mode=RESTORE_MODE_FILE_ANCHOR)
+    assert result.files[0].file_path == "资料包.zip > 附件 > 安装手册.pdf"
+    assert result.files[0].folder_path == "资料包.zip/附件"
+
+
+def test_file_anchor_mode_marks_paths_without_supported_suffix_unassigned():
+    result = restore_files([{
+        "nid": "a", "part_id": 1, "path": "资料 > 无后缀手册 > 第一章",
+        "title": "第一章",
+    }], restore_mode=RESTORE_MODE_FILE_ANCHOR)
+    assert result.files == ()
+    assert result.unassigned == 1
+
+
+def test_file_anchor_mode_does_not_treat_product_containers_as_files():
+    result = restore_files([{
+        "nid": "a", "part_id": 1, "path": "产品包.hwics > 接口管理 > 概述",
+        "title": "概述",
+    }], restore_mode=RESTORE_MODE_FILE_ANCHOR)
+    assert result.files == ()
+    assert result.unassigned == 1
+
+
+def test_auto_mode_prefers_product_rule_for_hwics_even_with_html_segment():
+    result = restore_files([{
+        "nid": "a", "part_id": 1,
+        "path": "产品包.hwics > 页面.html > 概述", "title": "概述",
+        "doc_type": ["hwics"], "file_name": "产品包.hwics",
+    }], restore_mode=RESTORE_MODE_AUTO)
+    assert result.restore_mode == RESTORE_MODE_PRODUCT_DOCUMENT
+    assert result.files[0].file_title == "页面.html"
+
+
+def test_auto_mode_uses_file_anchor_when_regular_file_segment_exists():
+    result = restore_files([{
+        "nid": "a", "part_id": 1,
+        "path": "资料 > 安装手册.pdf > 第一章", "title": "第一章",
+    }], restore_mode=RESTORE_MODE_AUTO)
+    assert result.restore_mode == RESTORE_MODE_FILE_ANCHOR
+    assert result.files[0].file_title == "安装手册.pdf"
+
+
+def test_restore_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="restore_mode"):
+        restore_files([], restore_mode="mixed")

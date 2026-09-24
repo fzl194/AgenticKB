@@ -166,12 +166,40 @@ def test_heading_chain_merges_spanning_title():
     assert headings == ["包", "接口管理", "告警 > 处理建议", "定位思路"]
 
 
+def test_heading_chain_inherits_spanning_parent_title_for_descendant():
+    rows = [
+        {"nid": "parent", "part_id": 1,
+         "path": "包 > 告警 > 处理建议", "title": "告警 > 处理建议",
+         "content": "父正文"},
+        {"nid": "child", "part_id": 2,
+         "path": "包 > 告警 > 处理建议 > 操作步骤", "title": "操作步骤",
+         "content": "子正文"},
+    ]
+    art = OnenetJsonlParser().parse(_jsonl(rows), mime=ONENET_JSONL_MIME)
+    headings = [(b.text, b.level) for b in art.blocks if b.block_type == "heading"]
+    assert headings == [("包", 1), ("告警 > 处理建议", 2), ("操作步骤", 3)]
+
+
+def test_heading_chain_uses_stored_segments_for_filtered_descendant_batch():
+    from knowledge_mining.mining.onenet.restore import ONENET_PATH_SEGMENTS_FIELD
+
+    row = {
+        "nid": "child", "part_id": 2,
+        "path": "包 > 告警 > 处理建议 > 操作步骤", "title": "操作步骤",
+        ONENET_PATH_SEGMENTS_FIELD: ["包", "告警 > 处理建议", "操作步骤"],
+        "content": "子正文",
+    }
+    art = OnenetJsonlParser().parse(_jsonl([row]), mime=ONENET_JSONL_MIME)
+    headings = [(b.text, b.level) for b in art.blocks if b.block_type == "heading"]
+    assert headings == [("包", 1), ("告警 > 处理建议", 2), ("操作步骤", 3)]
+
+
 def test_fingerprint_version_bumped():
     from knowledge_mining.mining.parse_adapters.onenet_jsonl import (
         ONENET_JSONL_FINGERPRINT, ONENET_JSONL_VERSION,
     )
-    assert ONENET_JSONL_VERSION == "1.1.1"
-    assert ONENET_JSONL_FINGERPRINT.startswith("onenet_jsonl@1.1.1")
+    assert ONENET_JSONL_VERSION == "1.1.2"
+    assert ONENET_JSONL_FINGERPRINT.startswith("onenet_jsonl@1.1.2")
 
 
 # ------------------------------------------------------------- registry 路由

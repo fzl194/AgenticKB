@@ -78,8 +78,9 @@ class FakeRepo:
         self.toc: dict[tuple, dict] = {}
 
     async def insert_import(self, **kw):
+        selection = kw.pop("selection")
         row = {"id": "imp1", "document_count": None, "error": None,
-               "status": "queued", **kw}
+               "status": "queued", "selection_json": selection.to_dict(), **kw}
         self.imports[row["id"]] = row
         return dict(row)
 
@@ -320,6 +321,38 @@ async def test_start_import_runs_to_done(tmp_path):
     assert final["parsed_version_seen"] == "hwics_v1.0"
 
 
+async def test_subtree_import_uses_path_hint_after_parent_slice_is_filtered(tmp_path):
+    from knowledge_mining.mining.onenet.restore import ONENET_PATH_SEGMENTS_FIELD
+
+    parent_path = "包 > 告警 > 处理建议"
+    child_path = parent_path + " > 操作步骤"
+    rows = [
+        _row(1, parent_path, title="告警 > 处理建议"),
+        _row(2, child_path, title="操作步骤"),
+    ]
+    selection = Selection(
+        subtrees=(child_path,),
+        path_hints=((child_path, ("包", "告警 > 处理建议", "操作步骤")),),
+    )
+    svc, repo, _, kbdb, docsvc, _ = _service(
+        tmp_path, client=_fake_client(rows),
+    )
+
+    record = await svc.start_import(
+        domain="d1", source_id="DOC1", selection=selection,
+        actor_id="admin1", username="管理员",
+    )
+    final = await _wait_terminal(repo, record["id"])
+
+    assert final["status"] == "done"
+    assert final["document_count"] == 1
+    document = next(iter(kbdb.docs.values()))
+    assert document["metadata"]["file_path"] == parent_path
+    stored_row = json.loads(docsvc.stored[0].decode("utf-8").splitlines()[0])
+    assert stored_row[ONENET_PATH_SEGMENTS_FIELD] == [
+        "包", "告警 > 处理建议", "操作步骤"]
+
+
 async def test_import_document_key_idempotent_on_retry(tmp_path):
     svc, repo, _, kbdb, *_ = _service(tmp_path)
     rec1 = await svc.start_import(
@@ -357,6 +390,31 @@ async def test_import_failure_marks_failed_with_reason(tmp_path):
     assert "无切片" in final["error"]
 
 
+async def test_import_uses_persisted_file_anchor_mode(tmp_path):
+    rows = [
+        _row(1, "资料 > 安装手册.pdf > 第一章 > 环境准备"),
+        _row(2, "资料 > 安装手册.pdf > 第二章 > 安装步骤"),
+    ]
+    svc, repo, _, kbdb, *_ = _service(
+        tmp_path, client=_fake_client(rows))
+    selection = Selection(restore_mode="file_anchor")
+
+    record = await svc.start_import(
+        domain="d1", source_id="DOC1", selection=selection,
+        actor_id="a", username="a",
+    )
+    final = await _wait_terminal(repo, record["id"])
+
+    assert final["status"] == "done"
+    assert final["selection_json"]["restore_mode"] == "file_anchor"
+    assert final["document_count"] == 1
+    assert len(kbdb.docs) == 1
+    document = next(iter(kbdb.docs.values()))
+    assert document["document_key"] == document_key_for(
+        "DOC1", "资料 > 安装手册.pdf")
+    assert document["directory_path"] == "UDG 手册 [DOC1]/资料"
+
+
 # ---------------------------------------------------------------- 落库细节
 
 
@@ -370,7 +428,7 @@ async def test_document_metadata_mapping_and_raw(tmp_path):
     assert meta["source_system"] == "onenet"
     assert meta["logical"] is True
     assert meta["source_id"] == "DOC1"
-    assert meta["rule_version"] == "beta-3"
+    assert meta["rule_version"] == "beta-5"
     assert meta["onenet"]["url"] == "https://support/x"
     assert meta["onenet"]["public_level"] == "C"
     assert meta["onenet"]["product_line"] == ["云核心网"]

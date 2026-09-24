@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildNodeIndex, buildParentPathMap, filterFilesBySelection,
-  minimalSubtreePaths, splitSegments,
+  buildNodeIndex, buildParentPathMap, buildPathHints, filterFilesBySelection,
+  countUnassignedFileAnchorSlices, effectivePreviewPaths, minimalSubtreePaths,
+  resolveRestoreMode, splitSegments,
 } from '@/utils/onenetSelection'
 import type { OnenetTocFile, OnenetTocNode } from '@/api/onenet'
 
 const node = (path: string, direct: number, children: OnenetTocNode[] = []): OnenetTocNode =>
-  ({ title: path, path, depth: 1, slice_count: direct, direct_slice_count: direct,
+  ({ title: path.split(' > ').pop() ?? path, path, depth: 1,
+     slice_count: direct + children.reduce((sum, child) => sum + child.slice_count, 0),
+     direct_slice_count: direct,
+     direct_part_min: direct ? 1 : null, direct_part_max: direct ? direct : null,
      part_min: null, part_max: null, children })
 
 const file = (filePath: string, slices = 1): OnenetTocFile =>
@@ -62,22 +66,25 @@ describe('splitSegments', () => {
 })
 
 describe('filterFilesBySelection', () => {
-  // 树：包 > [接口管理(direct=1, 子: 告警 > 处理建议), 性能指标(子: 定位思路)]
+  // 树和 files 均遵守 beta 规则：一个节点的直属切片归其树父节点文件。
   const tree: OnenetTocNode[] = [node('包', 0, [
     node('包 > 接口管理', 1, [
-      node('包 > 接口管理 > 告警 > 处理建议', 2),
+      { ...node('包 > 接口管理 > 告警 > 处理建议', 2, [
+        { ...node('包 > 接口管理 > 告警 > 处理建议 > 操作步骤', 1),
+          direct_part_min: 4, direct_part_max: 4 },
+      ]), title: '告警 > 处理建议', direct_part_min: 2, direct_part_max: 3 },
     ]),
     node('包 > 性能指标', 0, [
-      node('包 > 性能指标 > 定位思路', 1),
+      { ...node('包 > 性能指标 > 定位思路', 1), direct_part_min: 5, direct_part_max: 5 },
     ]),
   ])]
   const nodesByPath = buildNodeIndex(tree)
   const parentByPath = buildParentPathMap(tree)
   const files: OnenetTocFile[] = [
-    file('包'),                                  // 根级 α 文件（包直属切片的宿主不存在——本树包 direct=0，此文件仅作干扰项）
-    file('包 > 接口管理'),                       // 告警>处理建议 等 heading 的宿主文件
-    file('包 > 接口管理 > 告警 > 处理建议'),      // 其下更深层切片的文件
-    file('包 > 性能指标 > 定位思路'),
+    { ...file('包'), heading_title: '接口管理', part_min: 1, part_max: 1 },
+    { ...file('包 > 接口管理', 2), heading_title: '告警 > 处理建议', part_min: 2, part_max: 3 },
+    { ...file('包 > 接口管理 > 告警 > 处理建议'), heading_title: '操作步骤', part_min: 4, part_max: 4 },
+    { ...file('包 > 性能指标'), heading_title: '定位思路', part_min: 5, part_max: 5 },
   ]
 
   it('empty selection = all files (整包)', () => {
@@ -87,7 +94,7 @@ describe('filterFilesBySelection', () => {
   it('rule 1: chapter at-or-below filter (勾选章节是文件前缀)', () => {
     const out = filterFilesBySelection(
       files, ['包 > 性能指标'], nodesByPath, parentByPath)
-    expect(out.map((f) => f.file_path)).toEqual(['包 > 性能指标 > 定位思路'])
+    expect(out.map((f) => f.file_path)).toEqual(['包 > 性能指标'])
   })
 
   it('rule 2: checked node with direct slices pulls in tree-parent file', () => {
@@ -110,17 +117,141 @@ describe('filterFilesBySelection', () => {
     const paths = out.map((f) => f.file_path)
     expect(paths).toContain('包 > 接口管理 > 告警 > 处理建议')  // 子树1 规则1
     expect(paths).toContain('包')                               // 子树1 规则2（direct=1 → 父文件）
-    expect(paths).toContain('包 > 性能指标 > 定位思路')         // 子树2 规则1
-    expect(paths).not.toContain('包 > 性能指标')                // 子树2 direct=0 → 不触发规则2
+    expect(paths).toContain('包 > 性能指标')                    // 子树2 后代的宿主文件
     expect(out).toHaveLength(4)
   })
 
   it('non-minimal subtree inputs still exact (级联子孙已收编)', () => {
+    const minimal = filterFilesBySelection(
+      files, ['包 > 接口管理'], nodesByPath, parentByPath)
     const out = filterFilesBySelection(
       files,
       ['包 > 接口管理', '包 > 接口管理 > 告警 > 处理建议'],
       nodesByPath, parentByPath)
-    expect(out).toHaveLength(3)   // 与只传最小子树等价
+    expect(out).toEqual(minimal)   // 同一节点命中多棵子树也只统计一次
+  })
+
+  it('recomputes count, first heading and part range for a partial parent file', () => {
+    const partialTree: OnenetTocNode[] = [node('包', 0, [
+      { ...node('包 > 章节A', 1), title: '章节A', direct_part_min: 1, direct_part_max: 1 },
+      { ...node('包 > 章节B', 1), title: '章节B', direct_part_min: 2, direct_part_max: 2 },
+    ])]
+    const partialFiles: OnenetTocFile[] = [{
+      ...file('包', 2), heading_title: '章节A', part_min: 1, part_max: 2,
+    }]
+    const original = partialFiles.map((item) => ({ ...item }))
+    const out = filterFilesBySelection(
+      partialFiles,
+      ['包 > 章节B'],
+      buildNodeIndex(partialTree),
+      buildParentPathMap(partialTree),
+    )
+    expect(out).toEqual([{
+      ...partialFiles[0], slice_count: 1, heading_title: '章节B', part_min: 2, part_max: 2,
+    }])
+    expect(partialFiles).toEqual(original)
+  })
+
+  it('file-anchor mode assigns descendant slices to the explicit file ancestor', () => {
+    const anchorPath = '资料 > 手册.pdf'
+    const anchorTree: OnenetTocNode[] = [node('资料', 0, [
+      node(anchorPath, 0, [
+        node(`${anchorPath} > 第一章`, 0, [
+          { ...node(`${anchorPath} > 第一章 > 操作一`, 1), title: '操作一',
+            direct_part_min: 1, direct_part_max: 1 },
+        ]),
+        node(`${anchorPath} > 第二章`, 0, [
+          { ...node(`${anchorPath} > 第二章 > 操作二`, 1), title: '操作二',
+            direct_part_min: 2, direct_part_max: 2 },
+        ]),
+      ]),
+    ])]
+    const anchorFiles: OnenetTocFile[] = [{
+      ...file(anchorPath, 2), file_title: '手册.pdf', heading_title: '第一章',
+      part_min: 1, part_max: 2,
+    }]
+    const out = filterFilesBySelection(
+      anchorFiles,
+      [`${anchorPath} > 第二章 > 操作二`],
+      buildNodeIndex(anchorTree),
+      buildParentPathMap(anchorTree),
+      'file_anchor',
+    )
+    expect(out).toEqual([{
+      ...anchorFiles[0], slice_count: 1, heading_title: '操作二', part_min: 2, part_max: 2,
+    }])
+  })
+
+  it('file-anchor mode omits selected slices that have no file suffix ancestor', () => {
+    const tree: OnenetTocNode[] = [node('资料', 0, [
+      { ...node('资料 > 无后缀手册 > 第一章', 1), title: '第一章',
+        direct_part_min: 1, direct_part_max: 1 },
+    ])]
+    expect(filterFilesBySelection(
+      [],
+      ['资料 > 无后缀手册 > 第一章'],
+      buildNodeIndex(tree),
+      buildParentPathMap(tree),
+      'file_anchor',
+    )).toEqual([])
+  })
+})
+
+describe('resolveRestoreMode', () => {
+  it('resolves auto to the backend recommendation but keeps explicit choices', () => {
+    expect(resolveRestoreMode('auto', 'file_anchor')).toBe('file_anchor')
+    expect(resolveRestoreMode('product_document', 'file_anchor')).toBe('product_document')
+  })
+})
+
+describe('countUnassignedFileAnchorSlices', () => {
+  const anchorPath = '资料 > 手册.pdf'
+  const tree: OnenetTocNode[] = [node('资料', 0, [
+    node(anchorPath, 0, [
+      { ...node(`${anchorPath} > 第一章`, 1), title: '第一章',
+        direct_part_min: 1, direct_part_max: 1 },
+    ]),
+    node('资料 > 无后缀手册', 0, [
+      { ...node('资料 > 无后缀手册 > 第一章', 2), title: '第一章',
+        direct_part_min: 2, direct_part_max: 3 },
+    ]),
+  ])]
+  const nodesByPath = buildNodeIndex(tree)
+  const parentByPath = buildParentPathMap(tree)
+  const files: OnenetTocFile[] = [{
+    ...file(anchorPath), file_title: '手册.pdf', heading_title: '第一章',
+    part_min: 1, part_max: 1,
+  }]
+
+  it('does not report whole-document misses when the selected subtree is fully anchored', () => {
+    const paths = [`${anchorPath} > 第一章`]
+    const selectedFiles = filterFilesBySelection(
+      files, paths, nodesByPath, parentByPath, 'file_anchor')
+    expect(countUnassignedFileAnchorSlices(
+      paths, nodesByPath, selectedFiles, 2,
+    )).toBe(0)
+  })
+
+  it('reports only misses inside the selected subtree and keeps whole count for empty selection', () => {
+    const paths = ['资料 > 无后缀手册']
+    const selectedFiles = filterFilesBySelection(
+      files, paths, nodesByPath, parentByPath, 'file_anchor')
+    expect(countUnassignedFileAnchorSlices(
+      paths, nodesByPath, selectedFiles, 2,
+    )).toBe(2)
+    expect(countUnassignedFileAnchorSlices(
+      [], nodesByPath, files, 2,
+    )).toBe(2)
+  })
+})
+
+describe('effectivePreviewPaths', () => {
+  it('keeps the current range when edit mode has no newly checked paths', () => {
+    expect(effectivePreviewPaths([], ['包 > 当前范围'], true)).toEqual(['包 > 当前范围'])
+  })
+
+  it('uses empty paths as whole-package only for a new import', () => {
+    expect(effectivePreviewPaths([], ['包 > 当前范围'], false)).toEqual([])
   })
 })
 
@@ -129,5 +260,32 @@ describe('buildParentPathMap / buildNodeIndex', () => {
     const tree: OnenetTocNode[] = [node('r', 0, [node('r > A > B', 1)])]
     expect(buildParentPathMap(tree).get('r > A > B')).toBe('r')
     expect(buildNodeIndex(tree).get('r > A > B')?.path).toBe('r > A > B')
+  })
+
+
+  it('minimalSubtreePaths uses the real tree parent for titles containing >', () => {
+    const tree: OnenetTocNode[] = [node('包', 0, [
+      { ...node('包 > 告警 > 处理建议', 1), title: '告警 > 处理建议' },
+    ])]
+    const parentMap = buildParentPathMap(tree)
+    expect(minimalSubtreePaths(
+      ['包', '包 > 告警 > 处理建议'], parentMap,
+    )).toEqual(['包'])
+  })
+
+
+  it('buildPathHints preserves titles containing > as one semantic segment', () => {
+    const tree: OnenetTocNode[] = [node('包', 0, [
+      { ...node('包 > 告警 > 处理建议', 0, [
+        { ...node('包 > 告警 > 处理建议 > 操作步骤', 1), title: '操作步骤' },
+      ]), title: '告警 > 处理建议' },
+    ])]
+    const nodeIndex = buildNodeIndex(tree)
+    const parentMap = buildParentPathMap(tree)
+    expect(buildPathHints(
+      ['包 > 告警 > 处理建议 > 操作步骤'], nodeIndex, parentMap,
+    )).toEqual({
+      '包 > 告警 > 处理建议 > 操作步骤': ['包', '告警 > 处理建议', '操作步骤'],
+    })
   })
 })

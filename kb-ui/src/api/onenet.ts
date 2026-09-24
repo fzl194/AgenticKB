@@ -56,6 +56,8 @@ export interface OnenetTocNode {
   depth: number
   slice_count: number
   direct_slice_count?: number
+  direct_part_min: number | null
+  direct_part_max: number | null
   part_min: number | null
   part_max: number | null
   children: OnenetTocNode[]
@@ -71,6 +73,18 @@ export interface OnenetTocFile {
   part_max: number
 }
 
+export type OnenetRestoreMode = 'product_document' | 'file_anchor'
+export type OnenetRestoreModeChoice = 'auto' | OnenetRestoreMode
+
+export interface OnenetRestorePreview {
+  restore_mode: OnenetRestoreMode
+  files: OnenetTocFile[]
+  file_count: number
+  folder_count: number
+  slice_count: number
+  unassigned: number
+}
+
 export interface OnenetToc {
   cached?: boolean
   source_id: string
@@ -84,6 +98,13 @@ export interface OnenetToc {
   folder_count?: number
   unassigned?: number
   files?: OnenetTocFile[]
+  recommended_restore_mode: OnenetRestoreMode
+  anchor_coverage: {
+    assigned: number
+    total: number
+    ratio: number
+  }
+  restore_previews: Record<OnenetRestoreMode, OnenetRestorePreview>
 }
 
 export type OnenetImportStatus =
@@ -98,7 +119,12 @@ export interface OnenetImport {
   parsed_version_seen: string | null
   total_slices: number | null
   fetched_max_part_id: number | null
-  selection_json: { subtrees: string[]; max_part_id: number | null }
+  selection_json: {
+    subtrees: string[]
+    max_part_id: number | null
+    path_hints?: Record<string, string[]>
+    restore_mode?: OnenetRestoreMode
+  }
   status: OnenetImportStatus
   kb_id: string
   document_count: number | null
@@ -155,13 +181,22 @@ export function useOnenetApi() {
     },
     async startImport(body: {
       domain: string; source_id: string
-      selection?: { subtrees?: string[]; max_part_id?: number | null }
+      selection?: {
+        subtrees?: string[]
+        max_part_id?: number | null
+        path_hints?: Record<string, string[]>
+        restore_mode?: OnenetRestoreMode
+      }
       doc_name?: string; parsed_version?: string; total_slices?: number
     }): Promise<OnenetImport> {
       const { data } = await client.post('/api/onenet/imports', body)
       return data
     },
-    async updateSelection(importId: string, selection: { subtrees?: string[] }) {
+    async updateSelection(importId: string, selection: {
+      subtrees?: string[]
+      path_hints?: Record<string, string[]>
+      restore_mode?: OnenetRestoreMode
+    }) {
       const { data } = await client.patch(`/api/onenet/imports/${importId}/selection`, { selection })
       return data
     },

@@ -82,12 +82,43 @@ def test_selection_prefix_match_by_segments():
 
 
 def test_selection_roundtrip():
-    sel = Selection(subtrees=("A", "D > E"), max_part_id=2000)
+    sel = Selection(
+        subtrees=("A", "D > E"), max_part_id=2000,
+        path_hints=(("D > E", ("D > E",)),),
+        restore_mode="file_anchor",
+    )
     data = sel.to_dict()
     back = Selection.from_dict(data)
     assert back == sel
     assert Selection.from_dict(None) == Selection()
     assert Selection.from_dict({"subtrees": ["", "  "], "max_part_id": None}) == Selection()
+
+
+def test_selection_rejects_path_hint_that_does_not_rebuild_raw_path():
+    with pytest.raises(ValueError, match="path_hint"):
+        Selection.from_dict({
+            "subtrees": ["包 > 告警 > 处理建议"],
+            "path_hints": {
+                "包 > 告警 > 处理建议": ["包", "错误标题"],
+            },
+        })
+
+
+def test_selection_rejects_unknown_restore_mode():
+    with pytest.raises(ValueError, match="restore_mode"):
+        Selection.from_dict({"restore_mode": "mixed"})
+
+
+@pytest.mark.parametrize("payload", [[], "bad", {"subtrees": "A > B"}])
+def test_selection_rejects_invalid_container_shapes(payload):
+    with pytest.raises(ValueError, match="invalid selection"):
+        Selection.from_dict(payload)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "not-an-int"])
+def test_selection_rejects_invalid_max_part_id(value):
+    with pytest.raises(ValueError, match="max_part_id"):
+        Selection.from_dict({"max_part_id": value})
 
 
 # ------------------------------------------------------------- fetch_selection
@@ -117,6 +148,44 @@ def test_fetch_segment_idempotent_skip(tmp_path):
     assert fake.range_requests == n1  # 段全跳过，无新拉取
 
 
+def test_fetch_selection_change_invalidates_filtered_segment_cache(tmp_path):
+    fake = FakeFetch(list(ROWS))
+    first = fetch_selection(
+        _client(fake), "DOC1", Selection(subtrees=(f"{PKG} > A",)),
+        tmp_path, chunk_width=10, throttle_seconds=0,
+    )
+    assert first.slice_count == 2
+    first_requests = fake.range_requests
+
+    expanded = fetch_selection(
+        _client(fake), "DOC1",
+        Selection(subtrees=(f"{PKG} > A", f"{PKG} > D")),
+        tmp_path, chunk_width=10, throttle_seconds=0,
+    )
+    assert fake.range_requests > first_requests
+    assert expanded.slice_count == 4
+    assert {row["path"] for row in load_slices(expanded.slices_path)} == {
+        f"{PKG} > A > B", f"{PKG} > A > C",
+        f"{PKG} > D > E", f"{PKG} > D > F",
+    }
+
+
+def test_fetch_clears_orphan_filtered_parts_when_manifest_is_missing(tmp_path):
+    fake = FakeFetch(list(ROWS))
+    fetch_selection(
+        _client(fake), "DOC1", Selection(subtrees=(f"{PKG} > A",)),
+        tmp_path, chunk_width=10, throttle_seconds=0,
+    )
+    (tmp_path / "manifest.json").unlink()
+
+    expanded = fetch_selection(
+        _client(fake), "DOC1",
+        Selection(subtrees=(f"{PKG} > A", f"{PKG} > D")),
+        tmp_path, chunk_width=10, throttle_seconds=0,
+    )
+    assert expanded.slice_count == 4
+
+
 def test_fetch_mid_document_subtree_no_coverage_check(tmp_path):
     """审查 H1 回归：勾选文档中部子树（part 不从 1 起）不再因覆盖缺口失败。"""
     fake = FakeFetch(list(ROWS))
@@ -135,6 +204,9 @@ def test_fetch_full_mode_still_checks_coverage(tmp_path):
     parts.mkdir(parents=True)
     (parts / "part_1_2.jsonl").write_text(
         json.dumps(_row(1, f"{PKG} > A > B")) + "\n", encoding="utf-8")
+    # 有 matching manifest 才允许复用分段；否则新逻辑会保守清理孤儿 parts。
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"selection": Selection().to_dict()}), encoding="utf-8")
     from knowledge_mining.mining.onenet.fetch import FetchVerifyError
     # part_1_2 段只有 part1（part2 缺）→ 整包校验在 fetch 内即拒绝，
     # 且 slices.jsonl 未落位（M1：校验不过不毒化既有批次）

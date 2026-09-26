@@ -11,7 +11,7 @@
 - Prompt 模板管理（`$variable` 占位符 + JSON Schema 校验）
 - 三重 JSON 保障：schema 注入 prompt → response_format → jsonschema 后校验
 - 所有数据存 **PostgreSQL**（库 `agent_llm_runtime`，7 张表），启动自动建库建表
-- 配置热重载（`POST /api/v1/admin/reload-config`），无需重启切换 provider
+- 配置变更通过系统设置中的“一键重启后台服务”统一生效
 - Python SDK：`LLMClient`，Mining / Serving 直接 import 使用
 
 ## 目录结构
@@ -120,7 +120,7 @@ CONTROL_PLANE_BASE_URL=http://your-control-plane
 - `anthropic` — Anthropic Claude（原生 Messages API）
 - `mock` — 测试用
 
-> 想切换 provider 不用重启：修改控制面 dict 后 `POST /api/v1/admin/reload-config`。
+> 修改 provider 后，使用系统设置中的“一键重启后台服务”使配置生效。
 
 ## 3. 启动服务
 
@@ -640,8 +640,8 @@ WHERE status='failed';
 
 ### Q: Worker 并发数怎么调
 
-修改控制面 `worker.concurrency` 后调用 `POST /api/v1/admin/reload-config`，热重载即时生效（动态增减 `_loop` 协程）。默认 4，调太高可能触发 Provider 限流。
+修改控制面 `worker.concurrency` 后重启后台服务。默认 4，调太高可能触发 Provider 限流。
 
 ### Q: 想切换 Provider（如 DeepSeek → Anthropic）
 
-修改控制面 `provider.type` + 对应字段后调用 `POST /api/v1/admin/reload-config`。热重载会销毁旧 Provider 构造新的，**无需重启服务**。
+修改控制面 `provider.type` + 对应字段后，使用系统设置中的“一键重启后台服务”。

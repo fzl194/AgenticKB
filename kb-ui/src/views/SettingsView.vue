@@ -24,12 +24,6 @@
         <el-tab-pane label="域详情" name="scenario">
           <DomainDetailTab />
         </el-tab-pane>
-        <el-tab-pane label="配置重载" name="reload">
-          <ReloadConfigTab />
-        </el-tab-pane>
-        <el-tab-pane label="代码同步" name="sync">
-          <CodeSyncTab />
-        </el-tab-pane>
         <el-tab-pane label="系统状态" name="status">
           <SystemStatusTab />
         </el-tab-pane>
@@ -51,8 +45,6 @@ import BrandAppearanceTab from '@/components/settings/BrandAppearanceTab.vue'
 import UserManagementTab from '@/components/settings/UserManagementTab.vue'
 import DomainManageTab from '@/components/settings/DomainManageTab.vue'
 import DomainDetailTab from '@/components/settings/DomainDetailTab.vue'
-import ReloadConfigTab from '@/components/settings/ReloadConfigTab.vue'
-import CodeSyncTab from '@/components/settings/CodeSyncTab.vue'
 import ServiceLogsTab from '@/components/settings/ServiceLogsTab.vue'
 
 /**
@@ -60,7 +52,7 @@ import ServiceLogsTab from '@/components/settings/ServiceLogsTab.vue'
  * 一个面板都不渲染，页面看起来像坏了。概览页的「详情 →」就是靠 ?tab=status 进来的。
  */
 const TAB_NAMES = [
-  'system', 'brand', 'users', 'domain', 'scenario', 'reload', 'sync', 'status', 'logs',
+  'system', 'brand', 'users', 'domain', 'scenario', 'status', 'logs',
 ] as const
 
 const route = useRoute()

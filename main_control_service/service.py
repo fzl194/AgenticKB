@@ -303,20 +303,6 @@ class YamlConfigService:
             }
         return {"domains": domains}
 
-    def serving_reload_targets(self) -> list[str]:
-        """Distinct serving_url of enabled domains, for the reload fan-out."""
-        registry = self._load_domain_registry()
-        urls: list[str] = []
-        seen: set[str] = set()
-        for entry in registry.values():
-            if not bool(entry.get("enabled", True)):
-                continue
-            url = (entry.get("services") or {}).get("serving_url")
-            if url and url not in seen:
-                seen.add(url)
-                urls.append(url)
-        return urls
-
     def mining_internal_base_url(self) -> str | None:
         """51号批次1：内部查询用 mining 基址（首个 enabled 域的 mining_url）。"""
         registry = self._load_domain_registry()

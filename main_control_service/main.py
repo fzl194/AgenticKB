@@ -332,22 +332,6 @@ def create_app(
         return service.get_serving_config()
 
     # ------------------------------------------------------------------
-    # Code sync — GitHub archive -> local Python services
-    # ------------------------------------------------------------------
-
-    @app.post("/api/v1/code-sync")
-    def sync_code() -> dict:
-        from main_control_service.code_sync import sync_from_github
-
-        result = sync_from_github()
-        return {
-            "ok": result.ok,
-            "updated_dirs": result.updated_dirs,
-            "file_count": result.file_count,
-            **({"error": result.error} if result.error else {}),
-        }
-
-    # ------------------------------------------------------------------
     # Service logs — read-only tail of /app/logs (written by supervisor)
     # ------------------------------------------------------------------
 
@@ -521,33 +505,6 @@ def create_app(
                 except Exception as exc:  # noqa: BLE001 — best-effort fan-out
                     mining_hits.append({"url": base, "ok": False, "error": str(exc)})
         return {**result, "mining": mining_hits}
-
-    # ------------------------------------------------------------------
-    # Admin — fan out config hot-reload to agent_serving instances
-    # ------------------------------------------------------------------
-
-    @app.post("/api/v1/admin/reload-serving")
-    async def reload_serving() -> dict:
-        """Trigger config hot-reload on every enabled domain's serving instance.
-
-        Called by the kb-ui "配置热重载" button after a config save. Each distinct
-        serving_url is hit once; failures are reported, never raised.
-        """
-        client = get_proxy_client()
-        results: list[dict] = []
-        for url in service.serving_reload_targets():
-            target = f"{url.rstrip('/')}/api/v1/admin/reload-config"
-            try:
-                resp = await client.post(target, timeout=30.0)
-                results.append({
-                    "url": url,
-                    "ok": resp.status_code < 400,
-                    "status": resp.status_code,
-                    "detail": resp.text[:500],
-                })
-            except Exception as exc:  # noqa: BLE001 — best-effort fan-out
-                results.append({"url": url, "ok": False, "error": str(exc)})
-        return {"ok": all(r["ok"] for r in results) if results else True, "results": results}
 
     return app
 

@@ -21,6 +21,9 @@ GET /api/kb/overview 会被当成 kb_id="overview" → 404。同款事故见 62a
 """
 from __future__ import annotations
 
+from functools import wraps
+import logging
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -30,6 +33,24 @@ from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.deps import get_kb_db
 
 router = APIRouter(prefix="/api/kb", tags=["kb-overview"])
+logger = logging.getLogger(__name__)
+
+
+def _timed_endpoint(metric: str):
+    """Log aggregate endpoint latency without payloads or user-provided text."""
+    def decorate(func):
+        @wraps(func)
+        async def wrapped(*args, **kwargs):
+            started = perf_counter()
+            try:
+                return await func(*args, **kwargs)
+            finally:
+                logger.info(
+                    "%s duration_ms=%.1f",
+                    metric, (perf_counter() - started) * 1000,
+                )
+        return wrapped
+    return decorate
 
 # 首页卡片只渲染前 6 张，但 kbs 不截断——检索范围要用全集（默认全选）。
 RECENT_RUN_LIMIT = 5
@@ -54,6 +75,7 @@ def _sort_key(kb: dict[str, Any]) -> tuple:
 
 
 @router.get("/overview")
+@_timed_endpoint("kb_overview_total")
 async def kb_overview(
     domain: str = Query(..., min_length=1),
     user: dict[str, Any] = Depends(current_user),
@@ -101,6 +123,7 @@ async def kb_overview(
 
 
 @router.get("/stats")
+@_timed_endpoint("kb_stats_total")
 async def kb_stats(
     domain: str = Query(..., min_length=1),
     user: dict[str, Any] = Depends(current_user),

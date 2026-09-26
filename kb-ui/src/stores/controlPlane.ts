@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useControlPlaneApi } from '@/api/controlPlane'
-import type { CodeSyncResult, LogContent, LogFileInfo, LogQuery } from '@/api/controlPlane'
+import type { LogContent, LogFileInfo, LogQuery } from '@/api/controlPlane'
 
 export const useControlPlaneStore = defineStore('control-plane', () => {
   const api = useControlPlaneApi()
@@ -25,10 +25,6 @@ export const useControlPlaneStore = defineStore('control-plane', () => {
   // ── Shared ──
   const loading = ref(false)
   const saving = ref(false)
-  const reloading = ref(false)
-  const reloadResult = ref<{ ok: boolean; error?: string; config?: Record<string, unknown> } | null>(null)
-  const syncing = ref(false)
-  const syncResult = ref<CodeSyncResult | null>(null)
   const error = ref('')
 
   // ── Service logs ──
@@ -163,33 +159,6 @@ export const useControlPlaneStore = defineStore('control-plane', () => {
     }
   }
 
-  // ── Reload actions ──
-  async function reloadService(serviceName: string) {
-    if (!selectedDomainId.value) return
-    reloading.value = true
-    reloadResult.value = null
-    try {
-      reloadResult.value = await api.reloadServiceConfig(selectedDomainId.value, serviceName)
-    } catch (err) {
-      reloadResult.value = { ok: false, error: err instanceof Error ? err.message : 'Reload failed' }
-    } finally {
-      reloading.value = false
-    }
-  }
-
-  // ── Code sync actions ──
-  async function syncCode() {
-    syncing.value = true
-    syncResult.value = null
-    try {
-      syncResult.value = await api.codeSync()
-    } catch (err) {
-      syncResult.value = { ok: false, error: err instanceof Error ? err.message : 'Sync failed' }
-    } finally {
-      syncing.value = false
-    }
-  }
-
   // ── Service log actions ──
   async function loadLogFiles() {
     try {
@@ -232,10 +201,6 @@ export const useControlPlaneStore = defineStore('control-plane', () => {
     scenarioYamlOriginal,
     loading,
     saving,
-    reloading,
-    reloadResult,
-    syncing,
-    syncResult,
     error,
     systemConfigDirty,
     domainYamlDirty,
@@ -249,8 +214,6 @@ export const useControlPlaneStore = defineStore('control-plane', () => {
     saveDomainYaml,
     deleteDomain,
     saveScenarioYaml,
-    reloadService,
-    syncCode,
     logFiles,
     logDir,
     selectedLogName,

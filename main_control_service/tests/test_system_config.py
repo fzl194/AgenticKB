@@ -73,3 +73,10 @@ def test_get_system_config_not_found(tmp_path: Path) -> None:
     with _client(tmp_path) as c:
         r = c.get("/api/v1/system/does-not-exist")
         assert r.status_code == 404
+
+
+def test_obsolete_sync_and_reload_endpoints_are_removed(tmp_path: Path) -> None:
+    with _client(tmp_path) as c:
+        paths = {route.path for route in c.app.routes}
+        assert "/api/v1/code-sync" not in paths
+        assert "/api/v1/admin/reload-serving" not in paths

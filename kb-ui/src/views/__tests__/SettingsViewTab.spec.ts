@@ -41,6 +41,13 @@ describe('设置页 ?tab= 深链', () => {
     expect(w.vm.activeTab).toBe('system')
   })
 
+  it.each(['reload', 'sync'])('已下线的 %s 深链回落到系统配置', async (tab) => {
+    const w = await mountAt({ tab })
+    expect(w.vm.activeTab).toBe('system')
+    expect(w.text()).not.toContain('配置重载')
+    expect(w.text()).not.toContain('代码同步')
+  })
+
   it('没带 tab 时用默认', async () => {
     const w = await mountAt({})
     expect(w.vm.activeTab).toBe('system')

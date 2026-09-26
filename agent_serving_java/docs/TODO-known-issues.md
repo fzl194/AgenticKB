@@ -49,7 +49,7 @@ llm_service 抖动/部分不可用期间，用户检索问题 A 返回**空结�
 1. **主修**：在 `SemanticCacheService.store()`（或 `SearchService.java:395` 调用点）增加 guard——
    **空结果不写缓存**（`pack` 中无 `seed` 角色 item 时跳过）。
    进一步可在**任一 LLM 阶段降级**时也不写（`understanding.source() == fallback`，或 rerank 走了兜底）。
-2. **兜底增强**：把 `SemanticCacheService.evict(domain)` 接到发布新 release / `reload-serving` 钩子，
+2. **兜底增强**：把 `SemanticCacheService.evict(domain)` 接到发布新 release 钩子，
    内容变更即清旧缓存（顺带解决旧 release 死行堆积）。
 3. **可选**：为空/降级场景缩短 TTL，或增加「降级期禁写缓存」开关。
 

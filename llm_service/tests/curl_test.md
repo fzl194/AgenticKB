@@ -207,8 +207,6 @@ curl -s "$BASE/api/v1/stats/tokens" | python3 -m json.tool
 # 7.4 Worker 状态诊断
 curl -s "$BASE/api/v1/admin/worker-status" | python3 -m json.tool
 
-# 7.5 热重载配置（修改 YAML 后调用）
-curl -s -X POST "$BASE/api/v1/admin/reload-config" | python3 -m json.tool
 ```
 
 ## 8. 模板管理

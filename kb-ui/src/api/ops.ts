@@ -19,9 +19,15 @@ export function useOpsApi() {
      * 响应恒带 available：serving 从没启动过时那张表不存在，后端回一份形状相同的空壳，
      * 调用方只需判这一个字段。
      */
-    async getUsage(domain: string, days?: number): Promise<OpsUsage> {
+    async getUsage(
+      domain: string,
+      options: { days?: number; view?: 'full' | 'dashboard' } = {},
+    ): Promise<OpsUsage> {
+      const params: Record<string, string | number> = { domain }
+      if (options.days !== undefined) params.days = options.days
+      if (options.view !== undefined) params.view = options.view
       const { data } = await client.get('/api/ops/usage', {
-        params: days === undefined ? { domain } : { domain, days },
+        params,
       })
       return extractOne<OpsUsage>(data)
     },

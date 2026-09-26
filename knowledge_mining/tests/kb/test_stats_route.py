@@ -95,6 +95,12 @@ def test_stats_is_not_shadowed_by_kb_id_route():
     }
 
 
+def test_stats_logs_total_duration(caplog):
+    caplog.set_level("INFO", logger="knowledge_mining.mining.kb.routes.overview")
+    _client(FakeKbDB()).get("/api/kb/stats", params={"domain": "d1"})
+    assert "kb_stats_total duration_ms=" in caplog.text
+
+
 def test_real_app_resolves_stats_before_kb_id():
     """测 app.py 里的真实注册顺序（不发请求——那会拉起 lifespan 要数据库）。"""
     from knowledge_mining.mining.api.app import create_app

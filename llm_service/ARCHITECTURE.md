@@ -369,7 +369,7 @@ return from memory             batch ← 取最多 batch_size 条
 4. `INSERT agent_llm_results`（仅 succeeded 时）
 5. **`INSERT agent_llm_model_calls`**（embedding/rerank 专属审计表，记录 call_type/model/input_count/latency/tokens）
 
-## 7. 配置与热重载
+## 7. 配置与生效
 
 ### 7.1 配置来源：控制面拉取
 
@@ -397,23 +397,10 @@ llm_service **不在本地读 yaml 文件**，启动时通过 HTTP 从控制面�
 
 `provider.models` 是 dict，key 是模型别名（如 `default` / `cheap` / `strong`）。`provider.active_model` 指向当前生效的 key。`resolve_active_model_config()` 把 `provider.models[active_model]` 深合并覆盖 `provider` 顶层（model / temperature / max_tokens 等），最终作为运行时配置。
 
-### 7.4 热重载机制
+### 7.4 配置变更生效
 
-**入口**：`POST /api/v1/admin/reload-config`（`api/admin.py:53-176`）
-
-热重载流程：
-```
-POST /api/v1/admin/reload-config
-  → 重新从控制面拉 config + db_config
-  → diff 新旧 config：
-       ├─ provider.type 变了 → 销毁旧 Provider，构造新 Provider（跨 provider 切换）
-       ├─ worker.concurrency 变了 → Worker.scale(new_n)（动态增减 _loop 协程）
-       ├─ template.cache_ttl 变了 → 更新 TemplateRegistry 缓存 TTL
-       └─ 其余字段 → 替换 config 引用
-  → 返回 diff summary
-```
-
-**不影响**：进行中的 task（已 claim 的继续跑）、PersistWriter 队列中的 record、DB 连接池本身（除非 pg_config 变了，需要重启）。
+控制面配置修改后，通过系统设置的“一键重启后台服务”统一生效。LLM Service 在启动
+生命周期重新拉取 config 与 db_config；停机时运行中任务会重新入队，避免遗留 running。
 
 **相关诊断端点**：`GET /api/v1/admin/worker-status` 返回当前 concurrency / active_tasks / queue_depth。
 

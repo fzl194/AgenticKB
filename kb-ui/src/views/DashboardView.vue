@@ -14,22 +14,25 @@
     </section>
 
     <template v-else>
+    <div v-if="staleRefreshError" class="dash__refresh-warning">
+      刷新失败，显示上次数据
+    </div>
     <!-- ── 区块 1：汇总数字 ──────────────────────────────────────────── -->
     <section class="dash__block">
       <div class="dash__block-head">
         <h3 class="dash__block-title">知识库概况</h3>
         <div class="dash__block-actions">
           <span class="dash__scope">口径：本域我可见的 {{ stats?.kb_count ?? kbs.length }} 个知识库</span>
-          <el-button text type="primary" size="small" :loading="loading" @click="load">
+          <el-button text type="primary" size="small" :loading="refreshing" @click="load">
             刷新
           </el-button>
         </div>
       </div>
 
-      <div v-if="loading" class="dash__skeleton-grid dash__skeleton-grid--tiles">
+      <div v-if="statsLoading && !stats" class="dash__skeleton-grid dash__skeleton-grid--tiles">
         <div v-for="i in 6" :key="i" class="dash__skeleton dash__skeleton--tile" />
       </div>
-      <BlockError v-else-if="statsError" @retry="load" />
+      <BlockError v-else-if="statsError && !stats" @retry="load" />
       <div v-else class="dash__tiles">
         <StatsCard
           v-for="tile in tiles"
@@ -64,8 +67,8 @@
     <OpsPanel
       v-if="isAdmin"
       :usage="opsUsage"
-      :loading="loading"
-      :error="opsError"
+      :loading="opsLoading && !opsUsage"
+      :error="opsError && !opsUsage"
       @detail="router.push('/settings?tab=status')"
       @retry="load"
     />
@@ -75,7 +78,7 @@
       一个库都没有时不画四张空图：一排 0 和一条贴地的线会被读成「系统没在干活」，
       真相是「还没建库」。与 设置→系统状态 处理无 release 的做法同一条原则。
     -->
-    <section v-if="!loading && !statsError && !hasAnyKb" class="dash__block">
+    <section v-if="!statsLoading && (!statsError || !!stats) && !hasAnyKb" class="dash__block">
       <EmptyState text="还没有知识库，建一个就能看到统计">
         <template #action>
           <el-button type="primary" size="small" @click="router.push('/kb')">
@@ -89,8 +92,8 @@
       <!-- 文档状态分布 -->
       <section class="dash__block">
         <h3 class="dash__block-title">文档状态分布</h3>
-        <div v-if="loading" class="dash__skeleton dash__skeleton--chart" />
-        <BlockError v-else-if="statsError" @retry="load" />
+        <div v-if="statsLoading && !stats" class="dash__skeleton dash__skeleton--chart" />
+        <BlockError v-else-if="statsError && !stats" @retry="load" />
         <div v-else class="dash__donut">
           <div class="dash__donut-chart">
             <PieChart :data="statusSlices" height="220px" :show-legend="false" />
@@ -118,8 +121,8 @@
             共 {{ totals.documents }} 篇 · {{ totals.runs }} 次挖掘
           </span>
         </div>
-        <div v-if="loading" class="dash__skeleton dash__skeleton--chart" />
-        <BlockError v-else-if="statsError" @retry="load" />
+        <div v-if="statsLoading && !stats" class="dash__skeleton dash__skeleton--chart" />
+        <BlockError v-else-if="statsError && !stats" @retry="load" />
         <!-- 单系列不配图例：标题已经说明了这条线是什么 -->
         <LineChart
           v-else
@@ -132,8 +135,8 @@
       <!-- 各知识库文档数 -->
       <section class="dash__block">
         <h3 class="dash__block-title">各知识库文档数（前 {{ TOP_KB_BAR_LIMIT }}）</h3>
-        <div v-if="loading" class="dash__skeleton dash__skeleton--chart" />
-        <BlockError v-else-if="overviewError" @retry="load" />
+        <div v-if="overviewLoading && !overviewLoaded" class="dash__skeleton dash__skeleton--chart" />
+        <BlockError v-else-if="overviewError && !overviewLoaded" @retry="load" />
         <!-- 单一色相：谁是谁由 y 轴标签说明，颜色不承担身份，不必也不该上分类色 -->
         <BarChart
           v-else-if="kbBars.length"
@@ -147,8 +150,8 @@
       <!-- 检索单元类型 -->
       <section class="dash__block">
         <h3 class="dash__block-title">检索单元类型分布</h3>
-        <div v-if="loading" class="dash__skeleton dash__skeleton--chart" />
-        <BlockError v-else-if="statsError" @retry="load" />
+        <div v-if="statsLoading && !stats" class="dash__skeleton dash__skeleton--chart" />
+        <BlockError v-else-if="statsError && !stats" @retry="load" />
         <BarChart
           v-else-if="unitBars.length"
           :data="unitBars"
@@ -179,10 +182,10 @@
         </div>
       </div>
 
-      <div v-if="loading" class="dash__skeleton-grid">
+      <div v-if="overviewLoading && !overviewLoaded" class="dash__skeleton-grid">
         <div v-for="i in 3" :key="i" class="dash__skeleton" />
       </div>
-      <BlockError v-else-if="overviewError" @retry="load" />
+      <BlockError v-else-if="overviewError && !overviewLoaded" @retry="load" />
       <div v-else-if="cards.length" class="dash__kb-grid">
         <KbCard
           v-for="kb in cards"
@@ -204,10 +207,10 @@
     <section class="dash__block">
       <h3 class="dash__block-title">最近挖掘</h3>
 
-      <div v-if="loading" class="dash__skeleton-list">
+      <div v-if="overviewLoading && !overviewLoaded" class="dash__skeleton-list">
         <div v-for="i in 3" :key="i" class="dash__skeleton dash__skeleton--row" />
       </div>
-      <BlockError v-else-if="overviewError" @retry="load" />
+      <BlockError v-else-if="overviewError && !overviewLoaded" @retry="load" />
       <div v-else-if="recentRuns.length" class="dash__runs">
         <div
           v-for="run in recentRuns"
@@ -279,7 +282,12 @@ const kbs = ref<KbOverviewItem[]>([])
 const recentRuns = ref<KbOverviewRun[]>([])
 const stats = ref<KbStats | null>(null)
 const opsUsage = ref<OpsUsage | null>(null)
-const loading = ref(true)
+const overviewLoading = ref(true)
+const statsLoading = ref(true)
+const opsLoading = ref(false)
+const overviewLoaded = ref(false)
+const refreshing = computed(() =>
+  overviewLoading.value || statsLoading.value || opsLoading.value)
 /** 初值 true：首帧还没跑过 load，此时该显示骨架屏而不是"域未就绪"提示。 */
 const domainReady = ref(true)
 /**
@@ -289,6 +297,10 @@ const domainReady = ref(true)
 const overviewError = ref(false)
 const statsError = ref(false)
 const opsError = ref(false)
+const staleRefreshError = computed(() =>
+  (overviewError.value && overviewLoaded.value)
+  || (statsError.value && stats.value !== null)
+  || (opsError.value && opsUsage.value !== null))
 
 const cards = computed(() => visibleKbCards(kbs.value))
 const tasks = computed(() => pendingTasks(kbs.value))
@@ -320,14 +332,11 @@ const tiles = computed(() => {
 })
 
 /**
- * 切域竞态守卫。`alive` 只挡 unmount，挡不住切域——组件还活着，只是数据属于
- * 上一个域了。两个请求共用一个 generation：它们同批发出、同批作废。
- *
- * 用 allSettled 而不是 all：一个接口挂掉不该把另一个已经成功的结果一起丢掉。
- * 但每个 rejected 都要落到自己的 error 旗标上——早先那版把失败整个吞了，
- * 用户看到的是一片空白，分不清「没有数据」和「没加载出来」。
+ * 三个数据源独立落结果，但共享 generation：切域后旧请求即使迟到也不能覆盖新域。
+ * 同域手动刷新保留旧数据；切域则立即清空，避免短暂展示其他域的信息。
  */
 let generation = 0
+let loadedDomain = ''
 
 async function load() {
   const gen = ++generation
@@ -337,50 +346,79 @@ async function load() {
     // 以前这里直接 return，而 loading 初值是 true —— 域一直不来就**永远停在骨架屏**，
     // 既不报错也不给空状态，看起来像页面卡死。域到位时 watch 会再次触发 load。
     domainReady.value = false
-    loading.value = false
+    overviewLoading.value = false
+    statsLoading.value = false
+    opsLoading.value = false
     return
   }
+  const domainChanged = loadedDomain !== domain
+  loadedDomain = domain
   domainReady.value = true
-  loading.value = true
+  if (domainChanged) {
+    kbs.value = []
+    recentRuns.value = []
+    stats.value = null
+    opsUsage.value = null
+    overviewLoaded.value = false
+  }
   overviewError.value = false
   statsError.value = false
   opsError.value = false
 
-  // 非 admin 不发运维请求：后端会 403，白打一次往返还在控制台留一条红。
-  const [ov, st, ops] = await Promise.allSettled([
-    kbApi.getOverview(domain),
-    kbApi.getStats(domain),
-    isAdmin.value ? opsApi.getUsage(domain) : Promise.resolve(null),
-  ])
-  if (gen !== generation) return   // 旧域的响应，整批丢弃
+  overviewLoading.value = true
+  statsLoading.value = true
+  opsLoading.value = isAdmin.value
 
-  if (ov.status === 'fulfilled') {
-    kbs.value = ov.value.kbs
-    recentRuns.value = ov.value.recent_runs
-  } else {
-    console.error('Failed to load overview:', ov.reason)
-    overviewError.value = true
-    kbs.value = []
-    recentRuns.value = []
-  }
+  const overviewTask = (async () => {
+    try {
+      const value = await kbApi.getOverview(domain)
+      if (gen !== generation) return
+      kbs.value = value.kbs
+      recentRuns.value = value.recent_runs
+      overviewLoaded.value = true
+    } catch (error) {
+      if (gen !== generation) return
+      console.error('Failed to load overview:', error)
+      overviewError.value = true
+    } finally {
+      if (gen === generation) overviewLoading.value = false
+    }
+  })()
 
-  if (st.status === 'fulfilled') {
-    stats.value = st.value
-  } else {
-    console.error('Failed to load kb stats:', st.reason)
-    statsError.value = true
-    stats.value = null
-  }
+  const statsTask = (async () => {
+    try {
+      const value = await kbApi.getStats(domain)
+      if (gen !== generation) return
+      stats.value = value
+    } catch (error) {
+      if (gen !== generation) return
+      console.error('Failed to load kb stats:', error)
+      statsError.value = true
+    } finally {
+      if (gen === generation) statsLoading.value = false
+    }
+  })()
 
-  if (ops.status === 'fulfilled') {
-    opsUsage.value = ops.value
+  const tasks: Promise<void>[] = [overviewTask, statsTask]
+  if (isAdmin.value) {
+    tasks.push((async () => {
+      try {
+        const value = await opsApi.getUsage(domain, { view: 'dashboard' })
+        if (gen !== generation) return
+        opsUsage.value = value
+      } catch (error) {
+        if (gen !== generation) return
+        console.error('Failed to load ops usage:', error)
+        opsError.value = true
+      } finally {
+        if (gen === generation) opsLoading.value = false
+      }
+    })())
   } else {
-    console.error('Failed to load ops usage:', ops.reason)
-    opsError.value = true
     opsUsage.value = null
+    opsLoading.value = false
   }
-
-  loading.value = false
+  await Promise.allSettled(tasks)
 }
 
 function docDelta(run: KbOverviewRun): string {
@@ -492,6 +530,14 @@ watch(() => domainStore.currentDomain, load)
 }
 
 .dash__notice strong { color: var(--kb-text-primary); }
+
+.dash__refresh-warning {
+  padding: 8px 12px;
+  border: 1px solid var(--kb-warning);
+  border-radius: var(--kb-radius-sm);
+  color: var(--kb-warning);
+  font-size: 12px;
+}
 
 .dash__block-error {
   display: flex;

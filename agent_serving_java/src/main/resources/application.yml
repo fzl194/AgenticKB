@@ -32,7 +32,7 @@ logging:
 
 serving:
   # 配置来源：serving 启动时从 main_control 拉取 per-domain 配置（GET /api/v1/serving-config），
-  # 并可经 POST /api/v1/admin/reload-config 热重载。
+  # 配置变更通过后台服务重启生效。
   main-control:
     base-url: ${SERVING_MAIN_CONTROL_BASEURL:http://localhost:8910}
     # 默认数据源的地址是否也向 main_control 要（GET /api/v1/system/database 的 default 块）。

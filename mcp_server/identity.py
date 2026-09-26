@@ -4,14 +4,15 @@
 立即生效、无 60s 绕过窗口"的语义。mining 侧另有 last_used_at 节流，不会写放大。
 
 内部共享密钥（X-Internal-Auth）与 mining 同源：优先 env MCP_INTERNAL_AUTH_SECRET，
-否则从 main_control 的 /api/v1/system/auth/raw 拉取（300s 缓存）——同一份 auth.yaml
-是唯一真相源，不在 supervisord 里再复制一份。
+其次复用 main_control_service.internal_auth 的解析链（CONTROL_PLANE_INTERNAL_AUTH_SECRET
+env → 同容器 auth.yaml 共位读取）——同一份 auth.yaml 是唯一真相源，不在 supervisord
+里再复制一份。（auth/raw 拉取通道已随该端点上锁退役：无凭据拉取必 401，本地读取
+无网络依赖也更稳。）
 """
 from __future__ import annotations
 
 import logging
 import os
-import time
 from dataclasses import dataclass
 
 import httpx
@@ -20,45 +21,24 @@ logger = logging.getLogger(__name__)
 
 MINING_URL = os.environ.get("MINING_URL", "http://localhost:8901").rstrip("/")
 VERIFY_TIMEOUT = float(os.environ.get("MCP_VERIFY_TIMEOUT", "10.0"))
-CONTROL_PLANE_URL = os.environ.get(
-    "CONTROL_PLANE_BASE_URL", "http://localhost:8910"
-).rstrip("/")
-AUTH_SECRET_TTL = float(os.environ.get("MCP_AUTH_SECRET_TTL", "300.0"))
 
 KEY_PREFIX_TAG = "kbm_"
 
-_secret_cache: dict = {"value": None, "fetched_at": 0.0}
-
 
 def _internal_auth_secret() -> str:
-    """X-Internal-Auth 共享密钥：env 显式配置优先，否则从 main_control 拉取（带缓存）。
+    """X-Internal-Auth 共享密钥：env MCP_INTERNAL_AUTH_SECRET 优先，其次复用
+    main_control_service.internal_auth（CONTROL_PLANE_INTERNAL_AUTH_SECRET env →
+    同容器 auth.yaml 共位读取）。
 
     返回空串 = 未就绪（验钥必败 → 401）；拒 change-me 占位符（同 mining 语义）。
     """
     explicit = os.environ.get("MCP_INTERNAL_AUTH_SECRET", "").strip()
-    if explicit:
+    if explicit and not explicit.startswith("change-me"):
         return explicit
-    now = time.monotonic()
-    if _secret_cache["value"] and (now - _secret_cache["fetched_at"]) < AUTH_SECRET_TTL:
-        return _secret_cache["value"]
-    try:
-        import yaml
-
-        resp = httpx.get(
-            f"{CONTROL_PLANE_URL}/api/v1/system/auth/raw",
-            timeout=5.0,
-            trust_env=False,
-        )
-        resp.raise_for_status()
-        val = str((yaml.safe_load(resp.text) or {}).get("internal_verify_secret") or "")
-        if val and not val.startswith("change-me"):
-            _secret_cache["value"] = val
-            _secret_cache["fetched_at"] = now
-            return val
-        logger.warning("auth.raw 无有效 internal_verify_secret")
-    except Exception as exc:
-        logger.warning("拉取 internal_verify_secret 失败（%s）", exc)
-    return ""
+    from main_control_service.internal_auth import (
+        load_control_plane_internal_auth_secret,
+    )
+    return load_control_plane_internal_auth_secret()
 
 
 class IdentityError(Exception):

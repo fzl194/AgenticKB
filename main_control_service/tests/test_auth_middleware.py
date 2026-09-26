@@ -31,6 +31,7 @@ def _mw_app(
     auth_text: str = _AUTH_YAML,
     *,
     site_admin_active: bool = True,
+    site_admin_validator=None,
 ) -> FastAPI:
     """最小 app：只挂 AuthMiddleware + 几个探测路由。auth_text 在构造前写入。"""
     auth_path = _write_auth(tmp_path, auth_text)
@@ -73,7 +74,7 @@ def _mw_app(
     app.add_middleware(
         AuthMiddleware,
         config_path=auth_path,
-        site_admin_validator=validate_site_admin,
+        site_admin_validator=site_admin_validator or validate_site_admin,
     )
     return app
 
@@ -390,3 +391,55 @@ def test_domain_config_detail_is_site_admin_only(tmp_path):
         member_headers = {"Authorization": f"Bearer {_token('member')}"}
         assert c.get("/api/v1/domains/generic", headers=member_headers).status_code == 403
         assert c.get("/api/v1/domains/generic/raw", headers=member_headers).status_code == 403
+
+
+# --------------------------------------------- 站点管理员校验 stale-if-error
+
+
+def test_site_admin_validator_error_503_without_prior_success(tmp_path):
+    """后端异常且无近期成功结论 → 503（fail-closed 不放行）。"""
+    async def validator(_request, _username):
+        raise RuntimeError("mining down")
+
+    app = _mw_app(tmp_path, site_admin_validator=validator)
+    with TestClient(app) as c:
+        resp = c.get("/api/v1/me", headers={"Authorization": f"Bearer {_token('admin')}"})
+        assert resp.status_code == 503
+
+
+def test_site_admin_validator_error_reuses_recent_verdict(tmp_path):
+    """先成功一次（缓存结论）→ 后端异常 → TTL 窗口内沿用结论不锁死管理员。"""
+    calls = {"n": 0}
+
+    async def validator(_request, _username):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return True
+        raise RuntimeError("mining down")
+
+    app = _mw_app(tmp_path, site_admin_validator=validator)
+    with TestClient(app) as c:
+        headers = {"Authorization": f"Bearer {_token('admin')}"}
+        assert c.get("/api/v1/me", headers=headers).status_code == 200
+        # 第二次后端异常 → 沿用 60s 内的活跃结论
+        assert c.get("/api/v1/me", headers=headers).status_code == 200
+        assert calls["n"] == 2
+
+
+def test_site_admin_validator_error_503_after_ttl_expiry(tmp_path, monkeypatch):
+    """缓存结论过期（TTL 置负模拟）→ 回到 503，不吃无限旧的结论。"""
+    from main_control_service import auth as auth_mod
+    monkeypatch.setattr(auth_mod, "SITE_ADMIN_STALE_IF_ERROR_TTL", -1.0)
+    calls = {"n": 0}
+
+    async def validator(_request, _username):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return True
+        raise RuntimeError("mining down")
+
+    app = _mw_app(tmp_path, site_admin_validator=validator)
+    with TestClient(app) as c:
+        headers = {"Authorization": f"Bearer {_token('admin')}"}
+        assert c.get("/api/v1/me", headers=headers).status_code == 200
+        assert c.get("/api/v1/me", headers=headers).status_code == 503

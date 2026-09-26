@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import secrets
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,12 @@ from main_control_service.jwt_util import decode as jwt_decode
 logger = logging.getLogger(__name__)
 _PROXY_PREFIX = "/api/v1/proxy/"
 SiteAdminValidator = Callable[[Request, str], Awaitable[bool]]
+
+#: 站点管理员实时校验后端（mining）异常时的兜底窗口：窗口内沿用最近一次成功
+#: 结论，防 mining 抖动/重启把全部站点管理员锁在控制面外（RBAC 审查 M2）。
+#: 正常路径仍每请求实时校验——降权/禁用立即生效的语义不变；0 = 禁用兜底。
+SITE_ADMIN_STALE_IF_ERROR_TTL = float(
+    os.environ.get("CMKB_SITE_ADMIN_STALE_TTL", "60"))
 
 # 登录与健康检查不需要 token
 _SKIP_PATHS: frozenset[str] = frozenset({
@@ -151,6 +159,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._state: dict[str, Any] = {}
         self._config_present = False
         self._site_admin_validator = site_admin_validator or self._validate_site_admin
+        #: username → (最近一次成功校验的 monotonic 时间, 是否活跃)——仅异常兜底用
+        self._admin_verdicts: dict[str, tuple[float, bool]] = {}
         self.reload()
 
     async def _validate_site_admin(self, request: Request, username: str) -> bool:
@@ -260,16 +270,30 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # A site-admin JWT is only a claimed identity. Re-check the live user
         # row before *any* admin fast path (including ordinary domain proxy
         # requests and the full domain list), so demotion/disable is immediate.
+        # 后端异常时仅在 TTL 窗口内沿用最近一次成功结论（stale-if-error）：
+        # 语义仍 fail-closed——无缓存/缓存过期 → 503；缓存的 False → 403。
         if payload.get("role") == "admin":
+            username = str(payload.get("sub") or "")
             try:
-                active_admin = await self._site_admin_validator(
-                    request, str(payload.get("sub") or ""),
-                )
+                active_admin = await self._site_admin_validator(request, username)
             except Exception:
-                logger.exception("site admin live validation failed")
-                return JSONResponse(
-                    status_code=503, content={"detail": "identity backend unavailable"},
-                )
+                cached = self._admin_verdicts.get(username)
+                age = time.monotonic() - cached[0] if cached else None
+                if cached is not None and age is not None \
+                        and age <= SITE_ADMIN_STALE_IF_ERROR_TTL:
+                    logger.warning(
+                        "site admin live validation failed — reusing verdict "
+                        "from %.1fs ago for %s", age, username,
+                    )
+                    active_admin = cached[1]
+                else:
+                    logger.exception("site admin live validation failed")
+                    return JSONResponse(
+                        status_code=503,
+                        content={"detail": "identity backend unavailable"},
+                    )
+            else:
+                self._admin_verdicts[username] = (time.monotonic(), active_admin)
             if not active_admin:
                 return JSONResponse(status_code=403, content={"detail": "site admin inactive"})
 

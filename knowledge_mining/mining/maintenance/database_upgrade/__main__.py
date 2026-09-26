@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import sys
+import uuid
 
 import psycopg
 
@@ -32,9 +32,10 @@ from .ledger import (
     ledger_exists,
     load_applied,
     release_lock,
+    rollback_online_migration_records,
     schema_complete,
 )
-from .manifest import load_manifest, manifest_checksum, pending_migrations
+from .manifest import load_manifest, manifest_checksum, pending_migrations, requires_rebase
 from .runner import apply_manifest
 from .validation import (
     compare_retained_table_counts,
@@ -61,7 +62,16 @@ def _release_version(repo_root: Path) -> str:
 
 def _default_target(source: str) -> str:
     suffix = "_converged"
-    return validate_database_name(source[: 63 - len(suffix)] + suffix)
+    if source.endswith(suffix):
+        target = source[: -len(suffix)]
+        if not target:
+            raise DatabaseUpgradeError("源数据库名不能只有 _converged 后缀")
+        return validate_database_name(target)
+    if len(source) + len(suffix) > 63:
+        raise DatabaseUpgradeError(
+            "源数据库名过长，无法构造可逆的 <x>_converged 目标名；请使用 --target-db"
+        )
+    return validate_database_name(source + suffix)
 
 
 def _paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
@@ -81,11 +91,25 @@ def _configured_database_exists(endpoint: DatabaseEndpoint) -> bool:
         return database_exists(connection, endpoint.dbname)
 
 
+def _rebase_target_exists(endpoint: DatabaseEndpoint, target_dbname: str) -> bool:
+    """Validate deployment privileges and report whether the fixed target exists."""
+
+    admin = migration_admin_endpoint(endpoint)
+    with psycopg.connect(admin.maintenance_conninfo, autocommit=True) as maintenance:
+        privilege = maintenance.execute(
+            "SELECT rolsuper OR rolcreatedb FROM pg_roles WHERE rolname = current_user"
+        ).fetchone()
+        if not privilege or not privilege[0]:
+            raise DatabaseUpgradeError(
+                "迁移账号缺少 CREATEDB；请在部署环境临时注入 CMKB_MIGRATION_PG_*"
+            )
+        return database_exists(maintenance, validate_database_name(target_dbname))
+
+
 def _plan(args: argparse.Namespace) -> int:
     _, config_dir, manifest_path, _ = _paths(args)
     endpoint = load_default_endpoint(config_dir)
     manifest = load_manifest(manifest_path)
-    target = args.target_db or _default_target(endpoint.dbname)
     if not _configured_database_exists(endpoint):
         print(json.dumps({
             "action": "bootstrap",
@@ -95,44 +119,50 @@ def _plan(args: argparse.Namespace) -> int:
         return PENDING_EXIT_CODE
     with psycopg.connect(endpoint.conninfo, autocommit=True) as connection:
         if not ledger_exists(connection):
+            target = args.target_db or _default_target(endpoint.dbname)
             validate_supported_rebase_source(connection)
             preflight_report = preflight_51_bridge(
                 connection, load_bridge_51_policy(config_dir)
             )
-            admin = migration_admin_endpoint(endpoint)
-            with psycopg.connect(admin.maintenance_conninfo, autocommit=True) as maintenance:
-                privilege = maintenance.execute(
-                    "SELECT rolsuper OR rolcreatedb FROM pg_roles WHERE rolname = current_user"
-                ).fetchone()
-                if not privilege or not privilege[0]:
-                    raise DatabaseUpgradeError(
-                        "迁移账号缺少 CREATEDB；请在部署环境临时注入 CMKB_MIGRATION_PG_*"
-                    )
+            target_exists = _rebase_target_exists(endpoint, target)
             print(json.dumps({
                 "action": "rebase",
                 "source": _safe_summary(endpoint),
                 "target_db": target,
+                "target_exists": target_exists,
+                "replace_target_required": target_exists,
                 "schema_version": manifest.schema_version,
                 "bridge_preflight": preflight_report.to_dict(),
             }, ensure_ascii=False))
             return PENDING_EXIT_CODE
         pending = pending_migrations(manifest, load_applied(connection))
         complete = schema_complete(connection, checksum=manifest_checksum(manifest))
-        preflight_report = None
-        if pending:
+        rebase_required = requires_rebase(pending)
+        target_exists = False
+        if rebase_required:
+            target = args.target_db or _default_target(endpoint.dbname)
             validate_supported_rebase_source(connection)
-            preflight_report = preflight_51_bridge(
-                connection, load_bridge_51_policy(config_dir)
-            )
+            target_exists = _rebase_target_exists(endpoint, target)
     if pending or not complete:
         payload = {
-            "action": "rebase" if pending else "complete_marker_recovery",
+            "action": (
+                "rebase"
+                if rebase_required
+                else "online_migrate"
+                if pending
+                else "complete_marker_recovery"
+            ),
             "database": _safe_summary(endpoint),
             "migrations": [item.migration_id for item in pending],
+            "migration_modes": [item.mode.value for item in pending],
             "completion_marker_missing": not complete,
         }
-        if preflight_report is not None:
-            payload["bridge_preflight"] = preflight_report.to_dict()
+        if rebase_required:
+            payload.update({
+                "target_db": target,
+                "target_exists": target_exists,
+                "replace_target_required": target_exists,
+            })
         print(json.dumps(payload, ensure_ascii=False))
         return PENDING_EXIT_CODE
     print(json.dumps({
@@ -147,21 +177,20 @@ def _target_endpoint(
     source: DatabaseEndpoint,
     target_dbname: str,
     *,
-    explicit_target: bool,
+    replace_target: bool,
 ) -> DatabaseEndpoint:
     admin = migration_admin_endpoint(source)
     target = validate_database_name(target_dbname)
-    with psycopg.connect(admin.maintenance_conninfo, autocommit=True) as maintenance:
-        exists = database_exists(maintenance, target)
-    if exists and explicit_target:
-        raise DatabaseUpgradeError(f"显式目标数据库已存在，拒绝复用或覆盖：{target}")
-    if exists:
-        suffix = datetime.now(timezone.utc).strftime("_%Y%m%d%H%M%S")
-        target = validate_database_name(target[: 63 - len(suffix)] + suffix)
-        with psycopg.connect(admin.maintenance_conninfo, autocommit=True) as maintenance:
-            if database_exists(maintenance, target):
-                raise DatabaseUpgradeError(f"自动生成的目标数据库已存在：{target}")
-    return clone_database(source, target, maintenance_endpoint=admin)
+    if replace_target and target != _default_target(source.dbname):
+        raise DatabaseUpgradeError(
+            "--replace-target 只能删除固定轮换目标数据库，不能与任意 --target-db 组合"
+        )
+    return clone_database(
+        source,
+        target,
+        maintenance_endpoint=admin,
+        replace_existing=replace_target,
+    )
 
 
 def _apply(args: argparse.Namespace) -> int:
@@ -190,7 +219,8 @@ def _apply(args: argparse.Namespace) -> int:
         return 0
 
     with psycopg.connect(source.conninfo, autocommit=True) as source_connection:
-        if ledger_exists(source_connection):
+        legacy_bridge_required = not ledger_exists(source_connection)
+        if not legacy_bridge_required:
             pending = pending_migrations(manifest, load_applied(source_connection))
             if not pending:
                 # Recovery window: all SQL committed but the terminal marker was not.
@@ -213,8 +243,39 @@ def _apply(args: argparse.Namespace) -> int:
                     "schema_version": result.schema_version,
                 }, ensure_ascii=False))
                 return 0
+            if not requires_rebase(pending):
+                deployment_id = (
+                    str(getattr(args, "deployment_id", "") or "").strip()
+                    or uuid.uuid4().hex
+                )
+                result = apply_manifest(
+                    source_connection,
+                    manifest,
+                    app_version=app_version,
+                    details={
+                        "mode": "online_migrate",
+                        "deployment_id": deployment_id,
+                    },
+                    validate_before_complete=lambda: validate_schema(
+                        source_connection,
+                        manifest,
+                        require_completion_marker=False,
+                    ),
+                )
+                report = validate_schema(source_connection, manifest)
+                print(json.dumps({
+                    "ok": True,
+                    "mode": "online_migrate",
+                    "database": _safe_summary(source),
+                    "applied": result.applied_ids,
+                    "schema_version": report.schema_version,
+                    "deployment_id": deployment_id,
+                    "config_switched": False,
+                }, ensure_ascii=False))
+                return 0
         validate_supported_rebase_source(source_connection)
-        preflight_51_bridge(source_connection, bridge_policy)
+        if legacy_bridge_required:
+            preflight_51_bridge(source_connection, bridge_policy)
 
     target_dbname = args.target_db or _default_target(source.dbname)
     admin = migration_admin_endpoint(source)
@@ -227,19 +288,21 @@ def _apply(args: argparse.Namespace) -> int:
                     "等待迁移锁期间数据库配置已变化，拒绝基于陈旧源库继续"
                 )
             target = _target_endpoint(
-                source, target_dbname, explicit_target=args.target_db is not None
+                source, target_dbname, replace_target=args.replace_target
             )
             with (
                 psycopg.connect(source.conninfo, autocommit=True) as source_connection,
                 psycopg.connect(target.conninfo, autocommit=True) as target_connection,
             ):
                 verified_counts: dict[str, int] = {}
-                bridge_report = apply_51_bridge(
-                    target_connection,
-                    repo_root=repo_root,
-                    default_domain=bridge_policy.default_domain,
-                    allowed_domains=bridge_policy.allowed_domains,
-                )
+                bridge_report = None
+                if legacy_bridge_required:
+                    bridge_report = apply_51_bridge(
+                        target_connection,
+                        repo_root=repo_root,
+                        default_domain=bridge_policy.default_domain,
+                        allowed_domains=bridge_policy.allowed_domains,
+                    )
 
                 def validate_rebase_before_complete() -> None:
                     validate_schema(
@@ -282,7 +345,7 @@ def _apply(args: argparse.Namespace) -> int:
         "applied": result.applied_ids,
         "schema_version": report.schema_version,
         "verified_tables": len(verified_counts),
-        "bridge_51": {
+        "bridge_51": None if bridge_report is None else {
             "user_domain_rows": bridge_report.user_domain_rows,
             "migrated_keys": bridge_report.migrated_keys,
             "migrated_grants": bridge_report.migrated_grants,
@@ -314,10 +377,23 @@ def _verify(args: argparse.Namespace) -> int:
 def _rollback_config(args: argparse.Namespace) -> int:
     _, config_dir, manifest_path, backup_root = _paths(args)
     manifest = load_manifest(manifest_path)
+    migration_id = manifest.schema_version.replace("/", "_").replace(" ", "_")
+    backup_dir = backup_root / migration_id
+    backups = (
+        backup_dir / "database.yaml",
+        backup_dir / "domain_registry.yaml",
+    )
+    if not any(path.exists() for path in backups):
+        print(json.dumps({
+            "ok": True,
+            "mode": "rollback_config_noop",
+            "reason": "apply 未创建配置备份，配置尚未切换",
+        }, ensure_ascii=False))
+        return 0
     result = restore_config_backup(
         config_dir=config_dir,
         backup_root=backup_root,
-        migration_id=manifest.schema_version.replace("/", "_").replace(" ", "_"),
+        migration_id=migration_id,
     )
     print(json.dumps({
         "ok": True,
@@ -327,10 +403,49 @@ def _rollback_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _rollback_online_ledger(args: argparse.Namespace) -> int:
+    repo_root, config_dir, manifest_path, _ = _paths(args)
+    endpoint = load_default_endpoint(config_dir)
+    manifest = load_manifest(manifest_path)
+    app_version = _release_version(repo_root)
+    deployment_id = str(getattr(args, "deployment_id", "") or "").strip()
+    if not deployment_id:
+        raise DatabaseUpgradeError("rollback-online-ledger 必须提供 --deployment-id")
+    with psycopg.connect(endpoint.conninfo, autocommit=True) as connection:
+        acquire_lock(connection)
+        try:
+            deleted = rollback_online_migration_records(
+                connection,
+                manifest,
+                app_version=app_version,
+                deployment_id=deployment_id,
+            )
+        finally:
+            release_lock(connection)
+    print(json.dumps({
+        "ok": True,
+        "mode": "rollback_online_ledger",
+        "database": _safe_summary(endpoint),
+        "deployment_id": deployment_id,
+        "deleted": deleted,
+        "ddl_reverted": False,
+    }, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     repo_root = _repo_root()
     parser = argparse.ArgumentParser(description="AgenticKB versioned database convergence")
-    parser.add_argument("command", choices=("plan", "apply", "verify", "rollback-config"))
+    parser.add_argument(
+        "command",
+        choices=(
+            "plan",
+            "apply",
+            "verify",
+            "rollback-config",
+            "rollback-online-ledger",
+        ),
+    )
     parser.add_argument("--repo-root", default=str(repo_root))
     parser.add_argument(
         "--config-dir",
@@ -345,6 +460,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--backup-root", default="/app/data/database-migration-backups"
     )
     parser.add_argument("--target-db")
+    parser.add_argument("--deployment-id")
+    parser.add_argument(
+        "--replace-target",
+        action="store_true",
+        help="显式确认删除已存在的轮换目标库后重新克隆",
+    )
     parser.add_argument("--no-config-switch", action="store_true")
     return parser
 
@@ -358,7 +479,9 @@ def main(argv: list[str] | None = None) -> int:
             return _apply(args)
         if args.command == "verify":
             return _verify(args)
-        return _rollback_config(args)
+        if args.command == "rollback-config":
+            return _rollback_config(args)
+        return _rollback_online_ledger(args)
     except Exception as exc:  # noqa: BLE001 - operator CLI must fail closed without DSN traceback
         print(f"[ERROR] database upgrade failed: {exc}", file=sys.stderr)
         return 1

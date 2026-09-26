@@ -1,11 +1,22 @@
-schema_version: 2026.09.converged-v1
+schema_version: 2026.09.domain-role-v1
 migrations:
   - id: core/20260918_bridge_51_tables
     path: core/20260918_000_bridge_51_tables.sql
+    mode: offline_rebase
     checksum: bce94e11c987de51309903e1e306fc0bf1ddbb4dcf5fd86a12e5a866b2fee471
   - id: core/20260918_repair_51_indexes
     path: core/20260918_000_repair_51_indexes.sql
+    mode: offline_rebase
     checksum: d25be15e2246e0929018d94be5ce5fb7e69af08778dee134f0468b3698049b27
   - id: core/20260918_drop_retired_tables
     path: core/20260918_001_drop_retired_tables.sql
+    mode: offline_rebase
     checksum: 295aa8681bfb0bebea8ad861fc6ebdbe920544c59f72ccbc46d8e36930b43a38
+  - id: core/20260924_add_user_domain_role
+    path: core/20260924_002_add_user_domain_role.sql
+    mode: online_expand
+    checksum: 824f11260c945d72285029ba93601000cb971f82d0ba9336ac86bb0922cb34ef
+  - id: core/20260926_validate_kb_domain_memberships
+    path: core/20260926_003_validate_kb_domain_memberships.sql
+    mode: online_expand
+    checksum: ce71d771b6e81ae32f756add4434e2f6c28bdc09f16e2681fcc8ad227b0b5e43

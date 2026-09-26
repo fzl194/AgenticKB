@@ -11,8 +11,8 @@
 export type KbVisibility = 'private' | 'public'
 export type KbStatus = 'active' | 'deleted'
 export type KbMemberRole = 'viewer' | 'editor'
-/** 当前用户在该 KB 的有效访问级别（列表页展示用）。admin = site admin 全通。 */
-export type KbMyRole = 'owner' | 'editor' | 'viewer' | 'admin'
+/** 当前用户在该 KB 的有效访问级别。admin 为站点管理员，domain_admin 为本域管理员。 */
+export type KbMyRole = 'owner' | 'editor' | 'viewer' | 'admin' | 'domain_admin'
 /** 文档派生状态（后端 derive_document_status 实时计算，不存列）。
  * 36号 §九：mined=存在于该 KB 最新 validated Build 且 active（Build membership，
  * 不再以最近一次 run_document committed 为准）；update_failed=已入库但最近一次

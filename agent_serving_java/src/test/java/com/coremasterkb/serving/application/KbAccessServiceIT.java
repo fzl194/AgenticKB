@@ -44,7 +44,7 @@ class KbAccessServiceIT {
     private JdbcTemplate jdbc;
     private String token;
 
-    private String owner, member, outsider, admin, editor;
+    private String owner, member, outsider, admin, editor, domainAdmin;
     private String kbPrivate, kbShared, kbPublic, kbDeleted, kbOtherDomain;
 
     @BeforeEach
@@ -64,6 +64,7 @@ class KbAccessServiceIT {
         outsider = "outsider-" + token;
         admin = "admin-" + token;
         editor = "editor-" + token;
+        domainAdmin = "domain-admin-" + token;
         kbPrivate = "kbPriv-" + token;
         kbShared = "kbShared-" + token; // 现为 private+成员模型（007 收口 shared）
         kbPublic = "kbPub-" + token;
@@ -75,6 +76,7 @@ class KbAccessServiceIT {
         insertUser(outsider);
         insertUser(admin, "admin");
         insertUser(editor);
+        insertUser(domainAdmin);
         insertKb(kbPrivate, DOMAIN, "private", "active");
         insertKb(kbShared, DOMAIN, "private", "active");
         insertKb(kbPublic, DOMAIN, "public", "active");
@@ -86,6 +88,10 @@ class KbAccessServiceIT {
                 kbPrivate, member, "2026-01-01T00:00:00Z");
         jdbc.update("INSERT INTO kb_members (kb_id, user_id, role, added_at) VALUES (?,?, 'editor', ?)",
                 kbPrivate, editor, "2026-01-01T00:00:00Z");
+        bindDomain(owner, DOMAIN);
+        bindDomain(owner, OTHER_DOMAIN);
+        bindDomain(member, DOMAIN);
+        bindDomain(editor, DOMAIN);
     }
 
     @AfterEach
@@ -102,6 +108,16 @@ class KbAccessServiceIT {
     void ownerReadsPrivate() {
         assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPrivate), username(owner)))
                 .containsExactly(kbPrivate);
+    }
+
+    @Test
+    @DisplayName("an owner without a same-domain binding cannot read their own KB")
+    void unboundOwnerCannotReadOwnKb() {
+        jdbc.update("DELETE FROM user_domains WHERE user_id = ? AND domain = ?", owner, DOMAIN);
+        assertThatThrownBy(() ->
+                kbAccessService.authorize(DOMAIN, List.of(kbPrivate), username(owner)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("kb_not_found");
     }
 
     @Test
@@ -122,6 +138,16 @@ class KbAccessServiceIT {
         assertThatThrownBy(() ->
                 kbAccessService.authorize(DOMAIN, List.of(kbShared), username(outsider)))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("a KB member without a same-domain binding cannot read the KB")
+    void unboundKbMemberCannotRead() {
+        jdbc.update("DELETE FROM user_domains WHERE user_id = ? AND domain = ?", member, DOMAIN);
+        assertThatThrownBy(() ->
+                kbAccessService.authorize(DOMAIN, List.of(kbPrivate), username(member)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("kb_not_found");
     }
 
     @Test
@@ -190,6 +216,19 @@ class KbAccessServiceIT {
     }
 
     @Test
+    @DisplayName("a domain admin reads every active KB only in the granted domain")
+    void domainAdminReadsAnyActiveKbInGrantedDomain() {
+        jdbc.update("INSERT INTO user_domains (user_id, domain, domain_role) VALUES (?,?, 'admin')",
+                domainAdmin, DOMAIN);
+        assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPrivate), username(domainAdmin)))
+                .containsExactly(kbPrivate);
+        assertThatThrownBy(() ->
+                kbAccessService.authorize(OTHER_DOMAIN, List.of(kbOtherDomain), username(domainAdmin)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("kb_not_found");
+    }
+
+    @Test
     @DisplayName("site admin powers stop at soft-deleted and other-domain KBs")
     void siteAdminExclusions() {
         assertThatThrownBy(() ->
@@ -233,7 +272,7 @@ class KbAccessServiceIT {
 
         // public（51号批次1：域内化——未绑定域一律拒绝）
         assertThat(kbAccessService.authorize(DOMAIN, List.of(kbPublic), username(owner)))
-                .containsExactly(kbPublic);                        // owner × public（owner 分支，无需绑定）
+                .containsExactly(kbPublic);                        // owner × public（仍须同域绑定）
         assertThatThrownBy(() ->
                 kbAccessService.authorize(DOMAIN, List.of(kbPublic), username(outsider)))
                 .hasMessage("kb_not_found");                       // 未绑定 × public
@@ -287,6 +326,10 @@ class KbAccessServiceIT {
                         + "VALUES (?,?,?,?,?,?,?,?)",
                 id, domain, id, owner, visibility, status,
                 "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z");
+    }
+
+    private void bindDomain(String userId, String domain) {
+        jdbc.update("INSERT INTO user_domains (user_id, domain) VALUES (?,?)", userId, domain);
     }
 
     private boolean tableExists(String table) {

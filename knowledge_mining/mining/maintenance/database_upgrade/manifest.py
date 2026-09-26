@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import yaml
 
@@ -18,11 +19,21 @@ class AppliedMigrationMismatch(ManifestError):
     """A published migration differs from the version recorded in the database."""
 
 
+class MigrationMode(str, Enum):
+    """Operational safety class for a migration."""
+
+    ONLINE_EXPAND = "online_expand"
+    BACKFILL = "backfill"
+    OFFLINE_REBASE = "offline_rebase"
+
+
 @dataclass(frozen=True, slots=True)
 class Migration:
     migration_id: str
     path: Path
     checksum: str
+    mode: MigrationMode = MigrationMode.OFFLINE_REBASE
+    reentrant: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +51,8 @@ def _file_checksum(path: Path) -> str:
 
 def manifest_checksum(manifest: MigrationManifest) -> str:
     payload = "\n".join(
-        f"{item.migration_id}:{item.checksum}" for item in manifest.migrations
+        f"{item.migration_id}:{item.mode.value}:{int(item.reentrant)}:{item.checksum}"
+        for item in manifest.migrations
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
@@ -66,11 +78,26 @@ def load_manifest(path: Path) -> MigrationManifest:
         migration_id = str(row.get("id") or "").strip()
         relative_path = str(row.get("path") or "").strip()
         checksum = str(row.get("checksum") or "").strip().lower()
+        raw_mode = str(row.get("mode") or MigrationMode.OFFLINE_REBASE.value).strip()
+        reentrant = row.get("reentrant", False)
         if not migration_id or migration_id in seen_ids:
             raise ManifestError(f"migration id 缺失或重复：{migration_id!r}")
         seen_ids.add(migration_id)
         if not relative_path or not checksum:
             raise ManifestError(f"{migration_id} 缺少 path/checksum")
+        try:
+            mode = MigrationMode(raw_mode)
+        except ValueError as exc:
+            allowed = ", ".join(item.value for item in MigrationMode)
+            raise ManifestError(
+                f"{migration_id} mode 无效：{raw_mode!r}；允许值：{allowed}"
+            ) from exc
+        if not isinstance(reentrant, bool):
+            raise ManifestError(f"{migration_id} reentrant 必须是布尔值")
+        if reentrant and mode is not MigrationMode.BACKFILL:
+            raise ManifestError(
+                f"{migration_id} 仅 backfill migration 可声明 reentrant=true"
+            )
         sql_path = (root / relative_path).resolve(strict=True)
         try:
             sql_path.relative_to(root)
@@ -83,8 +110,18 @@ def load_manifest(path: Path) -> MigrationManifest:
             raise ManifestError(
                 f"{migration_id} checksum 不匹配：manifest={checksum}, actual={actual_checksum}"
             )
-        migrations.append(Migration(migration_id, sql_path, checksum))
+        migrations.append(Migration(migration_id, sql_path, checksum, mode, reentrant))
     return MigrationManifest(schema_version, tuple(migrations))
+
+
+def requires_rebase(migrations: Iterable[Migration]) -> bool:
+    """Return whether any pending migration requires clone-and-switch."""
+
+    return any(
+        item.mode is MigrationMode.OFFLINE_REBASE
+        or (item.mode is MigrationMode.BACKFILL and not item.reentrant)
+        for item in migrations
+    )
 
 
 def pending_migrations(
@@ -113,7 +150,9 @@ __all__ = [
     "ManifestError",
     "Migration",
     "MigrationManifest",
+    "MigrationMode",
     "load_manifest",
     "manifest_checksum",
     "pending_migrations",
+    "requires_rebase",
 ]

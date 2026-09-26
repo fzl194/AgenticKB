@@ -149,7 +149,7 @@ async def _mk_user(kbdb, uid: str, username: str, *, site_role: str = "member") 
 
 @pytest.mark.asyncio
 async def test_public_kb_visibility_requires_binding(kbdb):
-    """public 库域内化：未绑定域的用户不可见；owner 不受影响（安全网）；绑定后可见。"""
+    """硬域边界：普通用户即使是 owner，也必须先绑定资源所在域。"""
     s = _suffix()
     uid, uid2 = f"u_vis_1_{s}", f"u_vis_2_{s}"
     await _mk_user(kbdb, uid, f"vis_user_1_{s}")
@@ -164,14 +164,16 @@ async def test_public_kb_visibility_requires_binding(kbdb):
             user_id=uid, domain="generic"
         )
         assert await kbdb.is_visible(kb_id=kb_id, user_id=uid) is False
-        # owner 安全网：owner 未绑定该域仍可见（owner 分支不分域）
-        assert await kbdb.is_visible(kb_id=kb_id, user_id=uid2) is True
+        # owner/member 也不能绕过域绑定。
+        assert await kbdb.is_visible(kb_id=kb_id, user_id=uid2) is False
         # 绑定后 → 可见
         await kbdb.bind_domain(user_id=uid, domain="generic")
         assert kb_id in await kbdb.list_visible_kb_ids(
             user_id=uid, domain="generic"
         )
         assert await kbdb.is_visible(kb_id=kb_id, user_id=uid) is True
+        await kbdb.bind_domain(user_id=uid2, domain="generic")
+        assert await kbdb.is_visible(kb_id=kb_id, user_id=uid2) is True
     finally:
         async with kbdb._pool.connection() as conn:
             await conn.execute(

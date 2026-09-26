@@ -88,12 +88,17 @@ export function useKbApi() {
       const { data } = await client.delete(`/api/kb/${kbId}`, { data: { confirm_name: confirmName } })
       return data
     },
+    /** 恢复软删除知识库；后端按 owner / site admin / 同域 domain admin 校验。 */
+    async restoreKb(kbId: string): Promise<KbDetail> {
+      const { data } = await client.post(`/api/kb/${kbId}/restore`)
+      return extractOne<KbDetail>(data)
+    },
     /** 删除任务进度（site-admin 全域 / 库主自己发起的；前端 5s 轮询） */
     async purgeTasks(domain: string): Promise<KbPurgeTask[]> {
       const { data } = await client.get('/api/kb/purge-tasks', { params: { domain } })
       return extractItems<KbPurgeTask>(data.tasks ?? data)
     },
-    /** site-admin：已删库清单（存量善后）——行只含身份字段（DeletedKbRow） */
+    /** site/domain admin：当前域已删库清单——行只含身份字段（DeletedKbRow）。 */
     async listDeletedKbs(domain: string): Promise<DeletedKbRow[]> {
       const { data } = await client.get('/api/kb', { params: { domain, include_deleted: true } })
       return extractItems<DeletedKbRow>(data)

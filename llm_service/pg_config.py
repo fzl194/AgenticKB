@@ -11,6 +11,7 @@ import httpx
 import yaml
 
 from llm_service.config import CONTROL_PLANE_BASE_URL
+from main_control_service.internal_auth import control_plane_internal_headers
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,13 @@ def load_db_config() -> LlmDbConfig:
     url = CONTROL_PLANE_BASE_URL.rstrip("/")
     endpoint = f"{url}/api/v1/system/database/raw"
     try:
-        resp = httpx.get(endpoint, timeout=5.0, proxy=None, trust_env=False)
+        resp = httpx.get(
+            endpoint,
+            headers=control_plane_internal_headers(),
+            timeout=5.0,
+            proxy=None,
+            trust_env=False,
+        )
         resp.raise_for_status()
         data = yaml.safe_load(resp.text)
     except Exception as exc:

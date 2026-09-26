@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from psycopg.types.json import Jsonb
 
 from .contract import MIGRATION_LEDGER_TABLE, SCHEMA_MARKER_ID
+from .manifest import MigrationManifest, MigrationMode, manifest_checksum
 
 
 MIGRATION_LOCK_KEY = 0x434D4B425F4442  # "CMKB_DB"
@@ -24,6 +25,10 @@ CREATE TABLE IF NOT EXISTS {MIGRATION_LEDGER_TABLE} (
 
 class MigrationLockUnavailable(RuntimeError):
     """Another deployment owns the database migration lock."""
+
+
+class LedgerRollbackError(RuntimeError):
+    """Ledger rows are not safe to remove for an expand-only code rollback."""
 
 
 def ledger_exists(connection: Any) -> bool:
@@ -108,8 +113,84 @@ def record_schema_complete(
     )
 
 
+def rollback_online_migration_records(
+    connection: Any,
+    manifest: MigrationManifest,
+    *,
+    app_version: str,
+    deployment_id: str,
+    schema_marker_id: str = SCHEMA_MARKER_ID,
+) -> tuple[str, ...]:
+    """Remove only this release's online ledger rows; compatible DDL stays in place."""
+
+    if not ledger_exists(connection):
+        return ()
+    deployment = str(deployment_id).strip()
+    if not deployment:
+        raise LedgerRollbackError("在线迁移回滚缺少 deployment_id")
+    rollback_candidates = {
+        item.migration_id: item
+        for item in manifest.migrations
+        if item.mode in (MigrationMode.ONLINE_EXPAND, MigrationMode.BACKFILL)
+    }
+    candidate_ids = [*rollback_candidates, schema_marker_id]
+    with connection.transaction():
+        rows = connection.execute(
+            f"""SELECT migration_id, checksum, app_version, details_json
+                  FROM {MIGRATION_LEDGER_TABLE}
+                 WHERE migration_id = ANY(%s)""",
+            (candidate_ids,),
+        ).fetchall()
+        present: set[str] = set()
+        expected_manifest_checksum = manifest_checksum(manifest)
+        for raw_id, raw_checksum, raw_app_version, raw_details in rows:
+            migration_id = str(raw_id)
+            details = raw_details if isinstance(raw_details, Mapping) else {}
+            is_current_deployment = (
+                str(raw_app_version) == app_version
+                and details.get("deployment_id") == deployment
+            )
+            if not is_current_deployment:
+                continue
+            if migration_id == schema_marker_id:
+                valid = (
+                    str(raw_checksum) == expected_manifest_checksum
+                    and details.get("mode") == "online_migrate"
+                    and details.get("schema_version") == manifest.schema_version
+                )
+            else:
+                migration = rollback_candidates.get(migration_id)
+                if (
+                    migration is not None
+                    and migration.mode is MigrationMode.BACKFILL
+                    and not migration.reentrant
+                ):
+                    raise LedgerRollbackError(
+                        f"backfill {migration_id} 未声明 reentrant=true，不可自动回滚"
+                    )
+                valid = bool(
+                    migration
+                    and str(raw_checksum) == migration.checksum
+                    and details.get("mode") == "online_migrate"
+                    and details.get("migration_mode") == migration.mode.value
+                )
+            if not valid:
+                raise LedgerRollbackError(
+                    f"迁移账本 {migration_id} 不属于本次在线迁移，拒绝删除"
+                )
+            present.add(migration_id)
+        ordered = tuple(item for item in candidate_ids if item in present)
+        if ordered:
+            connection.execute(
+                f"DELETE FROM {MIGRATION_LEDGER_TABLE} WHERE migration_id = ANY(%s)",
+                (list(ordered),),
+            )
+    return ordered
+
+
 __all__ = [
     "LEDGER_DDL",
+    "LedgerRollbackError",
     "MIGRATION_LOCK_KEY",
     "MigrationLockUnavailable",
     "acquire_lock",
@@ -118,6 +199,7 @@ __all__ = [
     "load_applied",
     "record_migration",
     "record_schema_complete",
+    "rollback_online_migration_records",
     "release_lock",
     "schema_complete",
 ]

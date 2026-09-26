@@ -57,6 +57,8 @@ services:
       - "127.0.0.1:${CMKB_MINING_PORT:-8901}:8901"   # 知识挖掘服务 knowledge_mining
       - "127.0.0.1:${CMKB_CONTROL_PORT:-8910}:8910"  # 主控服务 main_control_service
       - "127.0.0.1:${CMKB_SERVING_PORT:-8081}:8081"  # 在线检索服务 agent_serving_java
+      # MCP 供外部 Agent 客户端直连（自带用户级密钥鉴权），保持全网可达——
+      # 勿改回 127.0.0.1（nginx 无 /mcp 转发，回环绑定会切断内网客户端）
       - "${CMKB_MCP_PORT:-9000}:9000"      # MCP 服务 mcp_server
 
     volumes:
@@ -109,6 +111,10 @@ services:
 
       # 场景包配置目录
       SCENARIO_PACKS_DIR: /app/main_control_service/config/scenario_packs
+
+      # Python/Java 子服务读取主控配置的共享凭证。留空时兼容同容器部署，
+      # 各进程从 /app/main_control_service/config/system/auth.yaml 读取。
+      CONTROL_PLANE_INTERNAL_AUTH_SECRET: "${CONTROL_PLANE_INTERNAL_AUTH_SECRET:-}"
 
       # 在线检索内部密钥：deploy-server.sh 首次部署随机生成并持久化到宿主机
       # .env（600 权限，后续部署复用不轮换）。serving 与 mcp_server 共享

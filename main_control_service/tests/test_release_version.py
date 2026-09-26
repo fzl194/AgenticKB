@@ -70,7 +70,12 @@ def test_version_endpoint_returns_the_deployed_release(tmp_path: Path) -> None:
 
     manifest_path = _write_manifest(tmp_path / "releases.json", _manifest())
     config_dir = tmp_path / "config"
-    config_dir.mkdir()
+    system_dir = config_dir / "system"
+    system_dir.mkdir(parents=True)
+    (system_dir / "auth.yaml").write_text(
+        "enabled: false\njwt_secret: test\ninternal_verify_secret: test-internal\n",
+        encoding="utf-8",
+    )
 
     with TestClient(
         create_app(config_dir=config_dir, release_manifest_path=manifest_path)

@@ -1,4 +1,5 @@
 import type { FrozenMiningWorkflowSummary } from '@/types/miningWorkflow'
+import type { DomainCapability, DomainRole } from '@/types/auth'
 
 export interface DomainInfo {
   domain_id: string
@@ -6,6 +7,10 @@ export interface DomainInfo {
   enabled: boolean
   default_channel: string
   scenario_pack_ref: string
+  /** 当前登录用户在这个域中的角色；系统管理员由后端返回 admin。 */
+  domain_role?: DomainRole | null
+  /** 由后端按域计算的能力，前端只据此显示和导航，安全校验仍在后端。 */
+  capabilities?: DomainCapability[]
 }
 
 

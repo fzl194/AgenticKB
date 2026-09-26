@@ -36,6 +36,14 @@ def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+class DomainMembershipConflict(RuntimeError):
+    """A domain membership cannot be removed without resolving owned resources."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 #: readiness 档位（低 → 高）。展示层按 level 索引取标签/颜色。
 READINESS_LEVELS = (
     "empty", "parsed", "segmented", "lexical_ready", "vector_ready",
@@ -258,7 +266,17 @@ class KbDB:
                               SELECT ud.domain FROM user_domains ud
                                WHERE ud.user_id = kb_users.id
                                ORDER BY ud.domain
-                          ) AS domains
+                          ) AS domains,
+                          COALESCE((
+                              SELECT jsonb_agg(
+                                  jsonb_build_object(
+                                      'domain', ud.domain,
+                                      'domain_role', ud.domain_role
+                                  ) ORDER BY ud.domain
+                              )
+                              FROM user_domains ud
+                              WHERE ud.user_id = kb_users.id
+                          ), '[]'::jsonb) AS domain_grants
                    FROM kb_users ORDER BY created_at""",
             )
             return [dict(r) for r in await cur.fetchall()]
@@ -342,26 +360,145 @@ class KbDB:
             )
             return [r["domain"] for r in await cur.fetchall()]
 
+    async def list_domain_grants(self, *, user_id: str) -> list[dict[str, str]]:
+        """Return scoped domain roles in stable domain order."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT domain, domain_role FROM user_domains
+                   WHERE user_id = %s ORDER BY domain""",
+                (user_id,),
+            )
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def get_domain_role(self, *, user_id: str, domain: str) -> str | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT domain_role FROM user_domains WHERE user_id = %s AND domain = %s",
+                (user_id, domain),
+            )
+            row = await cur.fetchone()
+            return str(row["domain_role"]) if row else None
+
+    async def can_manage_domain(self, *, user_id: str, domain: str) -> bool:
+        """Site admins manage every domain; domain admins manage only their grant."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT 1 FROM kb_users u
+                   WHERE u.id = %(uid)s AND u.status = 'active'
+                     AND (u.site_role = 'admin'
+                          OR EXISTS (SELECT 1 FROM user_domains ud
+                                     WHERE ud.user_id = u.id
+                                       AND ud.domain = %(domain)s
+                                       AND ud.domain_role = 'admin'))""",
+                {"uid": user_id, "domain": domain},
+            )
+            return await cur.fetchone() is not None
+
+    async def list_domain_users(self, *, domain: str) -> list[dict[str, Any]]:
+        """The non-sensitive user projection visible to domain administrators."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT u.id, u.username, u.display_name, ud.domain_role
+                   FROM user_domains ud
+                   JOIN kb_users u ON u.id = ud.user_id
+                   WHERE ud.domain = %s AND u.status = 'active'
+                   ORDER BY ud.domain_role, u.username""",
+                (domain,),
+            )
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def set_domain_grants(
+        self, *, user_id: str, grants: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Replace grants atomically while preserving removal safety invariants."""
+        normalized = {
+            str(grant["domain"]).strip(): str(grant.get("domain_role", "member")).strip()
+            for grant in grants
+            if grant.get("domain") and str(grant["domain"]).strip()
+        }
+        if any(role not in {"member", "admin"} for role in normalized.values()):
+            raise ValueError("invalid_domain_role")
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                cur = await conn.execute(
+                    "SELECT domain FROM user_domains WHERE user_id = %s FOR UPDATE",
+                    (user_id,),
+                )
+                existing = {row["domain"] for row in await cur.fetchall()}
+                for domain in sorted(existing - set(normalized)):
+                    await self._unbind_domain_on_conn(conn, user_id=user_id, domain=domain)
+                for domain, role in sorted(normalized.items()):
+                    await conn.execute(
+                        """INSERT INTO user_domains (user_id, domain, domain_role)
+                           VALUES (%s, %s, %s)
+                           ON CONFLICT (user_id, domain) DO UPDATE
+                           SET domain_role = EXCLUDED.domain_role""",
+                        (user_id, domain, role),
+                    )
+        return await self.list_domain_grants(user_id=user_id)
+
     async def set_user_domains(self, *, user_id: str, domains: list[str]) -> list[str]:
-        """覆盖式更新绑定（admin 分配端点专用；空集由路由层 422 拦截）。"""
+        """兼容入口：更新域集合，保留仍存在域的 domain_role。"""
         cleaned = sorted({d.strip() for d in domains if d and d.strip()})
         async with self._pool.connection() as conn:
             async with conn.transaction():
-                await conn.execute("DELETE FROM user_domains WHERE user_id = %s", (user_id,))
+                cur = await conn.execute(
+                    "SELECT domain FROM user_domains WHERE user_id = %s FOR UPDATE",
+                    (user_id,),
+                )
+                existing = {row["domain"] for row in await cur.fetchall()}
+                for domain in sorted(existing - set(cleaned)):
+                    await self._unbind_domain_on_conn(conn, user_id=user_id, domain=domain)
                 for d in cleaned:
                     await conn.execute(
-                        "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s)",
+                        """INSERT INTO user_domains (user_id, domain)
+                           VALUES (%s, %s) ON CONFLICT DO NOTHING""",
                         (user_id, d),
                     )
         return cleaned
 
-    async def bind_domain(self, *, user_id: str, domain: str) -> None:
+    async def bind_domain(
+        self, *, user_id: str, domain: str, domain_role: str = "member",
+    ) -> None:
         """单条幂等绑定（新用户自动绑默认域用）。"""
+        if domain_role not in {"member", "admin"}:
+            raise ValueError("invalid_domain_role")
         async with self._pool.connection() as conn:
             await conn.execute(
-                "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                (user_id, domain),
+                """INSERT INTO user_domains (user_id, domain, domain_role)
+                   VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
+                (user_id, domain, domain_role),
             )
+
+    async def _unbind_domain_on_conn(self, conn: Any, *, user_id: str, domain: str) -> None:
+        cur = await conn.execute(
+            """SELECT 1 FROM knowledge_bases
+               WHERE owner_id = %s AND domain = %s LIMIT 1""",
+            (user_id, domain),
+        )
+        if await cur.fetchone() is not None:
+            raise DomainMembershipConflict("domain_has_owned_kbs")
+        # Domain membership is the outer boundary. Remove stale per-KB edges and
+        # revoke active single-domain MCP keys in the same transaction.
+        await conn.execute(
+            """DELETE FROM kb_members m USING knowledge_bases kb
+               WHERE m.kb_id = kb.id AND m.user_id = %s AND kb.domain = %s""",
+            (user_id, domain),
+        )
+        await conn.execute(
+            """UPDATE mcp_keys SET status = 'revoked'
+               WHERE user_id = %s AND domain = %s AND status = 'active'""",
+            (user_id, domain),
+        )
+        await conn.execute(
+            "DELETE FROM user_domains WHERE user_id = %s AND domain = %s",
+            (user_id, domain),
+        )
+
+    async def unbind_domain(self, *, user_id: str, domain: str) -> None:
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await self._unbind_domain_on_conn(conn, user_id=user_id, domain=domain)
 
     async def can_create_in_domain(self, *, user_id: str, domain: str) -> bool:
         """建库资格：site admin 全通；普通用户须绑定该域（51号批次1收敛）。"""
@@ -615,16 +752,25 @@ class KbDB:
         """
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                "SELECT site_role FROM kb_users WHERE id = %(uid)s", {"uid": user_id},
+                """SELECT u.site_role,
+                          (SELECT ud.domain_role FROM user_domains ud
+                           WHERE ud.user_id = u.id AND ud.domain = %(dom)s) AS domain_role
+                   FROM kb_users u WHERE u.id = %(uid)s""",
+                {"uid": user_id, "dom": domain},
             )
             urow = await cur.fetchone()
-            if urow and urow.get("site_role") == "admin":
-                # admin：域内全部 active KB，my_role='admin'
+            if urow and (
+                urow.get("site_role") == "admin" or urow.get("domain_role") == "admin"
+            ):
+                effective_role = (
+                    "admin" if urow.get("site_role") == "admin" else "domain_admin"
+                )
+                # site/domain admin：当前域全部 active KB。
                 cur = await conn.execute(
                     """SELECT kb.id, kb.domain, kb.name, kb.description,
                               kb.owner_id, kb.visibility, kb.created_at,
                               kb.mining_workflow_id, kb.default_paradigm_id,
-                              'admin' AS my_role,
+                              %(effective_role)s AS my_role,
                               COALESCE(NULLIF(u.display_name, ''), u.username) AS owner_name,
                               (SELECT COUNT(*) FROM asset_documents d
                                WHERE d.kb_id = kb.id AND d.deleted_at IS NULL) AS document_count
@@ -632,7 +778,7 @@ class KbDB:
                        LEFT JOIN kb_users u ON u.id = kb.owner_id
                        WHERE kb.domain = %(dom)s AND kb.status = 'active'
                        ORDER BY kb.created_at DESC""",
-                    {"dom": domain},
+                    {"dom": domain, "effective_role": effective_role},
                 )
                 return [dict(r) for r in await cur.fetchall()]
             cur = await conn.execute(
@@ -652,11 +798,12 @@ class KbDB:
                    FROM knowledge_bases kb
                    LEFT JOIN kb_users u ON u.id = kb.owner_id
                    WHERE kb.domain = %(dom)s AND kb.status = 'active'
+                     AND EXISTS (SELECT 1 FROM user_domains access_domain
+                                 WHERE access_domain.user_id = %(uid)s
+                                   AND access_domain.domain = kb.domain)
                      AND (kb.owner_id = %(uid)s
                           OR (kb.visibility = 'public'
-                              AND EXISTS (SELECT 1 FROM user_domains ud
-                                          WHERE ud.user_id = %(uid)s
-                                            AND ud.domain = kb.domain))
+                              )
                           OR EXISTS (SELECT 1 FROM kb_members m
                                      WHERE m.kb_id = kb.id AND m.user_id = %(uid)s))
                    ORDER BY kb.created_at DESC""",
@@ -677,13 +824,18 @@ class KbDB:
                    WHERE kb.domain = %(dom)s AND kb.status = 'active'
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %(uid)s AND u.site_role = 'admin')
-                          OR kb.owner_id = %(uid)s
-                          OR (kb.visibility = 'public'
-                              AND EXISTS (SELECT 1 FROM user_domains ud
-                                          WHERE ud.user_id = %(uid)s
-                                            AND ud.domain = kb.domain))
-                          OR EXISTS (SELECT 1 FROM kb_members m
-                                     WHERE m.kb_id = kb.id AND m.user_id = %(uid)s))""",
+                          OR (EXISTS (SELECT 1 FROM user_domains access_domain
+                                      WHERE access_domain.user_id = %(uid)s
+                                        AND access_domain.domain = kb.domain)
+                              AND (EXISTS (SELECT 1 FROM user_domains ud
+                                           WHERE ud.user_id = %(uid)s
+                                             AND ud.domain = kb.domain
+                                             AND ud.domain_role = 'admin')
+                                   OR kb.owner_id = %(uid)s
+                                   OR kb.visibility = 'public'
+                                   OR EXISTS (SELECT 1 FROM kb_members m
+                                              WHERE m.kb_id = kb.id
+                                                AND m.user_id = %(uid)s))))""",
                 {"uid": user_id, "dom": domain},
             )
             return [r["id"] for r in await cur.fetchall()]
@@ -1372,7 +1524,7 @@ WITH latest AS (
         等敏感字段(区别于 admin-only 的 list_users)。供成员面板的用户选择器使用。
         可选 q 做 username 前缀过滤(防用户规模膨胀;前端默认不传)。
         """
-        params: list[Any] = [kb_id, kb_id]
+        params: list[Any] = [kb_id, kb_id, kb_id]
         where_extra = ""
         if q:
             where_extra = " AND u.username ILIKE %s"
@@ -1382,6 +1534,13 @@ WITH latest AS (
                 f"""SELECT u.id, u.username, u.display_name FROM kb_users u
                     WHERE u.status = 'active'
                       AND u.id <> (SELECT owner_id FROM knowledge_bases WHERE id = %s)
+                      AND (u.site_role = 'admin' OR EXISTS (
+                          SELECT 1 FROM user_domains ud
+                          WHERE ud.user_id = u.id
+                            AND ud.domain = (
+                                SELECT domain FROM knowledge_bases WHERE id = %s
+                            )
+                      ))
                       AND NOT EXISTS (
                           SELECT 1 FROM kb_members m
                           WHERE m.kb_id = %s AND m.user_id = u.id
@@ -1401,14 +1560,18 @@ WITH latest AS (
                    WHERE kb.id = %s AND kb.status = 'active'
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %s AND u.site_role = 'admin')
-                          OR kb.owner_id = %s
-                          OR (kb.visibility = 'public'
-                              AND EXISTS (SELECT 1 FROM user_domains ud
-                                          WHERE ud.user_id = %s
-                                            AND ud.domain = kb.domain))
-                          OR EXISTS (SELECT 1 FROM kb_members m
-                                     WHERE m.kb_id = kb.id AND m.user_id = %s))""",
-                [kb_id, user_id, user_id, user_id, user_id],
+                          OR (EXISTS (SELECT 1 FROM user_domains access_domain
+                                      WHERE access_domain.user_id = %s
+                                        AND access_domain.domain = kb.domain)
+                              AND (EXISTS (SELECT 1 FROM user_domains ud
+                                           WHERE ud.user_id = %s
+                                             AND ud.domain = kb.domain
+                                             AND ud.domain_role = 'admin')
+                                   OR kb.owner_id = %s
+                                   OR kb.visibility = 'public'
+                                   OR EXISTS (SELECT 1 FROM kb_members m
+                                              WHERE m.kb_id = kb.id AND m.user_id = %s))))""",
+                [kb_id, user_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 
@@ -1420,11 +1583,19 @@ WITH latest AS (
                    WHERE kb.id = %s AND kb.status = 'active'
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %s AND u.site_role = 'admin')
-                          OR kb.owner_id = %s
-                          OR EXISTS (SELECT 1 FROM kb_members m
-                                     WHERE m.kb_id = kb.id AND m.user_id = %s AND m.role = 'editor'))
+                          OR (EXISTS (SELECT 1 FROM user_domains access_domain
+                                      WHERE access_domain.user_id = %s
+                                        AND access_domain.domain = kb.domain)
+                              AND (EXISTS (SELECT 1 FROM user_domains ud
+                                           WHERE ud.user_id = %s
+                                             AND ud.domain = kb.domain
+                                             AND ud.domain_role = 'admin')
+                                   OR kb.owner_id = %s
+                                   OR EXISTS (SELECT 1 FROM kb_members m
+                                              WHERE m.kb_id = kb.id AND m.user_id = %s
+                                                AND m.role = 'editor'))))
                    """,
-                [kb_id, user_id, user_id, user_id],
+                [kb_id, user_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 
@@ -1436,8 +1607,15 @@ WITH latest AS (
                    WHERE kb.id = %s
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %s AND u.site_role = 'admin')
-                          OR kb.owner_id = %s)""",
-                [kb_id, user_id, user_id],
+                          OR (EXISTS (SELECT 1 FROM user_domains access_domain
+                                      WHERE access_domain.user_id = %s
+                                        AND access_domain.domain = kb.domain)
+                              AND (EXISTS (SELECT 1 FROM user_domains ud
+                                           WHERE ud.user_id = %s
+                                             AND ud.domain = kb.domain
+                                             AND ud.domain_role = 'admin')
+                                   OR kb.owner_id = %s)))""",
+                [kb_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 
@@ -1731,15 +1909,19 @@ WITH latest AS (
                      AND k.status = 'active'
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %s AND u.site_role = 'admin')
-                          OR k.owner_id = %s
-                          OR (k.visibility = 'public'
-                              AND EXISTS (SELECT 1 FROM user_domains ud
-                                          WHERE ud.user_id = %s
-                                            AND ud.domain = k.domain))
-                          OR EXISTS (SELECT 1 FROM kb_members m
-                                     WHERE m.kb_id = k.id AND m.user_id = %s))
+                          OR (EXISTS (SELECT 1 FROM user_domains access_domain
+                                      WHERE access_domain.user_id = %s
+                                        AND access_domain.domain = k.domain)
+                              AND (EXISTS (SELECT 1 FROM user_domains ud
+                                           WHERE ud.user_id = %s
+                                             AND ud.domain = k.domain
+                                             AND ud.domain_role = 'admin')
+                                   OR k.owner_id = %s
+                                   OR k.visibility = 'public'
+                                   OR EXISTS (SELECT 1 FROM kb_members m
+                                              WHERE m.kb_id = k.id AND m.user_id = %s))))
                    LIMIT 1""",
-                [document_id, user_id, user_id, user_id, user_id],
+                [document_id, user_id, user_id, user_id, user_id, user_id],
             )
             if (await cur.fetchone()) is not None:
                 return True
@@ -1752,15 +1934,19 @@ WITH latest AS (
                      AND k.status = 'active'
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %s AND u.site_role = 'admin')
-                          OR k.owner_id = %s
-                          OR (k.visibility = 'public'
-                              AND EXISTS (SELECT 1 FROM user_domains ud
-                                          WHERE ud.user_id = %s
-                                            AND ud.domain = k.domain))
-                          OR EXISTS (SELECT 1 FROM kb_members m
-                                     WHERE m.kb_id = k.id AND m.user_id = %s))
+                          OR (EXISTS (SELECT 1 FROM user_domains access_domain
+                                      WHERE access_domain.user_id = %s
+                                        AND access_domain.domain = k.domain)
+                              AND (EXISTS (SELECT 1 FROM user_domains ud
+                                           WHERE ud.user_id = %s
+                                             AND ud.domain = k.domain
+                                             AND ud.domain_role = 'admin')
+                                   OR k.owner_id = %s
+                                   OR k.visibility = 'public'
+                                   OR EXISTS (SELECT 1 FROM kb_members m
+                                              WHERE m.kb_id = k.id AND m.user_id = %s))))
                    LIMIT 1""",
-                [document_id, user_id, user_id, user_id, user_id],
+                [document_id, user_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 

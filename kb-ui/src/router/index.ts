@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useDomainStore } from '@/stores/domain'
+import { canManageDomainUsers } from '@/utils/domainPermissions'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -93,6 +94,11 @@ const router = createRouter({
           props: true,
         },
         {
+          path: 'users',
+          name: 'users',
+          component: () => import('@/views/UserManagementView.vue'),
+        },
+        {
           path: 'settings',
           name: 'settings',
           component: () => import('@/views/SettingsView.vue'),
@@ -124,15 +130,20 @@ export async function authAndDomainGuard(to: RouteLocationNormalized) {
   if (to.meta.public && auth.isAuthenticated) {
     return { name: 'dashboard' }
   }
-  // member 深链 admin 路由 → 挡回 /
-  if (ADMIN_ROUTES.has(to.name as string) && auth.siteRole !== 'admin') {
-    return { name: 'dashboard' }
-  }
   // 域缓存必须属于当前登录用户。store 会对同一用户复用成功结果；换用户或上次失败
   // 都会重新请求，避免把旧账号的 currentDomain/raw id 带进新会话。
+  let domainStore: ReturnType<typeof useDomainStore> | undefined
   if (auth.isAuthenticated && auth.user?.username) {
-    const domainStore = useDomainStore()
+    domainStore = useDomainStore()
     await domainStore.fetchDomains(auth.user.username)
+  }
+  // 域级权限依赖刚加载的 domain_role/capabilities，必须在域加载完成后判断。
+  if (to.name === 'users' && !canManageDomainUsers(auth.siteRole, domainStore?.currentDomainInfo)) {
+    return { name: 'dashboard' }
+  }
+  // 全局管理面仍只允许系统管理员。
+  if (ADMIN_ROUTES.has(to.name as string) && auth.siteRole !== 'admin') {
+    return { name: 'dashboard' }
   }
 }
 

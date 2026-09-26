@@ -1,6 +1,7 @@
 """Mining 配置统一从 main_control_service 获取（仿 llm_service）。
 
-唯一的环境变量是引导用的 ``CONTROL_PLANE_BASE_URL``（默认 http://localhost:8910），
+引导参数为 ``CONTROL_PLANE_BASE_URL``（默认 http://localhost:8910）以及可选的
+``CONTROL_PLANE_INTERNAL_AUTH_SECRET``（未设置时从同容器 auth.yaml 读取），
 其余配置全部向主控制服务拉取：
 - ``GET /api/v1/system/mining/raw``   —— 挖掘服务配置（llm_service_url / max_workers /
   mining_run_submission_engine / upload.* / port）。对应 main_control_service/config/system/mining.yaml。
@@ -18,7 +19,9 @@ from typing import Any
 import httpx
 import yaml
 
-# 唯一引导环境变量：主控制服务地址。与 llm_service 的 CONTROL_PLANE_BASE_URL 同名同默认。
+from main_control_service.internal_auth import control_plane_internal_headers
+
+# 控制面地址；内部读取凭证由 main_control_service.internal_auth 统一解析。
 CONTROL_PLANE_BASE_URL = os.getenv("CONTROL_PLANE_BASE_URL", "http://localhost:8910").rstrip("/")
 
 _service_config_cache: dict[str, Any] | None = None
@@ -31,7 +34,13 @@ def _get_raw(service_name: str, *, timeout: float = 5.0) -> dict[str, Any]:
     """GET /api/v1/system/{service_name}/raw，返回 yaml.safe_load 后的 dict。"""
     endpoint = f"{CONTROL_PLANE_BASE_URL}/api/v1/system/{service_name}/raw"
     # proxy=None / trust_env=False：显式绕过系统代理与环境代理变量，与 llm_service 一致。
-    resp = httpx.get(endpoint, timeout=timeout, proxy=None, trust_env=False)
+    resp = httpx.get(
+        endpoint,
+        headers=control_plane_internal_headers(),
+        timeout=timeout,
+        proxy=None,
+        trust_env=False,
+    )
     resp.raise_for_status()
     return yaml.safe_load(resp.text) or {}
 

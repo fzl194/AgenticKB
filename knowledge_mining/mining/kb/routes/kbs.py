@@ -93,9 +93,9 @@ async def list_kbs(
 ):
     try:
         if include_deleted:
-            # 已删库清单（site-admin 专属）：软删时代的存量善后入口
-            if user.get("site_role") != "admin":
-                raise HTTPException(403, "site_admin_required")
+            # 生命周期管理属于站点管理员或当前域管理员。
+            if not await kbdb.can_manage_domain(user_id=user["id"], domain=domain):
+                raise HTTPException(403, "domain_admin_required")
             return await kbdb.list_deleted_kbs(domain=domain)
         return await svc.list_visible(user_id=user["id"], domain=domain)
     except InvalidDomain as exc:
@@ -109,9 +109,9 @@ async def list_purge_tasks(
     kbdb: KbDB = Depends(get_kb_db),
     request: Request = None,  # type: ignore[assignment]
 ):
-    """删除任务进度（前端轮询渲染）。site-admin 看全域；库主看自己发起的."""
+    """删除任务进度。site/domain admin 看本域全部；普通库主只看自己发起的。"""
     from knowledge_mining.mining.kb.services.purge_tasks import PurgeTaskRepo
-    if user.get("site_role") == "admin":
+    if await kbdb.can_manage_domain(user_id=user["id"], domain=domain):
         rows = await PurgeTaskRepo(request.app.state.pg_pool).list_tasks(
             domain=domain)
         return {"tasks": rows}
@@ -260,7 +260,7 @@ async def add_member(
         return await svc.add_member(
             kb_id=kb_id, actor_id=user["id"], username=body.username, role=body.role,
         )
-    except (NotFound, Forbidden, InvalidVisibility) as exc:
+    except (NotFound, Forbidden, DomainNotBound, InvalidVisibility) as exc:
         raise _map_error(exc) from None
 
 

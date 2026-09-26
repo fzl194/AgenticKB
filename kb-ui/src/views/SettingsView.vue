@@ -15,9 +15,6 @@
         <el-tab-pane label="品牌外观" name="brand">
           <BrandAppearanceTab />
         </el-tab-pane>
-        <el-tab-pane label="用户管理" name="users">
-          <UserManagementTab />
-        </el-tab-pane>
         <el-tab-pane label="域管理" name="domain">
           <DomainManageTab />
         </el-tab-pane>
@@ -42,7 +39,6 @@ import { useControlPlaneStore } from '@/stores/controlPlane'
 import SystemConfigTab from '@/components/settings/SystemConfigTab.vue'
 import SystemStatusTab from '@/components/settings/SystemStatusTab.vue'
 import BrandAppearanceTab from '@/components/settings/BrandAppearanceTab.vue'
-import UserManagementTab from '@/components/settings/UserManagementTab.vue'
 import DomainManageTab from '@/components/settings/DomainManageTab.vue'
 import DomainDetailTab from '@/components/settings/DomainDetailTab.vue'
 import ServiceLogsTab from '@/components/settings/ServiceLogsTab.vue'
@@ -52,7 +48,7 @@ import ServiceLogsTab from '@/components/settings/ServiceLogsTab.vue'
  * 一个面板都不渲染，页面看起来像坏了。概览页的「详情 →」就是靠 ?tab=status 进来的。
  */
 const TAB_NAMES = [
-  'system', 'brand', 'users', 'domain', 'scenario', 'status', 'logs',
+  'system', 'brand', 'domain', 'scenario', 'status', 'logs',
 ] as const
 
 const route = useRoute()

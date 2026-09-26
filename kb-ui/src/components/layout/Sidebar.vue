@@ -42,12 +42,13 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Monitor, Management, Key,
-  Cpu, Setting, Connection, Files, Share,
+  Cpu, Setting, Connection, Files, Share, UserFilled,
 } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useBrandStore, resolveIcon } from '@/stores/brand'
 import { useAuthStore } from '@/stores/auth'
 import ReleaseVersion from './ReleaseVersion.vue'
+import { canManageDomainUsers } from '@/utils/domainPermissions'
 
 const route = useRoute()
 const domainStore = useDomainStore()
@@ -62,19 +63,25 @@ const logoSrc = computed(() => (brand.icon.trim() ? resolveIcon(brand.icon) : ''
 // 批次8 M0（24 号 §5.10-§5.16）：实体图谱/本体版本/本体图谱三菜单注释下线
 // （研究线代码保留，路由与视图不动；未来启用需重新闭环设计）。
 const ALL_NAV = [
-  { path: '/', label: '概览', icon: Monitor, requiresAdmin: false },
-  { path: '/kb', label: '知识库', icon: Files, requiresAdmin: false },
-  { path: '/mcp', label: 'MCP 接入', icon: Key, requiresAdmin: false },
+  { path: '/', label: '概览', icon: Monitor, access: 'all' },
+  { path: '/kb', label: '知识库', icon: Files, access: 'all' },
+  { path: '/mcp', label: 'MCP 接入', icon: Key, access: 'all' },
+  { path: '/users', label: '用户管理', icon: UserFilled, access: 'domain-users' },
   // 47 号：一张网接入（管理员：产品文档导入/重同步；KB 侧引用在知识库详情 tab）
-  { path: '/onenet', label: '一张网接入', icon: Share, requiresAdmin: true },
-  { path: '/mining/workflows', label: '挖掘范式', icon: Management, requiresAdmin: true },
-  { path: '/paradigm', label: '检索范式', icon: Connection, requiresAdmin: true },
-  { path: '/llm', label: 'LLM 服务', icon: Cpu, requiresAdmin: true },
-  { path: '/settings', label: '系统设置', icon: Setting, requiresAdmin: true },
+  // 一张网图标用 Share（原 Key 与 MCP 接入撞图标）
+  { path: '/onenet', label: '一张网接入', icon: Share, access: 'site-admin' },
+  { path: '/mining/workflows', label: '挖掘范式', icon: Management, access: 'site-admin' },
+  { path: '/paradigm', label: '检索范式', icon: Connection, access: 'site-admin' },
+  { path: '/llm', label: 'LLM 服务', icon: Cpu, access: 'site-admin' },
+  { path: '/settings', label: '系统设置', icon: Setting, access: 'site-admin' },
 ]
 
 const navItems = computed(() =>
-  ALL_NAV.filter((it) => !it.requiresAdmin || auth.siteRole === 'admin'),
+  ALL_NAV.filter((item) => {
+    if (item.access === 'all') return true
+    if (item.access === 'site-admin') return auth.siteRole === 'admin'
+    return canManageDomainUsers(auth.siteRole, domainStore.currentDomainInfo)
+  }),
 )
 
 function isActive(path: string): boolean {

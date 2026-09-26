@@ -163,3 +163,27 @@ def test_require_identity_403_non_json_is_generic(monkeypatch) -> None:
     _stub_verify(monkeypatch, _BadJson())
     with pytest.raises(IdentityError, match="身份校验失败"):
         require_identity(_HEADERS)
+
+
+# ---------------------------------------------------------------- 密钥解析链
+
+
+def test_internal_auth_secret_env_priority(monkeypatch) -> None:
+    """MCP_INTERNAL_AUTH_SECRET 显式优先于共享 CONTROL_PLANE 变量。"""
+    monkeypatch.setenv("MCP_INTERNAL_AUTH_SECRET", "mcp-explicit")
+    monkeypatch.setenv("CONTROL_PLANE_INTERNAL_AUTH_SECRET", "shared")
+    assert identity_mod._internal_auth_secret() == "mcp-explicit"
+
+
+def test_internal_auth_secret_shared_env_fallback(monkeypatch) -> None:
+    """未设 MCP 专属变量时复用 main_control 解析链（共享 env / 共位 auth.yaml）。"""
+    monkeypatch.delenv("MCP_INTERNAL_AUTH_SECRET", raising=False)
+    monkeypatch.setenv("CONTROL_PLANE_INTERNAL_AUTH_SECRET", "shared-secret")
+    assert identity_mod._internal_auth_secret() == "shared-secret"
+
+
+def test_internal_auth_secret_rejects_placeholder(monkeypatch) -> None:
+    """占位符/空值拒收（change-me → 空，验钥必败 401，不放行）。"""
+    monkeypatch.delenv("MCP_INTERNAL_AUTH_SECRET", raising=False)
+    monkeypatch.setenv("CONTROL_PLANE_INTERNAL_AUTH_SECRET", "change-me-please")
+    assert identity_mod._internal_auth_secret() == ""

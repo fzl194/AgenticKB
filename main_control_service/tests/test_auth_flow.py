@@ -84,10 +84,16 @@ def test_member_domain_filter_preserves_display_name(tmp_path):
     token = encode({"sub": "alice", "role": "member", "name": "Alice"}, "s", ttl=3600)
     with _client(tmp_path, registry=registry) as c:
         with patch(
-            "main_control_service.service.YamlConfigService.bound_domains_for",
+            "main_control_service.service.YamlConfigService.domain_access_for",
             new_callable=AsyncMock,
-        ) as bound:
-            bound.return_value = ({"domain_a"}, "")
+        ) as access:
+            access.return_value = ({
+                "site_role": "member",
+                "grants": [{"domain": "domain_a", "domain_role": "admin"}],
+                "capabilities_by_domain": {
+                    "domain_a": ["domain.users.manage", "domain.kbs.manage"],
+                },
+            }, "")
             r = c.get("/api/v1/domains", headers={"Authorization": f"Bearer {token}"})
 
     assert r.status_code == 200, r.text
@@ -97,7 +103,47 @@ def test_member_domain_filter_preserves_display_name(tmp_path):
         "enabled": True,
         "default_channel": "prod",
         "scenario_pack_ref": "domain_a",
+        "domain_role": "admin",
+        "capabilities": ["domain.users.manage", "domain.kbs.manage"],
     }]
+
+
+def test_member_proxy_is_limited_to_assigned_domains(tmp_path):
+    registry = (
+        "default_domain: domain_a\ndomains:\n"
+        "  domain_a:\n    display_name: Domain A\n    enabled: true\n"
+        "    services:\n      mining_url: http://mining:8901\n"
+        "  domain_b:\n    display_name: Domain B\n    enabled: true\n"
+        "    services:\n      mining_url: http://mining:8901\n"
+    )
+    token = encode({"sub": "alice", "role": "member", "name": "Alice"}, "s", ttl=3600)
+    with _client(tmp_path, registry=registry) as c:
+        with patch(
+            "main_control_service.service.YamlConfigService.domain_access_for",
+            new_callable=AsyncMock,
+        ) as access:
+            access.return_value = ({
+                "site_role": "member",
+                "grants": [{"domain": "domain_a", "domain_role": "admin"}],
+                "capabilities_by_domain": {"domain_a": ["domain.kbs.manage"]},
+            }, "")
+            with patch(
+                "main_control_service.main.proxy_request",
+                new_callable=AsyncMock,
+            ) as proxy:
+                from fastapi.responses import JSONResponse
+                proxy.return_value = JSONResponse({"ok": True})
+                allowed = c.get(
+                    "/api/v1/proxy/domain_a/mining/api/kb/overview",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            denied = c.get(
+                "/api/v1/proxy/domain_b/mining/api/kb/overview",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert allowed.status_code == 200
+    assert denied.status_code == 404
 
 
 def test_identify_returns_mode(tmp_path):

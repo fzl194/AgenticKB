@@ -29,6 +29,8 @@ from knowledge_mining.mining.kb.routes import kbs as kb_routes
 OWNER = {"id": "u-owner", "username": "owner", "site_role": "member"}
 ADMIN = {"id": "u-admin", "username": "admin", "site_role": "admin"}
 VIEWER = {"id": "u-viewer", "username": "viewer", "site_role": "member"}
+#: d1 的域管理员（RBAC：生命周期管理放宽到本域域管理员；跨域仍拒）
+DOMAIN_ADMIN = {"id": "u-dadmin", "username": "dadmin", "site_role": "member"}
 
 KB = {"id": "kb-1", "domain": "d1", "name": "交付局知识库", "owner_id": "u-owner",
       "visibility": "private", "status": "active", "deleted_at": None}
@@ -93,6 +95,11 @@ class FakeKbDb:
 
     async def can_restore(self, *, kb_id, user_id):
         return user_id == OWNER["id"] or user_id == ADMIN["id"]
+
+    async def can_manage_domain(self, *, user_id, domain):
+        # 站点管理员通行；域管理员仅本域（d1）——跨域域管理员（查 d2）拒绝
+        return user_id == ADMIN["id"] or (
+            user_id == DOMAIN_ADMIN["id"] and domain == "d1")
 
     async def list_deleted_kbs(self, *, domain):
         self.deleted_listed = True
@@ -267,6 +274,15 @@ def test_list_deleted_kbs_admin_ok():
     assert resp.status_code == 200
     assert resp.json() == [KB_DELETED]
     assert kbdb.deleted_listed
+
+
+def test_list_deleted_kbs_domain_admin_scoped():
+    """域管理员可见本域已删库；同一人查其他域（d2）仍 403（跨域拒绝）。"""
+    c, _, kbdb = _client(DOMAIN_ADMIN)
+    resp = c.get("/api/kb", params={"domain": "d1", "include_deleted": True})
+    assert resp.status_code == 200
+    assert kbdb.deleted_listed
+    assert c.get("/api/kb", params={"domain": "d2", "include_deleted": True}).status_code == 403
 
 
 def test_list_normal_still_works():

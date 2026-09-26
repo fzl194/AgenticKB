@@ -61,7 +61,7 @@ TREND_DAYS = 30
 
 # 有写权限的有效角色。与 KbDB.can_write 的 SQL 条件（admin 全通 / owner / editor 成员）
 # 逐项对应；这里从 list_visible 已返回的 my_role 推导，避免逐库再查一次。
-_WRITABLE_ROLES = {"owner", "editor", "admin"}
+_WRITABLE_ROLES = {"owner", "editor", "admin", "domain_admin"}
 
 
 def _sort_key(kb: dict[str, Any]) -> tuple:

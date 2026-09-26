@@ -3,8 +3,9 @@
 ALL config comes from main_control_service/config/system/llm_service.yaml.
 No defaults, no env fallbacks. Missing required fields = hard error.
 
-Exception: CONTROL_PLANE_BASE_URL is the single bootstrap parameter that
-tells this service where to find its config. It may be set via env var.
+Bootstrap parameters are CONTROL_PLANE_BASE_URL and the optional
+CONTROL_PLANE_INTERNAL_AUTH_SECRET. In the all-in-one container the latter
+falls back to main_control's colocated auth.yaml.
 
 Secrets (api_key fields) support ``${ENV_VAR}`` syntax — resolved at load time
 from the process environment.
@@ -18,6 +19,11 @@ from typing import Any
 
 import httpx
 import yaml
+
+from main_control_service.internal_auth import (
+    control_plane_internal_headers,
+    load_control_plane_internal_auth_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,30 +108,20 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def fetch_internal_verify_secret() -> str:
-    """Fetch internal_verify_secret from control plane auth.yaml (best-effort).
+    """Load the bootstrap internal secret from env or colocated auth.yaml.
 
     The control-plane proxy strips client-forged X-Internal-Auth headers and
     injects the real secret only for authenticated users — destructive admin
     endpoints use it (plus X-KB-Role) as a fail-closed gate. Returns "" on
     any failure so those endpoints refuse to run rather than open up.
     """
-    url = CONTROL_PLANE_BASE_URL.rstrip("/")
-    try:
-        resp = httpx.get(
-            f"{url}/api/v1/system/auth/raw",
-            timeout=5.0,
-            proxy=None,
-            trust_env=False,
-        )
-        resp.raise_for_status()
-        data = yaml.safe_load(resp.text) or {}
-        return str(data.get("internal_verify_secret", ""))
-    except Exception:
+    secret = load_control_plane_internal_auth_secret()
+    if not secret:
         logger.warning(
-            "Could not fetch internal_verify_secret from control plane — "
+            "Could not load internal_verify_secret from env or colocated auth.yaml — "
             "destructive admin endpoints will fail closed"
         )
-        return ""
+    return secret
 
 
 def dig_optional(data: dict, *keys: str, default: Any = None) -> Any:
@@ -218,7 +214,13 @@ def fetch_config_from_control_plane(
     url = (base_url or CONTROL_PLANE_BASE_URL).rstrip("/")
     endpoint = f"{url}/api/v1/system/llm_service/raw"
     try:
-        resp = httpx.get(endpoint, timeout=timeout, proxy=None, trust_env=False)
+        resp = httpx.get(
+            endpoint,
+            headers=control_plane_internal_headers(),
+            timeout=timeout,
+            proxy=None,
+            trust_env=False,
+        )
         resp.raise_for_status()
         data = yaml.safe_load(resp.text)
     except Exception as exc:

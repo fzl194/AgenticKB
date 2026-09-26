@@ -8,9 +8,12 @@ import pytest
 from knowledge_mining.mining.maintenance.database_upgrade.manifest import (
     AppliedMigrationMismatch,
     ManifestError,
+    Migration,
+    MigrationMode,
     load_manifest,
     manifest_checksum,
     pending_migrations,
+    requires_rebase,
 )
 from knowledge_mining.mining.maintenance.database_upgrade.contract import (
     CURRENT_SCHEMA_CHECKSUM,
@@ -37,9 +40,11 @@ def test_manifest_loads_ordered_checksum_verified_migrations(tmp_path: Path) -> 
         "migrations:\n"
         "  - id: core/001\n"
         "    path: core/001.sql\n"
+        "    mode: offline_rebase\n"
         f"    checksum: {_sha(first.read_bytes())}\n"
         "  - id: core/002\n"
         "    path: core/002.sql\n"
+        "    mode: online_expand\n"
         f"    checksum: {_sha(second.read_bytes())}\n",
         encoding="utf-8",
     )
@@ -48,9 +53,97 @@ def test_manifest_loads_ordered_checksum_verified_migrations(tmp_path: Path) -> 
 
     assert loaded.schema_version == "test-v2"
     assert [item.migration_id for item in loaded.migrations] == ["core/001", "core/002"]
+    assert [item.mode for item in loaded.migrations] == [
+        MigrationMode.OFFLINE_REBASE,
+        MigrationMode.ONLINE_EXPAND,
+    ]
+    assert requires_rebase(loaded.migrations) is True
+    assert requires_rebase((loaded.migrations[1],)) is False
     assert pending_migrations(loaded, {"core/001": _sha(first.read_bytes())}) == (
         loaded.migrations[1],
     )
+
+
+def test_non_reentrant_backfill_requires_clone_but_reentrant_can_run_online(
+    tmp_path: Path,
+) -> None:
+    sql = tmp_path / "backfill.sql"
+    sql.write_text("SELECT 1;", encoding="utf-8")
+    checksum = _sha(sql.read_bytes())
+
+    unsafe = Migration("backfill/unsafe", sql, checksum, MigrationMode.BACKFILL, False)
+    safe = Migration("backfill/safe", sql, checksum, MigrationMode.BACKFILL, True)
+
+    assert requires_rebase((unsafe,)) is True
+    assert requires_rebase((safe,)) is False
+
+
+def test_manifest_rejects_unknown_migration_mode(tmp_path: Path) -> None:
+    sql_file = tmp_path / "001.sql"
+    sql_file.write_text("SELECT 1;\n", encoding="utf-8")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "schema_version: test-v1\n"
+        "migrations:\n"
+        "  - id: core/001\n"
+        "    path: 001.sql\n"
+        "    mode: magic_copy\n"
+        f"    checksum: {_sha(sql_file.read_bytes())}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="mode"):
+        load_manifest(manifest)
+
+
+def test_manifest_defaults_legacy_entries_to_offline_rebase(tmp_path: Path) -> None:
+    sql_file = tmp_path / "001.sql"
+    sql_file.write_text("SELECT 1;\n", encoding="utf-8")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "schema_version: test-v1\n"
+        "migrations:\n"
+        "  - id: core/001\n"
+        "    path: 001.sql\n"
+        f"    checksum: {_sha(sql_file.read_bytes())}\n",
+        encoding="utf-8",
+    )
+
+    assert load_manifest(manifest).migrations[0].mode is MigrationMode.OFFLINE_REBASE
+
+
+def test_manifest_checksum_pins_operational_mode(tmp_path: Path) -> None:
+    sql_file = tmp_path / "001.sql"
+    sql_file.write_text("SELECT 1;\n", encoding="utf-8")
+    checksum = _sha(sql_file.read_bytes())
+
+    online = load_manifest(
+        _write_single_migration_manifest(
+            tmp_path / "online.yaml", sql_file, checksum, "online_expand"
+        )
+    )
+    offline = load_manifest(
+        _write_single_migration_manifest(
+            tmp_path / "offline.yaml", sql_file, checksum, "offline_rebase"
+        )
+    )
+
+    assert manifest_checksum(online) != manifest_checksum(offline)
+
+
+def _write_single_migration_manifest(
+    path: Path, sql_file: Path, checksum: str, mode: str
+) -> Path:
+    path.write_text(
+        "schema_version: test-v1\n"
+        "migrations:\n"
+        "  - id: core/001\n"
+        f"    path: {sql_file.name}\n"
+        f"    mode: {mode}\n"
+        f"    checksum: {checksum}\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_manifest_rejects_file_checksum_drift(tmp_path: Path) -> None:

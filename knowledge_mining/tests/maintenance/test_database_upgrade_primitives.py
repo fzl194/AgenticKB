@@ -15,6 +15,7 @@ from knowledge_mining.mining.maintenance.database_upgrade.database import (
     DatabaseUpgradeError,
     validate_database_name,
 )
+from knowledge_mining.mining.maintenance.database_upgrade.__main__ import _default_target
 from knowledge_mining.mining.maintenance.database_upgrade.manifest import load_manifest
 from knowledge_mining.mining.maintenance.database_upgrade.validation import (
     SchemaValidationError,
@@ -87,6 +88,24 @@ def test_database_name_accepts_safe_postgresql_identifiers(name: str) -> None:
 def test_database_name_rejects_unsafe_values(name: str) -> None:
     with pytest.raises(DatabaseUpgradeError):
         validate_database_name(name)
+
+
+@pytest.mark.parametrize(
+    ("source", "target"),
+    [
+        ("agentickb", "agentickb_converged"),
+        ("agentickb_converged", "agentickb"),
+    ],
+)
+def test_default_rebase_target_alternates_between_two_fixed_databases(
+    source: str, target: str
+) -> None:
+    assert _default_target(source) == target
+
+
+def test_default_rebase_target_refuses_irreversible_name_truncation() -> None:
+    with pytest.raises(DatabaseUpgradeError, match="过长"):
+        _default_target("x" * 54)
 
 
 def test_schema_validation_accepts_applied_manifest_and_required_extensions(tmp_path: Path) -> None:

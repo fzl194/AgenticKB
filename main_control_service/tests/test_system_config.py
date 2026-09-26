@@ -26,6 +26,10 @@ def _client(tmp_path: Path) -> TestClient:
     """构造一个指向临时 config 目录的 main_control 测试客户端。"""
     (tmp_path / "system").mkdir()
     (tmp_path / "system" / "ui.yaml").write_text(_UI_YAML, encoding="utf-8")
+    (tmp_path / "system" / "auth.yaml").write_text(
+        "enabled: false\njwt_secret: test\ninternal_verify_secret: test-internal\n",
+        encoding="utf-8",
+    )
     # 用上下文管理器触发 lifespan（建/拆 proxy client）。
     return TestClient(create_app(config_dir=tmp_path))
 

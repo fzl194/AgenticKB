@@ -51,6 +51,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { KbSummary, KbVisibility } from '@/types/kb'
+import { canManageKbLifecycle as roleCanManageLifecycle } from '@/views/kb/kbMeta'
 
 const props = defineProps<{ kb: KbSummary; canWrite: boolean }>()
 const emit = defineEmits<{ updated: []; deleted: [] }>()
@@ -59,7 +60,7 @@ const kbApi = useKbApi()
 const saving = ref(false)
 const deleting = ref(false)
 const canManageLifecycle = computed(
-  () => props.kb.my_role === 'owner' || props.kb.my_role === 'admin',
+  () => roleCanManageLifecycle(props.kb.my_role),
 )
 
 const form = reactive<{

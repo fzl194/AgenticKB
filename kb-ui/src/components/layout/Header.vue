@@ -39,13 +39,13 @@
             :type="auth.siteRole === 'admin' ? 'danger' : 'info'"
             effect="plain"
           >
-            {{ auth.siteRole === 'admin' ? '管理员' : '用户' }}
+            {{ accountRoleLabel }}
           </el-tag>
         </span>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item v-if="auth.siteRole === 'admin'" command="password">修改密码</el-dropdown-item>
-            <el-dropdown-item command="logout" :divided="auth.siteRole === 'admin'">登出</el-dropdown-item>
+            <el-dropdown-item v-if="canChangePassword" command="password">修改密码</el-dropdown-item>
+            <el-dropdown-item command="logout" :divided="canChangePassword">登出</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -62,6 +62,7 @@ import { useBrandStore } from '@/stores/brand'
 import { useAuthStore } from '@/stores/auth'
 import { useAuthApi } from '@/api/auth'
 import { apiErrorDetail } from '@/api/proxyClient'
+import { canManageDomainUsers } from '@/utils/domainPermissions'
 
 const route = useRoute()
 const router = useRouter()
@@ -83,6 +84,7 @@ const pageTitles: Record<string, string> = {
   'mcp-access': 'MCP 接入',
   llm: 'LLM 服务',
   'llm-task-detail': 'LLM 服务',
+  users: '用户管理',
   settings: '系统设置',
 }
 
@@ -90,12 +92,28 @@ const pageTitle = computed(() => pageTitles[route.name as string] || brand.title
 const displayName = computed(
   () => auth.user?.display_name || auth.user?.username || '—',
 )
+const accountRoleLabel = computed(() => {
+  if (auth.siteRole === 'admin') return '系统管理员'
+  return domainStore.currentDomainInfo?.domain_role === 'admin' ? '域管理员' : '用户'
+})
+/** 修改密码入口：系统管理员 + 当前域域管理员（后端要求域管理员必须有密码，
+ * 无自助入口就只能每次找系统管理员重置——RBAC 审查 M3）。 */
+const canChangePassword = computed(
+  () => auth.siteRole === 'admin'
+    || domainStore.currentDomainInfo?.domain_role === 'admin',
+)
 
 const allHealthy = ref(true)
 const someHealthy = ref(true)
 
 function onDomainChange(domainId: string) {
   domainStore.switchDomain(domainId)
+  if (
+    route.name === 'users'
+    && !canManageDomainUsers(auth.siteRole, domainStore.currentDomainInfo)
+  ) {
+    void router.replace('/')
+  }
   allHealthy.value = true
   someHealthy.value = true
 }

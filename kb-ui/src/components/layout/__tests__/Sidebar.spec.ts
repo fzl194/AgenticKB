@@ -50,6 +50,29 @@ describe('Sidebar navigation', () => {
     expect(wrapper.text()).not.toContain('检索范式')
     expect(wrapper.text()).not.toContain('挖掘范式')
     expect(wrapper.text()).not.toContain('系统设置')
+    expect(wrapper.text()).not.toContain('用户管理')
+  })
+
+  it('shows standalone user management to the selected domain administrator', () => {
+    auth.siteRole = 'member'
+    const domains = useDomainStore()
+    domains.domains = [{
+      domain_id: 'domain_a', display_name: 'Domain A', enabled: true,
+      default_channel: 'prod', scenario_pack_ref: 'domain_a',
+      domain_role: 'admin', capabilities: ['domain.users.manage', 'domain.kbs.manage'],
+    }]
+    domains.currentDomain = 'domain_a'
+
+    const wrapper = shallowMount(Sidebar)
+
+    expect(wrapper.text()).toContain('用户管理')
+    expect(wrapper.text()).not.toContain('系统设置')
+  })
+
+  it('shows standalone user management to the site administrator', () => {
+    const wrapper = shallowMount(Sidebar)
+    expect(wrapper.text()).toContain('用户管理')
+    expect(wrapper.html()).toContain('/users')
   })
 
   it('does not present an unmatched raw domain id as a display name', () => {

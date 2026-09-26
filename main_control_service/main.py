@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from main_control_service.auth import AuthMiddleware
+from main_control_service.auth import AuthMiddleware, SiteAdminValidator
 from main_control_service.config import MainControlSettings
 from main_control_service.ip_whitelist import IpWhitelistMiddleware
 from main_control_service.proxy import (
@@ -83,6 +83,7 @@ def create_app(
     config_dir: Path | None = None,
     settings: MainControlSettings | None = None,
     release_manifest_path: Path | None = None,
+    site_admin_validator: SiteAdminValidator | None = None,
 ) -> FastAPI:
     cfg = settings or MainControlSettings()
     effective_config_dir = config_dir or cfg.config_dir
@@ -114,7 +115,11 @@ def create_app(
 
     # 注册顺序 → Starlette 反序执行 → 执行序：IpWhitelist(最外) → CORS → Auth(最内)。
     # CORS 必须在 Auth 之外，否则浏览器 preflight OPTIONS 会被 Auth 当无 token → 401。
-    app.add_middleware(AuthMiddleware, config_path=auth_yaml_path)
+    app.add_middleware(
+        AuthMiddleware,
+        config_path=auth_yaml_path,
+        site_admin_validator=site_admin_validator,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),
@@ -252,6 +257,41 @@ def create_app(
     # Domains — JSON list + YAML text CRUD
     # ------------------------------------------------------------------
 
+    async def require_domain_access(request: Request, domain_id: str) -> dict:
+        """Resolve current DB-backed access for one target domain.
+
+        The domain in a URL is caller controlled.  Every detail/proxy request
+        therefore re-checks the gateway identity against mining rather than
+        trusting that the caller first loaded the filtered domain list.
+        """
+        if getattr(request.state, "internal_call", False):
+            return {"domain": domain_id, "domain_role": "admin", "capabilities": []}
+        user = getattr(request.state, "user", None) or {}
+        if user.get("role") == "admin":
+            return {
+                "domain": domain_id,
+                "domain_role": "admin",
+                "capabilities": ["domain.users.manage", "domain.kbs.manage"],
+            }
+        internal_secret = getattr(request.app.state, "internal_verify_secret", "") or ""
+        access, reason = await service.domain_access_for(
+            str(user.get("username") or ""), internal_secret,
+        )
+        if access is None:
+            raise HTTPException(
+                status_code=503, detail=f"mining_unavailable:{reason or 'unknown'}"
+            )
+        capabilities_by_domain = access.get("capabilities_by_domain") or {}
+        for grant in access.get("grants") or []:
+            if isinstance(grant, dict) and grant.get("domain") == domain_id:
+                return {
+                    **grant,
+                    "capabilities": list(capabilities_by_domain.get(domain_id) or []),
+                }
+        # Match the resource-level 404 convention: do not disclose unassigned
+        # domain existence to a caller that guessed its id.
+        raise HTTPException(status_code=404, detail="domain_not_found")
+
     @app.get("/api/v1/domains")
     async def list_domains(request: Request) -> dict:
         # 51号批次1：内部旁路调用（无用户态，X-Internal-Auth 已在中间件验过）与
@@ -260,21 +300,37 @@ def create_app(
         if user is None or user.get("role") == "admin":
             return {"items": service.list_domains()}
         internal_secret = getattr(request.app.state, "internal_verify_secret", "") or ""
-        bound, reason = await service.bound_domains_for(
+        access, reason = await service.domain_access_for(
             str(user.get("username") or ""), internal_secret
         )
-        if bound is None:
+        if access is None:
             raise HTTPException(
                 status_code=503, detail=f"mining_unavailable:{reason or 'unknown'}"
             )
-        return {"items": [d for d in service.list_domains() if d.get("domain_id") in bound]}
+        grants = {
+            str(grant["domain"]): str(grant.get("domain_role") or "member")
+            for grant in access.get("grants") or []
+            if isinstance(grant, dict) and grant.get("domain")
+        }
+        capabilities = access.get("capabilities_by_domain") or {}
+        return {"items": [
+            {
+                **domain,
+                "domain_role": grants[str(domain.get("domain_id"))],
+                "capabilities": list(capabilities.get(str(domain.get("domain_id"))) or []),
+            }
+            for domain in service.list_domains()
+            if str(domain.get("domain_id")) in grants
+        ]}
 
     @app.get("/api/v1/domains/{domain_id}")
-    def get_domain(domain_id: str) -> dict:
+    async def get_domain(domain_id: str, request: Request) -> dict:
+        await require_domain_access(request, domain_id)
         return service.get_domain(domain_id)
 
     @app.get("/api/v1/domains/{domain_id}/raw")
-    def get_domain_raw(domain_id: str) -> Response:
+    async def get_domain_raw(domain_id: str, request: Request) -> Response:
+        await require_domain_access(request, domain_id)
         return Response(content=service.get_domain_yaml(domain_id), media_type="text/yaml")
 
     @app.post("/api/v1/domains")
@@ -309,7 +365,10 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/v1/domains/{domain_id}/scenario")
-    def get_scenario(domain_id: str, section: str | None = None) -> dict:
+    async def get_scenario(
+        domain_id: str, request: Request, section: str | None = None,
+    ) -> dict:
+        await require_domain_access(request, domain_id)
         return service.get_scenario(domain_id, section)
 
     @app.get("/api/v1/domains/{domain_id}/scenario/raw")
@@ -449,6 +508,7 @@ def create_app(
         methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     )
     async def reverse_proxy(domain_id: str, service: str, path: str, request: Request) -> Response:
+        await require_domain_access(request, domain_id)
         svc: YamlConfigService = request.app.state.main_control  # type: ignore[attr-defined]
         domain_services = svc.get_domain_services(domain_id)
         return await proxy_request(request, domain_id, service, path, domain_services)

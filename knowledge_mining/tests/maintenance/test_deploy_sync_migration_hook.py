@@ -48,6 +48,7 @@ def test_cutover_rollback_stops_new_processes_before_restoring_config_and_code()
     code_at = rollback.index("restore_migration_code_backup")
     start_at = rollback.index("restart_old_services_after_rollback")
     assert stop_at < config_at < code_at < start_at
+    assert 'if [ "$DB_CONFIG_SWITCHED" = true ]' in rollback
 
 
 def test_migration_admin_password_is_not_embedded_in_process_arguments() -> None:
@@ -57,3 +58,57 @@ def test_migration_admin_password_is_not_embedded_in_process_arguments() -> None
     assert '"CMKB_MIGRATION_PG_PASSWORD=$CMKB_MIGRATION_PG_PASSWORD"' not in script
     assert 'env_args+=("-e" "CMKB_MIGRATION_PG_PASSWORD")' in script
     assert "CMKB_MIGRATION_FALLBACK_DOMAIN" not in script
+
+
+def test_existing_rotation_target_requires_interactive_delete_confirmation() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+    hook = script[
+        script.index("run_database_upgrade_if_needed()") : script.index("prepare_migration_code_backup()")
+    ]
+
+    assert 'replace_target_required' in hook
+    assert 'grep -Eq' in hook
+    assert 'read -r -p' in hook
+    assert '</dev/tty' in hook
+    assert '--replace-target' in hook
+    assert hook.index('read -r -p') < hook.index('database_upgrade apply')
+
+
+def test_apply_failure_uses_unified_rollback_before_restoring_old_code() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+    hook = script[
+        script.index("run_database_upgrade_if_needed()") : script.index("prepare_migration_code_backup()")
+    ]
+    failure = hook[hook.index("database_upgrade apply") : hook.index("database_upgrade verify")]
+
+    assert "DB_MIGRATION_RAN=true" in failure
+    assert "rollback_database_cutover" in failure
+    assert failure.index("rollback_database_cutover") < failure.index(
+        "restart_old_services_after_rollback"
+    ) if "restart_old_services_after_rollback" in failure else True
+
+
+def test_online_rollback_removes_new_ledger_rows_before_old_code_restore() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+    rollback_start = script.index("rollback_database_cutover()")
+    rollback = script[rollback_start : script.index("restart_services()", rollback_start)]
+
+    ledger_at = rollback.index("database_upgrade rollback-online-ledger")
+    code_at = rollback.index("restore_migration_code_backup")
+    assert 'if [ "$DB_ONLINE_MIGRATION" = true ]' in rollback
+    assert '--deployment-id "$DB_MIGRATION_DEPLOYMENT_ID"' in rollback
+    assert ledger_at < code_at
+
+
+def test_online_apply_and_rollback_share_one_deployment_id() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+    hook = script[
+        script.index("run_database_upgrade_if_needed()") : script.index("prepare_migration_code_backup()")
+    ]
+
+    assert 'DB_MIGRATION_DEPLOYMENT_ID=' in script
+    assert 'apply_args+=("--deployment-id" "$DB_MIGRATION_DEPLOYMENT_ID")' in hook

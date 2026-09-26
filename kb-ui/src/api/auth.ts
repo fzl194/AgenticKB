@@ -1,6 +1,13 @@
 import axios from 'axios'
 import { createProxyClient, extractOne, installAuthInterceptors } from './proxyClient'
-import type { AuthUser, LoginResponse, SiteRole } from '@/types/auth'
+import type {
+  AuthUser,
+  DomainAccessSummary,
+  DomainUser,
+  LoginResponse,
+  SiteRole,
+  UserDomainGrant,
+} from '@/types/auth'
 
 export { loadToken, saveToken, clearToken } from './tokenStorage'
 
@@ -32,6 +39,7 @@ export function useAuthApi() {
       status: string
       has_password?: boolean
       domains: string[]
+      domain_grants?: UserDomainGrant[]
     }>> {
       const { data } = await mining.get('/api/kb/users')
       return Array.isArray(data) ? data : (data?.items ?? [])
@@ -51,14 +59,49 @@ export function useAuthApi() {
     async resetPassword(id: string, password: string): Promise<void> {
       await mining.post(`/api/kb/users/${id}/reset-password`, { password })
     },
-    /** 51号批次1：admin 域分配。 */
+    /** 当前登录用户的域角色与能力。 */
+    async getMyDomainAccess(): Promise<DomainAccessSummary> {
+      const { data } = await mining.get('/api/kb/domain-access/me')
+      return data as DomainAccessSummary
+    },
+    /** 系统管理员按“用户 × 域”分配角色。 */
+    async getUserDomainGrants(id: string): Promise<UserDomainGrant[]> {
+      const { data } = await mining.get(`/api/kb/admin/users/${encodeURIComponent(id)}/domain-grants`)
+      return data?.domain_grants ?? []
+    },
+    async setUserDomainGrants(id: string, grants: UserDomainGrant[]): Promise<UserDomainGrant[]> {
+      const { data } = await mining.put(
+        `/api/kb/admin/users/${encodeURIComponent(id)}/domain-grants`,
+        { grants },
+      )
+      return data?.domain_grants ?? []
+    },
+    /** 域管理员只管理当前域的普通成员；同一接口也允许系统管理员调用。 */
+    async listDomainUsers(domain: string): Promise<DomainUser[]> {
+      const { data } = await mining.get(`/api/kb/domains/${encodeURIComponent(domain)}/users`)
+      return data?.users ?? []
+    },
+    async addDomainUser(domain: string, username: string): Promise<DomainUser> {
+      const { data } = await mining.post(
+        `/api/kb/domains/${encodeURIComponent(domain)}/users`,
+        { username },
+      )
+      return extractOne<DomainUser>(data)
+    },
+    async removeDomainUser(domain: string, userId: string): Promise<void> {
+      await mining.delete(
+        `/api/kb/domains/${encodeURIComponent(domain)}/users/${encodeURIComponent(userId)}`,
+      )
+    },
+    /** 旧契约兼容：旧调用方仍可只读写 member 域列表。 */
     async getUserDomains(id: string): Promise<string[]> {
-      const { data } = await mining.get(`/api/kb/admin/users/${id}/domains`)
-      return data?.domains ?? []
+      const grants = await this.getUserDomainGrants(id)
+      return grants.map(grant => grant.domain)
     },
     async setUserDomains(id: string, domains: string[]): Promise<string[]> {
-      const { data } = await mining.post(`/api/kb/admin/users/${id}/domains`, { domains })
-      return data?.domains ?? []
+      const grants = domains.map(domain => ({ domain, domain_role: 'member' as const }))
+      const saved = await this.setUserDomainGrants(id, grants)
+      return saved.map(grant => grant.domain)
     },
     async changeMyPassword(oldPw: string, newPw: string): Promise<void> {
       await mining.post('/api/kb/users/me/password', { old: oldPw, new: newPw })

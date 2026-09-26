@@ -4,6 +4,8 @@ import com.coremasterkb.serving.domainpack.DatabaseConfig;
 import com.coremasterkb.serving.domainpack.ServingConfigSnapshot;
 import com.coremasterkb.serving.domainpack.ServingConfigSnapshot.DomainConfig;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
@@ -30,10 +32,22 @@ public class MainControlClient {
 
     private final RestTemplate restTemplate;
     private final String baseUrl;
+    private final String internalAuthSecret;
 
     public MainControlClient(RestTemplate restTemplate, String baseUrl) {
+        this(restTemplate, baseUrl, ControlPlaneInternalAuth.load());
+    }
+
+    public MainControlClient(RestTemplate restTemplate, String baseUrl, String internalAuthSecret) {
         this.restTemplate = restTemplate;
         this.baseUrl = baseUrl != null ? baseUrl.replaceAll("/+$", "") : "";
+        this.internalAuthSecret = internalAuthSecret != null ? internalAuthSecret.trim() : "";
+    }
+
+    private HttpEntity<Void> configRequest() {
+        HttpHeaders headers = new HttpHeaders();
+        if (!internalAuthSecret.isBlank()) headers.set("X-Internal-Auth", internalAuthSecret);
+        return new HttpEntity<>(headers);
     }
 
     public boolean isConfigured() {
@@ -53,7 +67,7 @@ public class MainControlClient {
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     baseUrl + "/api/v1/serving-config",
                     HttpMethod.GET,
-                    null,
+                    configRequest(),
                     MAP_TYPE);
             Map<String, Object> body = response.getBody();
             if (body == null) {
@@ -89,7 +103,7 @@ public class MainControlClient {
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                     baseUrl + "/api/v1/system/database",
                     HttpMethod.GET,
-                    null,
+                    configRequest(),
                     MAP_TYPE);
             Map<String, Object> body = response.getBody();
             if (body == null) {

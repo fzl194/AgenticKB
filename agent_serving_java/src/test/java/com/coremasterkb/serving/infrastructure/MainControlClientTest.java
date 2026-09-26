@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
@@ -34,9 +35,24 @@ class MainControlClientTest {
 
     @SuppressWarnings("unchecked")
     private void stubBody(Map<String, Object> body) {
-        when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), isNull(),
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class),
                 any(ParameterizedTypeReference.class)))
                 .thenReturn(ResponseEntity.ok(body));
+    }
+
+    @Test
+    @DisplayName("sends the internal config credential on every control-plane read")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void sendsInternalConfigCredential() {
+        stubBody(servingConfigBody());
+        new MainControlClient(restTemplate, "http://localhost:8910", "bootstrap-secret")
+                .fetchServingConfig();
+
+        var entity = org.mockito.ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).exchange(anyString(), eq(HttpMethod.GET), entity.capture(),
+                any(ParameterizedTypeReference.class));
+        assertThat(entity.getValue().getHeaders().getFirst("X-Internal-Auth"))
+                .isEqualTo("bootstrap-secret");
     }
 
     /** Mirrors the Python payload. Credentials are dummies — shape is what matters. */
@@ -156,7 +172,7 @@ class MainControlClientTest {
         @DisplayName("transport error is wrapped as ConfigFetchException")
         @SuppressWarnings("unchecked")
         void transportErrorWrapped() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), isNull(),
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class),
                     any(ParameterizedTypeReference.class)))
                     .thenThrow(new RuntimeException("connection refused"));
 
@@ -182,7 +198,7 @@ class MainControlClientTest {
             new MainControlClient(restTemplate, "http://localhost:8910///").fetchServingConfig();
 
             verify(restTemplate).exchange(eq("http://localhost:8910/api/v1/serving-config"),
-                    eq(HttpMethod.GET), isNull(), any(ParameterizedTypeReference.class));
+                    eq(HttpMethod.GET), any(HttpEntity.class), any(ParameterizedTypeReference.class));
         }
     }
 
@@ -242,7 +258,7 @@ class MainControlClientTest {
             new MainControlClient(restTemplate, "http://localhost:8910/").fetchDefaultDatabase();
 
             verify(restTemplate).exchange(eq("http://localhost:8910/api/v1/system/database"),
-                    eq(HttpMethod.GET), isNull(), any(ParameterizedTypeReference.class));
+                    eq(HttpMethod.GET), any(HttpEntity.class), any(ParameterizedTypeReference.class));
         }
 
         @Test
@@ -270,7 +286,7 @@ class MainControlClientTest {
         @DisplayName("transport error is wrapped as ConfigFetchException")
         @SuppressWarnings("unchecked")
         void transportErrorWrapped() {
-            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), isNull(),
+            when(restTemplate.exchange(anyString(), eq(HttpMethod.GET), any(HttpEntity.class),
                     any(ParameterizedTypeReference.class)))
                     .thenThrow(new RuntimeException("connection refused"));
 

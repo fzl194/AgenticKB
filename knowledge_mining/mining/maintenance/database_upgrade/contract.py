@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 
-CURRENT_SCHEMA_VERSION = "2026.09.converged-v1"
-CURRENT_SCHEMA_CHECKSUM = "8966fa3f01d5d2f3ead7db8091c043e55fc4d4b6ae7e3c9c3142732543f4baed"
+CURRENT_SCHEMA_VERSION = "2026.09.domain-role-v1"
+CURRENT_SCHEMA_CHECKSUM = "21ef7bbf68e6f92fa9e45c05725b3ef5e0e7308d758fea957e7df03ce06443ed"
 SCHEMA_MARKER_ID = f"schema/{CURRENT_SCHEMA_VERSION}"
 MIGRATION_LEDGER_TABLE = "cmkb_schema_migrations"
 LEGACY_COMPAT_TABLES: tuple[str, ...] = ("mcp_open_kbs", "mcp_access")

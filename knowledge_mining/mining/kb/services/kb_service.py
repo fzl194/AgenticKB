@@ -167,6 +167,10 @@ class KbService:
             raise NotFound(f"user {username!r} not found")
         # public 库全员可读,viewer 成员冗余(对 public 库只有 editor 成员还有写权限意义)。
         kb = await self._db.get_kb(kb_id)
+        if kb and not await self._db.can_create_in_domain(
+            user_id=member["id"], domain=kb["domain"],
+        ):
+            raise DomainNotBound(kb["domain"])
         if kb and kb.get("visibility") == "public" and role == "viewer":
             raise InvalidVisibility(
                 "public 库无需添加只读成员(全员可读);如需协作请加编辑者"

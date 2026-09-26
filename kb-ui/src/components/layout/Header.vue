@@ -39,7 +39,7 @@
             :type="auth.siteRole === 'admin' ? 'danger' : 'info'"
             effect="plain"
           >
-            {{ auth.siteRole === 'admin' ? '管理员' : '用户' }}
+            {{ accountRoleLabel }}
           </el-tag>
         </span>
         <template #dropdown>
@@ -62,6 +62,7 @@ import { useBrandStore } from '@/stores/brand'
 import { useAuthStore } from '@/stores/auth'
 import { useAuthApi } from '@/api/auth'
 import { apiErrorDetail } from '@/api/proxyClient'
+import { canManageDomainUsers } from '@/utils/domainPermissions'
 
 const route = useRoute()
 const router = useRouter()
@@ -83,6 +84,7 @@ const pageTitles: Record<string, string> = {
   'mcp-access': 'MCP 接入',
   llm: 'LLM 服务',
   'llm-task-detail': 'LLM 服务',
+  users: '用户管理',
   settings: '系统设置',
 }
 
@@ -90,12 +92,22 @@ const pageTitle = computed(() => pageTitles[route.name as string] || brand.title
 const displayName = computed(
   () => auth.user?.display_name || auth.user?.username || '—',
 )
+const accountRoleLabel = computed(() => {
+  if (auth.siteRole === 'admin') return '系统管理员'
+  return domainStore.currentDomainInfo?.domain_role === 'admin' ? '域管理员' : '用户'
+})
 
 const allHealthy = ref(true)
 const someHealthy = ref(true)
 
 function onDomainChange(domainId: string) {
   domainStore.switchDomain(domainId)
+  if (
+    route.name === 'users'
+    && !canManageDomainUsers(auth.siteRole, domainStore.currentDomainInfo)
+  ) {
+    void router.replace('/')
+  }
   allHealthy.value = true
   someHealthy.value = true
 }

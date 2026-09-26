@@ -28,6 +28,8 @@ config.global.stubs = {
   ElUpload: { template: '<div><slot /><slot name="tip" /></div>' },
   ElPagination: true,
   ElTag: { template: '<span class="el-tag"><slot /></span>' },
+  ElTooltip: { template: '<span><slot /></span>' },
+  ElCheckbox: { template: '<label><slot /></label>' },
   ElDropdown: { template: '<div class="el-dropdown"><span class="el-dropdown-trigger"><slot /></span><div class="el-dropdown-menu"><slot name="dropdown" /></div></div>' },
   ElDropdownMenu: { template: '<div><slot /></div>' },
   ElDropdownItem: { template: '<div class="el-dropdown-item" @click="$emit(\'command\')"><slot /></div>' },

@@ -11,7 +11,7 @@ verify 例外：它是登录语义（main_control 的服务端调用），不挂
 from __future__ import annotations
 
 from hmac import compare_digest
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from knowledge_mining.mining.infra.control_plane import get_internal_verify_secret
 from knowledge_mining.mining.infra.domain_pack import resolve_domain
 from knowledge_mining.mining.kb.auth import current_user, require_admin
-from knowledge_mining.mining.kb.db import KbDB
+from knowledge_mining.mining.kb.db import DomainMembershipConflict, KbDB
 from knowledge_mining.mining.kb.deps import get_kb_db, get_user_service
 
 import logging
@@ -73,6 +73,19 @@ class UserDomainsReq(BaseModel):
     domains: list[str]
 
 
+class DomainGrantReq(BaseModel):
+    domain: str
+    domain_role: Literal["member", "admin"] = "member"
+
+
+class UserDomainGrantsReq(BaseModel):
+    grants: list[DomainGrantReq]
+
+
+class AddDomainUserReq(BaseModel):
+    username: str
+
+
 # ---------------------------------------------------------------- helpers
 
 def _require_internal(request: Request) -> None:
@@ -96,6 +109,54 @@ def _map_user_error(exc: Exception) -> HTTPException:
     if isinstance(exc, (InvalidRole, WrongPassword, UserError)):
         return HTTPException(400, str(exc))
     return HTTPException(500, str(exc))
+
+
+def _validate_domain(domain: str) -> str:
+    cleaned = domain.strip()
+    try:
+        resolve_domain(cleaned)
+    except Exception as exc:
+        raise HTTPException(400, f"invalid_domain:{cleaned}") from exc
+    return cleaned
+
+
+def _domain_access_payload(user: dict[str, Any], grants: list[dict[str, str]]) -> dict[str, Any]:
+    capabilities_by_domain = {
+        grant["domain"]: (
+            ["domain.kbs.manage", "domain.users.manage"]
+            if grant["domain_role"] == "admin" else []
+        )
+        for grant in grants
+    }
+    return {
+        "site_role": user["site_role"],
+        "grants": grants,
+        "capabilities_by_domain": capabilities_by_domain,
+    }
+
+
+def require_domain_admin_credential(
+    target: dict[str, Any], grants: list[dict[str, str]],
+) -> None:
+    """Privileged domain grants require a password-backed account.
+
+    Ordinary members currently use the intranet SSO placeholder, which accepts
+    an allow-listed username without a second factor.  Until real SSO lands,
+    granting domain-wide administration to such an account would turn knowing
+    the username into control of every KB in the domain.
+    """
+    if any(grant.get("domain_role") == "admin" for grant in grants) \
+            and not target.get("password_hash"):
+        raise HTTPException(400, "domain_admin_requires_password")
+
+
+async def _require_domain_manager(
+    *, user: dict[str, Any], domain: str, kbdb: KbDB,
+) -> str:
+    cleaned = _validate_domain(domain)
+    if not await kbdb.can_manage_domain(user_id=user["id"], domain=cleaned):
+        raise HTTPException(403, "domain_admin_required")
+    return cleaned
 
 
 # ---------------------------------------------------------------- verify (internal)
@@ -206,6 +267,19 @@ async def internal_user_domains(
     return {"domains": await kbdb.list_user_domains(user_id=user["id"])}
 
 
+@router.get("/internal/users/{username}/domain-access", dependencies=[Depends(_require_internal)])
+async def internal_user_domain_access(
+    username: str,
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    """Trusted control-plane projection used to scope domain menus and proxy checks."""
+    user = await kbdb.get_user_by_username(username)
+    if not user or user.get("status") != "active":
+        return {"site_role": None, "grants": [], "capabilities_by_domain": {}}
+    grants = await kbdb.list_domain_grants(user_id=user["id"])
+    return _domain_access_payload(user, grants)
+
+
 @router.get("/internal/domains/{domain}/kb-count", dependencies=[Depends(_require_internal)])
 async def internal_kb_count(
     domain: str,
@@ -287,6 +361,15 @@ async def change_my_password(
         raise _map_user_error(exc) from None
 
 
+@router.get("/domain-access/me")
+async def my_domain_access(
+    user: dict = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    grants = await kbdb.list_domain_grants(user_id=user["id"])
+    return _domain_access_payload(user, grants)
+
+
 # ---------------------------------------------------------------- 域分配 (admin, 51号批次1)
 
 @router.get("/admin/users/{user_id}/domains")
@@ -321,5 +404,120 @@ async def assign_user_domains(
             raise HTTPException(400, f"invalid_domain:{d}") from exc
     if user["site_role"] == "admin":
         return {"user_id": user_id, "domains": []}  # admin 免绑定，幂等空操作
-    updated = await kbdb.set_user_domains(user_id=user_id, domains=domains)
-    return {"user_id": user_id, "domains": updated}
+    try:
+        updated = await kbdb.set_user_domains(user_id=user_id, domains=domains)
+    except DomainMembershipConflict as exc:
+        raise HTTPException(409, exc.code) from None
+    return {
+        "user_id": user_id,
+        "domains": updated,
+        "domain_grants": await kbdb.list_domain_grants(user_id=user_id),
+    }
+
+
+@router.get("/admin/users/{user_id}/domain-grants")
+async def get_user_domain_grants(
+    user_id: str,
+    _admin: dict = Depends(require_admin),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    user = await kbdb.get_user(user_id)
+    if not user:
+        raise HTTPException(404, "user_not_found")
+    grants = await kbdb.list_domain_grants(user_id=user_id)
+    return {"user_id": user_id, "domains": [g["domain"] for g in grants], "domain_grants": grants}
+
+
+@router.put("/admin/users/{user_id}/domain-grants")
+async def assign_user_domain_grants(
+    user_id: str,
+    body: UserDomainGrantsReq,
+    _admin: dict = Depends(require_admin),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    user = await kbdb.get_user(user_id)
+    if not user:
+        raise HTTPException(404, "user_not_found")
+    if user["site_role"] == "admin":
+        return {"user_id": user_id, "domains": [], "domain_grants": []}
+    normalized: dict[str, str] = {}
+    for grant in body.grants:
+        domain = _validate_domain(grant.domain)
+        if domain in normalized:
+            raise HTTPException(422, f"duplicate_domain:{domain}")
+        normalized[domain] = grant.domain_role
+    if not normalized:
+        raise HTTPException(422, "domain_grants_must_not_be_empty")
+    normalized_grants = [
+        {"domain": domain, "domain_role": role}
+        for domain, role in normalized.items()
+    ]
+    require_domain_admin_credential(user, normalized_grants)
+    try:
+        grants = await kbdb.set_domain_grants(
+            user_id=user_id,
+            grants=normalized_grants,
+        )
+    except DomainMembershipConflict as exc:
+        raise HTTPException(409, exc.code) from None
+    return {"user_id": user_id, "domains": [g["domain"] for g in grants], "domain_grants": grants}
+
+
+@router.get("/domains/{domain}/users")
+async def list_domain_users(
+    domain: str,
+    user: dict = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    cleaned = await _require_domain_manager(user=user, domain=domain, kbdb=kbdb)
+    return {"domain": cleaned, "users": await kbdb.list_domain_users(domain=cleaned)}
+
+
+@router.post("/domains/{domain}/users", status_code=201)
+async def add_domain_user(
+    domain: str,
+    body: AddDomainUserReq,
+    user: dict = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    cleaned = await _require_domain_manager(user=user, domain=domain, kbdb=kbdb)
+    target = await kbdb.get_user_by_username(body.username.strip())
+    if not target or target.get("status") != "active":
+        raise HTTPException(404, "user_not_found")
+    if target.get("site_role") == "admin":
+        raise HTTPException(400, "site_admin_does_not_require_domain_grant")
+    existing_role = await kbdb.get_domain_role(user_id=target["id"], domain=cleaned)
+    if existing_role == "admin" and user.get("site_role") != "admin":
+        raise HTTPException(403, "cannot_manage_domain_admin")
+    await kbdb.bind_domain(user_id=target["id"], domain=cleaned)
+    return {
+        "id": target["id"],
+        "username": target["username"],
+        "display_name": target.get("display_name"),
+        "domain_role": existing_role or "member",
+    }
+
+
+@router.delete("/domains/{domain}/users/{user_id}")
+async def remove_domain_user(
+    domain: str,
+    user_id: str,
+    user: dict = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    cleaned = await _require_domain_manager(user=user, domain=domain, kbdb=kbdb)
+    target = await kbdb.get_user(user_id)
+    if not target:
+        raise HTTPException(404, "user_not_found")
+    if target.get("site_role") == "admin" and user.get("site_role") != "admin":
+        raise HTTPException(403, "cannot_manage_site_admin")
+    role = await kbdb.get_domain_role(user_id=user_id, domain=cleaned)
+    if role is None:
+        raise HTTPException(404, "domain_membership_not_found")
+    if role == "admin" and user.get("site_role") != "admin":
+        raise HTTPException(403, "cannot_manage_domain_admin")
+    try:
+        await kbdb.unbind_domain(user_id=user_id, domain=cleaned)
+    except DomainMembershipConflict as exc:
+        raise HTTPException(409, exc.code) from None
+    return {"ok": True, "user_id": user_id, "domain": cleaned}

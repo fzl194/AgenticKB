@@ -50,7 +50,11 @@ def apply_manifest(
                     migration_id=migration.migration_id,
                     checksum=migration.checksum,
                     app_version=app_version,
-                    details={"migration_id": migration.migration_id, **(details or {})},
+                    details={
+                        **(details or {}),
+                        "migration_id": migration.migration_id,
+                        "migration_mode": migration.mode.value,
+                    },
                 )
             applied_ids.append(migration.migration_id)
         # The release marker is the startup gate. It must be written only after

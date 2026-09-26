@@ -9,6 +9,11 @@ const api = vi.hoisted(() => ({
   updateUser: vi.fn(),
   getUserDomains: vi.fn(),
   setUserDomains: vi.fn(),
+  getUserDomainGrants: vi.fn(),
+  setUserDomainGrants: vi.fn(),
+  listDomainUsers: vi.fn(),
+  addDomainUser: vi.fn(),
+  removeDomainUser: vi.fn(),
 }))
 const ui = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }))
 
@@ -47,6 +52,10 @@ describe('UserManagementTab', () => {
       {
         id: '2', username: 'alice', site_role: 'member', status: 'active',
         display_name: 'Alice', domains: ['domain_a', 'domain_b'],
+        domain_grants: [
+          { domain: 'domain_a', domain_role: 'admin' },
+          { domain: 'domain_b', domain_role: 'member' },
+        ],
       },
     ])
 
@@ -54,8 +63,13 @@ describe('UserManagementTab', () => {
     await flushPromises()
 
     expect(w.vm.users[0].domains).toEqual(['domain_a', 'domain_b'])
-    expect(w.vm.userDomains).toEqual({ 2: ['domain_a', 'domain_b'] })
-    expect(api.getUserDomains).not.toHaveBeenCalled()
+    expect(w.vm.userDomains).toEqual({
+      2: [
+        { domain: 'domain_a', domain_role: 'admin' },
+        { domain: 'domain_b', domain_role: 'member' },
+      ],
+    })
+    expect(api.getUserDomainGrants).not.toHaveBeenCalled()
   })
 
   it('keeps the newer domain dialog loading until its own request finishes', async () => {
@@ -63,9 +77,9 @@ describe('UserManagementTab', () => {
       { id: '1', username: 'alice', site_role: 'member', status: 'active', domains: ['domain_a'] },
       { id: '2', username: 'bob', site_role: 'member', status: 'active', domains: ['domain_b'] },
     ])
-    let resolveAlice!: (domains: string[]) => void
-    let resolveBob!: (domains: string[]) => void
-    api.getUserDomains
+    let resolveAlice!: (grants: Array<{ domain: string; domain_role: 'member' | 'admin' }>) => void
+    let resolveBob!: (grants: Array<{ domain: string; domain_role: 'member' | 'admin' }>) => void
+    api.getUserDomainGrants
       .mockReturnValueOnce(new Promise(resolve => { resolveAlice = resolve }))
       .mockReturnValueOnce(new Promise(resolve => { resolveBob = resolve }))
 
@@ -74,11 +88,11 @@ describe('UserManagementTab', () => {
     const aliceLoad = w.vm.openDomains(w.vm.users[0])
     const bobLoad = w.vm.openDomains(w.vm.users[1])
 
-    resolveAlice(['domain_a'])
+    resolveAlice([{ domain: 'domain_a', domain_role: 'member' }])
     await aliceLoad
     expect(w.vm.domainsLoading).toBe(true)
 
-    resolveBob(['domain_b'])
+    resolveBob([{ domain: 'domain_b', domain_role: 'member' }])
     await bobLoad
     expect(w.vm.domainsLoading).toBe(false)
   })
@@ -102,5 +116,21 @@ describe('UserManagementTab', () => {
     await w.vm.load()
     await flushPromises()
     expect(ui.error).toHaveBeenCalled()
+  })
+
+  it('loads only the selected domain users in domain-admin mode', async () => {
+    api.listDomainUsers.mockResolvedValue([
+      { id: '2', username: 'alice', display_name: 'Alice', domain_role: 'member' },
+    ])
+
+    const w = mount(UserManagementTab, {
+      props: { domainId: 'domain_a' },
+      global: { plugins: [createPinia()] },
+    })
+    await flushPromises()
+
+    expect(api.listDomainUsers).toHaveBeenCalledWith('domain_a')
+    expect(api.listUsers).not.toHaveBeenCalled()
+    expect(w.vm.users[0].domain_role).toBe('member')
   })
 })

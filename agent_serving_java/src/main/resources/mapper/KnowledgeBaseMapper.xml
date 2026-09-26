@@ -24,21 +24,31 @@
               </foreach>
           </if>
           AND (
-                kb.owner_id = u.id
-                OR EXISTS (
-                    SELECT 1 FROM kb_members m
-                    WHERE m.kb_id = kb.id AND m.user_id = u.id
+                <!-- 站点管理员全通；软删/跨域仍被上面的 status/domain 条件挡住。 -->
+                u.site_role = 'admin'
+                OR (
+                    <!-- 硬域边界：非站点管理员必须先有同域绑定。owner / kb_member
+                         也不能绕过；解绑后立即失去该域全部检索权限。 -->
+                    EXISTS (
+                        SELECT 1 FROM user_domains access_domain
+                        WHERE access_domain.user_id = u.id
+                          AND access_domain.domain = kb.domain
+                    )
+                    AND (
+                        EXISTS (
+                            SELECT 1 FROM user_domains domain_admin
+                            WHERE domain_admin.user_id = u.id
+                              AND domain_admin.domain = kb.domain
+                              AND domain_admin.domain_role = 'admin'
+                        )
+                        OR kb.owner_id = u.id
+                        OR EXISTS (
+                            SELECT 1 FROM kb_members m
+                            WHERE m.kb_id = kb.id AND m.user_id = u.id
+                        )
+                        OR kb.visibility = 'public'
+                    )
                 )
-                  <!-- 1.0.2 修复：站点管理员全通（与 mining kb/db.list_visible_kb_ids 的
-                       admin 分支对齐）——软删/跨域仍被上面的 status/domain 条件挡住。 -->
-                OR u.site_role = 'admin'
-                <!-- 51号批次1：public 域内化——须用户绑定该域（与 mining kb/db
-                     list_visible_kb_ids 谓词逐字对齐；匿名 u.id 为 NULL 时自然拒绝） -->
-                OR (kb.visibility = 'public'
-                    AND EXISTS (
-                        SELECT 1 FROM user_domains ud
-                        WHERE ud.user_id = u.id AND ud.domain = kb.domain
-                    ))
               )
     </select>
 

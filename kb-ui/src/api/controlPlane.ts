@@ -121,6 +121,8 @@ export interface ControlPlaneDomainSummary {
   enabled: boolean
   default_channel: string
   scenario_pack_ref: string
+  domain_role?: import('@/types/auth').DomainRole | null
+  capabilities?: import('@/types/auth').DomainCapability[]
 }
 
 export interface ReleaseInfo {

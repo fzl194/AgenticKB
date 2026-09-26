@@ -6,6 +6,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import yaml
@@ -334,7 +335,20 @@ class YamlConfigService:
     async def bound_domains_for(
         self, username: str, internal_secret: str
     ) -> tuple[set[str] | None, str]:
-        """问 mining 拿用户绑定域；不可达返回 (None, 原因)（调用方 503，不降级全量）。
+        """Compatibility wrapper around the richer per-domain access contract."""
+        access, reason = await self.domain_access_for(username, internal_secret)
+        if access is None:
+            return None, reason
+        return {
+            str(grant["domain"])
+            for grant in access.get("grants", [])
+            if isinstance(grant, dict) and grant.get("domain")
+        }, ""
+
+    async def domain_access_for(
+        self, username: str, internal_secret: str
+    ) -> tuple[dict[str, Any] | None, str]:
+        """问 mining 拿用户的域角色/能力；失败时调用方必须 fail closed。
 
         原因同时进日志与 503 detail——此前静默吞异常，现场只看到 503 无从排查
         （内网 2026-09-21 实发）。
@@ -351,12 +365,15 @@ class YamlConfigService:
         reason = ""
         try:
             resp = await get_proxy_client().get(
-                f"{base}/api/kb/internal/users/{username}/domains",
+                f"{base}/api/kb/internal/users/{quote(username, safe='')}/domain-access",
                 headers={"X-Internal-Auth": internal_secret},
                 timeout=10.0,
             )
             resp.raise_for_status()
-            return set(resp.json().get("domains", [])), ""
+            payload = resp.json()
+            if not isinstance(payload, dict):
+                return None, "invalid_payload"
+            return payload, ""
         except httpx.HTTPStatusError as exc:
             reason = f"http_{exc.response.status_code}"
         except httpx.TimeoutException:
@@ -364,7 +381,7 @@ class YamlConfigService:
         except Exception as exc:  # noqa: BLE001 — fail-closed 由调用方处理
             reason = type(exc).__name__
         logger.warning(
-            "mining user-domains query failed (%s): user=%s base=%s",
+            "mining domain-access query failed (%s): user=%s base=%s",
             reason, username, base,
         )
         return None, reason

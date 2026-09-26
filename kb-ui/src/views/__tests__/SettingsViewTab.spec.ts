@@ -31,6 +31,12 @@ async function mountAt(query: Record<string, unknown>) {
 }
 
 describe('设置页 ?tab= 深链', () => {
+  it('用户管理已经从系统设置拆为独立页面', async () => {
+    const w = await mountAt({ tab: 'users' })
+    expect(w.text()).not.toContain('用户管理')
+    expect(w.vm.activeTab).toBe('system')
+  })
+
   it('合法 tab 名被采纳', async () => {
     const w = await mountAt({ tab: 'status' })
     expect(w.vm.activeTab).toBe('status')

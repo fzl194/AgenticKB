@@ -25,7 +25,12 @@ def _client(tmp_path: Path) -> TestClient:
         "default_domain: d\ndomains:\n  d:\n    display_name: D\n    enabled: true\n",
         encoding="utf-8",
     )
-    return TestClient(create_app(config_dir=tmp_path))
+    async def active_site_admin(_request, _username):
+        return True
+
+    return TestClient(
+        create_app(config_dir=tmp_path, site_admin_validator=active_site_admin)
+    )
 
 
 def _status_file(tmp_path: Path, monkeypatch) -> Path:

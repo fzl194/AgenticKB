@@ -242,6 +242,9 @@ dir_signature() {
 # 依赖顺序的全量服务重启序列
 ALL_SERVICES_IN_ORDER="control llm_service mining serving mcp"
 DB_MIGRATION_RAN=false
+DB_CONFIG_SWITCHED=false
+DB_ONLINE_MIGRATION=false
+DB_MIGRATION_DEPLOYMENT_ID=""
 
 migration_exec() {
     local env_args=()
@@ -260,6 +263,8 @@ migration_exec() {
 
 run_database_upgrade_if_needed() {
     local output status
+    local replace_answer
+    local apply_args=()
 
     # 迁移器位于 knowledge_mining，同普通代码一起同步；Python/psycopg 由现有
     # app 容器提供，宿主机无需安装 Python，也不要求替换镜像。
@@ -278,6 +283,32 @@ run_database_upgrade_if_needed() {
     if [ "$status" -ne 10 ]; then
         restore_migration_code_backup
         die "数据库迁移计划失败；未重启新代码，请先排查。"
+    fi
+
+    if printf '%s\n' "$output" | grep -Eq '"action"[[:space:]]*:[[:space:]]*"rebase"'; then
+        DB_CONFIG_SWITCHED=true
+    fi
+    if printf '%s\n' "$output" | grep -Eq '"action"[[:space:]]*:[[:space:]]*"online_migrate"'; then
+        DB_ONLINE_MIGRATION=true
+        DB_MIGRATION_DEPLOYMENT_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+        apply_args+=("--deployment-id" "$DB_MIGRATION_DEPLOYMENT_ID")
+    fi
+
+    # 双库轮换目标存在时绝不静默覆盖。交互部署必须由操作者明确输入
+    # DELETE；CI/无 TTY 环境安全失败，改由人工执行带 --replace-target 的
+    # migration apply，避免自动化误删完整回滚库。
+    if printf '%s\n' "$output" | grep -Eq '"replace_target_required"[[:space:]]*:[[:space:]]*true'; then
+        if ! read -r -p \
+            "轮换目标数据库已存在。确认它可删除并重建请输入 DELETE：" \
+            replace_answer </dev/tty; then
+            restore_migration_code_backup
+            die "当前环境无法交互确认，拒绝删除轮换目标数据库。"
+        fi
+        if [ "$replace_answer" != "DELETE" ]; then
+            restore_migration_code_backup
+            die "未确认删除轮换目标数据库，升级已取消。"
+        fi
+        apply_args+=("--replace-target")
     fi
 
     echo "=== 存在待办数据库迁移：暂停写入与检索服务 ==="
@@ -303,10 +334,12 @@ run_database_upgrade_if_needed() {
 
     echo "=== 在现有容器中执行数据库迁移 ==="
     if ! migration_exec \
-        python -m knowledge_mining.mining.maintenance.database_upgrade apply; then
-        restore_migration_code_backup
-        restart_old_services_after_rollback
-        die "数据库迁移失败。已恢复旧代码并尝试重启旧服务；目标库保留供排查。"
+        python -m knowledge_mining.mining.maintenance.database_upgrade apply \
+        "${apply_args[@]}"; then
+        DB_MIGRATION_RAN=true
+        rollback_database_cutover \
+            || die "数据库迁移失败且自动回滚未完成，服务保持停止，需人工介入。"
+        die "数据库迁移失败。已清理本次在线账本或恢复旧库配置，并重启旧服务。"
     fi
 
     echo "=== 验证切换后的数据库 ==="
@@ -378,19 +411,36 @@ rollback_database_cutover() {
     local svc state
     for svc in mcp serving mining llm_service; do
         state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}' || true)"
-        if [ "$state" != "STOPPED" ]; then
-            compose exec -T app supervisorctl stop "$svc" >/dev/null 2>&1 \
-                || return 1
-            state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}' || true)"
-        fi
-        [ "$state" = "STOPPED" ] || return 1
+        case "$state" in
+            STOPPED|EXITED|FATAL) ;;
+            *)
+                compose exec -T app supervisorctl stop "$svc" >/dev/null 2>&1 \
+                    || return 1
+                state="$(compose exec -T app supervisorctl status "$svc" 2>/dev/null | awk '{print $2}' || true)"
+                case "$state" in
+                    STOPPED|EXITED|FATAL) ;;
+                    *) return 1 ;;
+                esac
+                ;;
+        esac
     done
     echo "=== 回滚数据库配置与代码 ==="
-    migration_exec \
-        python -m knowledge_mining.mining.maintenance.database_upgrade rollback-config \
-        || return 1
+    if [ "$DB_ONLINE_MIGRATION" = true ]; then
+        migration_exec \
+            python -m knowledge_mining.mining.maintenance.database_upgrade rollback-online-ledger \
+            --deployment-id "$DB_MIGRATION_DEPLOYMENT_ID" \
+            || return 1
+    fi
+    if [ "$DB_CONFIG_SWITCHED" = true ]; then
+        migration_exec \
+            python -m knowledge_mining.mining.maintenance.database_upgrade rollback-config \
+            || return 1
+    fi
     restore_migration_code_backup || return 1
     DB_MIGRATION_RAN=false
+    DB_CONFIG_SWITCHED=false
+    DB_ONLINE_MIGRATION=false
+    DB_MIGRATION_DEPLOYMENT_ID=""
     restart_old_services_after_rollback || return 1
     verify_health_by_services "$ALL_SERVICES_IN_ORDER" || return 1
 }

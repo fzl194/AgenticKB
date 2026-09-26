@@ -132,8 +132,9 @@ def clone_database(
     target_dbname: str,
     *,
     maintenance_endpoint: DatabaseEndpoint | None = None,
+    replace_existing: bool = False,
 ) -> DatabaseEndpoint:
-    """Clone one stopped source database without overwriting an existing target."""
+    """Clone one stopped source database, replacing a stale target only by opt-in."""
 
     target = validate_database_name(target_dbname)
     if target == endpoint.dbname:
@@ -158,7 +159,21 @@ def clone_database(
                 f"源库仍有 {active_connections} 个连接，停写屏障未成立"
             )
         if database_exists(conn, target):
-            raise DatabaseUpgradeError(f"目标数据库已存在，拒绝覆盖：{target}")
+            if not replace_existing:
+                raise DatabaseUpgradeError(
+                    f"目标数据库已存在，拒绝覆盖：{target}；确认可删除后使用 --replace-target"
+                )
+            target_active_row = conn.execute(
+                """SELECT count(*) FROM pg_stat_activity
+                     WHERE datname = %s AND pid <> pg_backend_pid()""",
+                (target,),
+            ).fetchone()
+            target_connections = int(target_active_row[0]) if target_active_row else 0
+            if target_connections:
+                raise DatabaseUpgradeError(
+                    f"目标数据库 {target} 仍有 {target_connections} 个连接，拒绝删除"
+                )
+            conn.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(target)))
         conn.execute(
             sql.SQL("CREATE DATABASE {} WITH TEMPLATE {} OWNER {}").format(
                 sql.Identifier(target),

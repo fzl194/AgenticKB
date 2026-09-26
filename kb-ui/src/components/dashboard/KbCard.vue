@@ -24,6 +24,7 @@
 import { computed } from 'vue'
 import { kbCardStatus } from '@/utils/dashboard'
 import type { KbOverviewItem } from '@/types/kb'
+import { roleLabel as kbRoleLabel } from '@/views/kb/kbMeta'
 
 const props = defineProps<{ kb: KbOverviewItem }>()
 defineEmits<{ open: [string] }>()
@@ -38,10 +39,7 @@ const badgeTitle = computed(() => (
   { failed: '有文档处理失败', mining: '正在挖掘', ready: '就绪' }[status.value]
 ))
 
-const roleLabel = computed(() => (
-  { owner: '拥有者', editor: '编辑者', viewer: '只读', admin: '管理员' }[props.kb.my_role]
-    ?? props.kb.my_role
-))
+const roleLabel = computed(() => kbRoleLabel(props.kb.my_role) ?? props.kb.my_role)
 
 const subline = computed(() => {
   const { failed, mining, total } = props.kb.status_counts

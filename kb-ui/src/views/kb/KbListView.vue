@@ -93,12 +93,15 @@
         </div>
       </el-alert>
 
-      <!-- site-admin：已删除库（软删时代存量）的彻底清理入口 -->
-      <el-collapse v-if="authStore.siteRole === 'admin' && deletedKbs.length" class="kb-deleted">
-        <el-collapse-item :title="`已删除的知识库（${deletedKbs.length}）——软删时代存量清理`">
+      <!-- 系统管理员或当前域管理员：恢复/清理本域软删除库。 -->
+      <el-collapse v-if="canManageDomainKbs && deletedKbs.length" class="kb-deleted">
+        <el-collapse-item :title="`已删除的知识库（${deletedKbs.length}）`">
           <div v-for="dkb in deletedKbs" :key="dkb.id" class="kb-deleted__row">
             <span class="kb-deleted__name">{{ dkb.name }}</span>
             <span class="kb-deleted__meta">删除于 {{ formatDate(dkb.deleted_at ?? '') }}</span>
+            <el-button size="small" plain
+                       :loading="restoringId === dkb.id"
+                       @click="restoreDeleted(dkb)">恢复</el-button>
             <el-button size="small" type="danger" plain
                        :loading="purgingId === dkb.id"
                        @click="removeDeleted(dkb)">彻底删除</el-button>
@@ -127,12 +130,16 @@ import { Collection, Cpu, Document, Loading, MoreFilled, Plus, Refresh } from '@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useAuthStore } from '@/stores/auth'
+import { canManageDomainKnowledgeBases } from '@/utils/domainPermissions'
 import { useKbApi } from '@/api/kb'
 import type { DeletedKbRow, KbPurgeTask } from '@/types/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import KbCreateDialog from '@/components/kb/KbCreateDialog.vue'
-import { roleLabel, roleTagType, visibilityLabel, visibilityTagType } from '@/views/kb/kbMeta'
+import {
+  canManageKbLifecycle, canWriteKb, roleLabel, roleTagType,
+  visibilityLabel, visibilityTagType,
+} from '@/views/kb/kbMeta'
 import type { KbSummary } from '@/types/kb'
 
 const router = useRouter()
@@ -147,12 +154,16 @@ const miningId = ref<string | null>(null)
 let loadGeneration = 0
 
 function canWrite(kb: KbSummary): boolean {
-  return kb.my_role === 'owner' || kb.my_role === 'editor' || kb.my_role === 'admin'
+  return canWriteKb(kb.my_role)
 }
 
 const authStore = useAuthStore()
+const canManageDomainKbs = computed(() =>
+  canManageDomainKnowledgeBases(authStore.siteRole, domainStore.currentDomainInfo),
+)
 const deletedKbs = ref<DeletedKbRow[]>([])
 const purgingId = ref('')
+const restoringId = ref('')
 const purgeTasks = ref<KbPurgeTask[]>([])
 let purgeTimer: ReturnType<typeof setInterval> | null = null
 
@@ -218,11 +229,13 @@ async function load() {
   const generation = ++loadGeneration
   loading.value = true
   loadError.value = ''
-  if (authStore.siteRole === 'admin') {
+  if (canManageDomainKbs.value) {
     try {
       const deleted = await kbApi.listDeletedKbs(domain)
       if (generation === loadGeneration) deletedKbs.value = deleted
     } catch { if (generation === loadGeneration) deletedKbs.value = [] }
+  } else if (generation === loadGeneration) {
+    deletedKbs.value = []
   }
   if (generation === loadGeneration) {
     try { purgeTasks.value = await kbApi.purgeTasks(domain) }
@@ -243,7 +256,7 @@ async function load() {
 }
 
 function canManageLifecycle(kb: KbSummary): boolean {
-  return kb.my_role === 'owner' || kb.my_role === 'admin'
+  return canManageKbLifecycle(kb.my_role)
 }
 
 function enter(kb: KbSummary) {
@@ -324,6 +337,23 @@ async function removeDeleted(dkb: DeletedKbRow) {
     await load()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
   finally { purgingId.value = '' }
+}
+
+async function restoreDeleted(dkb: DeletedKbRow) {
+  try {
+    await ElMessageBox.confirm(
+      `确认恢复知识库「${dkb.name}」？若当前域已有同名知识库，恢复会被拒绝。`,
+      '恢复知识库',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  restoringId.value = dkb.id
+  try {
+    await kbApi.restoreKb(dkb.id)
+    ElMessage.success('知识库已恢复')
+    await load()
+  } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
+  finally { restoringId.value = '' }
 }
 
 function formatDate(t: string): string {

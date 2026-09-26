@@ -133,7 +133,7 @@ import KbMiningPanel from '@/components/kb/KbMiningPanel.vue'
 import KbQualityPanel from '@/components/kb/KbQualityPanel.vue'
 import OnenetRefPanel from '@/components/kb/OnenetRefPanel.vue'
 import KbSettingsPanel from '@/components/kb/KbSettingsPanel.vue'
-import { roleLabel, roleTagType, visibilityLabel, visibilityTagType } from '@/views/kb/kbMeta'
+import { canWriteKb, roleLabel, roleTagType, visibilityLabel, visibilityTagType } from '@/views/kb/kbMeta'
 import type { KbReadiness, KbReadinessLevel, KbSummary } from '@/types/kb'
 
 const props = defineProps<{ kbId: string }>()
@@ -163,7 +163,7 @@ const miningWorkflowId = ref<string | null>(null)
 let reloadGeneration = 0
 
 const canWrite = computed(
-  () => kb.value?.my_role === 'owner' || kb.value?.my_role === 'editor' || kb.value?.my_role === 'admin',
+  () => kb.value ? canWriteKb(kb.value.my_role) : false,
 )
 
 const READINESS_LABELS: Record<KbReadinessLevel, string> = {

@@ -83,6 +83,16 @@ def test_overview_is_not_shadowed_by_kb_id_route():
     assert set(body) == {"has_active_release", "kbs", "recent_runs"}
 
 
+def test_overview_logs_total_duration_without_user_data(caplog):
+    caplog.set_level("INFO", logger="knowledge_mining.mining.kb.routes.overview")
+    _client(FakeKbDB(visible=[_kb("kb-a", "Sensitive KB Name")])).get(
+        "/api/kb/overview", params={"domain": "d1"},
+    )
+    assert "kb_overview_total duration_ms=" in caplog.text
+    assert "domain=" not in caplog.text
+    assert "Sensitive KB Name" not in caplog.text
+
+
 def test_wrong_registration_order_actually_breaks():
     """反证：顺序反了就真的坏——证明上一条测的是真约束，不是巧合。
 

@@ -12,7 +12,7 @@ import java.util.Set;
 
 /**
  * Holds the per-domain registry view sourced from main_control's serving-config
- * snapshot. Populated at startup and replaced atomically on hot-reload by
+ * snapshot. Populated at startup and replaced atomically whenever a snapshot is applied by
  * {@link #apply(ServingConfigSnapshot)} — Serving no longer reads the registry file
  * directly (see {@link ConfigReloadService} for the fetch + file-fallback logic).
  *
@@ -29,7 +29,7 @@ public class DomainRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(DomainRegistry.class);
 
-    /** Replaced wholesale on reload — volatile so readers always see a consistent map. */
+    /** Replaced wholesale on snapshot apply — volatile so readers see a consistent map. */
     private volatile Map<String, DomainRegistryEntry> entries = Map.of();
 
     /** Rebuild the registry from a snapshot, replacing the previous view atomically. */

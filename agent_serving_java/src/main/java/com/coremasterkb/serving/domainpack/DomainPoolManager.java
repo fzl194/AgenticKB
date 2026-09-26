@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * config a dedicated HikariCP pool is created; otherwise the default DataSource is reused.
  *
  * <p>Pools are created lazily on first access and cached. {@link #invalidate()} is called
- * after a config reload: pools whose DB signature changed (or whose domain was removed)
+ * after applying a config snapshot: pools whose DB signature changed (or whose domain was removed)
  * are closed and dropped so the next request rebuilds them from the new config; unchanged
  * pools are left untouched to avoid needless reconnects.
  *
@@ -42,7 +42,7 @@ public class DomainPoolManager {
 
     /** domain → resolved DataSource (may be the default for unconfigured domains). */
     private final Map<String, DataSource> pools = new ConcurrentHashMap<>();
-    /** domain → DB signature backing its current pool (for change detection on reload). */
+    /** domain → DB signature backing its current pool (for snapshot change detection). */
     private final Map<String, String> poolSignatures = new ConcurrentHashMap<>();
     /** Dedicated Hikari pools we own so we can close them. */
     private final Map<String, HikariDataSource> ownedPools = new ConcurrentHashMap<>();

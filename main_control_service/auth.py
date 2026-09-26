@@ -39,8 +39,6 @@ def _is_admin_only(method: str, path: str) -> bool:
         return True
     if method in {"GET", "PUT"} and "/scenario/raw" in path and path.startswith("/api/v1/domains/"):
         return True
-    if method == "POST" and path == "/api/v1/code-sync":
-        return True
     if method == "GET" and path.startswith("/api/v1/logs"):
         return True
     return False

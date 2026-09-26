@@ -32,6 +32,7 @@ class FakeStats:
     def __init__(self, *, available: bool = True):
         self.available = available
         self.calls: list[tuple[str, str, int]] = []
+        self.no_result_limits: list[int] = []
 
     async def is_available(self):
         return self.available
@@ -48,6 +49,7 @@ class FakeStats:
 
     async def no_result_queries(self, *, domain, days, limit):
         self._note("no_result_queries", domain, days)
+        self.no_result_limits.append(limit)
         return [{"query_text": "SMF 会话建立超时", "count": 12, "last_at": "2026-08-18T01:00:00Z"}]
 
     async def top_queries(self, *, domain, days, limit):
@@ -210,6 +212,51 @@ def test_domain_is_passed_to_every_aggregation(monkeypatch):
         "summary", "no_result_queries", "top_queries", "paradigms", "trend",
         "breakdown:intent", "breakdown:channel",
     }
+
+
+def test_dashboard_view_skips_unused_detail_aggregations(monkeypatch):
+    stats = FakeStats()
+    _install_stats(monkeypatch, stats)
+
+    resp = _client(stats).get(
+        "/api/ops/usage", params={"domain": "d1", "view": "dashboard"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {call[0] for call in stats.calls} == {
+        "summary", "no_result_queries", "paradigms", "trend",
+    }
+    assert stats.no_result_limits == [5]
+    assert body["top_queries"] == []
+    assert body["intents"] == {}
+    assert body["channels"] == {}
+
+
+def test_unknown_usage_view_is_422_before_query(monkeypatch):
+    stats = FakeStats()
+    _install_stats(monkeypatch, stats)
+    resp = _client(stats).get(
+        "/api/ops/usage", params={"domain": "d1", "view": "compact"},
+    )
+    assert resp.status_code == 422
+    assert stats.calls == []
+
+
+def test_usage_timing_logs_do_not_include_query_text(monkeypatch, caplog):
+    stats = FakeStats()
+    _install_stats(monkeypatch, stats)
+    caplog.set_level("INFO", logger="knowledge_mining.mining.api.routes.ops")
+
+    _client(stats).get(
+        "/api/ops/usage", params={"domain": "d1", "view": "dashboard"},
+    )
+
+    text = caplog.text
+    assert "ops_usage_total" in text
+    assert "segment=summary" in text
+    assert "segment=trend" in text
+    assert "SMF 会话建立超时" not in text
 
 
 def test_domain_is_required(monkeypatch):

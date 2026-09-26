@@ -18,7 +18,7 @@ import java.util.Map;
 
 /**
  * Orchestrates loading the serving config and feeding it to the registry, pack reader and
- * pool manager — at startup and on every hot-reload. Fetches once from main_control; on
+ * pool manager at startup. Fetches once from main_control; on
  * failure falls back to the local config files (keeps IntelliJ/dev and tests working when
  * main_control is not running).
  */
@@ -47,7 +47,7 @@ public class ConfigReloadService {
         try {
             reload();
         } catch (Exception e) {
-            // Never fail startup on config load — run lenient, recover via reload endpoint.
+            // Never fail startup on config load — run lenient; an operator can restart after fixing config.
             log.warn("Initial config load failed, starting with lenient/empty config: {}", e.getMessage());
         }
     }

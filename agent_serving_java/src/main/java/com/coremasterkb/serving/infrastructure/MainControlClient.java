@@ -18,7 +18,7 @@ import java.util.Map;
  * <p>Two endpoints, two audiences:</p>
  * <ul>
  *   <li>{@code GET /api/v1/serving-config} — the per-domain snapshot (inline {@code database}
- *       blocks + the scenario pack's {@code serving} section), reloadable at runtime.</li>
+ *       blocks + the scenario pack's {@code serving} section), read during startup.</li>
  *   <li>{@code GET /api/v1/system/database} — the global {@code default} block of
  *       {@code system/database.yaml}, read once at startup to build the default DataSource.</li>
  * </ul>
@@ -75,8 +75,8 @@ public class MainControlClient {
      *
      * <p>Backs {@code defaultDataSource}: the non-routed global tables ({@code operator_paradigm*})
      * plus any domain without an inline {@code database} block. Deliberately NOT folded into the
-     * {@code /serving-config} snapshot — that snapshot is hot-reloadable, whereas a Hikari pool's
-     * JDBC URL is immutable once built, so changing the default DB requires a serving restart.</p>
+     * {@code /serving-config} snapshot — the two payloads have different consumers, while a Hikari
+     * pool's JDBC URL is immutable once built. Changing either configuration requires a serving restart.</p>
      *
      * @throws ConfigFetchException on transport failure, or when the file has no usable
      *                             {@code default} block (caller decides fallback)

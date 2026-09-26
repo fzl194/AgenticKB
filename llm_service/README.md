@@ -10,7 +10,7 @@ LLM Service 是一个**独立运行的 FastAPI 服务**，使用 PostgreSQL 持�
 **核心职责：**
 - 统一管理 chat 类 LLM 调用的提交、执行、重试、结果解析与审计
 - 统一暴露 Embedding / Rerank 模型 HTTP 接口给 Mining / Serving 复用
-- 提供模板 CRUD、热重载配置、任务重试与取消等运维能力
+- 提供模板 CRUD、任务重试与取消等运维能力
 
 Mining / Serving 不各自维护模型调用逻辑，而是通过 `LLMClient` 或 HTTP API 调用本服务。
 
@@ -37,7 +37,7 @@ OpenAI兼容  Anthropic  BigModel     Mock
 (chat)      (chat)     (embed/rerank) (test)
 ```
 
-> 深入架构（启动生命周期 / 数据流 / 状态机 / Provider 协议 / 存储层 / 热重载）请阅读 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
+> 深入架构（启动生命周期 / 数据流 / 状态机 / Provider 协议 / 存储层）请阅读 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
 
 ## 2. 快速启动
 
@@ -119,7 +119,6 @@ curl http://localhost:8900/health
 | GET | `/api/v1/stats/tokens` | token 用量细分 |
 | GET | `/api/v1/tasks` | 任务列表（分页 + 多维过滤：status/task_type/domain/...） |
 | GET | `/api/v1/admin/worker-status` | Worker 诊断（concurrency / active_tasks / queue_depth） |
-| POST | `/api/v1/admin/reload-config` | **热重载**配置（跨 provider 切换 / worker 缩放 / cache_ttl 更新） |
 | GET | `/health` | 健康检查（含 DB 连通性 + tables_ok） |
 
 ### 3.7 请求/响应示例（同步 execute）
@@ -201,13 +200,10 @@ curl http://localhost:8900/health
 
 `provider.models` 是 dict（key 为别名如 `default` / `cheap` / `strong`），`provider.active_model` 指向当前生效 key。`resolve_active_model_config()` 把 `provider.models[active_model]` 深合并覆盖 `provider` 顶层，作为运行时配置。
 
-### 4.5 热重载
+### 4.5 配置生效
 
-调用 `POST /api/v1/admin/reload-config` 触发：
-
-- 重新拉 config + db_config
-- diff 后按字段分别处理：provider.type 变了 → 销毁旧 Provider 构造新的；worker.concurrency 变了 → `Worker.scale(n)`；template.cache_ttl 变了 → 更新 TemplateRegistry
-- 不影响进行中的 task 与 PersistWriter 队列中的 record
+修改控制面配置后，通过系统设置中的“一键重启后台服务”统一重启；LLM Service 会在
+启动阶段重新拉取 config 与 db_config。运行中的任务会按既有停机恢复机制重新入队。
 
 ## 5. 架构深入
 
@@ -219,7 +215,7 @@ curl http://localhost:8900/health
 - 任务状态机（5 个状态 + 迁移矩阵 + 退避公式 + Lease 机制）
 - Provider 体系（双协议 + 能力矩阵 + BigModel rerank 三层批处理上限 + Anthropic JSON 策略 + 扩展指南）
 - 存储层（PostgreSQL 7 张表 schema + PersistWriter 解耦机制）
-- 配置与热重载（控制面拉取 + 多模型 + 热重载入口）
+- 配置生效（控制面拉取 + 多模型 + 重启流程）
 
 ## 6. 测试
 
@@ -274,9 +270,9 @@ pytest llm_service/tests/ -v
 - 启动时会把所有 `status='running'` 任务 re-queue（避免前次崩溃卡死任务）
 - 失败任务可通过 `POST /api/v1/tasks/{id}/retry` 重置（attempt_count=0）
 
-### 7.5 配置热重载
+### 7.5 配置变更
 
-修改控制面配置后调用 `POST /api/v1/admin/reload-config`，无需重启服务即可切换 provider / 缩放 worker / 更新缓存 TTL。
+修改控制面配置后，使用系统设置中的“一键重启后台服务”使配置生效。
 
 ### 7.6 日志
 

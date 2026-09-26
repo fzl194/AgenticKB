@@ -141,7 +141,7 @@ API：`GET /api/v1/operator/catalog`、`POST /api/v1/paradigm/run`（inline）�
 - **建池**：`DomainPoolManager`（`DomainPoolManager.java:32-175`）按 domain lazy 建池。registry 的 `database:` 块 `isUsable()`（有 host+dbname，`DatabaseConfig.java:26-29`）就建专用 Hikari 池，**建池即 `getConnection().isValid(3)` 验连**，连不上抛 `domain_database_unavailable`（503）。无 database 块回落 defaultDataSource + schema ensure。
 - **reload**：`invalidate()` 比较 `poolSignatures`，只关签名变化的池。
 - **配置来源**：`ConfigReloadService.reload()`（line 65-81）**先试 main_control HTTP** `GET {control}/api/v1/serving-config`，失败回落本地文件。两路解析同一组键（`MainControlClient.parseDatabase` 与 `ConfigReloadService.parseDatabase` 字段一一对应），契约由 `MainControlClientTest` 锁。
-- **热重载**：`POST /api/v1/admin/reload-config`（`AdminController.java:34-44`），**只重载 service config**（registry/pack/pool），不碰 db_config。
+- **配置生效**：人工热重载端点已下线；修改配置后由“一键重启后台服务”触发启动期重新加载。
 - **schema 自动初始化**：范式表由 `ParadigmSchemaInitializer` 在 defaultDataSource 跑；serving 运行时表（query_logs/cache）由 `ServingRuntimeSchemaInitializer` 实现 `DomainSchemaEnsurer`，启动跑一次 + 每个新域池建好后 `DomainPoolManager.ensureSchema` 再跑一次（**按域路由，每个域的库都建**）。
 
 ---

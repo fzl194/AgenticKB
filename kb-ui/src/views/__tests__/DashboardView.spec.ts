@@ -122,6 +122,16 @@ function stats(over: Record<string, unknown> = {}) {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 async function mountDash() {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -216,6 +226,64 @@ describe('概览页（统计仪表盘）', () => {
 
     expect(wrapper.text()).toContain('建一个就能看到统计')
     expect(wrapper.find('.pie-stub').exists()).toBe(false)
+  })
+
+  it('overview 先返回时立即显示知识库，不等待慢 stats / ops', async () => {
+    setRole('admin')
+    const slowStats = deferred<ReturnType<typeof stats>>()
+    const slowOps = deferred<ReturnType<typeof usage>>()
+    kbApi.getStats.mockReturnValueOnce(slowStats.promise)
+    opsApi.getUsage.mockReturnValueOnce(slowOps.promise)
+
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).toContain('KB-A')
+    expect(wrapper.findAll('.bar-stub')).toHaveLength(1) // KB 文档图来自 overview
+    expect(wrapper.text()).not.toContain('120')
+    expect(wrapper.text()).not.toContain('零结果率')
+
+    slowStats.resolve(stats())
+    slowOps.resolve(usage())
+    await flushPromises()
+    expect(wrapper.text()).toContain('120')
+    expect(wrapper.text()).toContain('零结果率')
+  })
+
+  it('手动刷新期间保留已有卡片和统计，不退回整页骨架', async () => {
+    const { wrapper } = await mountDash()
+    expect(wrapper.text()).toContain('KB-A')
+    expect(wrapper.text()).toContain('120')
+
+    const slowOverview = deferred<ReturnType<typeof overview>>()
+    const slowStats = deferred<ReturnType<typeof stats>>()
+    kbApi.getOverview.mockReturnValueOnce(slowOverview.promise)
+    kbApi.getStats.mockReturnValueOnce(slowStats.promise)
+    const refresh = wrapper.findAll('button').find(button => button.text().includes('刷新'))
+    await refresh!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('KB-A')
+    expect(wrapper.text()).toContain('120')
+
+    slowOverview.resolve(overview([kb('kb-b')]))
+    slowStats.resolve(stats({ assets: { snapshots: 3, segments: 90, retrieval_units: 222 } }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('KB-B')
+    expect(wrapper.text()).toContain('222')
+  })
+
+  it('同域刷新失败时保留旧数据并提示，而不是用错误块覆盖', async () => {
+    const { wrapper } = await mountDash()
+    kbApi.getOverview.mockRejectedValueOnce(new Error('overview down'))
+    kbApi.getStats.mockRejectedValueOnce(new Error('stats down'))
+    const refresh = wrapper.findAll('button').find(button => button.text().includes('刷新'))
+
+    await refresh!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('KB-A')
+    expect(wrapper.text()).toContain('120')
+    expect(wrapper.text()).toContain('刷新失败，显示上次数据')
   })
 
   it('统计接口挂掉不牵连知识库卡片与最近挖掘', async () => {
@@ -317,8 +385,25 @@ describe('概览页（统计仪表盘）', () => {
 
     const { wrapper } = await mountDash()
 
-    expect(opsApi.getUsage).toHaveBeenCalledWith('cloud_core_network')
+    expect(opsApi.getUsage).toHaveBeenCalledWith(
+      'cloud_core_network', { view: 'dashboard' },
+    )
     expect(wrapper.text()).toContain('运维概览')
+    expect(wrapper.text()).toContain('零结果率')
+  })
+
+  it('慢 ops 不阻塞管理员的知识库卡片和统计', async () => {
+    setRole('admin')
+    const slowOps = deferred<ReturnType<typeof usage>>()
+    opsApi.getUsage.mockReturnValueOnce(slowOps.promise)
+
+    const { wrapper } = await mountDash()
+
+    expect(wrapper.text()).toContain('KB-A')
+    expect(wrapper.text()).toContain('120')
+
+    slowOps.resolve(usage())
+    await flushPromises()
     expect(wrapper.text()).toContain('零结果率')
   })
 

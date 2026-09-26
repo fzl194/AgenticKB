@@ -183,7 +183,14 @@ def test_internal_auth_secret_shared_env_fallback(monkeypatch) -> None:
 
 
 def test_internal_auth_secret_rejects_placeholder(monkeypatch) -> None:
-    """占位符/空值拒收（change-me → 空，验钥必败 401，不放行）。"""
-    monkeypatch.delenv("MCP_INTERNAL_AUTH_SECRET", raising=False)
-    monkeypatch.setenv("CONTROL_PLANE_INTERNAL_AUTH_SECRET", "change-me-please")
+    """占位符/空值拒收（change-me → 空，验钥必败 401，不放行）。
+
+    桩掉共享解析链的文件回落——开发机主区的共位 auth.yaml 可能存有真实
+    密钥，不隔离会让断言依赖运行环境（worktree 占位符通过/主区真值失败）。
+    占位符拒收语义由 main_control.internal_auth 自己的测试网兜底。
+    """
+    import main_control_service.internal_auth as ia
+    monkeypatch.setenv("MCP_INTERNAL_AUTH_SECRET", "change-me-please")
+    monkeypatch.setattr(ia, "load_control_plane_internal_auth_secret",
+                        lambda **kw: "")
     assert identity_mod._internal_auth_secret() == ""

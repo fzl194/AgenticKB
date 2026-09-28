@@ -4,12 +4,16 @@ import type {
   AuthUser,
   DomainAccessSummary,
   DomainUser,
+  DomainUserCandidate,
   LoginResponse,
+  ManagedUser,
   SiteRole,
+  UserDeletionPreview,
   UserDomainGrant,
+  UserImportPlan,
 } from '@/types/auth'
 
-export { loadToken, saveToken, clearToken } from './tokenStorage'
+export { loadToken, saveToken, clearToken, subscribeTokenChanges } from './tokenStorage'
 
 // main_control 直连端点（login/me）—— 必须装拦截器，否则 getMe 不带 token → 401 → fetchMe 登出。
 const http = axios.create({ baseURL: '/api/control-plane' })
@@ -34,14 +38,10 @@ export function useAuthApi() {
       return data as AuthUser
     },
     /** 用户管理走 mining 代理（/api/kb/users）。 */
-    async listUsers(): Promise<Array<AuthUser & {
-      id: string
-      status: string
-      has_password?: boolean
-      domains: string[]
-      domain_grants?: UserDomainGrant[]
-    }>> {
-      const { data } = await mining.get('/api/kb/users')
+    async listUsers(includeDeleted = false): Promise<ManagedUser[]> {
+      const { data } = await mining.get('/api/kb/users', {
+        params: { include_deleted: includeDeleted },
+      })
       return Array.isArray(data) ? data : (data?.items ?? [])
     },
     async createUser(body: {
@@ -69,16 +69,34 @@ export function useAuthApi() {
       const { data } = await mining.get(`/api/kb/admin/users/${encodeURIComponent(id)}/domain-grants`)
       return data?.domain_grants ?? []
     },
-    async setUserDomainGrants(id: string, grants: UserDomainGrant[]): Promise<UserDomainGrant[]> {
+    async setUserDomainGrants(
+      id: string,
+      grants: UserDomainGrant[],
+      initialPassword?: string,
+    ): Promise<UserDomainGrant[]> {
       const { data } = await mining.put(
         `/api/kb/admin/users/${encodeURIComponent(id)}/domain-grants`,
-        { grants },
+        {
+          grants,
+          ...(initialPassword ? { initial_password: initialPassword } : {}),
+        },
       )
       return data?.domain_grants ?? []
     },
     /** 域管理员只管理当前域的普通成员；同一接口也允许系统管理员调用。 */
     async listDomainUsers(domain: string): Promise<DomainUser[]> {
       const { data } = await mining.get(`/api/kb/domains/${encodeURIComponent(domain)}/users`)
+      return data?.users ?? []
+    },
+    async listDomainUserCandidates(
+      domain: string,
+      query: string,
+      limit = 20,
+    ): Promise<DomainUserCandidate[]> {
+      const { data } = await mining.get(
+        `/api/kb/domains/${encodeURIComponent(domain)}/user-candidates`,
+        { params: { q: query.trim(), limit } },
+      )
       return data?.users ?? []
     },
     async addDomainUser(domain: string, username: string): Promise<DomainUser> {
@@ -92,6 +110,47 @@ export function useAuthApi() {
       await mining.delete(
         `/api/kb/domains/${encodeURIComponent(domain)}/users/${encodeURIComponent(userId)}`,
       )
+    },
+    async previewUserDeletion(id: string): Promise<UserDeletionPreview> {
+      const { data } = await mining.get(
+        `/api/kb/admin/users/${encodeURIComponent(id)}/deletion-preview`,
+      )
+      return extractOne<UserDeletionPreview>(data)
+    },
+    async deleteUser(id: string, confirmUsername: string): Promise<ManagedUser> {
+      const { data } = await mining.delete(
+        `/api/kb/admin/users/${encodeURIComponent(id)}`,
+        { data: { confirm_username: confirmUsername } },
+      )
+      return extractOne<ManagedUser>(data)
+    },
+    async restoreUser(id: string): Promise<ManagedUser> {
+      const { data } = await mining.post(
+        `/api/kb/admin/users/${encodeURIComponent(id)}/restore`,
+      )
+      return extractOne<ManagedUser>(data)
+    },
+    async importUsers(file: File, dryRun: boolean): Promise<UserImportPlan> {
+      const body = new FormData()
+      body.append('file', file)
+      const { data } = await mining.post('/api/kb/admin/users/import', body, {
+        params: { dry_run: dryRun },
+      })
+      return data as UserImportPlan
+    },
+    async importDomainUsers(
+      domain: string,
+      file: File,
+      dryRun: boolean,
+    ): Promise<UserImportPlan> {
+      const body = new FormData()
+      body.append('file', file)
+      const { data } = await mining.post(
+        `/api/kb/domains/${encodeURIComponent(domain)}/users/import`,
+        body,
+        { params: { dry_run: dryRun } },
+      )
+      return data as UserImportPlan
     },
     /** 旧契约兼容：旧调用方仍可只读写 member 域列表。 */
     async getUserDomains(id: string): Promise<string[]> {

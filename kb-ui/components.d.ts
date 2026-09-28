@@ -95,6 +95,7 @@ declare module 'vue' {
     SystemConfigTab: typeof import('./src/components/settings/SystemConfigTab.vue')['default']
     SystemStatusTab: typeof import('./src/components/settings/SystemStatusTab.vue')['default']
     TbTableQueryPanel: typeof import('./src/components/kb/TbTableQueryPanel.vue')['default']
+    UserImportDialog: typeof import('./src/components/settings/UserImportDialog.vue')['default']
     UserManagementTab: typeof import('./src/components/settings/UserManagementTab.vue')['default']
     WorkflowOperatorNodeBase: typeof import('./src/components/workflow/WorkflowOperatorNodeBase.vue')['default']
     WorkflowValidationPanel: typeof import('./src/components/mining/workflow/WorkflowValidationPanel.vue')['default']

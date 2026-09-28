@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 
@@ -112,3 +114,117 @@ def test_online_apply_and_rollback_share_one_deployment_id() -> None:
 
     assert 'DB_MIGRATION_DEPLOYMENT_ID=' in script
     assert 'apply_args+=("--deployment-id" "$DB_MIGRATION_DEPLOYMENT_ID")' in hook
+
+
+def test_running_deploy_script_is_replaced_atomically_without_corrupting_current_process(
+    tmp_path: Path,
+) -> None:
+    """The old process must finish from its old inode; the next run uses the new script."""
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+    start = script.index("replace_deploy_sync_script_atomically()")
+    end = script.index("\n}\n", start) + 3
+    helper = script[start:end]
+    assert 'mktemp "$target_dir/.${target_name}.next.XXXXXX"' in helper
+    assert 'cp -p -- "$source_script" "$pending_script"' in helper
+    assert 'mv -f -- "$pending_script" "$target_script"' in helper
+    assert 'cat -- "$STAGE_DIR/$DEPLOY_SYNC_SCRIPT" > "$DEPLOY_SYNC_SCRIPT"' not in script
+
+    # Windows may expose a broken WSL launcher named `bash`. Structural checks
+    # still run there; developers with Git Bash can opt into the executable
+    # handoff through CMKB_TEST_BASH. Linux CI executes it with ordinary bash.
+    bash_bin = os.environ.get("CMKB_TEST_BASH", "bash")
+    if os.name == "nt" and "CMKB_TEST_BASH" not in os.environ:
+        return
+
+    runner = tmp_path / "deploy-sync.sh"
+    new_script = tmp_path / "new-deploy-sync.sh"
+    runner.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        + helper
+        + '\nprintf "old-before\\n"\n'
+        + 'replace_deploy_sync_script_atomically "$1" "$0"\n'
+        + 'printf "old-after\\n"\n',
+        encoding="utf-8",
+    )
+    new_script.write_text(
+        '#!/usr/bin/env bash\nprintf "new-version\\n"\n', encoding="utf-8"
+    )
+
+    first = subprocess.run(
+        [bash_bin, str(runner), str(new_script)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    second = subprocess.run(
+        [bash_bin, str(runner)], check=True, capture_output=True, text=True
+    )
+
+    assert first.stdout.splitlines() == ["old-before", "old-after"]
+    assert second.stdout.splitlines() == ["new-version"]
+
+
+def test_script_only_package_installs_new_deploy_script_before_no_restart_return() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+    apply = script[script.index("cmd_apply()") :]
+    no_restart = apply[
+        apply.index('if [ -z "$(printf \'%s\' "$needed" | tr -d \' \')" ]; then') :
+        apply.index("restart_services", apply.index('if [ -z "$(printf \'%s\' "$needed"'))
+    ]
+
+    assert "install_staged_deploy_sync_script" in no_restart
+    assert no_restart.index("install_staged_deploy_sync_script") < no_restart.index("return 0")
+
+
+def test_atomic_self_update_validates_new_script_before_replacing_current_one(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+    start = script.index("replace_deploy_sync_script_atomically()")
+    end = script.index("\n}\n", start) + 3
+    helper = script[start:end]
+
+    syntax_at = helper.index('bash -n "$pending_script"')
+    move_at = helper.index('mv -f -- "$pending_script" "$target_script"')
+    assert syntax_at < move_at
+
+    bash_bin = os.environ.get("CMKB_TEST_BASH", "bash")
+    if os.name == "nt" and "CMKB_TEST_BASH" not in os.environ:
+        return
+
+    runner = tmp_path / "deploy-sync.sh"
+    invalid_script = tmp_path / "invalid-deploy-sync.sh"
+    original = (
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        + helper
+        + '\nreplace_deploy_sync_script_atomically "$1" "$0"\n'
+        + 'printf "must-not-run\\n"\n'
+    )
+    runner.write_text(original, encoding="utf-8")
+    invalid_script.write_text("#!/usr/bin/env bash\nif then\n", encoding="utf-8")
+
+    rejected = subprocess.run(
+        [bash_bin, str(runner), str(invalid_script)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert rejected.returncode != 0
+    assert "must-not-run" not in rejected.stdout
+    assert runner.read_text(encoding="utf-8") == original
+
+
+def test_self_update_failure_reports_business_publish_succeeded() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = (repo_root / "deploy-sync.sh").read_text(encoding="utf-8")
+    start = script.index("install_staged_deploy_sync_script()")
+    end = script.index("\n}\n", start) + 3
+    install = script[start:end]
+
+    assert "业务发布成功但 deploy-sync.sh 更新失败" in install
+    assert 'if ! replace_deploy_sync_script_atomically' in install
+    assert "return 1" in install

@@ -441,6 +441,10 @@ async function handleResume() {
 }
 
 async function pollOnce(silent = false) {
+  if (!domainStore.currentDomain) {
+    initialLoading.value = false
+    return
+  }
   await Promise.all([
     miningStore.fetchProgress(props.runId),
     miningStore.fetchRunDetail(props.runId, { silent }),
@@ -461,6 +465,11 @@ function startPolling() {
   // 时旧 .then 不得再赋值 interval，否则句柄被覆盖成孤儿——双倍轮询且
   // 离开页面后无法清理（2026-08-31 前端审查 H4）。
   const gen = ++pollingGeneration
+  if (!domainStore.currentDomain) {
+    pollTimer = null
+    initialLoading.value = false
+    return
+  }
   pollOnce(false).then(() => {
     if (gen !== pollingGeneration) return
     if (isActiveRunStatus(miningStore.currentRun?.status)) {
@@ -476,13 +485,16 @@ onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
   if (resumeTimer) clearTimeout(resumeTimer)
 })
-watch(() => domainStore.currentDomain, () => {
+watch(() => domainStore.currentDomain, (domain) => {
   traceGeneration += 1
+  pollingGeneration += 1
   trace.value = null
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = null
   if (resumeTimer) clearTimeout(resumeTimer)
   resumeTimer = null
   miningStore.clearCurrentRun()
-  startPolling()
+  if (domain) startPolling()
 })
 watch(() => props.runId, () => {
   traceGeneration += 1

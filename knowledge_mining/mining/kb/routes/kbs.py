@@ -4,7 +4,7 @@ Auth: X-KB-User header (Phase 1)。Permissions via KbService.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -41,9 +41,14 @@ class KbUpdate(BaseModel):
     default_paradigm_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class OwnerTransfer(BaseModel):
+    new_owner_id: str = Field(min_length=1, max_length=128)
+    keep_old_as_editor: bool = False
+
+
 class MemberAdd(BaseModel):
     username: str = Field(description="登录名 / X-KB-User 用户名")
-    role: str = "viewer"
+    role: Literal["viewer", "editor"] = "viewer"
 
 
 # ----------------------------------------------------------------- helpers
@@ -148,6 +153,40 @@ async def update_kb(
         NotFound, Forbidden, Duplicate, InvalidDomain, InvalidName,
         InvalidVisibility,
     ) as exc:
+        raise _map_error(exc) from None
+
+
+@router.post("/{kb_id}/transfer-owner")
+async def transfer_kb_owner(
+    kb_id: str,
+    body: OwnerTransfer,
+    user: dict[str, Any] = Depends(current_user),
+    svc: KbService = Depends(get_kb_service),
+):
+    try:
+        return await svc.transfer_owner(
+            kb_id=kb_id,
+            actor_id=user["id"],
+            new_owner_id=body.new_owner_id,
+            keep_old_as_editor=body.keep_old_as_editor,
+        )
+    except (NotFound, Forbidden, Duplicate, DomainNotBound) as exc:
+        raise _map_error(exc) from None
+
+
+@router.get("/{kb_id}/owner-candidates")
+async def list_owner_candidates(
+    kb_id: str,
+    q: str | None = Query(None, max_length=100),
+    limit: int = Query(20, ge=1, le=50),
+    user: dict[str, Any] = Depends(current_user),
+    svc: KbService = Depends(get_kb_service),
+):
+    try:
+        return {"users": await svc.list_owner_candidates(
+            kb_id=kb_id, actor_id=user["id"], q=q, limit=limit,
+        )}
+    except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
 
 

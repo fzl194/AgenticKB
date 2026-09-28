@@ -1,6 +1,8 @@
 """P2.4 — /api/kb routes end-to-end (httpx ASGI transport)."""
 from __future__ import annotations
 
+import uuid
+
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
@@ -143,6 +145,61 @@ async def test_add_member_rejects_unknown_user(async_pool):
             f"/api/kb/{kb_id}/members", json={"username": "bob", "role": "editor"}, headers=h_alice,
         )
         assert r.status_code == 201, r.text
+
+
+async def test_add_member_rejects_disabled_user(async_pool):
+    """An existing domain-bound user cannot be added after deactivation."""
+    from knowledge_mining.mining.kb.db import KbDB
+
+    db = KbDB(async_pool)
+    target = await db.create_user(username=f"disabled_member_{uuid.uuid4().hex[:8]}")
+    await db.bind_domain(user_id=target["id"], domain=DOMAIN)
+    await db.update_user(target["id"], status="disabled")
+
+    async with await _client(async_pool) as c:
+        h_alice = kb_headers("alice")
+        r = await c.post(
+            "/api/kb",
+            json={
+                "domain": DOMAIN,
+                "name": f"kb-disabled-member-{uuid.uuid4().hex[:8]}",
+            },
+            headers=h_alice,
+        )
+        assert r.status_code == 201, r.text
+        kb_id = r.json()["id"]
+
+        r = await c.post(
+            f"/api/kb/{kb_id}/members",
+            json={"username": target["username"], "role": "editor"},
+            headers=h_alice,
+        )
+
+        assert r.status_code == 403, r.text
+
+
+async def test_add_member_rejects_invalid_role_with_422(async_pool):
+    """Invalid member roles are rejected at the API boundary, never by PostgreSQL."""
+    async with await _client(async_pool) as c:
+        h_alice = kb_headers("alice")
+        r = await c.post(
+            "/api/kb",
+            json={
+                "domain": DOMAIN,
+                "name": f"kb-invalid-member-role-{uuid.uuid4().hex[:8]}",
+            },
+            headers=h_alice,
+        )
+        assert r.status_code == 201, r.text
+        kb_id = r.json()["id"]
+
+        for role in ("admin", "owner", "invalid"):
+            r = await c.post(
+                f"/api/kb/{kb_id}/members",
+                json={"username": "bob", "role": role},
+                headers=h_alice,
+            )
+            assert r.status_code == 422, f"{role}: {r.text}"
 
 
 async def test_public_kb_rejects_viewer_member(async_pool):

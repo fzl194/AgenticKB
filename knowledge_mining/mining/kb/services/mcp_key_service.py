@@ -21,7 +21,7 @@ from typing import Any
 
 from psycopg.errors import UniqueViolation
 
-from knowledge_mining.mining.kb.db import KbDB
+from knowledge_mining.mining.kb.db import KbDB, UserDeletionConflict
 
 # 复用建库同源域校验（51号批次1收敛后的唯一入口）
 from knowledge_mining.mining.kb.services.kb_service import InvalidDomain, _validate_domain
@@ -46,6 +46,10 @@ class KeyNameConflict(McpKeyError):
 
 class KeyRevoked(McpKeyError):
     """对已吊销钥匙执行轮换/配置/开放库操作。"""
+
+
+class KeyMustBeRevoked(McpKeyError):
+    """删除钥匙记录前必须先吊销，避免把失效动作伪装成普通清理。"""
 
 
 class KeyDomainNotBound(McpKeyError):
@@ -196,6 +200,10 @@ class McpKeyService:
                 user_id=user_id, name=cleaned, domain=domain,
                 key_hash=key_hash, key_prefix=key_prefix, key_id=key_id,
             )
+        except UserDeletionConflict as exc:
+            raise KeyDomainNotBound(
+                f"你未绑定知识域「{domain}」，无法在该域创建 MCP 钥匙"
+            ) from exc
         except UniqueViolation as exc:
             raise KeyNameConflict(
                 f"创建失败：该知识域（{domain}）下你名下已有同名的活跃钥匙"
@@ -222,6 +230,14 @@ class McpKeyService:
         """吊销（幂等：已 revoked 不报错）。"""
         await self._require_owned(user_id=user_id, key_id=key_id)
         await self._db.revoke_mcp_key(key_id=key_id)
+
+    async def delete_key(self, *, user_id: str, key_id: str) -> None:
+        """软隐藏本人已吊销钥匙；active 钥匙必须显式先吊销。"""
+        key = await self._require_owned(user_id=user_id, key_id=key_id)
+        if key["status"] != "revoked":
+            raise KeyMustBeRevoked("请先吊销钥匙，再删除记录")
+        if not await self._db.delete_mcp_key(key_id=key_id):
+            raise KeyNotFound(key_id)
 
     # ------------------------------------------------------------ 开放库 / 配置
 

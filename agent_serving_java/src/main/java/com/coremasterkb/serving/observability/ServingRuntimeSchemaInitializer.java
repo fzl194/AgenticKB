@@ -29,9 +29,9 @@ public class ServingRuntimeSchemaInitializer implements DomainSchemaEnsurer {
     private static final Logger log = LoggerFactory.getLogger(ServingRuntimeSchemaInitializer.class);
 
     private static final String LEDGER_TABLE = "cmkb_schema_migrations";
-    private static final String EXPECTED_SCHEMA_VERSION = "2026.09.domain-role-v1";
+    private static final String EXPECTED_SCHEMA_VERSION = "2026.09.user-lifecycle-v1";
     private static final String EXPECTED_SCHEMA_CHECKSUM =
-            "21ef7bbf68e6f92fa9e45c05725b3ef5e0e7308d758fea957e7df03ce06443ed";
+            "c0c728e009f308ecefd0227bac1ae606bf5ca8dcadc9369e058654102cfa123a";
     private static final String EXPECTED_SCHEMA_MARKER =
             "schema/" + EXPECTED_SCHEMA_VERSION;
 

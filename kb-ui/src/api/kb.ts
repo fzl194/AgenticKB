@@ -83,6 +83,21 @@ export function useKbApi() {
       return extractOne<KbDetail>(data)
     },
 
+    async listOwnerCandidates(kbId: string, q = ''): Promise<KbUserCandidate[]> {
+      const { data } = await client.get(`/api/kb/${kbId}/owner-candidates`, {
+        params: { q: q || undefined, limit: 50 },
+      })
+      return extractItems<KbUserCandidate>(data, ['users'])
+    },
+
+    async transferOwner(
+      kbId: string,
+      body: { new_owner_id: string; keep_old_as_editor: boolean },
+    ): Promise<KbDetail> {
+      const { data } = await client.post(`/api/kb/${kbId}/transfer-owner`, body)
+      return extractOne<KbDetail>(data)
+    },
+
     /** 整库删除（二期：秒级禁用 + 后台硬删 + 进度轮询）——202 返回任务 id */
     async deleteKb(kbId: string, confirmName: string): Promise<{ ok: boolean; task_id: string; status: string; phase: string; already_started?: boolean }> {
       const { data } = await client.delete(`/api/kb/${kbId}`, { data: { confirm_name: confirmName } })
@@ -129,6 +144,11 @@ export function useKbApi() {
     /** 吊销指定钥匙：不可逆。 */
     async revokeMcpKey(keyId: string): Promise<void> {
       await client.post(`/api/kb/users/me/mcp-keys/${keyId}/revoke`)
+    },
+
+    /** 从默认列表软隐藏一条已吊销钥匙记录；active 钥匙必须先吊销。 */
+    async deleteMcpKey(keyId: string): Promise<void> {
+      await client.delete(`/api/kb/users/me/mcp-keys/${keyId}`)
     },
 
     /** 全量覆盖该钥匙的开放库勾选（空数组=清空）。 */

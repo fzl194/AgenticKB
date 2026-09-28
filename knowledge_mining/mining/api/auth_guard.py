@@ -34,6 +34,7 @@ _UPLOAD_DIRECT_PREFIX = "PUT:/api/kb/mcp-tools/upload-direct/"
 #: internal_user_domains / internal_kb_count 两个自验端点。遗漏此豁免会让
 #: 中间件抢先 401（内网 2026-09-23 实发：登录 verify 放行、查绑定 401）。
 _INTERNAL_GET_PREFIX = "GET:/api/kb/internal/"
+_USER_IMPORT_BODY_LIMIT = 5 * 1024 * 1024 + 256 * 1024
 
 
 def _is_exempt(method: str, path: str) -> bool:
@@ -43,6 +44,16 @@ def _is_exempt(method: str, path: str) -> bool:
     return scoped.startswith(_UPLOAD_DIRECT_PREFIX) or scoped.startswith(
         _INTERNAL_GET_PREFIX
     )
+
+
+def _is_user_import(method: str, path: str) -> bool:
+    if method != "POST":
+        return False
+    if path == "/api/kb/admin/users/import":
+        return True
+    parts = path.strip("/").split("/")
+    return len(parts) == 6 and parts[:3] == ["api", "kb", "domains"] \
+        and parts[4:] == ["users", "import"]
 
 
 class MiningApiAuthMiddleware(BaseHTTPMiddleware):
@@ -69,6 +80,14 @@ class MiningApiAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if request.method == "OPTIONS" or not path.startswith("/api/"):
             return await call_next(request)
+        if _is_user_import(request.method, path):
+            raw_length = request.headers.get("content-length", "").strip()
+            if raw_length:
+                try:
+                    if int(raw_length) > _USER_IMPORT_BODY_LIMIT:
+                        return JSONResponse(status_code=413, content={"detail": "file_too_large"})
+                except ValueError:
+                    return JSONResponse(status_code=400, content={"detail": "invalid_content_length"})
         if _is_exempt(request.method, path):
             return await call_next(request)
 

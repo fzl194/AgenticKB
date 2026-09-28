@@ -30,6 +30,14 @@
       </el-form>
     </div>
 
+    <div v-if="canManageLifecycle" class="kb-settings__owner">
+      <div>
+        <div class="kb-settings__owner-title">知识库所有者</div>
+        <div class="kb-settings__hint">转移后新所有者必须是启用的同域用户。</div>
+      </div>
+      <el-button plain @click="openOwnerTransfer">转移所有者</el-button>
+    </div>
+
     <div v-if="canManageLifecycle" class="kb-settings__danger">
       <div class="kb-settings__danger-text">
         <div class="kb-settings__danger-title">删除知识库</div>
@@ -42,6 +50,38 @@
         删除知识库
       </el-button>
     </div>
+
+    <el-dialog v-model="ownerDialogVisible" title="转移知识库所有者" width="460px">
+      <el-form label-width="90px">
+        <el-form-item label="新所有者">
+          <el-select
+            v-model="newOwnerId"
+            filterable
+            remote
+            :remote-method="loadOwnerCandidates"
+            :loading="ownerCandidatesLoading"
+            placeholder="搜索用户名或显示名"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="candidate in ownerCandidates"
+              :key="candidate.id"
+              :value="candidate.id"
+              :label="candidate.display_name ? `${candidate.display_name} (${candidate.username})` : candidate.username"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原所有者">
+          <el-checkbox v-model="keepOldAsEditor">保留为编辑者</el-checkbox>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="ownerDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="ownerTransferring" :disabled="!newOwnerId" @click="confirmOwnerTransfer">
+          确认转移
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -49,8 +89,8 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
-import { apiErrorDetail } from '@/api/proxyClient'
-import type { KbSummary, KbVisibility } from '@/types/kb'
+import { managementErrorMessage } from '@/utils/managementError'
+import type { KbSummary, KbUserCandidate, KbVisibility } from '@/types/kb'
 import { canManageKbLifecycle as roleCanManageLifecycle } from '@/views/kb/kbMeta'
 
 const props = defineProps<{ kb: KbSummary; canWrite: boolean }>()
@@ -59,6 +99,12 @@ const emit = defineEmits<{ updated: []; deleted: [] }>()
 const kbApi = useKbApi()
 const saving = ref(false)
 const deleting = ref(false)
+const ownerDialogVisible = ref(false)
+const ownerTransferring = ref(false)
+const ownerCandidatesLoading = ref(false)
+const ownerCandidates = ref<KbUserCandidate[]>([])
+const newOwnerId = ref('')
+const keepOldAsEditor = ref(false)
 const canManageLifecycle = computed(
   () => roleCanManageLifecycle(props.kb.my_role),
 )
@@ -103,9 +149,45 @@ async function save() {
     ElMessage.success('已保存')
     emit('updated')
   } catch (e) {
-    ElMessage.error(await apiErrorDetail(e))
+    ElMessage.error(await managementErrorMessage(e))
   } finally {
     saving.value = false
+  }
+}
+
+async function loadOwnerCandidates(query = '') {
+  ownerCandidatesLoading.value = true
+  try {
+    ownerCandidates.value = await kbApi.listOwnerCandidates(props.kb.id, query.trim())
+  } catch (e) {
+    ElMessage.error(await managementErrorMessage(e))
+  } finally {
+    ownerCandidatesLoading.value = false
+  }
+}
+
+async function openOwnerTransfer() {
+  newOwnerId.value = ''
+  keepOldAsEditor.value = false
+  ownerDialogVisible.value = true
+  await loadOwnerCandidates()
+}
+
+async function confirmOwnerTransfer() {
+  if (!newOwnerId.value) return
+  ownerTransferring.value = true
+  try {
+    await kbApi.transferOwner(props.kb.id, {
+      new_owner_id: newOwnerId.value,
+      keep_old_as_editor: keepOldAsEditor.value,
+    })
+    ownerDialogVisible.value = false
+    ElMessage.success('所有者已转移')
+    emit('updated')
+  } catch (e) {
+    ElMessage.error(await managementErrorMessage(e))
+  } finally {
+    ownerTransferring.value = false
   }
 }
 
@@ -131,7 +213,7 @@ async function confirmDelete() {
     ElMessage.success('已开始后台删除：库即刻停用，可在知识库列表查看进度')
     emit('deleted')
   } catch (e) {
-    ElMessage.error(await apiErrorDetail(e))
+    ElMessage.error(await managementErrorMessage(e))
   } finally {
     deleting.value = false
   }
@@ -158,6 +240,23 @@ async function confirmDelete() {
   font-size: 12px;
   line-height: 1.5;
   color: var(--kb-text-tertiary);
+}
+
+.kb-settings__owner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--kb-border-light);
+  border-radius: var(--kb-radius);
+  background: var(--kb-bg-card);
+}
+
+.kb-settings__owner-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--kb-text-primary);
 }
 
 .kb-settings__danger {

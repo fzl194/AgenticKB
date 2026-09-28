@@ -20,6 +20,8 @@ class _Connection:
 
     async def execute(self, sql, params=None):
         self.calls.append((" ".join(sql.split()), params))
+        if "SELECT id FROM kb_users" in sql or "FROM kb_users u" in sql:
+            return _Cursor({"id": "user-1"})
         if "INSERT INTO knowledge_bases" in sql:
             return _Cursor({
                 "id": params["id"], "domain": params["dom"],
@@ -30,6 +32,10 @@ class _Connection:
                 "mining_workflow_id": params["wf"],
             })
         return _Cursor(None)
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
 
 
 class _Pool:

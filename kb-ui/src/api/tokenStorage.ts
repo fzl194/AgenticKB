@@ -7,6 +7,8 @@
  */
 const TOKEN_KEY = 'kb-token'
 
+export type TokenChangeListener = (token: string | null) => void
+
 export function loadToken(): string | null {
   try {
     return localStorage.getItem(TOKEN_KEY)
@@ -29,4 +31,20 @@ export function clearToken(): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * Keep authentication state aligned across browser tabs. The StorageEvent is
+ * deliberately handled in this leaf module so API clients do not import the
+ * Pinia store and recreate the auth-store/proxy-client dependency cycle.
+ */
+export function subscribeTokenChanges(listener: TokenChangeListener): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return () => undefined
+  }
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === TOKEN_KEY) listener(event.newValue)
+  }
+  window.addEventListener('storage', onStorage)
+  return () => window.removeEventListener('storage', onStorage)
 }

@@ -8,8 +8,6 @@ site_role 由库现查（require_admin），不靠 X-KB-Role 头。
 from __future__ import annotations
 
 import asyncio
-import time
-
 from hmac import compare_digest
 from typing import Any
 
@@ -20,11 +18,12 @@ from knowledge_mining.mining.kb.db import KbDB
 
 
 class IdentityCache:
-    """网关身份确认缓存（批次3-问题1）。
+    """Bounded identity snapshot cache with database-authoritative account status.
 
-    原实现每请求一次 kb_users upsert 写——pool_max=10 下慢查询占满连接时
-    认证排队 30s 超时（PoolTimeout 实测），全站 401/500。用户行极少变化，
-    短 TTL 缓存即可；禁用即时生效由禁用端点主动 invalidate 保证（同进程）。
+    The old path cached ``status`` for 60 seconds and only invalidated the local
+    worker, so another worker could continue accepting a disabled account. A
+    cheap SELECT now refreshes authorization state on every request; INSERT is
+    still reserved for the exceptional lazy-provisioning miss.
     """
 
     def __init__(self, *, ttl_seconds: float = 60.0, max_entries: int = 500) -> None:
@@ -34,13 +33,11 @@ class IdentityCache:
         self._lock = asyncio.Lock()
 
     async def get_user(self, db: Any, username: str) -> dict[str, Any]:
-        now = time.monotonic()
-        hit = self._entries.get(username)
-        if hit is not None and now - hit[0] < self.ttl_seconds:
-            return dict(hit[1])
-        user = await db.upsert_user_by_username(username)
+        user = await db.get_user_by_username(username)
+        if user is None:
+            user = await db.upsert_user_by_username(username)
         async with self._lock:
-            self._entries[username] = (now, dict(user))
+            self._entries[username] = (0.0, dict(user))
             while len(self._entries) > self._max_entries:
                 self._entries.pop(next(iter(self._entries)))
         return user

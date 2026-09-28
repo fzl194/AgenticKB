@@ -9,6 +9,7 @@ const storage = vi.hoisted(() => ({
   loadToken: vi.fn<() => string | null>(() => null),
   saveToken: vi.fn(),
   clearToken: vi.fn(),
+  subscribeTokenChanges: vi.fn(),
 }))
 
 vi.mock('@/api/auth', () => ({
@@ -16,6 +17,7 @@ vi.mock('@/api/auth', () => ({
   loadToken: storage.loadToken,
   saveToken: storage.saveToken,
   clearToken: storage.clearToken,
+  subscribeTokenChanges: storage.subscribeTokenChanges,
 }))
 
 import { useAuthStore } from '@/stores/auth'
@@ -25,6 +27,8 @@ describe('auth store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    storage.loadToken.mockReturnValue(null)
+    storage.subscribeTokenChanges.mockReturnValue(() => undefined)
   })
 
   it('login sets token + user and persists', async () => {
@@ -60,9 +64,64 @@ describe('auth store', () => {
     expect(s.token).toBe(null)
     expect(s.user).toBe(null)
     expect(storage.clearToken).toHaveBeenCalled()
+    expect(s.loggingOut).toBe(true)
     expect(domains.domains).toEqual([])
     expect(domains.currentDomain).toBe('')
     expect(domains.loaded).toBe(false)
+  })
+
+  it('does not let an in-flight profile response revive a logged-out session', async () => {
+    let resolveProfile!: (user: { username: string; display_name: string; site_role: 'member' }) => void
+    api.getMe.mockReturnValue(new Promise(resolve => { resolveProfile = resolve }))
+    const s = useAuthStore()
+    s.token = 'old-token'
+
+    const pending = s.fetchMe()
+    s.logout()
+    resolveProfile({ username: 'alice', display_name: 'Alice', site_role: 'member' })
+    await pending
+
+    expect(s.token).toBe(null)
+    expect(s.user).toBe(null)
+  })
+
+  it('logs out when another browser tab removes the shared token', async () => {
+    let onTokenChange!: (token: string | null) => void
+    storage.loadToken.mockReturnValue('persisted')
+    storage.subscribeTokenChanges.mockImplementation((listener) => {
+      onTokenChange = listener
+      return () => undefined
+    })
+    api.getMe.mockResolvedValue({ username: 'alice', display_name: 'Alice', site_role: 'member' })
+    const s = useAuthStore()
+    await s.bootstrap()
+
+    onTokenChange(null)
+
+    expect(s.token).toBe(null)
+    expect(s.user).toBe(null)
+    expect(s.loggingOut).toBe(true)
+  })
+
+  it('loads the replacement identity when another tab changes to a new token', async () => {
+    let onTokenChange!: (token: string | null) => void
+    storage.loadToken.mockReturnValue('alice-token')
+    storage.subscribeTokenChanges.mockImplementation((listener) => {
+      onTokenChange = listener
+      return () => undefined
+    })
+    api.getMe
+      .mockResolvedValueOnce({ username: 'alice', display_name: 'Alice', site_role: 'member' })
+      .mockResolvedValueOnce({ username: 'bob', display_name: 'Bob', site_role: 'admin' })
+    const s = useAuthStore()
+    await s.bootstrap()
+
+    onTokenChange('bob-token')
+    await s.ready
+
+    expect(s.token).toBe('bob-token')
+    expect(s.user?.username).toBe('bob')
+    expect(s.externalSessionGeneration).toBe(1)
   })
 
   it('fetchMe populates from token', async () => {

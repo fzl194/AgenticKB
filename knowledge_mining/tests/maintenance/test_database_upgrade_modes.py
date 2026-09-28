@@ -199,6 +199,35 @@ def test_repository_hard_domain_boundary_validation_blocks_orphaned_kb_access() 
     assert "u.site_role <> 'admin'" in sql_text
 
 
+def test_repository_user_mcp_deletion_metadata_is_online_expand() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    manifest = upgrade_main.load_manifest(
+        repo_root / "databases/migrations/manifest.yaml"
+    )
+    migration = next(
+        item
+        for item in manifest.migrations
+        if item.migration_id.endswith("add_user_mcp_deletion_metadata")
+    )
+    sql_text = migration.path.read_text(encoding="utf-8")
+
+    assert migration.mode is MigrationMode.ONLINE_EXPAND
+    assert "ALTER TABLE kb_users" in sql_text
+    assert "ADD COLUMN IF NOT EXISTS deleted_at" in sql_text
+    assert "ADD COLUMN IF NOT EXISTS deleted_by_user_id" in sql_text
+    assert "ALTER TABLE mcp_keys" in sql_text
+
+    user_bootstrap = (
+        repo_root / "databases/kb/schemas/006_kb_users_auth.sql"
+    ).read_text(encoding="utf-8")
+    key_bootstrap = (
+        repo_root / "databases/kb/schemas/014_mcp_keys.sql"
+    ).read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS deleted_at" in user_bootstrap
+    assert "ADD COLUMN IF NOT EXISTS deleted_by_user_id" in user_bootstrap
+    assert "ADD COLUMN IF NOT EXISTS deleted_at" in key_bootstrap
+
+
 def test_rollback_config_is_noop_when_rebase_never_created_backup(
     monkeypatch, tmp_path, capsys
 ) -> None:

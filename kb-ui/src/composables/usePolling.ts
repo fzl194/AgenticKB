@@ -1,10 +1,15 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
-export function usePolling(fn: () => Promise<void>, intervalMs: number, options?: { immediate?: boolean }) {
+export function usePolling(
+  fn: () => Promise<void>,
+  intervalMs: number,
+  options?: { immediate?: boolean; shouldRun?: () => boolean },
+) {
   const isPolling = ref(false)
   let timer: ReturnType<typeof setInterval> | null = null
 
   async function poll() {
+    if (isPolling.value || options?.shouldRun?.() === false) return
     isPolling.value = true
     try {
       await fn()
@@ -15,7 +20,7 @@ export function usePolling(fn: () => Promise<void>, intervalMs: number, options?
 
   function start() {
     stop()
-    if (options?.immediate !== false) poll()
+    if (options?.immediate !== false) void poll()
     timer = setInterval(poll, intervalMs)
   }
 

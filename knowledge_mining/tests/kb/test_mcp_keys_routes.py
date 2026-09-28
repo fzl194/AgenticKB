@@ -137,6 +137,29 @@ async def test_revoke_then_same_name_recreate_201(async_pool, kbdb):
 
 
 @pytest.mark.asyncio
+async def test_delete_requires_revoked_key_and_hides_it(async_pool, kbdb):
+    u = await _mk_user(async_pool)
+    await kbdb.set_user_domains(user_id=u["id"], domains=["generic"])
+    async with await _client(async_pool) as c:
+        headers = kb_headers(u["username"])
+        created = await _create(c, f"delete-{_suffix()}", "generic", headers)
+        active_delete = await c.delete(f"{BASE}/{created['id']}", headers=headers)
+        assert active_delete.status_code == 409
+
+        assert (await c.post(
+            f"{BASE}/{created['id']}/revoke", headers=headers,
+        )).status_code == 204
+        assert (await c.delete(
+            f"{BASE}/{created['id']}", headers=headers,
+        )).status_code == 204
+        listed = (await c.get(BASE, headers=headers)).json()["keys"]
+        assert created["id"] not in {key["id"] for key in listed}
+        assert (await c.delete(
+            f"{BASE}/{created['id']}", headers=headers,
+        )).status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_same_name_across_domains_201(async_pool, kbdb):
     """终审整改②：跨域同名放行（用户在 A/B 两域各建一把 'prod'）。"""
     s = _suffix()
@@ -348,6 +371,21 @@ async def test_verify_revoked_and_wrong_key_401(async_pool, kbdb):
                          headers=kb_headers(_u["username"]))
         assert r.status_code == 204
         r = await c.post(VERIFY, json={"key": created["key"]}, headers=INTERNAL)
+        assert r.status_code == 401
+        assert r.json()["detail"] == "invalid mcp key"
+
+
+@pytest.mark.asyncio
+async def test_verify_disabled_users_key_401(async_pool, kbdb):
+    """Disabling an account immediately invalidates its otherwise-active MCP keys."""
+    async with await _client(async_pool) as c:
+        user, _kb, created = await _mk_key_with_kb(
+            async_pool, kbdb, c, kb_headers,
+        )
+        await kbdb.update_user(user["id"], status="disabled")
+
+        r = await c.post(VERIFY, json={"key": created["key"]}, headers=INTERNAL)
+
         assert r.status_code == 401
         assert r.json()["detail"] == "invalid mcp key"
 

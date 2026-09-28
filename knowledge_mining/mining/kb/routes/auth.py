@@ -13,13 +13,17 @@ from __future__ import annotations
 from hmac import compare_digest
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from knowledge_mining.mining.infra.control_plane import get_internal_verify_secret
 from knowledge_mining.mining.infra.domain_pack import resolve_domain
 from knowledge_mining.mining.kb.auth import current_user, require_admin
-from knowledge_mining.mining.kb.db import DomainMembershipConflict, KbDB
+from knowledge_mining.mining.kb.db import (
+    DomainMembershipConflict,
+    KbDB,
+    UserDeletionConflict,
+)
 from knowledge_mining.mining.kb.deps import get_kb_db, get_user_service
 
 import logging
@@ -30,7 +34,13 @@ from knowledge_mining.mining.kb.services.mcp_key_service import (
     normalize_legacy_open_tools,
 )
 from knowledge_mining.mining.kb.services.user_service import (
-    DuplicateUser, InvalidRole, UserError, UserNotFound, UserService, WrongPassword,
+    DuplicateUser, InvalidRole, UserError, UserNotFound, UserOwnsKnowledgeBases,
+    UserService, WrongPassword,
+)
+from knowledge_mining.mining.kb.services.user_import_service import (
+    MAX_IMPORT_BYTES,
+    UserImportError,
+    UserImportService,
 )
 
 router = APIRouter(prefix="/api/kb", tags=["kb-auth"])
@@ -57,7 +67,7 @@ class CreateUserReq(BaseModel):
 class UpdateUserReq(BaseModel):
     display_name: str | None = None
     site_role: str | None = None
-    status: str | None = None
+    status: Literal["active", "disabled"] | None = None
 
 
 class ResetPasswordReq(BaseModel):
@@ -80,10 +90,39 @@ class DomainGrantReq(BaseModel):
 
 class UserDomainGrantsReq(BaseModel):
     grants: list[DomainGrantReq]
+    initial_password: str | None = None
 
 
 class AddDomainUserReq(BaseModel):
     username: str
+
+
+class DeleteUserReq(BaseModel):
+    confirm_username: str
+
+
+def _validate_user_import_upload(request: Request, file: UploadFile) -> None:
+    multipart_budget = MAX_IMPORT_BYTES + 256 * 1024
+    raw_length = request.headers.get("content-length", "").strip()
+    if raw_length:
+        try:
+            if int(raw_length) > multipart_budget:
+                raise HTTPException(413, "file_too_large")
+        except ValueError:
+            raise HTTPException(400, "invalid_content_length") from None
+    if file.size is not None and file.size > MAX_IMPORT_BYTES:
+        raise HTTPException(413, "file_too_large")
+    filename = (file.filename or "").lower()
+    allowed_types = {
+        ".csv": {"text/csv", "application/csv", "application/vnd.ms-excel", "application/octet-stream"},
+        ".xlsx": {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/octet-stream",
+        },
+    }
+    suffix = ".xlsx" if filename.endswith(".xlsx") else ".csv" if filename.endswith(".csv") else ""
+    if not suffix or (file.content_type or "application/octet-stream") not in allowed_types[suffix]:
+        raise HTTPException(422, "unsupported_file_type")
 
 
 # ---------------------------------------------------------------- helpers
@@ -106,6 +145,11 @@ def _map_user_error(exc: Exception) -> HTTPException:
         return HTTPException(404, str(exc) or "user not found")
     if isinstance(exc, DuplicateUser):
         return HTTPException(409, str(exc) or "duplicate user")
+    if isinstance(exc, UserOwnsKnowledgeBases):
+        return HTTPException(409, {
+            "code": "user_owns_knowledge_bases",
+            "knowledge_bases": exc.knowledge_bases,
+        })
     if isinstance(exc, (InvalidRole, WrongPassword, UserError)):
         return HTTPException(400, str(exc))
     return HTTPException(500, str(exc))
@@ -293,10 +337,11 @@ async def internal_kb_count(
 
 @router.get("/users")
 async def list_users(
+    include_deleted: bool = Query(False),
     _admin: dict = Depends(require_admin),
     svc: UserService = Depends(get_user_service),
 ) -> list[dict[str, Any]]:
-    return await svc.list_users()
+    return await svc.list_users(include_deleted=include_deleted)
 
 
 @router.post("/users", status_code=201)
@@ -306,10 +351,14 @@ async def create_user(
     svc: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     try:
-        return await svc.create_user(
+        created = await svc.create_user(
             username=body.username, password=body.password,
             site_role=body.site_role, display_name=body.display_name,
         )
+        return {
+            key: created.get(key)
+            for key in ("id", "username", "display_name", "status", "site_role", "created_at")
+        }
     except (DuplicateUser, InvalidRole, UserError) as exc:
         raise _map_user_error(exc) from None
 
@@ -348,6 +397,70 @@ async def reset_password(
         raise _map_user_error(exc) from None
 
 
+@router.post("/admin/users/import")
+async def import_users(
+    request: Request,
+    file: UploadFile = File(...),
+    dry_run: bool = Query(True),
+    _admin: dict = Depends(require_admin),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    _validate_user_import_upload(request, file)
+    content = await file.read(MAX_IMPORT_BYTES + 1)
+    try:
+        return await UserImportService(kbdb).execute(
+            filename=file.filename or "", content=content, dry_run=dry_run,
+        )
+    except UserImportError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@router.get("/admin/users/{user_id}/deletion-preview")
+async def preview_user_deletion(
+    user_id: str,
+    _admin: dict = Depends(require_admin),
+    svc: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    try:
+        return await svc.deletion_preview(user_id=user_id)
+    except UserError as exc:
+        raise _map_user_error(exc) from None
+
+
+@router.delete("/admin/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    body: DeleteUserReq,
+    request: Request,
+    admin: dict = Depends(require_admin),
+    svc: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    try:
+        deleted = await svc.delete_user(
+            user_id=user_id,
+            actor_id=admin["id"],
+            confirm_username=body.confirm_username,
+        )
+        cache = getattr(request.app.state, "identity_cache", None)
+        if cache is not None:
+            cache.invalidate(deleted["username"])
+        return deleted
+    except UserError as exc:
+        raise _map_user_error(exc) from None
+
+
+@router.post("/admin/users/{user_id}/restore")
+async def restore_user(
+    user_id: str,
+    _admin: dict = Depends(require_admin),
+    svc: UserService = Depends(get_user_service),
+) -> dict[str, Any]:
+    try:
+        return await svc.restore_user(user_id=user_id)
+    except UserError as exc:
+        raise _map_user_error(exc) from None
+
+
 @router.post("/users/me/password")
 async def change_my_password(
     body: ChangeMyPasswordReq,
@@ -379,7 +492,7 @@ async def get_user_domains(
     kbdb: KbDB = Depends(get_kb_db),
 ) -> dict[str, Any]:
     user = await kbdb.get_user(user_id)
-    if not user:
+    if not user or user.get("deleted_at") is not None:
         raise HTTPException(404, "user_not_found")
     return {"user_id": user_id, "domains": await kbdb.list_user_domains(user_id=user_id)}
 
@@ -392,7 +505,7 @@ async def assign_user_domains(
     kbdb: KbDB = Depends(get_kb_db),
 ) -> dict[str, Any]:
     user = await kbdb.get_user(user_id)
-    if not user:
+    if not user or user.get("deleted_at") is not None:
         raise HTTPException(404, "user_not_found")
     domains = sorted({d.strip() for d in body.domains if d and d.strip()})
     if not domains:
@@ -422,7 +535,7 @@ async def get_user_domain_grants(
     kbdb: KbDB = Depends(get_kb_db),
 ) -> dict[str, Any]:
     user = await kbdb.get_user(user_id)
-    if not user:
+    if not user or user.get("deleted_at") is not None:
         raise HTTPException(404, "user_not_found")
     grants = await kbdb.list_domain_grants(user_id=user_id)
     return {"user_id": user_id, "domains": [g["domain"] for g in grants], "domain_grants": grants}
@@ -434,9 +547,10 @@ async def assign_user_domain_grants(
     body: UserDomainGrantsReq,
     _admin: dict = Depends(require_admin),
     kbdb: KbDB = Depends(get_kb_db),
+    svc: UserService = Depends(get_user_service),
 ) -> dict[str, Any]:
     user = await kbdb.get_user(user_id)
-    if not user:
+    if not user or user.get("deleted_at") is not None:
         raise HTTPException(404, "user_not_found")
     if user["site_role"] == "admin":
         return {"user_id": user_id, "domains": [], "domain_grants": []}
@@ -452,14 +566,18 @@ async def assign_user_domain_grants(
         {"domain": domain, "domain_role": role}
         for domain, role in normalized.items()
     ]
-    require_domain_admin_credential(user, normalized_grants)
     try:
-        grants = await kbdb.set_domain_grants(
+        grants = await svc.assign_domain_grants(
             user_id=user_id,
             grants=normalized_grants,
+            initial_password=body.initial_password,
         )
     except DomainMembershipConflict as exc:
         raise HTTPException(409, exc.code) from None
+    except UserDeletionConflict:
+        raise HTTPException(404, "user_not_found") from None
+    except UserError as exc:
+        raise _map_user_error(exc) from None
     return {"user_id": user_id, "domains": [g["domain"] for g in grants], "domain_grants": grants}
 
 
@@ -471,6 +589,21 @@ async def list_domain_users(
 ) -> dict[str, Any]:
     cleaned = await _require_domain_manager(user=user, domain=domain, kbdb=kbdb)
     return {"domain": cleaned, "users": await kbdb.list_domain_users(domain=cleaned)}
+
+
+@router.get("/domains/{domain}/user-candidates")
+async def list_domain_user_candidates(
+    domain: str,
+    q: str | None = Query(None, max_length=100),
+    limit: int = Query(20, ge=1, le=50),
+    user: dict = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    cleaned = await _require_domain_manager(user=user, domain=domain, kbdb=kbdb)
+    candidates = await kbdb.list_domain_user_candidates(
+        domain=cleaned, q=q, limit=limit,
+    )
+    return {"domain": cleaned, "users": candidates}
 
 
 @router.post("/domains/{domain}/users", status_code=201)
@@ -489,13 +622,37 @@ async def add_domain_user(
     existing_role = await kbdb.get_domain_role(user_id=target["id"], domain=cleaned)
     if existing_role == "admin" and user.get("site_role") != "admin":
         raise HTTPException(403, "cannot_manage_domain_admin")
-    await kbdb.bind_domain(user_id=target["id"], domain=cleaned)
+    try:
+        await kbdb.bind_domain(user_id=target["id"], domain=cleaned)
+    except UserDeletionConflict:
+        raise HTTPException(404, "user_not_found") from None
     return {
         "id": target["id"],
         "username": target["username"],
         "display_name": target.get("display_name"),
         "domain_role": existing_role or "member",
     }
+
+
+@router.post("/domains/{domain}/users/import")
+async def import_domain_users(
+    domain: str,
+    request: Request,
+    file: UploadFile = File(...),
+    dry_run: bool = Query(True),
+    user: dict = Depends(current_user),
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    cleaned = await _require_domain_manager(user=user, domain=domain, kbdb=kbdb)
+    _validate_user_import_upload(request, file)
+    content = await file.read(MAX_IMPORT_BYTES + 1)
+    try:
+        return await UserImportService(kbdb).execute(
+            filename=file.filename or "", content=content,
+            domain=cleaned, dry_run=dry_run,
+        )
+    except UserImportError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 @router.delete("/domains/{domain}/users/{user_id}")

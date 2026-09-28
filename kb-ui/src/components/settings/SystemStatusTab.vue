@@ -347,6 +347,15 @@ async function loadHealth() {
 }
 
 function loadAll() {
+  if (!domainStore.currentDomain) {
+    statsGen++
+    healthGen++
+    usageGen++
+    statsLoading.value = false
+    healthLoading.value = false
+    usageLoading.value = false
+    return
+  }
   loadHealth()
   loadStats()
   loadUsage()

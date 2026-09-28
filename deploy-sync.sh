@@ -233,6 +233,40 @@ sync_dir_contents() {
     echo "$dir" >> "$SWAP_LOG"
 }
 
+# Replace this script through a new inode. Truncating the path in place while
+# Bash is still reading the old script can make the current process parse bytes
+# from the new version and execute garbage after an otherwise successful apply.
+replace_deploy_sync_script_atomically() {
+    local source_script="${1:?source deploy script required}"
+    local target_script="${2:?target deploy script required}"
+    local target_dir target_name pending_script
+    target_dir="$(dirname -- "$target_script")"
+    target_name="$(basename -- "$target_script")"
+    pending_script="$(mktemp "$target_dir/.${target_name}.next.XXXXXX")"
+    if ! cp -p -- "$source_script" "$pending_script"; then
+        rm -f -- "$pending_script"
+        return 1
+    fi
+    if ! bash -n "$pending_script"; then
+        rm -f -- "$pending_script"
+        return 1
+    fi
+    if ! mv -f -- "$pending_script" "$target_script"; then
+        rm -f -- "$pending_script"
+        return 1
+    fi
+}
+
+install_staged_deploy_sync_script() {
+    [ -f "$STAGE_DIR/$DEPLOY_SYNC_SCRIPT" ] || return 0
+    if ! replace_deploy_sync_script_atomically \
+            "$STAGE_DIR/$DEPLOY_SYNC_SCRIPT" "$DEPLOY_SYNC_SCRIPT"; then
+        echo "错误：业务发布成功但 deploy-sync.sh 更新失败；数据库和服务保持已发布状态，请手工校验并替换脚本。" >&2
+        return 1
+    fi
+    echo "已更新：$DEPLOY_SYNC_SCRIPT（本次部署成功后生效，供后续同步使用）"
+}
+
 # 计算目录内容签名（变更检测用）：文件路径 + 相对 mtime/size 的排序列表
 dir_signature() {
     (cd "$1" && find . -type f -not -path '*/__pycache__/*' -not -name '*.pyc' \
@@ -620,15 +654,13 @@ cmd_apply() {
     # 5. 按依赖顺序重启受影响服务 + 健康检查
     needed="$(printf '%s' "$needed" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
     if [ -z "$(printf '%s' "$needed" | tr -d ' ')" ]; then
+        install_staged_deploy_sync_script
         echo "=== 所有目录均无变化，无需重启 ==="
         return 0
     fi
     restart_services "$needed"
     verify_health_by_services "$needed"
-    if [ -f "$STAGE_DIR/$DEPLOY_SYNC_SCRIPT" ]; then
-        cat -- "$STAGE_DIR/$DEPLOY_SYNC_SCRIPT" > "$DEPLOY_SYNC_SCRIPT"
-        echo "已更新：$DEPLOY_SYNC_SCRIPT（本次部署成功后生效，供后续同步使用）"
-    fi
+    install_staged_deploy_sync_script
     echo "=== 同步完成 ==="
     compose exec -T app supervisorctl status
 }

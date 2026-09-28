@@ -109,6 +109,27 @@ async def test_can_create_in_domain(kbdb):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("site_role", ["member", "admin"])
+async def test_can_create_in_domain_rejects_disabled_users(kbdb, site_role):
+    """Domain grants and site-admin role never bypass account deactivation."""
+    user = await kbdb.create_user(
+        username=f"disabled_domain_{site_role}_{_suffix()}", site_role=site_role,
+    )
+    if site_role == "member":
+        await kbdb.bind_domain(user_id=user["id"], domain="generic")
+
+    assert await kbdb.can_create_in_domain(
+        user_id=user["id"], domain="generic",
+    ) is True
+
+    await kbdb.update_user(user["id"], status="disabled")
+
+    assert await kbdb.can_create_in_domain(
+        user_id=user["id"], domain="generic",
+    ) is False
+
+
+@pytest.mark.asyncio
 async def test_count_kbs_by_domain_active_only(kbdb):
     """count 只计 active；软删（status='deleted'）不计。随机域名防共享库撞数。"""
     s = _suffix()

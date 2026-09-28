@@ -25,7 +25,7 @@ async def test_mcp_keys_tables_exist(kbdb):
         cols2 = {r["column_name"] for r in await cur.fetchall()}
     assert {"id", "user_id", "name", "domain", "key_hash", "key_prefix", "status",
             "open_tools", "instructions", "tool_descriptions",
-            "created_at", "rotated_at", "last_used_at"} <= cols
+            "created_at", "rotated_at", "last_used_at", "deleted_at"} <= cols
     assert {"key_id", "kb_id", "granted_at"} == cols2
 
 
@@ -74,6 +74,10 @@ async def test_mcp_key_lifecycle(kbdb):
     assert got["tool_descriptions"] is None
     assert await kbdb.get_mcp_key(key_id="no_such_key") is None
     assert await kbdb.count_active_mcp_keys(user_id=uid) == 1
+    assert await kbdb.delete_mcp_key(key_id=key_id) is True
+    assert await kbdb.delete_mcp_key(key_id=key_id) is False
+    assert await kbdb.get_mcp_key(key_id=key_id) is None
+    assert {row["id"] for row in await kbdb.list_mcp_keys(user_id=uid)} == {key2}
 
     # 开放库域防线：越域 kb_c 被拒（SQL 层）
     effective = await kbdb.replace_mcp_key_open_kbs(
@@ -185,6 +189,7 @@ from knowledge_mining.mining.kb.services.mcp_key_service import (  # noqa: E402
     KeyNameConflict,
     KeyNotFound,
     KeyRevoked,
+    KeyMustBeRevoked,
     McpKeyError,
     McpKeyService,
     normalize_legacy_open_tools,
@@ -210,6 +215,7 @@ class _KeyFakeDb:
         self.created: list[dict] = []
         self.rotated: list[tuple] = []
         self.revoked: list[str] = []
+        self.deleted: list[str] = []
         self.replaced: list[tuple] = []
         self.config_updates: list[tuple] = []
 
@@ -238,6 +244,10 @@ class _KeyFakeDb:
 
     async def revoke_mcp_key(self, *, key_id: str) -> bool:
         self.revoked.append(key_id)
+        return True
+
+    async def delete_mcp_key(self, *, key_id: str) -> bool:
+        self.deleted.append(key_id)
         return True
 
     async def is_visible(self, *, kb_id: str, user_id: str) -> bool:
@@ -278,6 +288,26 @@ async def test_create_returns_plaintext_once_and_only_hash_persisted() -> None:
     assert db.created[0]["name"] == "我的钥匙"  # strip 后落库
     assert "key" not in db.created[0]           # 明文不落库，只有 hash/prefix
     assert db.created[0]["key_hash"] and db.created[0]["key_prefix"]
+
+
+@pytest.mark.asyncio
+async def test_delete_key_requires_owned_revoked_key() -> None:
+    active = _KeyFakeDb(keys={"active": _key_row(id="active")})
+    with pytest.raises(KeyMustBeRevoked):
+        await _svc(active).delete_key(user_id="u1", key_id="active")
+    assert active.deleted == []
+
+    revoked = _KeyFakeDb(keys={
+        "revoked": _key_row(id="revoked", status="revoked"),
+    })
+    await _svc(revoked).delete_key(user_id="u1", key_id="revoked")
+    assert revoked.deleted == ["revoked"]
+
+    foreign = _KeyFakeDb(keys={
+        "foreign": _key_row(id="foreign", user_id="someone-else", status="revoked"),
+    })
+    with pytest.raises(KeyNotFound):
+        await _svc(foreign).delete_key(user_id="u1", key_id="foreign")
 
 
 @pytest.mark.asyncio

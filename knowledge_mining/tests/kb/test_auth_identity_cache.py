@@ -19,10 +19,15 @@ class _FakeDb:
     def __init__(self, user: dict | None = None):
         self.user = user or {"id": "u1", "username": "alice",
                              "status": "active", "site_role": "admin"}
-        self.calls = 0
+        self.upsert_calls = 0
+        self.lookup_calls = 0
+
+    async def get_user_by_username(self, username):
+        self.lookup_calls += 1
+        return dict(self.user) if self.user else None
 
     async def upsert_user_by_username(self, username, *, display_name=None):
-        self.calls += 1
+        self.upsert_calls += 1
         return dict(self.user)
 
 
@@ -30,14 +35,15 @@ def _cache(db, ttl=60.0):
     return IdentityCache(ttl_seconds=ttl)
 
 
-async def test_cache_hits_do_not_touch_db():
+async def test_cached_identity_still_refreshes_authorization_status():
     db = _FakeDb()
     cache = _cache(db)
     u1 = await cache.get_user(db, "alice")
     u2 = await cache.get_user(db, "alice")
     assert u1 == u2 == {"id": "u1", "username": "alice",
                         "status": "active", "site_role": "admin"}
-    assert db.calls == 1  # 第二次命中缓存
+    assert db.lookup_calls == 2
+    assert db.upsert_calls == 0
 
 
 async def test_ttl_expiry_refetches():
@@ -45,19 +51,18 @@ async def test_ttl_expiry_refetches():
     cache = IdentityCache(ttl_seconds=0.0)  # 立即过期
     await cache.get_user(db, "alice")
     await cache.get_user(db, "alice")
-    assert db.calls == 2
+    assert db.lookup_calls == 2
 
 
-async def test_disable_invalidates_cache_immediately():
-    """禁用即时生效：禁用端点（同进程）调 invalidate，下次认证触库拿到 disabled。"""
+async def test_disable_is_visible_without_same_process_invalidation():
+    """Every worker observes disabled from the database on the next request."""
     db = _FakeDb()
     cache = _cache(db)
     await cache.get_user(db, "alice")  # 缓存 active
     db.user = {**db.user, "status": "disabled"}
-    cache.invalidate("alice")  # 禁用端点的钩子
     user = await cache.get_user(db, "alice")
     assert user["status"] == "disabled"
-    assert db.calls == 2
+    assert db.lookup_calls == 2
 
 
 async def test_invalidate_clears_entry():
@@ -66,7 +71,7 @@ async def test_invalidate_clears_entry():
     await cache.get_user(db, "alice")
     cache.invalidate("alice")
     await cache.get_user(db, "alice")
-    assert db.calls == 2
+    assert db.lookup_calls == 2
 
 
 async def test_cache_is_bounded():
@@ -78,7 +83,7 @@ async def test_cache_is_bounded():
     assert cache.size() == 3
 
 
-def test_ttl_default_is_minutes_not_hours():
+async def test_ttl_default_is_minutes_not_hours():
     """默认 TTL 必须短（分钟级）——禁用/改名等管理操作的生效窗口。"""
     cache = IdentityCache()
     assert 30 <= cache.ttl_seconds <= 300

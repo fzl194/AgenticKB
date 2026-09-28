@@ -382,6 +382,7 @@ import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { useLlmApi } from '@/api/llm'
 import { usePolling } from '@/composables/usePolling'
+import { useDomainStore } from '@/stores/domain'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ExpandableText from './ExpandableText.vue'
@@ -389,6 +390,7 @@ import ExpandableText from './ExpandableText.vue'
 const props = defineProps<{ taskId: string }>()
 const router = useRouter()
 const llmApi = useLlmApi()
+const domainStore = useDomainStore()
 
 const loading = ref(true)
 const initialLoading = ref(true)
@@ -605,6 +607,16 @@ async function handleCancel() {
 }
 
 async function loadAll(silent = false) {
+  if (!domainStore.currentDomain) {
+    task.value = null
+    requestData.value = null
+    result.value = null
+    attempts.value = []
+    events.value = []
+    loading.value = false
+    initialLoading.value = false
+    return
+  }
   if (!silent) loading.value = true
   try {
     const detail = await llmApi.getTask(props.taskId).catch(() => null) as Record<string, any> | null
@@ -630,7 +642,10 @@ async function refreshTaskDetail() {
   await loadAll(true)
 }
 
-const { start: startPolling, stop: stopPolling } = usePolling(refreshTaskDetail, 3000, { immediate: false })
+const { start: startPolling, stop: stopPolling } = usePolling(refreshTaskDetail, 3000, {
+  immediate: false,
+  shouldRun: () => Boolean(domainStore.currentDomain),
+})
 
 watch(() => task.value?.status, (status) => {
   if (isTerminalTaskStatus(status)) {

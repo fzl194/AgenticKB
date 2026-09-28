@@ -121,7 +121,7 @@ function onDomainChange(domainId: string) {
 async function onAccountCommand(cmd: string): Promise<void> {
   if (cmd === 'logout') {
     auth.logout()
-    router.push('/login')
+    router.replace('/login')
   } else if (cmd === 'password') {
     try {
       const { value } = await ElMessageBox.prompt('输入新密码（≥8 位）', '修改密码', {
@@ -138,7 +138,7 @@ async function onAccountCommand(cmd: string): Promise<void> {
       )
       ElMessage.success('密码已更新，请重新登录')
       auth.logout()
-      router.push('/login')
+      router.replace('/login')
     } catch (e) {
       if (e !== 'cancel' && e !== 'close') {
         ElMessage.error((await apiErrorDetail(e)) || '修改失败')

@@ -15,7 +15,7 @@ from typing import Any
 from psycopg.errors import UniqueViolation
 
 from knowledge_mining.mining.infra.domain_pack import resolve_domain
-from knowledge_mining.mining.kb.db import KbDB
+from knowledge_mining.mining.kb.db import KbDB, UserDeletionConflict
 
 
 # ----------------------------------------------------------------- errors
@@ -75,6 +75,8 @@ class KbService:
                 domain=domain, name=name, owner_id=owner_id,
                 visibility=visibility, description=description, metadata=metadata,
             )
+        except UserDeletionConflict as exc:
+            raise DomainNotBound(domain) from exc
         except UniqueViolation as exc:
             # 面向用户的错误文案（此前是裸 "domain/name"，前端弹窗原样展示）
             raise Duplicate(
@@ -115,6 +117,54 @@ class KbService:
         if updated is None:
             raise NotFound(kb_id)
         return updated
+
+    async def transfer_owner(
+        self,
+        *,
+        kb_id: str,
+        actor_id: str,
+        new_owner_id: str,
+        keep_old_as_editor: bool,
+    ) -> dict[str, Any]:
+        kb = await self._db.get_kb(kb_id)
+        if kb is None:
+            raise NotFound(kb_id)
+        if not await self._db.can_restore(kb_id=kb_id, user_id=actor_id):
+            raise Forbidden("owner_transfer_actor_forbidden")
+        try:
+            updated = await self._db.transfer_kb_owner(
+                kb_id=kb_id,
+                actor_id=actor_id,
+                new_owner_id=new_owner_id,
+                keep_old_as_editor=keep_old_as_editor,
+            )
+        except UserDeletionConflict as exc:
+            if exc.code == "kb_not_found":
+                raise NotFound(kb_id) from None
+            if exc.code == "owner_target_not_found":
+                raise NotFound(exc.code) from None
+            if exc.code == "owner_target_not_domain_bound":
+                raise Forbidden(exc.code) from None
+            if exc.code in {
+                "owner_transfer_actor_forbidden",
+                "owner_target_inactive",
+                "owner_previous_inactive",
+            }:
+                raise Forbidden(exc.code) from None
+            raise Forbidden("owner_transfer_forbidden") from None
+        except UniqueViolation as exc:
+            raise Duplicate("new_owner_has_same_name_kb") from exc
+        return updated
+
+    async def list_owner_candidates(
+        self, *, kb_id: str, actor_id: str, q: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        kb = await self._db.get_kb(kb_id)
+        if kb is None:
+            raise NotFound(kb_id)
+        if not await self._db.can_restore(kb_id=kb_id, user_id=actor_id):
+            raise Forbidden(kb_id)
+        return await self._db.list_owner_candidates(kb_id=kb_id, q=q, limit=limit)
 
     async def soft_delete(self, *, kb_id: str, actor_id: str) -> dict[str, Any]:
         if not await self._db.is_visible(kb_id=kb_id, user_id=actor_id):
@@ -175,7 +225,12 @@ class KbService:
             raise InvalidVisibility(
                 "public 库无需添加只读成员(全员可读);如需协作请加编辑者"
             )
-        return await self._db.add_member(kb_id=kb_id, user_id=member["id"], role=role)
+        try:
+            return await self._db.add_member(
+                kb_id=kb_id, user_id=member["id"], role=role,
+            )
+        except UserDeletionConflict as exc:
+            raise NotFound(f"user {username!r} not found") from exc
 
     async def list_members(self, *, kb_id: str, user_id: str) -> list[dict[str, Any]]:
         await self._assert_read(kb_id, user_id)

@@ -15,6 +15,7 @@
         LEFT JOIN kb_users u
                ON u.username = #{username}
               AND u.status = 'active'
+              AND u.deleted_at IS NULL
         WHERE kb.status = 'active'
           AND kb.domain = #{domain}
           <if test="kbIds != null and !kbIds.isEmpty()">

@@ -8,7 +8,10 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from knowledge_mining.mining.kb.db import DomainMembershipConflict, KbDB
-from knowledge_mining.mining.kb.routes.auth import router as auth_router
+from knowledge_mining.mining.kb.routes.auth import (
+    list_domain_user_candidates,
+    router as auth_router,
+)
 from knowledge_mining.tests.conftest import kb_headers
 
 pytestmark = pytest.mark.asyncio
@@ -16,6 +19,33 @@ pytestmark = pytest.mark.asyncio
 
 def _name(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
+class _CandidateDb:
+    async def can_manage_domain(self, *, user_id: str, domain: str) -> bool:
+        return user_id == "domain-admin" and domain == "generic"
+
+    async def list_domain_user_candidates(self, *, domain: str, q: str | None, limit: int):
+        assert (domain, q, limit) == ("generic", "ali", 20)
+        return [{
+            "id": "u1", "username": "alice", "display_name": "Alice",
+            "already_in_domain": False,
+        }]
+
+
+async def test_domain_admin_candidate_search_returns_minimal_projection() -> None:
+    payload = await list_domain_user_candidates(
+        "generic", q="ali", limit=20,
+        user={"id": "domain-admin", "site_role": "member"},
+        kbdb=_CandidateDb(),  # type: ignore[arg-type]
+    )
+    assert payload == {
+        "domain": "generic",
+        "users": [{
+            "id": "u1", "username": "alice", "display_name": "Alice",
+            "already_in_domain": False,
+        }],
+    }
 
 
 async def _client(async_pool) -> AsyncClient:
@@ -85,10 +115,33 @@ async def test_unbind_domain_rejects_owner_then_removes_member_edges(async_pool)
             "UPDATE knowledge_bases SET owner_id = %s WHERE id = %s",
             (other["id"], owned["id"]),
         )
+    await db.bind_domain(user_id=target["id"], domain="odn")
     await db.add_member(kb_id=owned["id"], user_id=target["id"], role="editor")
     await db.unbind_domain(user_id=target["id"], domain="generic")
-    assert await db.list_domain_grants(user_id=target["id"]) == []
+    assert await db.list_domain_grants(user_id=target["id"]) == [
+        {"domain": "odn", "domain_role": "member"},
+    ]
     assert not any(m["user_id"] == target["id"] for m in await db.list_members(owned["id"]))
+
+
+async def test_active_member_cannot_remove_last_domain(async_pool):
+    db = KbDB(async_pool)
+    target = await db.create_user(username=_name("last_domain"), site_role="member")
+    await db.bind_domain(user_id=target["id"], domain="generic")
+    with pytest.raises(DomainMembershipConflict) as exc_info:
+        await db.unbind_domain(user_id=target["id"], domain="generic")
+    assert exc_info.value.code == "domain_grants_must_not_be_empty"
+
+
+async def test_disabled_member_can_remove_last_domain(async_pool):
+    db = KbDB(async_pool)
+    target = await db.create_user(username=_name("disabled_last_domain"), site_role="member")
+    await db.bind_domain(user_id=target["id"], domain="generic")
+    await db.update_user(target["id"], status="disabled")
+
+    await db.unbind_domain(user_id=target["id"], domain="generic")
+
+    assert await db.list_domain_grants(user_id=target["id"]) == []
 
 
 async def test_site_admin_assigns_roles_and_domain_admin_manages_members(async_pool):

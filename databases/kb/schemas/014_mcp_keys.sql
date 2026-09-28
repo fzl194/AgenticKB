@@ -15,10 +15,16 @@ CREATE TABLE IF NOT EXISTS mcp_keys (
     tool_descriptions JSONB,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     rotated_at  TIMESTAMPTZ,
-    last_used_at TIMESTAMPTZ              -- 验钥时节流更新（沿用旧 mcp_access 语义）
+    last_used_at TIMESTAMPTZ,             -- 验钥时节流更新（沿用旧 mcp_access 语义）
+    deleted_at   TIMESTAMPTZ               -- revoked 后可从用户列表软隐藏，保留审计行
 );
 
+-- 兼容已存在的 1.1.9+ mcp_keys 表。
+ALTER TABLE mcp_keys ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_mcp_keys_user ON mcp_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_keys_visible_user
+    ON mcp_keys(user_id, created_at) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_keys_hash ON mcp_keys(key_hash);
 
 -- 同名约束：仅「同用户+同域+活跃」内唯一（部分唯一索引，终审整改）——

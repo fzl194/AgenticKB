@@ -26,6 +26,7 @@ from knowledge_mining.mining.kb.services.mcp_key_service import (
     KeyNameConflict,
     KeyNotFound,
     KeyRevoked,
+    KeyMustBeRevoked,
     McpKeyError,
     McpKeyService,
 )
@@ -50,7 +51,7 @@ def _http_error(exc: McpKeyError) -> HTTPException:
         return HTTPException(403, {
             "code": "domain_not_bound", "message": str(exc),
         })
-    if isinstance(exc, (KeyLimitExceeded, KeyNameConflict, KeyRevoked)):
+    if isinstance(exc, (KeyLimitExceeded, KeyNameConflict, KeyRevoked, KeyMustBeRevoked)):
         return HTTPException(409, str(exc))
     return HTTPException(422, str(exc))  # McpKeyError 基类兜底
 
@@ -113,6 +114,20 @@ async def revoke_my_key(
     """吊销（幂等：已吊销不报错）。"""
     try:
         await svc.revoke_key(user_id=user["id"], key_id=key_id)
+    except McpKeyError as exc:
+        raise _http_error(exc) from None
+    return Response(status_code=204)
+
+
+@router.delete("/{key_id}", status_code=204)
+async def delete_my_key(
+    key_id: str,
+    user: dict[str, Any] = Depends(current_user),
+    svc: McpKeyService = Depends(_get_service),
+) -> Response:
+    """Delete one revoked key from the visible list while retaining its audit row."""
+    try:
+        await svc.delete_key(user_id=user["id"], key_id=key_id)
     except McpKeyError as exc:
         raise _http_error(exc) from None
     return Response(status_code=204)

@@ -16,10 +16,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from psycopg.rows import dict_row
+from psycopg.errors import UniqueViolation
 
 from knowledge_mining.mining.workflow.presets import DEFAULT_WORKFLOW_ID
 
 logger = logging.getLogger(__name__)
+_USER_ID_GENERATION_ATTEMPTS = 3
 
 
 def _new_id() -> str:
@@ -36,12 +38,26 @@ def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
+def _escape_ilike_literal(value: str) -> str:
+    """Escape PostgreSQL LIKE metacharacters for a literal user search term."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class DomainMembershipConflict(RuntimeError):
     """A domain membership cannot be removed without resolving owned resources."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class UserDeletionConflict(RuntimeError):
+    """A user cannot be cleared while protected resources or admin invariants remain."""
+
+    def __init__(self, code: str, *, knowledge_bases: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.knowledge_bases = knowledge_bases or []
 
 
 #: readiness 档位（低 → 高）。展示层按 level 索引取标签/颜色。
@@ -198,6 +214,40 @@ class KbDB:
 
     # ---------------------------------------------------------------- users
 
+    @staticmethod
+    async def _lock_active_user_on_conn(conn: Any, *, user_id: str) -> bool:
+        cur = await conn.execute(
+            """SELECT id FROM kb_users
+               WHERE id = %s AND status = 'active' AND deleted_at IS NULL
+               FOR SHARE""",
+            (user_id,),
+        )
+        return await cur.fetchone() is not None
+
+    @staticmethod
+    async def _lock_user_domain_access_on_conn(
+        conn: Any, *, user_id: str, domain: str,
+    ) -> bool:
+        cur = await conn.execute(
+            """SELECT u.id FROM kb_users u
+               WHERE u.id = %(uid)s AND u.status = 'active'
+                 AND u.deleted_at IS NULL
+                 AND (u.site_role = 'admin' OR EXISTS (
+                     SELECT 1 FROM user_domains ud
+                     WHERE ud.user_id = u.id AND ud.domain = %(domain)s
+                 ))
+               FOR SHARE""",
+            {"uid": user_id, "domain": domain},
+        )
+        return await cur.fetchone() is not None
+
+    @staticmethod
+    async def _lock_admin_lifecycle_on_conn(conn: Any) -> None:
+        """Serialize site-admin disable/demote/delete before taking user row locks."""
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtext('cmkb_active_admin_guard'))"
+        )
+
     async def upsert_user_by_username(
         self, username: str, *, display_name: str | None = None
     ) -> dict[str, Any]:
@@ -222,17 +272,13 @@ class KbDB:
             # 仅新插入行绑（xmax=0）；已存在用户不碰（解绑语义归 admin 端点/backfill）。
             if row.pop("_inserted") and row.get("site_role") != "admin":
                 from knowledge_mining.mining.infra.domain_pack import get_default_domain
-                try:
-                    # savepoint：绑定失败只回滚绑定本身——否则连接进入 INERROR，
-                    # pool 退出时会把上面的 user INSERT 一起 ROLLBACK（建档丢失）。
-                    async with conn.transaction():
-                        await conn.execute(
-                            "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s)"
-                            " ON CONFLICT DO NOTHING",
-                            (row["id"], get_default_domain()),
-                        )
-                except Exception:  # noqa: BLE001 — 惰性建档优先，绑定降级（与 user_service 一致）
-                    logger.warning("lazy upsert auto-bind default domain failed for %s", username)
+                # Binding is a hard invariant. Let failure roll the new identity back
+                # instead of leaving an active zero-domain user.
+                await conn.execute(
+                    "INSERT INTO user_domains (user_id, domain) VALUES (%s, %s)"
+                    " ON CONFLICT DO NOTHING",
+                    (row["id"], get_default_domain()),
+                )
             return row
 
     # ---------------------------------------------------- user management (Phase 2)
@@ -240,28 +286,46 @@ class KbDB:
     async def get_user_by_username(self, username: str) -> dict[str, Any] | None:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """SELECT id, username, display_name, status, site_role, password_hash, created_at
+                """SELECT id, username, display_name, status, site_role, password_hash, created_at,
+                          deleted_at, deleted_by_user_id
                    FROM kb_users WHERE username = %s""",
                 [username],
             )
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def get_users_by_usernames(
+        self, usernames: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        if not usernames:
+            return {}
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, username, display_name, status, site_role, password_hash,
+                          created_at, deleted_at, deleted_by_user_id
+                   FROM kb_users WHERE username = ANY(%s)""",
+                (usernames,),
+            )
+            return {str(row["username"]): dict(row) for row in await cur.fetchall()}
+
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """SELECT id, username, display_name, status, site_role, password_hash, created_at
+                """SELECT id, username, display_name, status, site_role, password_hash, created_at,
+                          deleted_at, deleted_by_user_id
                    FROM kb_users WHERE id = %s""",
                 [user_id],
             )
             row = await cur.fetchone()
             return dict(row) if row else None
 
-    async def list_users(self) -> list[dict[str, Any]]:
+    async def list_users(self, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+        where = "" if include_deleted else "WHERE kb_users.deleted_at IS NULL"
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """SELECT id, username, display_name, status, site_role,
-                          (password_hash IS NOT NULL) AS has_password, created_at,
+                f"""SELECT id, username, display_name, status, site_role,
+                           (password_hash IS NOT NULL) AS has_password, created_at,
+                           deleted_at, deleted_by_user_id,
                           ARRAY(
                               SELECT ud.domain FROM user_domains ud
                                WHERE ud.user_id = kb_users.id
@@ -277,7 +341,7 @@ class KbDB:
                               FROM user_domains ud
                               WHERE ud.user_id = kb_users.id
                           ), '[]'::jsonb) AS domain_grants
-                   FROM kb_users ORDER BY created_at""",
+                   FROM kb_users {where} ORDER BY created_at""",
             )
             return [dict(r) for r in await cur.fetchall()]
 
@@ -286,15 +350,55 @@ class KbDB:
         site_role: str = "member", display_name: str | None = None,
     ) -> dict[str, Any]:
         async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """INSERT INTO kb_users (id, username, display_name, status, created_at,
-                                         password_hash, site_role)
-                   VALUES (%(id)s, %(u)s, %(d)s, 'active', %(t)s, %(ph)s, %(sr)s)
-                   RETURNING id, username, display_name, status, site_role, password_hash, created_at""",
-                {"id": _new_id(), "u": username, "d": display_name, "t": _utcnow(),
-                 "ph": password_hash, "sr": site_role},
-            )
-            return dict(await cur.fetchone())  # type: ignore[arg-type]
+            for attempt in range(_USER_ID_GENERATION_ATTEMPTS):
+                try:
+                    async with conn.transaction():
+                        cur = await conn.execute(
+                            """INSERT INTO kb_users (id, username, display_name, status, created_at,
+                                                     password_hash, site_role)
+                               VALUES (%(id)s, %(u)s, %(d)s, 'active', %(t)s, %(ph)s, %(sr)s)
+                               RETURNING id, username, display_name, status, site_role,
+                                         password_hash, created_at""",
+                            {"id": _new_id(), "u": username, "d": display_name,
+                             "t": _utcnow(), "ph": password_hash, "sr": site_role},
+                        )
+                        return dict(await cur.fetchone())  # type: ignore[arg-type]
+                except UniqueViolation as exc:
+                    constraint = getattr(getattr(exc, "diag", None), "constraint_name", None)
+                    if constraint == "kb_users_pkey" and attempt + 1 < _USER_ID_GENERATION_ATTEMPTS:
+                        continue
+                    raise
+        raise RuntimeError("user_id_generation_exhausted")
+
+    async def create_member_with_domain(
+        self, *, username: str, display_name: str | None, domain: str,
+    ) -> dict[str, Any]:
+        """Create an ordinary active identity and its first domain atomically."""
+        async with self._pool.connection() as conn:
+            for attempt in range(_USER_ID_GENERATION_ATTEMPTS):
+                try:
+                    async with conn.transaction():
+                        cur = await conn.execute(
+                            """INSERT INTO kb_users
+                               (id, username, display_name, status, created_at, password_hash, site_role)
+                               VALUES (%s, %s, %s, 'active', %s, NULL, 'member')
+                               RETURNING id, username, display_name, status, site_role,
+                                         password_hash, created_at, deleted_at, deleted_by_user_id""",
+                            (_new_id(), username, display_name, _utcnow()),
+                        )
+                        user = dict(await cur.fetchone())
+                        await conn.execute(
+                            """INSERT INTO user_domains (user_id, domain, domain_role)
+                               VALUES (%s, %s, 'member')""",
+                            (user["id"], domain),
+                        )
+                        return user
+                except UniqueViolation as exc:
+                    constraint = getattr(getattr(exc, "diag", None), "constraint_name", None)
+                    if constraint == "kb_users_pkey" and attempt + 1 < _USER_ID_GENERATION_ATTEMPTS:
+                        continue
+                    raise
+        raise RuntimeError("user_id_generation_exhausted")
 
     async def update_user(
         self, user_id: str, *,
@@ -316,18 +420,42 @@ class KbDB:
         if not sets:
             return await self.get_user(user_id)
         async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                "UPDATE kb_users SET " + ", ".join(sets) + " WHERE id = %(id)s "
-                "RETURNING id, username, display_name, status, site_role, created_at",
-                params,
-            )
-            row = await cur.fetchone()
-            return dict(row) if row else None
+            async with conn.transaction():
+                await self._lock_admin_lifecycle_on_conn(conn)
+                cur = await conn.execute(
+                    """SELECT id, site_role, status FROM kb_users
+                       WHERE id = %s AND deleted_at IS NULL FOR UPDATE""",
+                    (user_id,),
+                )
+                target = await cur.fetchone()
+                if target is None:
+                    return None
+                removes_active_admin = (
+                    target["site_role"] == "admin"
+                    and target["status"] == "active"
+                    and (site_role == "member" or status == "disabled")
+                )
+                if removes_active_admin:
+                    cur = await conn.execute(
+                        """SELECT id FROM kb_users
+                           WHERE site_role = 'admin' AND status = 'active'
+                             AND deleted_at IS NULL FOR UPDATE"""
+                    )
+                    if len(await cur.fetchall()) <= 1:
+                        raise UserDeletionConflict("last_active_admin")
+                cur = await conn.execute(
+                    "UPDATE kb_users SET " + ", ".join(sets)
+                    + " WHERE id = %(id)s AND deleted_at IS NULL "
+                    "RETURNING id, username, display_name, status, site_role, created_at",
+                    params,
+                )
+                row = await cur.fetchone()
+                return dict(row) if row else None
 
     async def set_password_hash(self, user_id: str, password_hash: str) -> None:
         async with self._pool.connection() as conn:
             await conn.execute(
-                "UPDATE kb_users SET password_hash = %s WHERE id = %s",
+                "UPDATE kb_users SET password_hash = %s WHERE id = %s AND deleted_at IS NULL",
                 [password_hash, user_id],
             )
 
@@ -336,7 +464,8 @@ class KbDB:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT 1 FROM kb_users "
-                "WHERE site_role='admin' AND password_hash IS NOT NULL LIMIT 1"
+                "WHERE site_role='admin' AND password_hash IS NOT NULL "
+                "AND status='active' AND deleted_at IS NULL LIMIT 1"
             )
             return (await cur.fetchone()) is not None
 
@@ -345,9 +474,210 @@ class KbDB:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT COUNT(*) AS n FROM kb_users "
-                "WHERE site_role='admin' AND status='active'"
+                "WHERE site_role='admin' AND status='active' AND deleted_at IS NULL"
             )
             return int((await cur.fetchone())["n"])
+
+    async def list_owned_kbs_for_user(self, *, user_id: str) -> list[dict[str, Any]]:
+        """All retained KB rows owned by one user, including deleting/deleted rows."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT id, domain, name, status FROM knowledge_bases
+                   WHERE owner_id = %s ORDER BY domain, name LIMIT 50""",
+                (user_id,),
+            )
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def get_user_deletion_counts(self, *, user_id: str) -> dict[str, int]:
+        """Return the permission edges that account cleanup will remove or hide."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """SELECT
+                     (SELECT count(*) FROM user_domains WHERE user_id = %(uid)s)
+                         AS domain_count,
+                     (SELECT count(*) FROM kb_members WHERE user_id = %(uid)s)
+                         AS kb_member_count,
+                     (SELECT count(*) FROM mcp_keys
+                       WHERE user_id = %(uid)s AND deleted_at IS NULL)
+                         AS mcp_key_count""",
+                {"uid": user_id},
+            )
+            row = await cur.fetchone()
+            return {
+                "domain_count": int(row["domain_count"]),
+                "kb_member_count": int(row["kb_member_count"]),
+                "mcp_key_count": int(row["mcp_key_count"]),
+            }
+
+    async def delete_user_account(
+        self, *, user_id: str, deleted_by_user_id: str,
+    ) -> dict[str, Any]:
+        """Atomically clear one identity after locking and rechecking hard invariants."""
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await self._lock_admin_lifecycle_on_conn(conn)
+                cur = await conn.execute(
+                    """SELECT id, username, site_role, status, deleted_at
+                       FROM kb_users WHERE id = %s FOR UPDATE""",
+                    (user_id,),
+                )
+                target = await cur.fetchone()
+                if target is None or target.get("deleted_at") is not None:
+                    raise UserDeletionConflict("user_not_found")
+                cur = await conn.execute(
+                    """SELECT id, domain, name, status FROM knowledge_bases
+                       WHERE owner_id = %s ORDER BY domain, name LIMIT 50""",
+                    (user_id,),
+                )
+                owned = [dict(row) for row in await cur.fetchall()]
+                if owned:
+                    raise UserDeletionConflict(
+                        "user_owns_knowledge_bases", knowledge_bases=owned,
+                    )
+                if target["site_role"] == "admin" and target["status"] == "active":
+                    cur = await conn.execute(
+                        """SELECT id FROM kb_users
+                           WHERE site_role = 'admin' AND status = 'active'
+                             AND deleted_at IS NULL FOR UPDATE"""
+                    )
+                    if len(await cur.fetchall()) <= 1:
+                        raise UserDeletionConflict("last_active_admin")
+                await conn.execute("DELETE FROM kb_members WHERE user_id = %s", (user_id,))
+                await conn.execute("DELETE FROM user_domains WHERE user_id = %s", (user_id,))
+                await conn.execute(
+                    """UPDATE mcp_keys
+                       SET status = 'revoked', deleted_at = COALESCE(deleted_at, now())
+                       WHERE user_id = %s""",
+                    (user_id,),
+                )
+                cur = await conn.execute(
+                    """UPDATE kb_users
+                       SET status = 'disabled', site_role = 'member', password_hash = NULL,
+                           deleted_at = now(), deleted_by_user_id = %s
+                       WHERE id = %s
+                       RETURNING id, username, display_name, status, site_role, created_at,
+                                 deleted_at, deleted_by_user_id""",
+                    (deleted_by_user_id, user_id),
+                )
+                return dict(await cur.fetchone())
+
+    async def restore_user_account(self, *, user_id: str) -> dict[str, Any]:
+        """Restore the same identity as disabled and permission-empty."""
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await self._lock_admin_lifecycle_on_conn(conn)
+                cur = await conn.execute(
+                    """SELECT id FROM kb_users
+                       WHERE id = %s AND deleted_at IS NOT NULL FOR UPDATE""",
+                    (user_id,),
+                )
+                if await cur.fetchone() is None:
+                    raise UserDeletionConflict("user_not_found")
+                await conn.execute("DELETE FROM kb_members WHERE user_id = %s", (user_id,))
+                await conn.execute("DELETE FROM user_domains WHERE user_id = %s", (user_id,))
+                await conn.execute(
+                    """UPDATE mcp_keys
+                       SET status = 'revoked', deleted_at = COALESCE(deleted_at, now())
+                       WHERE user_id = %s""",
+                    (user_id,),
+                )
+                cur = await conn.execute(
+                    """UPDATE kb_users
+                       SET status = 'disabled', site_role = 'member', password_hash = NULL,
+                           deleted_at = NULL, deleted_by_user_id = NULL
+                       WHERE id = %s
+                       RETURNING id, username, display_name, status, site_role, created_at,
+                                 deleted_at, deleted_by_user_id""",
+                    (user_id,),
+                )
+                return dict(await cur.fetchone())
+
+    async def demote_admin_to_member(
+        self, *, user_id: str, fallback_domain: str,
+    ) -> dict[str, Any]:
+        """Atomically preserve hard-domain access while removing the global role."""
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                await self._lock_admin_lifecycle_on_conn(conn)
+                cur = await conn.execute(
+                    """SELECT id, site_role FROM kb_users
+                       WHERE id = %s AND deleted_at IS NULL FOR UPDATE""",
+                    (user_id,),
+                )
+                target = await cur.fetchone()
+                if target is None:
+                    raise UserDeletionConflict("user_not_found")
+                if target["site_role"] == "admin":
+                    cur = await conn.execute(
+                        """SELECT id FROM kb_users
+                           WHERE site_role = 'admin' AND status = 'active'
+                             AND deleted_at IS NULL FOR UPDATE"""
+                    )
+                    if len(await cur.fetchall()) <= 1:
+                        raise UserDeletionConflict("last_active_admin")
+                cur = await conn.execute(
+                    """SELECT domain FROM user_domains WHERE user_id = %s
+                       UNION
+                       SELECT domain FROM knowledge_bases WHERE owner_id = %s
+                       ORDER BY domain""",
+                    (user_id, user_id),
+                )
+                domains = [str(row["domain"]) for row in await cur.fetchall()]
+                if not domains:
+                    domains = [fallback_domain]
+                for domain in domains:
+                    await conn.execute(
+                        """INSERT INTO user_domains (user_id, domain, domain_role)
+                           VALUES (%s, %s, 'member')
+                           ON CONFLICT (user_id, domain) DO NOTHING""",
+                        (user_id, domain),
+                    )
+                cur = await conn.execute(
+                    """UPDATE kb_users SET site_role = 'member'
+                       WHERE id = %s
+                       RETURNING id, username, display_name, status, site_role, created_at,
+                                 deleted_at, deleted_by_user_id""",
+                    (user_id,),
+                )
+                return dict(await cur.fetchone())
+
+    async def apply_user_import(
+        self, *, new_users: list[dict[str, Any]], bindings: list[dict[str, str]],
+    ) -> None:
+        """Apply one validated user-import plan atomically."""
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                for user in new_users:
+                    user_id = _new_id()
+                    await conn.execute(
+                        """INSERT INTO kb_users
+                           (id, username, display_name, status, created_at, site_role)
+                           VALUES (%s, %s, %s, 'active', %s, 'member')""",
+                        (user_id, user["username"], user.get("display_name"), _utcnow()),
+                    )
+                    for domain in user["domains"]:
+                        await conn.execute(
+                            """INSERT INTO user_domains (user_id, domain, domain_role)
+                               VALUES (%s, %s, 'member')""",
+                            (user_id, domain),
+                        )
+                for binding in bindings:
+                    cur = await conn.execute(
+                        """SELECT id FROM kb_users
+                           WHERE id = %s AND status = 'active'
+                             AND deleted_at IS NULL AND site_role = 'member'
+                           FOR SHARE""",
+                        (binding["user_id"],),
+                    )
+                    if await cur.fetchone() is None:
+                        raise UserDeletionConflict("import_user_not_active")
+                    await conn.execute(
+                        """INSERT INTO user_domains (user_id, domain, domain_role)
+                           VALUES (%s, %s, 'member')
+                           ON CONFLICT (user_id, domain) DO UPDATE
+                           SET domain_role = user_domains.domain_role""",
+                        (binding["user_id"], binding["domain"]),
+                    )
 
     # ------------------------------------- 51号批次1：用户↔域绑定
 
@@ -407,10 +737,49 @@ class KbDB:
             )
             return [dict(row) for row in await cur.fetchall()]
 
+    async def list_domain_user_candidates(
+        self, *, domain: str, q: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        """Minimal active ordinary-user directory for one domain manager."""
+        cleaned = (q or "").strip()
+        params: dict[str, Any] = {"domain": domain, "limit": limit}
+        search = ""
+        if cleaned:
+            params["pattern"] = f"%{_escape_ilike_literal(cleaned)}%"
+            search = (
+                " AND (u.username ILIKE %(pattern)s ESCAPE '\\'"
+                " OR COALESCE(u.display_name, '') ILIKE %(pattern)s ESCAPE '\\')"
+            )
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""SELECT u.id, u.username, u.display_name,
+                           EXISTS (SELECT 1 FROM user_domains ud
+                                   WHERE ud.user_id = u.id
+                                     AND ud.domain = %(domain)s) AS already_in_domain
+                    FROM kb_users u
+                    WHERE u.status = 'active' AND u.deleted_at IS NULL
+                      AND u.site_role = 'member'{search}
+                    ORDER BY u.username
+                    LIMIT %(limit)s""",
+                params,
+            )
+            return [dict(row) for row in await cur.fetchall()]
+
     async def set_domain_grants(
         self, *, user_id: str, grants: list[dict[str, str]],
     ) -> list[dict[str, str]]:
-        """Replace grants atomically while preserving removal safety invariants."""
+        return await self.set_domain_grants_with_password(
+            user_id=user_id, grants=grants, password_hash=None,
+        )
+
+    async def set_domain_grants_with_password(
+        self,
+        *,
+        user_id: str,
+        grants: list[dict[str, str]],
+        password_hash: str | None,
+    ) -> list[dict[str, str]]:
+        """Replace grants and optionally establish the first password in one transaction."""
         normalized = {
             str(grant["domain"]).strip(): str(grant.get("domain_role", "member")).strip()
             for grant in grants
@@ -420,13 +789,30 @@ class KbDB:
             raise ValueError("invalid_domain_role")
         async with self._pool.connection() as conn:
             async with conn.transaction():
+                user_cur = await conn.execute(
+                    """SELECT id, password_hash FROM kb_users
+                       WHERE id = %s AND deleted_at IS NULL FOR UPDATE""",
+                    (user_id,),
+                )
+                user_row = await user_cur.fetchone()
+                if user_row is None:
+                    raise UserDeletionConflict("user_not_found")
+                needs_admin_password = any(role == "admin" for role in normalized.values())
+                if needs_admin_password and not user_row.get("password_hash"):
+                    if password_hash is None:
+                        raise UserDeletionConflict("domain_admin_requires_password")
+                    await conn.execute(
+                        """UPDATE kb_users SET password_hash = %s
+                           WHERE id = %s""",
+                        (password_hash, user_id),
+                    )
+                elif password_hash is not None:
+                    raise UserDeletionConflict("password_changed_concurrently")
                 cur = await conn.execute(
                     "SELECT domain FROM user_domains WHERE user_id = %s FOR UPDATE",
                     (user_id,),
                 )
                 existing = {row["domain"] for row in await cur.fetchall()}
-                for domain in sorted(existing - set(normalized)):
-                    await self._unbind_domain_on_conn(conn, user_id=user_id, domain=domain)
                 for domain, role in sorted(normalized.items()):
                     await conn.execute(
                         """INSERT INTO user_domains (user_id, domain, domain_role)
@@ -435,6 +821,8 @@ class KbDB:
                            SET domain_role = EXCLUDED.domain_role""",
                         (user_id, domain, role),
                     )
+                for domain in sorted(existing - set(normalized)):
+                    await self._unbind_domain_on_conn(conn, user_id=user_id, domain=domain)
         return await self.list_domain_grants(user_id=user_id)
 
     async def set_user_domains(self, *, user_id: str, domains: list[str]) -> list[str]:
@@ -442,19 +830,26 @@ class KbDB:
         cleaned = sorted({d.strip() for d in domains if d and d.strip()})
         async with self._pool.connection() as conn:
             async with conn.transaction():
+                user_cur = await conn.execute(
+                    """SELECT id FROM kb_users
+                       WHERE id = %s AND deleted_at IS NULL FOR UPDATE""",
+                    (user_id,),
+                )
+                if await user_cur.fetchone() is None:
+                    raise UserDeletionConflict("user_not_found")
                 cur = await conn.execute(
                     "SELECT domain FROM user_domains WHERE user_id = %s FOR UPDATE",
                     (user_id,),
                 )
                 existing = {row["domain"] for row in await cur.fetchall()}
-                for domain in sorted(existing - set(cleaned)):
-                    await self._unbind_domain_on_conn(conn, user_id=user_id, domain=domain)
                 for d in cleaned:
                     await conn.execute(
                         """INSERT INTO user_domains (user_id, domain)
                            VALUES (%s, %s) ON CONFLICT DO NOTHING""",
                         (user_id, d),
                     )
+                for domain in sorted(existing - set(cleaned)):
+                    await self._unbind_domain_on_conn(conn, user_id=user_id, domain=domain)
         return cleaned
 
     async def bind_domain(
@@ -464,11 +859,14 @@ class KbDB:
         if domain_role not in {"member", "admin"}:
             raise ValueError("invalid_domain_role")
         async with self._pool.connection() as conn:
-            await conn.execute(
-                """INSERT INTO user_domains (user_id, domain, domain_role)
-                   VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
-                (user_id, domain, domain_role),
-            )
+            async with conn.transaction():
+                if not await self._lock_active_user_on_conn(conn, user_id=user_id):
+                    raise UserDeletionConflict("user_not_active")
+                await conn.execute(
+                    """INSERT INTO user_domains (user_id, domain, domain_role)
+                       VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
+                    (user_id, domain, domain_role),
+                )
 
     async def _unbind_domain_on_conn(self, conn: Any, *, user_id: str, domain: str) -> None:
         cur = await conn.execute(
@@ -478,6 +876,24 @@ class KbDB:
         )
         if await cur.fetchone() is not None:
             raise DomainMembershipConflict("domain_has_owned_kbs")
+        cur = await conn.execute(
+            "SELECT domain FROM user_domains WHERE user_id = %s FOR UPDATE",
+            (user_id,),
+        )
+        bindings = {str(row["domain"]) for row in await cur.fetchall()}
+        cur = await conn.execute(
+            """SELECT status, site_role, deleted_at FROM kb_users WHERE id = %s""",
+            (user_id,),
+        )
+        user = await cur.fetchone()
+        protects_last_domain = bool(
+            user
+            and user["status"] == "active"
+            and user["site_role"] == "member"
+            and user.get("deleted_at") is None
+        )
+        if protects_last_domain and domain in bindings and len(bindings) <= 1:
+            raise DomainMembershipConflict("domain_grants_must_not_be_empty")
         # Domain membership is the outer boundary. Remove stale per-KB edges and
         # revoke active single-domain MCP keys in the same transaction.
         await conn.execute(
@@ -498,17 +914,25 @@ class KbDB:
     async def unbind_domain(self, *, user_id: str, domain: str) -> None:
         async with self._pool.connection() as conn:
             async with conn.transaction():
+                cur = await conn.execute(
+                    """SELECT id FROM kb_users
+                       WHERE id = %s AND deleted_at IS NULL FOR UPDATE""",
+                    (user_id,),
+                )
+                if await cur.fetchone() is None:
+                    raise UserDeletionConflict("user_not_found")
                 await self._unbind_domain_on_conn(conn, user_id=user_id, domain=domain)
 
     async def can_create_in_domain(self, *, user_id: str, domain: str) -> bool:
-        """建库资格：site admin 全通；普通用户须绑定该域（51号批次1收敛）。"""
+        """建库资格：active site admin 全通；active 普通用户须绑定该域。"""
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """SELECT (EXISTS (SELECT 1 FROM kb_users u
-                           WHERE u.id = %s AND u.site_role = 'admin')
-                       OR EXISTS (SELECT 1 FROM user_domains ud
-                           WHERE ud.user_id = %s AND ud.domain = %s)) AS ok""",
-                (user_id, user_id, domain),
+                """SELECT EXISTS (SELECT 1 FROM kb_users u
+                           WHERE u.id = %s AND u.status = 'active'
+                             AND (u.site_role = 'admin'
+                                  OR EXISTS (SELECT 1 FROM user_domains ud
+                                      WHERE ud.user_id = u.id AND ud.domain = %s))) AS ok""",
+                (user_id, domain),
             )
             return bool((await cur.fetchone())["ok"])
 
@@ -534,8 +958,13 @@ class KbDB:
         metadata: dict | None = None,
     ) -> dict[str, Any]:
         async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """INSERT INTO knowledge_bases
+            async with conn.transaction():
+                if not await self._lock_user_domain_access_on_conn(
+                    conn, user_id=owner_id, domain=domain,
+                ):
+                    raise UserDeletionConflict("user_not_active")
+                cur = await conn.execute(
+                    """INSERT INTO knowledge_bases
                      (id, domain, name, description, owner_id, visibility, status,
                       metadata_json, created_at, updated_at, mining_workflow_id)
                    VALUES
@@ -552,8 +981,114 @@ class KbDB:
                     ),
                 },
             )
-            row = await cur.fetchone()
-            return dict(row)  # type: ignore[arg-type]
+                row = await cur.fetchone()
+                return dict(row)  # type: ignore[arg-type]
+
+    async def transfer_kb_owner(
+        self, *, kb_id: str, actor_id: str, new_owner_id: str, keep_old_as_editor: bool,
+    ) -> dict[str, Any] | None:
+        """Transfer one active KB to an active same-domain user in one transaction."""
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                cur = await conn.execute(
+                    """SELECT id, domain, owner_id FROM knowledge_bases
+                       WHERE id = %s AND status = 'active' FOR UPDATE""",
+                    (kb_id,),
+                )
+                kb = await cur.fetchone()
+                if kb is None:
+                    raise UserDeletionConflict("kb_not_found")
+                lock_ids = {str(actor_id), str(new_owner_id)}
+                if keep_old_as_editor:
+                    lock_ids.add(str(kb["owner_id"]))
+                locked_users: dict[str, dict[str, Any]] = {}
+                for locked_user_id in sorted(lock_ids):
+                    cur = await conn.execute(
+                        """SELECT id, status, site_role, deleted_at FROM kb_users
+                           WHERE id = %s FOR SHARE""",
+                        (locked_user_id,),
+                    )
+                    row = await cur.fetchone()
+                    if row is not None:
+                        locked_users[locked_user_id] = dict(row)
+                actor = locked_users.get(str(actor_id))
+                if (
+                    actor is None or actor["status"] != "active"
+                    or actor.get("deleted_at") is not None
+                ):
+                    raise UserDeletionConflict("owner_transfer_actor_forbidden")
+                target = locked_users.get(str(new_owner_id))
+                if target is None:
+                    raise UserDeletionConflict("owner_target_not_found")
+                if target["status"] != "active" or target.get("deleted_at") is not None:
+                    raise UserDeletionConflict("owner_target_inactive")
+                old_owner = locked_users.get(str(kb["owner_id"]))
+                if keep_old_as_editor and (
+                    old_owner is None or old_owner["status"] != "active"
+                    or old_owner.get("deleted_at") is not None
+                ):
+                    raise UserDeletionConflict("owner_previous_inactive")
+                cur = await conn.execute(
+                    """SELECT 1 FROM kb_users actor
+                       WHERE actor.id = %(actor)s AND actor.status = 'active'
+                         AND actor.deleted_at IS NULL
+                         AND (actor.site_role = 'admin'
+                              OR actor.id = %(owner)s
+                              OR EXISTS (SELECT 1 FROM user_domains ud
+                                         WHERE ud.user_id = actor.id
+                                           AND ud.domain = %(domain)s
+                                           AND ud.domain_role = 'admin'))
+                       FOR SHARE""",
+                    {
+                        "actor": actor_id,
+                        "owner": kb["owner_id"],
+                        "domain": kb["domain"],
+                    },
+                )
+                if await cur.fetchone() is None:
+                    raise UserDeletionConflict("owner_transfer_actor_forbidden")
+                cur = await conn.execute(
+                    """SELECT 1 FROM kb_users u
+                       WHERE u.id = %(uid)s AND u.status = 'active'
+                         AND u.deleted_at IS NULL
+                         AND (u.site_role = 'admin' OR EXISTS (
+                             SELECT 1 FROM user_domains ud
+                             WHERE ud.user_id = u.id AND ud.domain = %(domain)s
+                         ))""",
+                    {"uid": new_owner_id, "domain": kb["domain"]},
+                )
+                if await cur.fetchone() is None:
+                    raise UserDeletionConflict("owner_target_not_domain_bound")
+                old_owner_id = str(kb["owner_id"])
+                await conn.execute(
+                    "UPDATE knowledge_bases SET owner_id = %s, updated_at = %s WHERE id = %s",
+                    (new_owner_id, _utcnow(), kb_id),
+                )
+                await conn.execute(
+                    "DELETE FROM kb_members WHERE kb_id = %s AND user_id = %s",
+                    (kb_id, new_owner_id),
+                )
+                if old_owner_id != new_owner_id:
+                    if keep_old_as_editor:
+                        await conn.execute(
+                            """INSERT INTO kb_members (kb_id, user_id, role, added_at)
+                               VALUES (%s, %s, 'editor', %s)
+                               ON CONFLICT (kb_id, user_id) DO UPDATE SET role = 'editor'""",
+                            (kb_id, old_owner_id, _utcnow()),
+                        )
+                    else:
+                        await conn.execute(
+                            "DELETE FROM kb_members WHERE kb_id = %s AND user_id = %s",
+                            (kb_id, old_owner_id),
+                        )
+                cur = await conn.execute(
+                    """SELECT id, domain, name, description, owner_id, visibility, status,
+                              deleted_at, created_at, updated_at, mining_workflow_id,
+                              default_paradigm_id
+                       FROM knowledge_bases WHERE id = %s""",
+                    (kb_id,),
+                )
+                return dict(await cur.fetchone())
 
     async def get_kb_quality(self, kb_id: str) -> dict[str, Any]:
         """A4 质量报告（34 号 P1-1；39 号 §4.1）：结构与表格完整度 + 定位覆盖.
@@ -755,10 +1290,13 @@ class KbDB:
                 """SELECT u.site_role,
                           (SELECT ud.domain_role FROM user_domains ud
                            WHERE ud.user_id = u.id AND ud.domain = %(dom)s) AS domain_role
-                   FROM kb_users u WHERE u.id = %(uid)s""",
+                   FROM kb_users u WHERE u.id = %(uid)s
+                     AND u.status = 'active' AND u.deleted_at IS NULL""",
                 {"uid": user_id, "dom": domain},
             )
             urow = await cur.fetchone()
+            if urow is None:
+                return []
             if urow and (
                 urow.get("site_role") == "admin" or urow.get("domain_role") == "admin"
             ):
@@ -822,8 +1360,13 @@ class KbDB:
             cur = await conn.execute(
                 """SELECT kb.id FROM knowledge_bases kb
                    WHERE kb.domain = %(dom)s AND kb.status = 'active'
-                     AND (EXISTS (SELECT 1 FROM kb_users u
-                                  WHERE u.id = %(uid)s AND u.site_role = 'admin')
+                      AND EXISTS (SELECT 1 FROM kb_users active_user
+                                  WHERE active_user.id = %(uid)s
+                                    AND active_user.status = 'active'
+                                    AND active_user.deleted_at IS NULL)
+                      AND (EXISTS (SELECT 1 FROM kb_users u
+                                   WHERE u.id = %(uid)s AND u.site_role = 'admin'
+                                     AND u.status = 'active' AND u.deleted_at IS NULL)
                           OR (EXISTS (SELECT 1 FROM user_domains access_domain
                                       WHERE access_domain.user_id = %(uid)s
                                         AND access_domain.domain = kb.domain)
@@ -1156,14 +1699,19 @@ WITH latest AS (
     async def create_mcp_key(self, *, user_id: str, name: str, domain: str,
                              key_hash: str, key_prefix: str, key_id: str) -> dict[str, Any]:
         async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """INSERT INTO mcp_keys (id, user_id, name, domain, key_hash, key_prefix)
-                   VALUES (%(id)s, %(u)s, %(n)s, %(d)s, %(h)s, %(p)s)
-                   RETURNING id, user_id, name, domain, key_prefix, status, created_at""",
-                {"id": key_id, "u": user_id, "n": name, "d": domain,
-                 "h": key_hash, "p": key_prefix},
-            )
-            return dict(await cur.fetchone())  # type: ignore[arg-type]
+            async with conn.transaction():
+                if not await self._lock_user_domain_access_on_conn(
+                    conn, user_id=user_id, domain=domain,
+                ):
+                    raise UserDeletionConflict("user_not_active")
+                cur = await conn.execute(
+                    """INSERT INTO mcp_keys (id, user_id, name, domain, key_hash, key_prefix)
+                       VALUES (%(id)s, %(u)s, %(n)s, %(d)s, %(h)s, %(p)s)
+                       RETURNING id, user_id, name, domain, key_prefix, status, created_at""",
+                    {"id": key_id, "u": user_id, "n": name, "d": domain,
+                     "h": key_hash, "p": key_prefix},
+                )
+                return dict(await cur.fetchone())  # type: ignore[arg-type]
 
     async def list_mcp_keys(self, *, user_id: str) -> list[dict[str, Any]]:
         """本人全部钥匙（无 key_hash），每把附 open_kb_ids 聚合（active ∩ 同域）。"""
@@ -1180,7 +1728,7 @@ WITH latest AS (
                                AND k.domain = m.domain),
                             '[]'::jsonb) AS open_kb_ids
                    FROM mcp_keys m
-                   WHERE m.user_id = %s
+                   WHERE m.user_id = %s AND m.deleted_at IS NULL
                    ORDER BY m.created_at""",
                 (user_id,),
             )
@@ -1193,7 +1741,7 @@ WITH latest AS (
                 """SELECT id, user_id, name, domain, key_prefix, status,
                           open_tools, instructions, tool_descriptions,
                           created_at, rotated_at, last_used_at
-                   FROM mcp_keys WHERE id = %s""",
+                   FROM mcp_keys WHERE id = %s AND deleted_at IS NULL""",
                 (key_id,),
             )
             row = await cur.fetchone()
@@ -1205,22 +1753,30 @@ WITH latest AS (
         """验钥热路径（复刻旧 verify_mcp_key 的 60s 节流 UPDATE...RETURNING 模式）。
 
         last_used_at 节流更新（距上次 ≥throttle 才写）；节流窗口内走只读 SELECT。
-        active-only：miss / revoked → None。"""
+        key 与所属账号均 active：miss / revoked / disabled account → None。"""
         async with self._pool.connection() as conn:
             cur = await conn.execute(
-                """UPDATE mcp_keys
+                """UPDATE mcp_keys m
                    SET last_used_at = now()
-                   WHERE key_hash = %(h)s AND status = 'active'
-                     AND (last_used_at IS NULL
-                          OR last_used_at <= now() - %(throttle)s * interval '1 second')
-                   RETURNING id""",
+                   FROM kb_users u
+                   WHERE m.key_hash = %(h)s AND m.status = 'active'
+                     AND m.deleted_at IS NULL
+                     AND u.id = m.user_id AND u.status = 'active'
+                     AND u.deleted_at IS NULL
+                     AND (m.last_used_at IS NULL
+                          OR m.last_used_at <= now() - %(throttle)s * interval '1 second')
+                   RETURNING m.id""",
                 {"h": key_hash, "throttle": last_used_throttle_s},
             )
             hit = await cur.fetchone()
             if hit is None:
                 # 节流窗口内或无需更新：只读校验
                 cur = await conn.execute(
-                    "SELECT id FROM mcp_keys WHERE key_hash = %s AND status = 'active'",
+                    """SELECT m.id FROM mcp_keys m
+                       JOIN kb_users u ON u.id = m.user_id
+                       WHERE m.key_hash = %s AND m.status = 'active'
+                         AND m.deleted_at IS NULL
+                         AND u.status = 'active' AND u.deleted_at IS NULL""",
                     (key_hash,),
                 )
                 row = await cur.fetchone()
@@ -1233,7 +1789,9 @@ WITH latest AS (
                 """SELECT m.id AS key_id, m.user_id, u.username, m.name, m.domain,
                           m.open_tools, m.instructions, m.tool_descriptions
                    FROM mcp_keys m JOIN kb_users u ON u.id = m.user_id
-                   WHERE m.id = %s AND m.status = 'active'""",
+                   WHERE m.id = %s AND m.status = 'active'
+                     AND m.deleted_at IS NULL
+                     AND u.status = 'active' AND u.deleted_at IS NULL""",
                 (key_id,),
             )
             mrow = await cur.fetchone()
@@ -1286,11 +1844,22 @@ WITH latest AS (
             )
             return await cur.fetchone() is not None
 
+    async def delete_mcp_key(self, *, key_id: str) -> bool:
+        """Soft-hide one revoked key while retaining its audit row."""
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """UPDATE mcp_keys SET deleted_at = now()
+                   WHERE id = %s AND status = 'revoked' AND deleted_at IS NULL
+                   RETURNING id""",
+                (key_id,),
+            )
+            return await cur.fetchone() is not None
+
     async def count_active_mcp_keys(self, *, user_id: str) -> int:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT count(*) AS n FROM mcp_keys
-                   WHERE user_id = %s AND status = 'active'""",
+                   WHERE user_id = %s AND status = 'active' AND deleted_at IS NULL""",
                 (user_id,),
             )
             return int((await cur.fetchone())["n"])
@@ -1488,15 +2057,25 @@ WITH latest AS (
 
     async def add_member(self, *, kb_id: str, user_id: str, role: str = "viewer") -> dict[str, Any]:
         async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                """INSERT INTO kb_members (kb_id, user_id, role, added_at)
-                   VALUES (%(kb)s, %(u)s, %(r)s, %(t)s)
-                   ON CONFLICT (kb_id, user_id) DO UPDATE SET role = EXCLUDED.role
-                   RETURNING kb_id, user_id, role, added_at""",
-                {"kb": kb_id, "u": user_id, "r": role, "t": _utcnow()},
-            )
-            row = await cur.fetchone()
-            return dict(row)  # type: ignore[arg-type]
+            async with conn.transaction():
+                cur = await conn.execute(
+                    "SELECT domain FROM knowledge_bases WHERE id = %s AND status = 'active'",
+                    (kb_id,),
+                )
+                kb = await cur.fetchone()
+                if kb is None or not await self._lock_user_domain_access_on_conn(
+                    conn, user_id=user_id, domain=str(kb["domain"]),
+                ):
+                    raise UserDeletionConflict("user_not_active")
+                cur = await conn.execute(
+                    """INSERT INTO kb_members (kb_id, user_id, role, added_at)
+                       VALUES (%(kb)s, %(u)s, %(r)s, %(t)s)
+                       ON CONFLICT (kb_id, user_id) DO UPDATE SET role = EXCLUDED.role
+                       RETURNING kb_id, user_id, role, added_at""",
+                    {"kb": kb_id, "u": user_id, "r": role, "t": _utcnow()},
+                )
+                row = await cur.fetchone()
+                return dict(row)  # type: ignore[arg-type]
 
     async def list_members(self, kb_id: str) -> list[dict[str, Any]]:
         async with self._pool.connection() as conn:
@@ -1527,8 +2106,8 @@ WITH latest AS (
         params: list[Any] = [kb_id, kb_id, kb_id]
         where_extra = ""
         if q:
-            where_extra = " AND u.username ILIKE %s"
-            params.append(f"{q}%")
+            where_extra = " AND u.username ILIKE %s ESCAPE '\\'"
+            params.append(f"{_escape_ilike_literal(q)}%")
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 f"""SELECT u.id, u.username, u.display_name FROM kb_users u
@@ -1550,6 +2129,37 @@ WITH latest AS (
             )
             return [dict(r) for r in await cur.fetchall()]
 
+    async def list_owner_candidates(
+        self, *, kb_id: str, q: str | None, limit: int,
+    ) -> list[dict[str, Any]]:
+        """Active same-domain identities eligible to own a KB, including current members."""
+        params: dict[str, Any] = {"kb": kb_id, "limit": limit}
+        search = ""
+        cleaned = (q or "").strip()
+        if cleaned:
+            params["pattern"] = f"%{_escape_ilike_literal(cleaned)}%"
+            search = (
+                " AND (u.username ILIKE %(pattern)s ESCAPE '\\'"
+                " OR COALESCE(u.display_name, '') ILIKE %(pattern)s ESCAPE '\\')"
+            )
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                f"""SELECT u.id, u.username, u.display_name
+                    FROM kb_users u
+                    WHERE u.status = 'active' AND u.deleted_at IS NULL
+                      AND u.id <> (SELECT owner_id FROM knowledge_bases WHERE id = %(kb)s)
+                      AND (u.site_role = 'admin' OR EXISTS (
+                          SELECT 1 FROM user_domains ud
+                          WHERE ud.user_id = u.id
+                            AND ud.domain = (
+                                SELECT domain FROM knowledge_bases WHERE id = %(kb)s
+                            )
+                      )){search}
+                    ORDER BY u.username LIMIT %(limit)s""",
+                params,
+            )
+            return [dict(row) for row in await cur.fetchall()]
+
     # ------------------------------------------------------------- visibility
 
     async def is_visible(self, *, kb_id: str, user_id: str) -> bool:
@@ -1558,8 +2168,13 @@ WITH latest AS (
             cur = await conn.execute(
                 """SELECT 1 FROM knowledge_bases kb
                    WHERE kb.id = %s AND kb.status = 'active'
-                     AND (EXISTS (SELECT 1 FROM kb_users u
-                                  WHERE u.id = %s AND u.site_role = 'admin')
+                      AND EXISTS (SELECT 1 FROM kb_users active_user
+                                  WHERE active_user.id = %s
+                                    AND active_user.status = 'active'
+                                    AND active_user.deleted_at IS NULL)
+                      AND (EXISTS (SELECT 1 FROM kb_users u
+                                   WHERE u.id = %s AND u.site_role = 'admin'
+                                     AND u.status = 'active' AND u.deleted_at IS NULL)
                           OR (EXISTS (SELECT 1 FROM user_domains access_domain
                                       WHERE access_domain.user_id = %s
                                         AND access_domain.domain = kb.domain)
@@ -1571,7 +2186,7 @@ WITH latest AS (
                                    OR kb.visibility = 'public'
                                    OR EXISTS (SELECT 1 FROM kb_members m
                                               WHERE m.kb_id = kb.id AND m.user_id = %s))))""",
-                [kb_id, user_id, user_id, user_id, user_id, user_id],
+                [kb_id, user_id, user_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 
@@ -1581,8 +2196,13 @@ WITH latest AS (
             cur = await conn.execute(
                 """SELECT 1 FROM knowledge_bases kb
                    WHERE kb.id = %s AND kb.status = 'active'
-                     AND (EXISTS (SELECT 1 FROM kb_users u
-                                  WHERE u.id = %s AND u.site_role = 'admin')
+                      AND EXISTS (SELECT 1 FROM kb_users active_user
+                                  WHERE active_user.id = %s
+                                    AND active_user.status = 'active'
+                                    AND active_user.deleted_at IS NULL)
+                      AND (EXISTS (SELECT 1 FROM kb_users u
+                                   WHERE u.id = %s AND u.site_role = 'admin'
+                                     AND u.status = 'active' AND u.deleted_at IS NULL)
                           OR (EXISTS (SELECT 1 FROM user_domains access_domain
                                       WHERE access_domain.user_id = %s
                                         AND access_domain.domain = kb.domain)
@@ -1595,7 +2215,7 @@ WITH latest AS (
                                               WHERE m.kb_id = kb.id AND m.user_id = %s
                                                 AND m.role = 'editor'))))
                    """,
-                [kb_id, user_id, user_id, user_id, user_id, user_id],
+                [kb_id, user_id, user_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 
@@ -1605,8 +2225,13 @@ WITH latest AS (
             cur = await conn.execute(
                 """SELECT 1 FROM knowledge_bases kb
                    WHERE kb.id = %s
-                     AND (EXISTS (SELECT 1 FROM kb_users u
-                                  WHERE u.id = %s AND u.site_role = 'admin')
+                      AND EXISTS (SELECT 1 FROM kb_users active_user
+                                  WHERE active_user.id = %s
+                                    AND active_user.status = 'active'
+                                    AND active_user.deleted_at IS NULL)
+                      AND (EXISTS (SELECT 1 FROM kb_users u
+                                   WHERE u.id = %s AND u.site_role = 'admin'
+                                     AND u.status = 'active' AND u.deleted_at IS NULL)
                           OR (EXISTS (SELECT 1 FROM user_domains access_domain
                                       WHERE access_domain.user_id = %s
                                         AND access_domain.domain = kb.domain)
@@ -1615,7 +2240,7 @@ WITH latest AS (
                                              AND ud.domain = kb.domain
                                              AND ud.domain_role = 'admin')
                                    OR kb.owner_id = %s)))""",
-                [kb_id, user_id, user_id, user_id, user_id],
+                [kb_id, user_id, user_id, user_id, user_id, user_id],
             )
             return (await cur.fetchone()) is not None
 

@@ -424,6 +424,9 @@ const pageSize = 30
 const templates = ref<Record<string, unknown>[]>([])
 const templateDrawerVisible = ref(false)
 const selectedTemplate = ref<Record<string, any> | null>(null)
+let statsGeneration = 0
+let tasksGeneration = 0
+let templatesGeneration = 0
 
 function showTemplateDetail(row: Record<string, any>) {
   selectedTemplate.value = row
@@ -520,16 +523,37 @@ function formatTime(t?: string | null) {
 }
 
 async function loadStats(silent = false) {
+  const generation = ++statsGeneration
+  const domain = domainStore.currentDomain
+  if (!domain) {
+    stats.value = null
+    loading.value = false
+    return
+  }
   if (!silent) loading.value = true
-  try { stats.value = await llmApi.getStats({ domain: domainStore.currentDomain }) } catch { stats.value = null }
-  finally { if (!silent) loading.value = false }
+  try {
+    const result = await llmApi.getStats({ domain })
+    if (generation === statsGeneration && domain === domainStore.currentDomain) stats.value = result
+  } catch {
+    if (generation === statsGeneration && domain === domainStore.currentDomain) stats.value = null
+  } finally {
+    if (!silent && generation === statsGeneration) loading.value = false
+  }
 }
 
 async function loadTasks(silent = false) {
+  const generation = ++tasksGeneration
+  const domain = domainStore.currentDomain
+  if (!domain) {
+    tasks.value = []
+    taskTotal.value = 0
+    loadingTasks.value = false
+    return
+  }
   if (!silent) loadingTasks.value = true
   try {
     const params: Record<string, unknown> = {
-      domain: domainStore.currentDomain,
+      domain,
       page: currentPage.value,
       page_size: pageSize,
     }
@@ -537,23 +561,44 @@ async function loadTasks(silent = false) {
     if (filterType.value) params.task_type = filterType.value
     if (filterStage.value) params.stage = filterStage.value
     const res = await llmApi.getTasks(params)
+    if (generation !== tasksGeneration || domain !== domainStore.currentDomain) return
     tasks.value = res.items
     taskTotal.value = res.total
-  } catch { tasks.value = []; taskTotal.value = 0 }
-  finally { if (!silent) loadingTasks.value = false }
+  } catch {
+    if (generation === tasksGeneration && domain === domainStore.currentDomain) {
+      tasks.value = []
+      taskTotal.value = 0
+    }
+  } finally {
+    if (!silent && generation === tasksGeneration) loadingTasks.value = false
+  }
 }
 
 async function loadTemplates() {
+  const generation = ++templatesGeneration
+  const domain = domainStore.currentDomain
+  if (!domain) {
+    templates.value = []
+    loadingTemplates.value = false
+    return
+  }
   loadingTemplates.value = true
   try {
-    const list = await llmApi.getTemplates({ domain: domainStore.currentDomain })
-    templates.value = Array.isArray(list) ? list : []
-  } catch { templates.value = [] }
-  finally { loadingTemplates.value = false }
+    const list = await llmApi.getTemplates({ domain })
+    if (generation === templatesGeneration && domain === domainStore.currentDomain) {
+      templates.value = Array.isArray(list) ? list : []
+    }
+  } catch {
+    if (generation === templatesGeneration && domain === domainStore.currentDomain) {
+      templates.value = []
+    }
+  } finally {
+    if (generation === templatesGeneration) loadingTemplates.value = false
+  }
 }
 
 async function refreshLiveData() {
-  if (document.visibilityState !== 'visible') return
+  if (!domainStore.currentDomain || document.visibilityState !== 'visible') return
   await Promise.all([loadStats(true), loadTasks(true)])
 }
 
@@ -682,7 +727,10 @@ async function runCleanupDelete() {
   }
 }
 
-const { start: startPolling } = usePolling(refreshLiveData, 5000, { immediate: false })
+const { start: startPolling } = usePolling(refreshLiveData, 5000, {
+  immediate: false,
+  shouldRun: () => Boolean(domainStore.currentDomain),
+})
 
 watch([filterStatus, filterType, filterStage], () => { currentPage.value = 1; loadTasks() })
 watch(currentPage, () => loadTasks())

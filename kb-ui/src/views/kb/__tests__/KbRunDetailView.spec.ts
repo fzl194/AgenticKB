@@ -80,6 +80,7 @@ function ev(stage: string) {
 describe('A0-6 Run 详情阶段展示', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    domainRef.current = 'odn'
     miningStore.currentRun = run()
     miningStore.error = null
     miningStore.progress = { total: 2, completed: 2, failed: 0, skipped: 0, processing: 0, progress_percent: 100 }
@@ -106,6 +107,16 @@ describe('A0-6 Run 详情阶段展示', () => {
     const body = wrapper.text()
     expect(body).not.toContain('实体抽取')
     expect(body).not.toContain('落图')
+  })
+
+  it('退出清空知识域后不再启动 run 详情轮询', async () => {
+    domainRef.current = ''
+
+    await mountView()
+
+    expect(miningStore.fetchProgress).not.toHaveBeenCalled()
+    expect(miningStore.fetchRunDetail).not.toHaveBeenCalled()
+    expect(miningApi.getRunTrace).not.toHaveBeenCalled()
   })
 
   it('重试按钮再次拉取 trace（恢复后阶段可见）', async () => {

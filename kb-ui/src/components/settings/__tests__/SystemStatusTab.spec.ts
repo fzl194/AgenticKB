@@ -228,4 +228,16 @@ describe('系统状态 tab', () => {
 
     expect(wrapper.find('[data-testid="service-restart"]').exists()).toBe(false)
   })
+
+  it('域在退出时被清空后不再发起健康、统计或用量请求', async () => {
+    domainRef.current!.value = ''
+
+    await mountTab()
+
+    expect(miningApi.getHealth).not.toHaveBeenCalled()
+    expect(servingApi.getHealth).not.toHaveBeenCalled()
+    expect(llmApi.getHealth).not.toHaveBeenCalled()
+    expect(miningApi.getStats).not.toHaveBeenCalled()
+    expect(opsApi.getUsage).not.toHaveBeenCalled()
+  })
 })

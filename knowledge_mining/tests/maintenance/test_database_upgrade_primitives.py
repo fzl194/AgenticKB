@@ -10,6 +10,7 @@ from knowledge_mining.mining.maintenance.database_upgrade.contract import (
     FORMAL_TABLES,
     MIGRATION_LEDGER_TABLE,
     PRE51_REQUIRED_TABLES,
+    PREVIOUS_RELEASE_TABLES,
 )
 from knowledge_mining.mining.maintenance.database_upgrade.database import (
     DatabaseUpgradeError,
@@ -19,6 +20,7 @@ from knowledge_mining.mining.maintenance.database_upgrade.__main__ import _defau
 from knowledge_mining.mining.maintenance.database_upgrade.manifest import load_manifest
 from knowledge_mining.mining.maintenance.database_upgrade.validation import (
     SchemaValidationError,
+    compare_retained_table_counts,
     expected_rebase_target_tables,
     validate_schema,
     validate_supported_rebase_source,
@@ -60,6 +62,11 @@ class _ValidationConnection:
                 ("idx_mcp_keys_user", "CREATE INDEX idx_mcp_keys_user ON mcp_keys (user_id)"),
                 ("idx_mcp_keys_hash", "CREATE UNIQUE INDEX idx_mcp_keys_hash ON mcp_keys (key_hash)"),
                 ("idx_mcp_keys_active_name", "CREATE UNIQUE INDEX idx_mcp_keys_active_name ON mcp_keys (user_id, domain, name) WHERE status = 'active'"),
+                ("idx_knowledge_access_domain_time", "CREATE INDEX idx_knowledge_access_domain_time ON knowledge_access_records (domain, occurred_at DESC, id DESC)"),
+                ("idx_knowledge_access_actor_time", "CREATE INDEX idx_knowledge_access_actor_time ON knowledge_access_records (actor_user_id, occurred_at DESC, id DESC)"),
+                ("idx_knowledge_access_source_tool_time", "CREATE INDEX idx_knowledge_access_source_tool_time ON knowledge_access_records (source, tool_name, occurred_at DESC)"),
+                ("idx_knowledge_access_status_time", "CREATE INDEX idx_knowledge_access_status_time ON knowledge_access_records (status, occurred_at DESC)"),
+                ("idx_knowledge_access_kb_ids", "CREATE INDEX idx_knowledge_access_kb_ids ON knowledge_access_records USING GIN (kb_ids)"),
             ])
         raise AssertionError(f"unexpected SQL: {text}")
 
@@ -142,13 +149,37 @@ def test_rebase_source_requires_the_complete_supported_pre51_schema(tmp_path: Pa
         migration=manifest.migrations[0],
     )
 
-    with pytest.raises(SchemaValidationError, match="不属于受支持的 pre-51 基线"):
+    with pytest.raises(SchemaValidationError, match="pre-51"):
         validate_supported_rebase_source(connection)
 
 
 def test_rebase_source_accepts_complete_pre51_schema_without_51_tables(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     tables = sorted(PRE51_REQUIRED_TABLES)
+    connection = _ValidationConnection(
+        tables=tables,
+        extensions=["pg_trgm", "vector"],
+        migration=manifest.migrations[0],
+    )
+
+    assert validate_supported_rebase_source(connection) == tuple(tables)
+
+
+def test_rebase_source_accepts_complete_immediately_previous_schema(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    tables = sorted(PREVIOUS_RELEASE_TABLES)
+    connection = _ValidationConnection(
+        tables=tables,
+        extensions=["pg_trgm", "vector"],
+        migration=manifest.migrations[0],
+    )
+
+    assert validate_supported_rebase_source(connection) == tuple(tables)
+
+
+def test_rebase_source_accepts_current_schema_for_future_offline_rebase(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    tables = sorted(FORMAL_TABLES)
     connection = _ValidationConnection(
         tables=tables,
         extensions=["pg_trgm", "vector"],
@@ -172,7 +203,9 @@ def test_rebase_source_rejects_unknown_historical_table_before_clone(tmp_path: P
 
 
 def test_pre51_contract_is_exactly_formal_tables_without_bridge_tables() -> None:
-    assert PRE51_REQUIRED_TABLES == FORMAL_TABLES - BRIDGE_51_TABLES
+    assert PRE51_REQUIRED_TABLES == PREVIOUS_RELEASE_TABLES - BRIDGE_51_TABLES
+    assert "serving_query_logs" in PRE51_REQUIRED_TABLES
+    assert "knowledge_access_records" not in PRE51_REQUIRED_TABLES
 
 
 def test_pre51_rebase_target_adds_51_tables_without_requiring_them_in_source() -> None:
@@ -202,6 +235,46 @@ def test_content_digest_exempt_tables_are_exactly_migration_mutated_ones() -> No
     assert CONTENT_DIGEST_EXEMPT_TABLES == frozenset({"mining_runs"})
 
 
+def test_future_rebase_preserves_existing_knowledge_access_records(monkeypatch) -> None:
+    """After this cutover, later offline rebases must retain ledger sentinels."""
+
+    class _CountRows:
+        def __init__(self, value):
+            self.value = value
+
+        def fetchone(self):
+            return (self.value,)
+
+    class _Connection:
+        def __init__(self, name):
+            self.name = name
+            self.tables = tuple(FORMAL_TABLES)
+
+        def execute(self, _statement, _params=None):
+            return _CountRows(1)
+
+    source = _Connection("source")
+    target = _Connection("target")
+    monkeypatch.setattr(
+        "knowledge_mining.mining.maintenance.database_upgrade.validation.fetch_public_tables",
+        lambda connection: connection.tables,
+    )
+    monkeypatch.setattr(
+        "knowledge_mining.mining.maintenance.database_upgrade.validation._shared_columns",
+        lambda *_args: ("id",),
+    )
+    monkeypatch.setattr(
+        "knowledge_mining.mining.maintenance.database_upgrade.validation._table_digest",
+        lambda connection, table, _columns: (
+            "retrieval-sentinel" if table == "knowledge_access_records" else "same"
+        ),
+    )
+
+    counts = compare_retained_table_counts(source, target)
+
+    assert counts["knowledge_access_records"] == 1
+
+
 def test_shared_columns_intersect_in_target_order() -> None:
     """源库被删列（subloop_stage 等）不参与指纹：取交集并按目标列序。"""
     from knowledge_mining.mining.maintenance.database_upgrade.validation import (
@@ -225,3 +298,51 @@ def test_shared_columns_intersect_in_target_order() -> None:
     source = _ColsConnection(["id", "status", "subloop_stage", "ontology_version_id"])
     target = _ColsConnection(["id", "status", "build_id"])
     assert _shared_columns(source, target, "mining_runs") == ("id", "status")
+
+
+def test_two_consecutive_future_rebases_preserve_record_and_payload_ledgers(
+    monkeypatch,
+) -> None:
+    """Both ledgers survive source -> vNext -> vNext+1 clone verification."""
+
+    class _CountRows:
+        def fetchone(self):
+            return (1,)
+
+    class _Connection:
+        def __init__(self, name):
+            self.name = name
+            self.tables = tuple(FORMAL_TABLES)
+
+        def execute(self, _statement, _params=None):
+            return _CountRows()
+
+    source = _Connection("source")
+    middle = _Connection("middle")
+    target = _Connection("target")
+    monkeypatch.setattr(
+        "knowledge_mining.mining.maintenance.database_upgrade.validation.fetch_public_tables",
+        lambda connection: connection.tables,
+    )
+    monkeypatch.setattr(
+        "knowledge_mining.mining.maintenance.database_upgrade.validation._shared_columns",
+        lambda *_args: ("id",),
+    )
+    monkeypatch.setattr(
+        "knowledge_mining.mining.maintenance.database_upgrade.validation._table_digest",
+        lambda _connection, table, _columns: (
+            "ledger-sentinel"
+            if table in {
+                "knowledge_access_records",
+                "knowledge_access_record_payloads",
+            }
+            else "same"
+        ),
+    )
+
+    first = compare_retained_table_counts(source, middle)
+    second = compare_retained_table_counts(middle, target)
+
+    for counts in (first, second):
+        assert counts["knowledge_access_records"] == 1
+        assert counts["knowledge_access_record_payloads"] == 1

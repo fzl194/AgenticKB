@@ -203,11 +203,21 @@ def list_documents(
 # mining 的旧 /api/kb/mcp-tools/get-document 端点已随代码瘦身批次3 删除。
 
 
-def begin_upload(username: str, key_id: str, kb_id: str, filename: str) -> dict:
+def begin_upload(
+    username: str,
+    key_id: str,
+    kb_id: str,
+    filename: str,
+    *,
+    access_record_id: str = "",
+    access_record_total: int = 1,
+) -> dict:
     """直传第一步：签发一次性上传票据（mining 校验权限/文件名后返回）。"""
     return _post("/api/kb/mcp-tools/begin-upload", {
         "username": username, "key_id": key_id, "kb_id": kb_id,
         "filename": filename,
+        "access_record_id": access_record_id,
+        "access_record_total": access_record_total,
     })
 
 

@@ -177,7 +177,7 @@ def test_upload_document_returns_direct_upload_urls(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     monkeypatch.setattr(
         server.backend, "begin_upload",
-        lambda username, key_id, kb_id, filename: {
+        lambda username, key_id, kb_id, filename, **kwargs: {
             "ticket": f"up_{filename}", "max_bytes": 52_428_800,
             "expires_in": 600,
         },
@@ -222,6 +222,20 @@ def test_upload_document_rejects_path_like_filename(monkeypatch) -> None:
         server.upload_document(kb_name="网络手册库", filenames=["a/b.md"])
     with pytest.raises(ToolError, match="不能为空"):
         server.upload_document(kb_name="网络手册库", filenames=[])
+
+
+def test_upload_document_limits_filename_count_and_length(monkeypatch) -> None:
+    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
+    with pytest.raises(ToolError, match="最多"):
+        server.upload_document(
+            kb_name="网络手册库",
+            filenames=[f"{index}.md" for index in range(101)],
+        )
+    with pytest.raises(ToolError, match="过长"):
+        server.upload_document(
+            kb_name="网络手册库",
+            filenames=["x" * 256],
+        )
 
 
 def test_upload_document_rejects_kb_not_open(monkeypatch) -> None:

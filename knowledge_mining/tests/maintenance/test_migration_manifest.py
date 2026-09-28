@@ -209,11 +209,17 @@ def test_repository_manifest_drops_every_retired_table_without_cascade() -> None
     drop_migration = next(
         item for item in manifest.migrations if item.migration_id.endswith("drop_retired_tables")
     )
-    sql = drop_migration.path.read_text(encoding="utf-8")
-
-    assert "CASCADE" not in "\n".join(
-        line for line in sql.splitlines() if not line.lstrip().startswith("--")
+    sql = "\n".join(
+        item.path.read_text(encoding="utf-8")
+        for item in manifest.migrations
+        if item.mode is MigrationMode.OFFLINE_REBASE
     )
+
+    drop_lines = [
+        line for line in sql.splitlines()
+        if line.lstrip().upper().startswith("DROP TABLE")
+    ]
+    assert "CASCADE" not in "\n".join(drop_lines)
     for table in RETIRED_TABLES:
         assert f"DROP TABLE IF EXISTS {table} RESTRICT;" in sql
     for table in LEGACY_COMPAT_TABLES:
@@ -221,3 +227,47 @@ def test_repository_manifest_drops_every_retired_table_without_cascade() -> None
     assert "new_key.user_id = old_key.user_id" in sql
     assert "new_key.id = new_open.key_id" in sql or "new_key.id = grant_row.key_id" in sql
     assert "kb.domain IS DISTINCT FROM new_key.domain" in sql
+
+
+@pytest.mark.parametrize(
+    "sql_text",
+    [
+        "DROP TABLE knowledge_access_records;",
+        "TRUNCATE TABLE knowledge_access_record_payloads;",
+        "DELETE FROM knowledge_access_records;",
+        "DELETE FROM knowledge_access_record_payloads /* still no where */;",
+        "WITH doomed AS (SELECT id FROM scratch WHERE id = 1) DELETE FROM knowledge_access_records USING doomed;",
+        "TRUNCATE TABLE scratch, knowledge_access_record_payloads RESTART IDENTITY;",
+    ],
+)
+def test_online_expand_rejects_destructive_access_ledger_sql(
+    tmp_path: Path, sql_text: str,
+) -> None:
+    sql_file = tmp_path / "unsafe.sql"
+    sql_file.write_text(sql_text, encoding="utf-8")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "schema_version: test-v1\n"
+        "migrations:\n"
+        "  - id: core/unsafe\n"
+        "    path: unsafe.sql\n"
+        "    mode: online_expand\n"
+        f"    checksum: {_sha(sql_file.read_bytes())}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="knowledge_access"):
+        load_manifest(manifest)
+
+
+def test_online_expand_allows_scoped_delete_from_unrelated_table(tmp_path: Path) -> None:
+    sql_file = tmp_path / "safe.sql"
+    sql_file.write_text("DELETE FROM scratch WHERE id = 1;", encoding="utf-8")
+    manifest = _write_single_migration_manifest(
+        tmp_path / "manifest.yaml",
+        sql_file,
+        _sha(sql_file.read_bytes()),
+        "online_expand",
+    )
+
+    assert load_manifest(manifest).migrations[0].mode is MigrationMode.ONLINE_EXPAND

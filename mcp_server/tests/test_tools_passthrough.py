@@ -69,11 +69,15 @@ def test_begin_upload_body_carries_key_id(monkeypatch) -> None:
         return {"ticket": "t", "max_bytes": 1, "expires_in": 600}
 
     monkeypatch.setattr(tools, "_post", fake_post)
-    tools.begin_upload("alice", "key-1", "kb-9", "手册.pdf")
+    tools.begin_upload(
+        "alice", "key-1", "kb-9", "手册.pdf",
+        access_record_id="call-1", access_record_total=2,
+    )
     assert seen["path"] == "/api/kb/mcp-tools/begin-upload"
     assert seen["payload"] == {
         "username": "alice", "key_id": "key-1",
         "kb_id": "kb-9", "filename": "手册.pdf",
+        "access_record_id": "call-1", "access_record_total": 2,
     }
 
 
@@ -85,8 +89,8 @@ def test_server_passes_key_id_to_backend(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
 
     def note(kind, ret=None):
-        def _fn(*args):
-            calls.append((kind,) + args)
+        def _fn(*args, **kwargs):
+            calls.append((kind,) + args + (kwargs,))
             return ret if ret is not None else {}
         return _fn
 

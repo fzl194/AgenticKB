@@ -69,13 +69,15 @@ EXPORT_TABLES = [
     # operator（检索范式）——见 OPTIONAL_TABLES
     "operator_paradigm",
     "operator_paradigm_version",
-    # serving_runtime（检索服务运行态）——见 OPTIONAL_TABLES
-    "serving_query_logs",
+    # 统一 Web/API/MCP 检索与读取记录
+    "knowledge_access_records",
+    "knowledge_access_record_payloads",
 ]
 
 # 兼容尚未完成 52 号 bootstrap 的测试/旧库；生产收敛库验证要求这些表存在。
 OPTIONAL_TABLES = {
     "operator_paradigm",
     "operator_paradigm_version",
-    "serving_query_logs",
+    "knowledge_access_records",
+    "knowledge_access_record_payloads",
 }

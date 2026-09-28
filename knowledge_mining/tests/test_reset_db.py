@@ -188,18 +188,18 @@ class _Connection:
 
 def test_truncate_public_tables_discovers_current_tables_dynamically() -> None:
     cursor = _Cursor(
-        [("public", "asset_documents"), ("public", "serving_query_logs")]
+        [("public", "asset_documents"), ("public", "knowledge_access_records")]
     )
 
     tables = reset_db.truncate_public_tables(cursor)
 
-    assert tables == ["public.asset_documents", "public.serving_query_logs"]
+    assert tables == ["public.asset_documents"]
     assert "FROM pg_catalog.pg_class" in cursor.executed[0]
     assert "NOT c.relispartition" in cursor.executed[0]
     assert cursor.executed[1] == (
-        'TRUNCATE TABLE "public"."asset_documents", '
-        '"public"."serving_query_logs" RESTART IDENTITY'
+        'TRUNCATE TABLE "public"."asset_documents" RESTART IDENTITY'
     )
+    assert "knowledge_access_records" not in cursor.executed[1]
 
 
 def test_truncate_public_tables_is_noop_when_database_has_no_tables() -> None:
@@ -288,7 +288,7 @@ def test_main_execute_truncates_in_one_transaction(
     monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
     cursor = _Cursor(
-        [("public", "asset_documents"), ("public", "serving_query_logs")]
+        [("public", "asset_documents"), ("public", "knowledge_access_records")]
     )
     _install_fake_psycopg(monkeypatch, cursor)
     monkeypatch.setattr(

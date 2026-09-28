@@ -167,6 +167,15 @@ def test_proxy_internal_only_route_is_never_browser_callable(tmp_path):
     assert admin.status_code == 403
 
 
+def test_retrieval_record_internal_write_is_never_browser_callable(tmp_path):
+    path = "/api/v1/proxy/generic/mining/api/internal/retrieval-records"
+    with TestClient(_mw_app(tmp_path)) as c:
+        member = c.post(path, headers={"Authorization": f"Bearer {_token('member')}"})
+        admin = c.post(path, headers={"Authorization": f"Bearer {_token('admin')}"})
+    assert member.status_code == 403
+    assert admin.status_code == 403
+
+
 def test_proxy_rejects_encoded_dot_segments_before_path_policy() -> None:
     from starlette.requests import Request
 

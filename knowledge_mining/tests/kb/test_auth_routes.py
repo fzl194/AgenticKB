@@ -53,12 +53,13 @@ async def test_identify_modes(async_pool):
 async def test_verify_member_no_password_passes(async_pool):
     """工号 member 无密码 → verify 直接通过（SSO 口子现恒 True）。"""
     db = KbDB(async_pool)
-    await db.create_user(username="alice", password_hash=None, site_role="member")
+    user = await db.create_user(username="alice", password_hash=None, site_role="member")
     async with await _client(async_pool) as c:
         r = await c.post("/api/kb/auth/verify", json={"username": "alice"},
                          headers=kb_headers("i"))  # 不传 password
         assert r.status_code == 200, r.text
         assert r.json()["user"]["site_role"] == "member"
+        assert r.json()["user"]["id"] == user["id"]
 
 
 @pytest.mark.asyncio

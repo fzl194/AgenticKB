@@ -241,3 +241,63 @@ def test_rollback_config_is_noop_when_rebase_never_created_backup(
 
     assert upgrade_main._rollback_config(SimpleNamespace()) == 0
     assert '"mode": "rollback_config_noop"' in capsys.readouterr().out
+
+
+def test_plan_with_pending_online_and_offline_migrations_uses_rebase(
+    monkeypatch, capsys,
+) -> None:
+    source = _endpoint()
+    manifest = MigrationManifest(
+        "test-mixed",
+        (
+            Migration(
+                "core/online",
+                Path("online.sql"),
+                "online-checksum",
+                MigrationMode.ONLINE_EXPAND,
+            ),
+            Migration(
+                "core/rebase",
+                Path("rebase.sql"),
+                "rebase-checksum",
+                MigrationMode.OFFLINE_REBASE,
+            ),
+        ),
+    )
+    connection = object()
+
+    class _ConnectionContext:
+        def __enter__(self):
+            return connection
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        upgrade_main,
+        "_paths",
+        lambda _args: (Path("."), Path("."), Path("."), Path(".")),
+    )
+    monkeypatch.setattr(upgrade_main, "load_default_endpoint", lambda _path: source)
+    monkeypatch.setattr(upgrade_main, "load_manifest", lambda _path: manifest)
+    monkeypatch.setattr(upgrade_main, "_configured_database_exists", lambda _ep: True)
+    monkeypatch.setattr(
+        upgrade_main.psycopg, "connect", lambda *_a, **_k: _ConnectionContext()
+    )
+    monkeypatch.setattr(upgrade_main, "ledger_exists", lambda _connection: True)
+    monkeypatch.setattr(upgrade_main, "load_applied", lambda _connection: {})
+    monkeypatch.setattr(upgrade_main, "schema_complete", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        upgrade_main, "validate_supported_rebase_source", lambda _connection: ()
+    )
+    monkeypatch.setattr(
+        upgrade_main, "_rebase_target_exists", lambda *_args, **_kwargs: False
+    )
+
+    result = upgrade_main._plan(SimpleNamespace(target_db=None))
+
+    assert result == upgrade_main.PENDING_EXIT_CODE
+    output = capsys.readouterr().out
+    assert '"action": "rebase"' in output
+    assert '"online_expand"' in output
+    assert '"offline_rebase"' in output

@@ -1,106 +1,5 @@
 <template>
   <div class="sys-status">
-    <!-- ── 检索使用分析（明细）───────────────────────────────────────
-      概览页放的是摘要（四个数字 + 零结果前 5 + 两张图），这里是全量：热门查询、
-      各范式明细、意图与渠道分布。两边同源于 GET /api/ops/usage，职责不重叠。
-    -->
-    <section class="sys-status__section">
-      <div class="sys-status__head">
-        <h3 class="sys-status__title">检索使用分析</h3>
-        <span class="sys-status__scope">近 {{ usage?.days ?? 7 }} 天 · 全域检索流量</span>
-        <el-button text type="primary" size="small" :loading="usageLoading" @click="loadUsage">
-          刷新
-        </el-button>
-      </div>
-
-      <div v-if="usageError" class="sys-status__notice sys-status__notice--error">
-        加载失败
-        <el-button text type="primary" size="small" @click="loadUsage">重试</el-button>
-      </div>
-
-      <div v-else-if="usage && !usage.available" class="sys-status__notice sys-status__notice--info">
-        <strong>尚未产生检索日志</strong>
-        <span>
-          检索服务还没有写入过查询日志（serving_query_logs 不存在）。这张表由 serving
-          在启动时创建、在每次检索后写入；发生过检索之后这里就会有数据。
-        </span>
-      </div>
-
-      <template v-else-if="usage">
-        <div class="sys-status__stats">
-          <StatsCard label="检索次数" :value="usage.summary.queries" icon="🔍" />
-          <StatsCard label="零结果" :value="usage.summary.no_result" icon="🕳" />
-          <StatsCard label="零结果率" :value="formatRate(usage.summary.no_result_rate)" icon="📉" />
-          <StatsCard label="P95 延迟" :value="formatMs(usage.summary.p95_duration_ms)" icon="⏱" />
-          <StatsCard label="平均延迟" :value="formatMs(usage.summary.avg_duration_ms)" icon="〽" />
-        </div>
-
-        <!-- 各范式明细：调用量之外还要给零结果率与 P95——「调用多」不等于「跑得好」 -->
-        <div class="sys-status__chart">
-          <h4 class="sys-status__subtitle">各检索范式</h4>
-          <table v-if="usage.paradigms.length" class="ptable">
-            <thead>
-              <tr><th>范式</th><th>调用</th><th>零结果</th><th>P95</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="p in usage.paradigms" :key="p.paradigm_id">
-                <td class="ptable__name">{{ paradigmLabel(p.paradigm_id) }}</td>
-                <td>{{ p.calls }}</td>
-                <td>{{ p.no_result }}（{{ formatRate(p.calls ? p.no_result / p.calls : 0) }}）</td>
-                <td>{{ formatMs(p.p95_duration_ms) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-else class="sys-status__muted">窗口内没有检索调用</p>
-        </div>
-
-        <!--
-          概览页只列前 5 条，这里给后端返回的全量。这是整块数据里最有行动价值的一段：
-          零结果率说明「有缺口」，这份清单说明「缺口在哪、该补什么」。
-        -->
-        <div class="sys-status__chart">
-          <h4 class="sys-status__subtitle">
-            答不上来的问题
-            <span class="sys-status__hint">用户输入原文，仅管理员可见</span>
-          </h4>
-          <QueryList v-if="noResultItems.length" :items="noResultItems" />
-          <p v-else class="sys-status__muted">窗口内没有零结果查询</p>
-        </div>
-
-        <div class="sys-status__chart">
-          <h4 class="sys-status__subtitle">
-            热门查询
-            <span class="sys-status__hint">用户输入原文，仅管理员可见</span>
-          </h4>
-          <QueryList v-if="topQueryItems.length" :items="topQueryItems" />
-          <p v-else class="sys-status__muted">窗口内没有查询</p>
-        </div>
-
-        <div class="sys-status__split">
-          <div>
-            <h4 class="sys-status__subtitle">查询意图分布</h4>
-            <BarChart
-              v-if="intentBars.length"
-              :data="intentBars"
-              horizontal
-              :height="barChartHeight(intentBars.length)"
-            />
-            <p v-else class="sys-status__muted">无数据</p>
-          </div>
-          <div>
-            <h4 class="sys-status__subtitle">接入渠道分布</h4>
-            <BarChart
-              v-if="channelBars.length"
-              :data="channelBars"
-              horizontal
-              :height="barChartHeight(channelBars.length)"
-            />
-            <p v-else class="sys-status__muted">无数据</p>
-          </div>
-        </div>
-      </template>
-    </section>
-
     <!-- ── 服务状态 ────────────────────────────────────────────────── -->
     <section class="sys-status__section">
       <div class="sys-status__head">
@@ -180,18 +79,11 @@ import { useDomainStore } from '@/stores/domain'
 import { useMiningApi } from '@/api/mining'
 import { useServingApi } from '@/api/serving'
 import { useLlmApi } from '@/api/llm'
-import { useOpsApi } from '@/api/ops'
-import { breakdownBars, formatMs, formatRate, paradigmLabel } from '@/utils/opsStats'
-import { barChartHeight } from '@/utils/dashboard'
 import type { HealthStatus, KnowledgeStats } from '@/types'
-import type { OpsUsage } from '@/types/ops'
 import StatsCard from '@/components/common/StatsCard.vue'
 import ServiceHealthCard from '@/components/common/ServiceHealthCard.vue'
 import ServiceRestartCard from '@/components/settings/ServiceRestartCard.vue'
 import PieChart from '@/components/charts/PieChart.vue'
-import BarChart from '@/components/charts/BarChart.vue'
-import QueryList from '@/components/dashboard/QueryList.vue'
-import type { QueryListItem } from '@/components/dashboard/QueryList.vue'
 
 type Health = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
 
@@ -199,44 +91,11 @@ const domainStore = useDomainStore()
 const miningApi = useMiningApi()
 const servingApi = useServingApi()
 const llmApi = useLlmApi()
-const opsApi = useOpsApi()
 
 const stats = ref<KnowledgeStats | null>(null)
 const statsLoading = ref(false)
 const statsError = ref(false)
 const healthLoading = ref(false)
-
-const usage = ref<OpsUsage | null>(null)
-const usageLoading = ref(false)
-const usageError = ref(false)
-
-const intentBars = computed(() => breakdownBars(usage.value?.intents))
-const channelBars = computed(() => breakdownBars(usage.value?.channels))
-
-/** 「最近一次被问到」只给到日，精确到分秒对补知识这个动作没有帮助。 */
-function formatDay(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString('zh-CN')
-}
-
-// 两份清单共用 QueryList，差别只在注记：零结果给"最近被问到"的日期，热门查询给
-// "N 次无结果"（染成警告色——问得多又答不上的那几条优先级最高）。
-const noResultItems = computed<QueryListItem[]>(
-  () => (usage.value?.no_result_queries ?? []).map(q => ({
-    text: q.query_text,
-    count: q.count,
-    note: q.last_at ? formatDay(q.last_at) : undefined,
-  })),
-)
-
-const topQueryItems = computed<QueryListItem[]>(
-  () => (usage.value?.top_queries ?? []).map(q => ({
-    text: q.query_text,
-    count: q.count,
-    note: q.no_result ? `${q.no_result} 次无结果` : undefined,
-    noteTone: 'warn' as const,
-  })),
-)
 
 const services = ref([
   { key: 'mining', name: '挖掘服务', icon: '⚙', status: 'unknown' as Health, detail: '' },
@@ -272,26 +131,6 @@ const unitTypeData = computed(() => {
 // 直接作废，健康检查结果永远落不下来。
 let statsGen = 0
 let healthGen = 0
-let usageGen = 0
-
-async function loadUsage() {
-  const gen = ++usageGen
-  usageLoading.value = true
-  usageError.value = false
-  try {
-    const data = await opsApi.getUsage(domainStore.currentDomain)
-    if (gen !== usageGen) return
-    usage.value = data
-  } catch (e) {
-    if (gen !== usageGen) return
-    console.error('Failed to load ops usage:', e)
-    usageError.value = true
-    usage.value = null
-  } finally {
-    if (gen === usageGen) usageLoading.value = false
-  }
-}
-
 async function loadStats() {
   const gen = ++statsGen
   statsLoading.value = true
@@ -358,11 +197,10 @@ function loadAll() {
   }
   loadHealth()
   loadStats()
-  loadUsage()
 }
 
 onMounted(loadAll)
-onUnmounted(() => { statsGen++; healthGen++; usageGen++ })
+onUnmounted(() => { statsGen++; healthGen++ })
 watch(() => domainStore.currentDomain, loadAll)
 </script>
 

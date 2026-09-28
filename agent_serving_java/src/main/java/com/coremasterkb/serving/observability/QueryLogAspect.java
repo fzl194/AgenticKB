@@ -1,6 +1,5 @@
 package com.coremasterkb.serving.observability;
 
-import com.coremasterkb.serving.domain.EvidenceResponse;
 import com.coremasterkb.serving.operator.api.ParadigmExecutionService.RunArgs;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -9,105 +8,44 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.time.Instant;
 
-/**
- * Intercepts {@code ParadigmExecutionService.run()} to record query logs for every
- * operator-paradigm execution. No business code is aware of this aspect.
- *
- * <p>批次8 R0：旧固定链 {@code SearchService.search()} 的 advice 随固定链删除；本切面只保留
- * 范式执行路径的日志（25号 §11.1）。批次8 R6：终点协议从 ContextPack 换成
- * {@link EvidenceResponse}（§5.3），本切面随之改取 {@code evidenceResponse}。</p>
- */
 @Aspect
 @Component
 public class QueryLogAspect {
-
     private static final Logger log = LoggerFactory.getLogger(QueryLogAspect.class);
 
-    private final QueryLogService queryLogService;
+    private final KnowledgeAccessRecordService recordService;
 
-    public QueryLogAspect(QueryLogService queryLogService) {
-        this.queryLogService = queryLogService;
+    public QueryLogAspect(KnowledgeAccessRecordService recordService) {
+        this.recordService = recordService;
     }
 
-    /**
-     * The operator-paradigm engine is the only search execution path — without this advice every
-     * served query would be absent from {@code serving_query_logs} entirely.
-     *
-     * <p>Paradigms may terminate in a non-{@code assemble} node, in which case there is no
-     * EvidenceResponse; those rows are still recorded, just with null result detail. That is
-     * intentional — a missing row and a candidate-only row mean very different things.</p>
-     */
     @Around("execution(* com.coremasterkb.serving.operator.api.ParadigmExecutionService.run(..))")
-    public Object logParadigmSearch(ProceedingJoinPoint pjp) throws Throwable {
-        Object[] args = pjp.getArgs();
-        if (args.length < 2 || !(args[1] instanceof RunArgs runArgs)) {
-            return pjp.proceed();   // signature changed under us — never break the request over logging
+    public Object logParadigmSearch(ProceedingJoinPoint joinPoint) throws Throwable {
+        Object[] methodArgs = joinPoint.getArgs();
+        if (methodArgs.length < 2 || !(methodArgs[1] instanceof RunArgs runArgs)) {
+            return joinPoint.proceed();
         }
 
-        long startMs = System.currentTimeMillis();
-        String queryId = UUID.randomUUID().toString();
-
-        log.info("[paradigm-search] start id={} domain={} paradigm={} query=\"{}\"",
-                queryId, runArgs.domain(), runArgs.paradigmId(), abbreviate(runArgs.query(), 60));
-
-        Throwable thrown = null;
+        Instant startedAt = Instant.now();
+        long startedNanos = System.nanoTime();
         Object result = null;
+        Throwable failure = null;
         try {
-            result = pjp.proceed();
+            result = joinPoint.proceed();
             return result;
-        } catch (Throwable t) {
-            thrown = t;
-            throw t;
+        } catch (Throwable thrown) {
+            failure = thrown;
+            throw thrown;
         } finally {
-            long durationMs = System.currentTimeMillis() - startMs;
-            if (thrown != null) {
-                log.warn("[paradigm-search] error id={} domain={} duration={}ms error={}",
-                        queryId, runArgs.domain(), durationMs, thrown.getMessage());
+            long durationMs = Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
+            recordService.record(startedAt, runArgs, result, failure, durationMs);
+            if (failure != null) {
+                log.warn("[knowledge-access] search failed id={} source={} duration_ms={} code={}",
+                        runArgs.accessId(), runArgs.source(), durationMs,
+                        failure.getClass().getSimpleName());
             }
-            recordParadigm(queryId, runArgs, result, durationMs);
         }
-    }
-
-    private void recordParadigm(String queryId, RunArgs runArgs, Object result, long durationMs) {
-        try {
-            Map<String, Object> metadata = new LinkedHashMap<>();
-            metadata.put("engine", "paradigm");
-            if (runArgs.paradigmId() != null) metadata.put("paradigm_id", runArgs.paradigmId());
-            if (runArgs.paradigmVersion() != null) metadata.put("paradigm_version", runArgs.paradigmVersion());
-            metadata.put("output", outputKind(result));
-            EvidenceResponse response = extractEvidence(result);
-            if (response != null) {
-                metadata.put("has_more", response.hasMore());
-            }
-
-            queryLogService.record(queryId, runArgs.query(), runArgs.domain(), runArgs.channel(),
-                    response, durationMs, metadata);
-        } catch (Exception e) {
-            // Logging must never convert a business failure into a 500.
-            log.warn("Failed to record paradigm query log [{}]: {}", queryId, e.getMessage());
-        }
-    }
-
-    private static EvidenceResponse extractEvidence(Object result) {
-        if (result instanceof Map<?, ?> m && m.get("evidenceResponse") instanceof EvidenceResponse er) {
-            return er;
-        }
-        return null;
-    }
-
-    private static String outputKind(Object result) {
-        if (!(result instanceof Map<?, ?> m)) return "none";
-        if (m.containsKey("evidenceResponse")) return "evidenceResponse";
-        if (m.containsKey("candidates")) return "candidates";
-        return "none";
-    }
-
-    private static String abbreviate(String s, int maxLen) {
-        if (s == null) return "";
-        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
     }
 }

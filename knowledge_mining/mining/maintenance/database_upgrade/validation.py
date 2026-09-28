@@ -16,6 +16,7 @@ from .contract import (
     MIGRATION_LEDGER_TABLE,
     LEGACY_COMPAT_TABLES,
     PRE51_REQUIRED_TABLES,
+    PREVIOUS_RELEASE_TABLES,
     RETIRED_TABLES,
 )
 from .manifest import MigrationManifest, pending_migrations
@@ -42,6 +43,21 @@ REQUIRED_INDEXES: dict[str, tuple[bool, tuple[str, ...]]] = {
         True,
         ("mcp_keys", "user_id", "domain", "name", "where", "status", "active"),
     ),
+    "idx_knowledge_access_domain_time": (
+        False, ("knowledge_access_records", "domain", "occurred_at", "id"),
+    ),
+    "idx_knowledge_access_actor_time": (
+        False, ("knowledge_access_records", "actor_user_id", "occurred_at", "id"),
+    ),
+    "idx_knowledge_access_source_tool_time": (
+        False, ("knowledge_access_records", "source", "tool_name", "occurred_at"),
+    ),
+    "idx_knowledge_access_status_time": (
+        False, ("knowledge_access_records", "status", "occurred_at"),
+    ),
+    "idx_knowledge_access_kb_ids": (
+        False, ("knowledge_access_records", "using gin", "kb_ids"),
+    ),
 }
 
 
@@ -60,7 +76,9 @@ def compare_retained_table_counts(source: Any, target: Any) -> dict[str, int]:
     """Compare every retained table by count and deterministic row-content digest."""
 
     source_tables = set(fetch_public_tables(source))
-    source_retained = source_tables & set(PRE51_REQUIRED_TABLES)
+    # Future rebases must preserve the unified ledger like every other formal
+    # table. It is absent only from this release's one-time legacy cutover.
+    source_retained = source_tables & set(FORMAL_TABLES)
     expected = expected_rebase_target_tables(source_tables)
     target_tables = set(fetch_public_tables(target)) - {MIGRATION_LEDGER_TABLE}
     if expected != target_tables:
@@ -95,6 +113,21 @@ def compare_retained_table_counts(source: Any, target: Any) -> dict[str, int]:
     for table in sorted(set(BRIDGE_51_TABLES) - source_retained):
         statement = sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
         counts[table] = int(target.execute(statement).fetchone()[0])
+    for new_table in (
+        "knowledge_access_records",
+        "knowledge_access_record_payloads",
+    ):
+        if new_table in source_tables:
+            continue
+        statement = sql.SQL("SELECT count(*) FROM {}").format(
+            sql.Identifier(new_table)
+        )
+        new_count = int(target.execute(statement).fetchone()[0])
+        if new_count != 0:
+            raise SchemaValidationError(
+                f"新表 {new_table} 在首次切换前必须为空"
+            )
+        counts[new_table] = new_count
     return counts
 
 
@@ -146,7 +179,7 @@ def fetch_public_tables(connection: Any) -> tuple[str, ...]:
 
 
 def validate_supported_rebase_source(connection: Any) -> tuple[str, ...]:
-    """Accept only the complete immediate pre-51/51 schema family.
+    """Accept only the complete current, previous, or pre-51 schema family.
 
     Retired and legacy compatibility tables may still be present because the
     migration owns their removal.  Any other table means the source is outside
@@ -155,13 +188,21 @@ def validate_supported_rebase_source(connection: Any) -> tuple[str, ...]:
 
     tables = fetch_public_tables(connection)
     table_set = set(tables)
-    missing = sorted(PRE51_REQUIRED_TABLES - table_set)
-    if missing:
+    current_complete = set(FORMAL_TABLES) <= table_set
+    previous_complete = PREVIOUS_RELEASE_TABLES <= table_set
+    pre51_complete = PRE51_REQUIRED_TABLES <= table_set
+    if not current_complete and not previous_complete and not pre51_complete:
+        missing_current = sorted(set(FORMAL_TABLES) - table_set)
+        missing_previous = sorted(PREVIOUS_RELEASE_TABLES - table_set)
+        missing_pre51 = sorted(PRE51_REQUIRED_TABLES - table_set)
         raise SchemaValidationError(
-            "源库不属于受支持的 pre-51 基线，缺少表：" + ", ".join(missing)
+            "源库不属于受支持的当前、上一版本或 pre-51 基线："
+            f"current_missing={missing_current}, previous_missing={missing_previous}, "
+            f"pre51_missing={missing_pre51}"
         )
     allowed = (
         set(FORMAL_TABLES)
+        | set(PREVIOUS_RELEASE_TABLES)
         | set(RETIRED_TABLES)
         | set(LEGACY_COMPAT_TABLES)
         | {MIGRATION_LEDGER_TABLE}
@@ -169,7 +210,7 @@ def validate_supported_rebase_source(connection: Any) -> tuple[str, ...]:
     unknown = sorted(table_set - allowed)
     if unknown:
         raise SchemaValidationError(
-            "源库存在52迁移未声明的未知表：" + ", ".join(unknown)
+            "源库存在迁移未声明的未知表：" + ", ".join(unknown)
         )
     return tables
 

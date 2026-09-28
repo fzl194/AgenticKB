@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import socket
+import uuid
 from urllib.parse import urlparse
 
 import httpx
@@ -29,7 +31,8 @@ _STRIP_REQUEST_HEADERS = frozenset({
     "transfer-encoding", "upgrade", "proxy-connection",
     "proxy-authenticate", "proxy-authorization",
     "cookie", "authorization",
-    "x-kb-user", "x-kb-role", "x-internal-auth",
+    "x-kb-user", "x-kb-user-id", "x-kb-role", "x-internal-auth",
+    "x-kb-access-id", "x-kb-call-source",
 })
 
 # Cloud metadata endpoint — the only blocked network.
@@ -106,7 +109,9 @@ def _resolve_target_url(domain_services: dict, service: str) -> str:
     return url
 
 
-def _build_forward_headers(request: Request) -> dict[str, str]:
+def _build_forward_headers(
+    request: Request, *, service: str | None = None,
+) -> dict[str, str]:
     """Strip hop-by-hop/sensitive, add proxy context + gateway-injected identity."""
     headers = {
         k: v for k, v in request.headers.items()
@@ -124,10 +129,21 @@ def _build_forward_headers(request: Request) -> dict[str, str]:
     user = getattr(request.state, "user", None)
     if user:
         headers["X-KB-User"] = str(user.get("username", ""))
+        if user.get("id"):
+            headers["X-KB-User-Id"] = str(user["id"])
         headers["X-KB-Role"] = str(user.get("role", ""))
-        ivs = getattr(request.app.state, "internal_verify_secret", "") or ""
-        if ivs:
-            headers["X-Internal-Auth"] = ivs
+        headers["X-KB-Access-Id"] = str(uuid.uuid4())
+        headers["X-KB-Call-Source"] = "web"
+        if service == "serving":
+            # Serving has its own shared secret. Never fall back to Mining's verifier:
+            # a missing deployment secret must fail closed at the Serving boundary.
+            internal_auth = os.environ.get("SERVING_INTERNAL_AUTH_SECRET", "").strip()
+        else:
+            internal_auth = getattr(
+                request.app.state, "internal_verify_secret", "",
+            ) or ""
+        if internal_auth:
+            headers["X-Internal-Auth"] = internal_auth
     return headers
 
 
@@ -145,7 +161,7 @@ async def proxy_request(
         target_url = f"{target_url}?{request.url.query}"
 
     client = get_proxy_client()
-    headers = _build_forward_headers(request)
+    headers = _build_forward_headers(request, service=service)
     body = await request.body()
 
     upstream_cm = client.stream(

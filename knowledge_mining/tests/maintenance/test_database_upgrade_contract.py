@@ -41,6 +41,7 @@ EXPECTED_RETIRED_TABLES = {
     "asset_segment_entity_mentions",
     "asset_publish_releases",
     "serving_query_cache",
+    "serving_query_logs",
 }
 
 
@@ -59,9 +60,9 @@ def _database(dbname: str) -> dict[str, object]:
 
 def test_convergence_contract_has_exact_retired_table_set() -> None:
     assert set(RETIRED_TABLES) == EXPECTED_RETIRED_TABLES
-    assert len(RETIRED_TABLES) == 21
-    assert EXPECTED_FORMAL_TABLES == 52
-    assert EXPECTED_PHYSICAL_TABLES == 53
+    assert len(RETIRED_TABLES) == 22
+    assert EXPECTED_FORMAL_TABLES == 53
+    assert EXPECTED_PHYSICAL_TABLES == 54
     assert CURRENT_SCHEMA_VERSION
 
 

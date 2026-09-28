@@ -114,7 +114,7 @@ def _is_forbidden_proxy_target(path: str) -> bool:
     if service == "mining":
         blocked = (
             "api/kb/internal", "api/kb/auth", "api/kb/admin/reload-auth-config",
-            "api/kb/mcp-tools",
+            "api/kb/mcp-tools", "api/internal",
         )
         return any(upstream == prefix or upstream.startswith(prefix + "/") for prefix in blocked)
     if service == "serving":
@@ -260,6 +260,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=401, content={"detail": "unauthenticated"})
 
         request.state.user = {
+            "id": payload.get("uid"),
             "username": payload.get("sub"),
             "role": payload.get("role"),
             "name": payload.get("name"),  # display_name，供 /api/v1/auth/me 回显

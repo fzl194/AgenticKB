@@ -9,9 +9,8 @@
   东西，不该对普通成员敞开。
 - 服务级运维数据对无权处理的人只是噪声。
 
-数据来自 serving 拥有的 `serving_query_logs`（跨服务只读，取舍见 query_log_db 模块
-docstring）。表不存在时回 available=False 而不是 500 —— serving 从没启动过的部署里
-它本来就不存在。
+数据来自统一知识访问记录表，经 query_log_db 兼容适配为旧页面响应。表不存在时回
+available=False 而不是 500，便于滚动部署期间安全降级。
 """
 from __future__ import annotations
 
@@ -55,7 +54,7 @@ async def _timed(
 
 
 def _empty_payload(days: int) -> dict[str, Any]:
-    """serving 没产出过日志时的空壳。
+    """统一记录表尚不可用时的空壳。
 
     保持与正常响应**完全相同的形状**，让前端只判 available、不必对每个字段判
     undefined —— 少一个分支就少一处 "reading 'queries' of undefined"。

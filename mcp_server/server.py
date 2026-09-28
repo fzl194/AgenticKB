@@ -16,6 +16,12 @@
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
+import time
+import uuid
+
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
@@ -36,6 +42,90 @@ from mcp_server.identity import (
     validate_domain,
 )
 from mcp_server.schemas import SearchInput
+from mcp_server.access_records import (
+    ACCESS_RECORD_WRITE_TIMEOUT_SECONDS,
+    build_access_payload,
+    complete_upload_ticket,
+    current_access_call,
+    expire_pending_uploads as _expire_pending_uploads,
+    get_access_record_metrics,
+    increment_access_record_write_failures,
+    post_access_record,
+    register_upload_tickets,
+)
+
+logger = logging.getLogger(__name__)
+_post_access_record = post_access_record
+MAX_UPLOAD_FILENAMES = 100
+MAX_UPLOAD_FILENAME_LENGTH = 255
+_pending_upload_recovery_lock = asyncio.Lock()
+
+
+async def _recover_pending_uploads_once() -> None:
+    """Best-effort idempotent recovery on every initialize across all domains."""
+
+    async with _pending_upload_recovery_lock:
+        try:
+            expired_count = await _expire_pending_uploads()
+        except Exception as exc:
+            increment_access_record_write_failures()
+            logger.warning(
+                "access_record_write_failed",
+                extra={
+                    "record_id": "",
+                    "tool": "upload_document",
+                    "phase": "startup_expire",
+                    "error_class": exc.__class__.__name__,
+                },
+            )
+            return
+        if expired_count:
+            logger.info(
+                "expired_orphan_upload_records",
+                extra={"expired_count": expired_count},
+            )
+
+class LedgerToolError(ToolError):
+    """ToolError carrying stable, non-sensitive ledger classification."""
+
+    def __init__(
+        self, message: str, *, ledger_status: str, error_code: str,
+    ) -> None:
+        super().__init__(message)
+        self.ledger_status = ledger_status
+        self.error_code = error_code
+
+
+def _upstream_tool_error(exc: BaseException) -> LedgerToolError:
+    return LedgerToolError(
+        str(exc), ledger_status="failed", error_code="upstream_failed",
+    )
+
+
+async def _safe_post_access_record(
+    payload: dict, *, phase: str,
+) -> None:
+    """Keep observability failures bounded and outside the tool result path."""
+    async def invoke() -> None:
+        outcome = _post_access_record(payload)
+        if inspect.isawaitable(outcome):
+            await outcome
+
+    try:
+        await asyncio.wait_for(
+            invoke(), timeout=ACCESS_RECORD_WRITE_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        increment_access_record_write_failures()
+        logger.warning(
+            "access_record_write_failed",
+            extra={
+                "record_id": str(payload.get("id") or ""),
+                "tool": str(payload.get("tool_name") or ""),
+                "phase": phase,
+                "error_class": exc.__class__.__name__,
+            },
+        )
 
 DEFAULT_INSTRUCTIONS = """\
 你是多领域知识证据检索服务（用户级接入：调用必须携带 Bearer 密钥）。
@@ -82,6 +172,7 @@ class PersonalizationMiddleware(Middleware):
         context: MiddlewareContext[InitializeRequest],
         call_next: CallNext[InitializeRequest, object],
     ):
+        await _recover_pending_uploads_once()
         ident = _identity_or_none()
         # 已知限制（fastmcp 3.4.7）：initialize 响应在 middleware 返回路径之外组装
         # （见 fastmcp/server/low_level.py 的 capture 注释），pre-set 实例属性不反映。
@@ -119,15 +210,69 @@ class PersonalizationMiddleware(Middleware):
         context: MiddlewareContext[CallToolRequestParams],
         call_next: CallNext[CallToolRequestParams, object],
     ):
+        name = context.message.name
+        raw_arguments = getattr(context.message, "arguments", None)
+        arguments = dict(raw_arguments) if isinstance(raw_arguments, dict) else {}
         try:
             ident = require_identity(get_http_headers(include={"authorization"}))
         except IdentityError as exc:
+            # 鉴权失败不是用户业务活动，不能污染正式检索账本。
             raise ToolError(str(exc)) from None
-        name = context.message.name
-        if name in TOOL_NAMES and not ident.tool_enabled(name):
-            raise ToolError(f"工具 {name} 未开放：密钥主人已在「MCP 接入」页关闭它。")
-        current_identity.set(ident)
-        return await call_next(context)
+
+        identity_token = current_identity.set(ident)
+        if name not in TOOL_NAMES:
+            try:
+                return await call_next(context)
+            finally:
+                current_identity.reset(identity_token)
+
+        call_id = str(uuid.uuid4())
+        started = time.monotonic()
+        result = None
+        failure: BaseException | None = None
+        forced_status: str | None = None
+        access_token = current_access_call.set({"id": call_id})
+        try:
+            if not ident.tool_enabled(name):
+                forced_status = "denied"
+                failure = ToolError(f"tool {name} is disabled")
+                raise failure
+            pending = build_access_payload(
+                call_id=call_id,
+                tool_name=name,
+                arguments=arguments,
+                identity=ident,
+                result=None,
+                failure=None,
+                duration_ms=0,
+                forced_status="pending",
+            )
+            await _safe_post_access_record(pending, phase="create")
+            result = await call_next(context)
+            return result
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+            raise
+        finally:
+            try:
+                duration_ms = int(max(0.0, (time.monotonic() - started) * 1000))
+                payload = build_access_payload(
+                    call_id=call_id,
+                    tool_name=name,
+                    arguments=arguments,
+                    identity=ident,
+                    result=result,
+                    failure=failure,
+                    duration_ms=duration_ms,
+                    forced_status=forced_status,
+                )
+                if name == "upload_document" and payload["status"] == "pending":
+                    register_upload_tickets(payload, result)
+                await _safe_post_access_record(payload, phase="complete")
+            finally:
+                current_access_call.reset(access_token)
+                current_identity.reset(identity_token)
 
 
 mcp = FastMCP(
@@ -136,6 +281,13 @@ mcp = FastMCP(
     middleware=[PersonalizationMiddleware()],
 )
 
+
+@mcp.custom_route("/health", methods=["GET"])
+async def _health(_request):
+    """Process health plus best-effort retrieval-ledger write failures."""
+    from starlette.responses import JSONResponse
+
+    return JSONResponse({"status": "ok", **get_access_record_metrics()})
 
 def _identity() -> Identity:
     return require_current_identity()
@@ -185,9 +337,14 @@ def _serving_call(call, *args, **kwargs):
             hint = "请重新 search_knowledge 获取新 ref。"
         elif exc.code == "result_too_large":
             hint = "请缩小范围、增加过滤条件或使用 cursor 分页。"
-        raise ToolError(f"[{exc.code}] {exc}。{hint}") from None
+        status = "denied" if exc.code == "out_of_scope" else "invalid"
+        raise LedgerToolError(
+            f"[{exc.code}] {exc}。{hint}",
+            ledger_status=status,
+            error_code=exc.code,
+        ) from None
     except backend.ToolBackendError as exc:
-        raise ToolError(str(exc)) from None
+        raise _upstream_tool_error(exc) from None
 
 
 # ── Tools ────────────────────────────────────────────────────────────────
@@ -381,7 +538,7 @@ def _list_kb_documents(ident: Identity, kb_name: str,
                                      limit if limit is not None else 50,
                                      offset or 0)
     except backend.ToolBackendError as exc:
-        raise ToolError(str(exc)) from None
+        raise _upstream_tool_error(exc) from None
     return {**out, "view": "documents"}
 
 
@@ -392,7 +549,7 @@ def _browse_top(ident: Identity, domain: str | None) -> dict:
     try:
         listing = backend.list_knowledge_bases(ident.username, ident.key_id)
     except backend.ToolBackendError as exc:
-        raise ToolError(str(exc)) from None
+        raise _upstream_tool_error(exc) from None
     kbs: list[dict] = []
     for k in (listing.get("knowledge_bases") or []):
         if str(k.get("domain") or "") != resolved:
@@ -448,9 +605,15 @@ def upload_document(kb_name: str, filenames: list[str]) -> dict:
     kb_id = _resolve_open_kb(ident, kb_name)
     if not filenames:
         raise ToolError("filenames 不能为空：至少给出一个文件名。")
+    if len(filenames) > MAX_UPLOAD_FILENAMES:
+        raise ToolError(f"filenames 最多允许 {MAX_UPLOAD_FILENAMES} 个文件名。")
     for filename in filenames:
-        if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        if not isinstance(filename, str) or not filename or "/" in filename or "\\" in filename or ".." in filename:
             raise ToolError(f"filename 非法：{filename!r}（须为不含路径分隔符的纯文件名）。")
+        if len(filename) > MAX_UPLOAD_FILENAME_LENGTH:
+            raise ToolError(
+                f"filename 过长：最多 {MAX_UPLOAD_FILENAME_LENGTH} 个字符。"
+            )
 
     headers = get_http_headers(include={"host", "x-forwarded-proto"}) or {}
 
@@ -467,9 +630,12 @@ def upload_document(kb_name: str, filenames: list[str]) -> dict:
     for filename in filenames:
         try:
             issued = backend.begin_upload(
-                ident.username, ident.key_id, kb_id, str(filename))
+                ident.username, ident.key_id, kb_id, str(filename),
+                access_record_id=str((current_access_call.get() or {}).get("id") or ""),
+                access_record_total=len(filenames),
+            )
         except backend.ToolBackendError as exc:
-            raise ToolError(str(exc)) from None
+            raise _upstream_tool_error(exc) from None
         # 无 Host 上下文（理论不可达）时退化为相对路径，Agent 自行补全
         upload_url = (
             f"{proto}://{host}/upload/{issued['ticket']}" if host
@@ -514,6 +680,8 @@ async def _direct_upload(request):
     # 归档 500MB）流式强制。这里用归档上限做粗过滤，避免误拒合法大包。
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > 500 * 1024 * 1024:
+        await _finish_upload_access(
+            ticket, success=False, error_code="upload_too_large")
         return JSONResponse({"detail": "文件过大：MCP 上传上限（归档 500MB）。"}, status_code=413)
 
     try:
@@ -521,14 +689,30 @@ async def _direct_upload(request):
             ticket, request.stream(),
         )
     except backend.ToolBackendError as exc:
+        await _finish_upload_access(
+            ticket, success=False, error_code="upload_backend_failed")
         return JSONResponse({"detail": str(exc)}, status_code=502)
     if status != 200:
+        await _finish_upload_access(
+            ticket, success=False, error_code="upload_failed")
         detail = body.get("detail") if isinstance(body, dict) else None
         return JSONResponse(
             {"detail": detail or "上传失败，请重取上传地址重试。"},
             status_code=status,
         )
+    await _finish_upload_access(ticket, success=True, result=body)
     return JSONResponse(body)
+
+
+async def _finish_upload_access(
+    ticket: str, *, success: bool, error_code: str | None = None,
+    result: dict | None = None,
+) -> None:
+    payload = complete_upload_ticket(
+        ticket, success=success, error_code=error_code, result=result)
+    if payload is None:
+        return
+    await _safe_post_access_record(payload, phase="upload_complete")
 
 
 __all__ = ["mcp", "__version__"]

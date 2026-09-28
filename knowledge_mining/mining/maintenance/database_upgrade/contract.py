@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 
-CURRENT_SCHEMA_VERSION = "2026.09.user-lifecycle-v1"
-CURRENT_SCHEMA_CHECKSUM = "c0c728e009f308ecefd0227bac1ae606bf5ca8dcadc9369e058654102cfa123a"
+CURRENT_SCHEMA_VERSION = "2026.09.user-lifecycle-retrieval-v1"
+CURRENT_SCHEMA_CHECKSUM = "0552fa01f5ba579b26854ad64f7ac3d2d6ac3929847cc65a4540784bd27c6319"
 SCHEMA_MARKER_ID = f"schema/{CURRENT_SCHEMA_VERSION}"
 MIGRATION_LEDGER_TABLE = "cmkb_schema_migrations"
 LEGACY_COMPAT_TABLES: tuple[str, ...] = ("mcp_open_kbs", "mcp_access")
@@ -66,15 +66,20 @@ FORMAL_TABLES: frozenset[str] = frozenset({
     "onenet_toc_cache",
     "operator_paradigm",
     "operator_paradigm_version",
-    "serving_query_logs",
+    "knowledge_access_records",
+    "knowledge_access_record_payloads",
 })
 EXPECTED_FORMAL_TABLES = len(FORMAL_TABLES)
 EXPECTED_PHYSICAL_TABLES = EXPECTED_FORMAL_TABLES + 1
 
-# One-hop support starts at the complete release immediately preceding design 51.
-# The bridge is allowed to add only these four design-51 tables; an arbitrarily
-# old or partially bootstrapped database is not silently guessed forward.
-PRE51_REQUIRED_TABLES: frozenset[str] = FORMAL_TABLES - BRIDGE_51_TABLES
+# This release accepts the complete immediately preceding table set: the old
+# Java log exists and the unified ledger does not yet exist.
+PREVIOUS_RELEASE_TABLES: frozenset[str] = frozenset(
+    (FORMAL_TABLES - {"knowledge_access_records", "knowledge_access_record_payloads"}) | {"serving_query_logs"}
+)
+# Compatibility export for older callers/tests. New cutover source validation
+# uses PREVIOUS_RELEASE_TABLES.
+PRE51_REQUIRED_TABLES: frozenset[str] = PREVIOUS_RELEASE_TABLES - BRIDGE_51_TABLES
 
 RETIRED_TABLES: tuple[str, ...] = (
     "asset_upload_sessions",
@@ -98,10 +103,11 @@ RETIRED_TABLES: tuple[str, ...] = (
     "asset_segment_entity_mentions",
     "asset_publish_releases",
     "serving_query_cache",
+    "serving_query_logs",
 )
 
 if len(RETIRED_TABLES) != len(set(RETIRED_TABLES)):  # pragma: no cover - import guard
     raise RuntimeError("RETIRED_TABLES contains duplicates")
 
-if EXPECTED_FORMAL_TABLES != 52:  # pragma: no cover - import guard
-    raise RuntimeError("FORMAL_TABLES must contain exactly 52 names")
+if EXPECTED_FORMAL_TABLES != 53:  # pragma: no cover - import guard
+    raise RuntimeError("FORMAL_TABLES must contain exactly 53 names")

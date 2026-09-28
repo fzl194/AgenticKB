@@ -33,6 +33,9 @@ DEFAULT_AUTH_CONFIG_PATH = (
 )
 
 _MANAGED_TABLE_NAMES = frozenset(EXPORT_TABLES) - {"cmkb_schema_migrations"}
+# Unified retrieval history survives data resets. It can only be removed by a
+# separately authorized retention/compliance operation, never by this helper.
+_PROTECTED_DATA_TABLES = frozenset({"knowledge_access_records", "knowledge_access_record_payloads"})
 
 _DISCOVER_TABLES_SQL = """
 SELECT n.nspname, c.relname
@@ -246,10 +249,11 @@ def truncate_public_tables(cursor: Any) -> list[str]:
     """Discover and truncate every current CoreMasterKB table atomically."""
     tables = discover_public_tables(cursor)
     validate_managed_tables(tables)
-    statement = build_truncate_statement(tables)
+    clearable = [item for item in tables if item[1] not in _PROTECTED_DATA_TABLES]
+    statement = build_truncate_statement(clearable)
     if statement is not None:
         cursor.execute(statement)
-    return [f"{schema}.{table}" for schema, table in tables]
+    return [f"{schema}.{table}" for schema, table in clearable]
 
 
 def _build_parser() -> argparse.ArgumentParser:

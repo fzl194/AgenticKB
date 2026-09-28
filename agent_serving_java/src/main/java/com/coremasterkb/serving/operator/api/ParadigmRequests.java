@@ -24,7 +24,19 @@ final class ParadigmRequests {
 
     /** @param username the {@code X-KB-User} header value, or null when the caller sent none */
     static RunArgs toRunArgs(JsonNode body, String username) {
+        return toRunArgs(body, username, null, null, "api");
+    }
+
+    /** Compatibility overload for callers that have not yet propagated a trusted user id. */
+    static RunArgs toRunArgs(
+            JsonNode body, String username, String accessId, String source) {
+        return toRunArgs(body, username, null, accessId, source);
+    }
+
+    static RunArgs toRunArgs(
+            JsonNode body, String username, String userId, String accessId, String source) {
         String caller = (username != null && !username.isBlank()) ? username.trim() : null;
+        String trustedUserId = (userId != null && !userId.isBlank()) ? userId.trim() : null;
         return new RunArgs(
                 text(body, "query"), text(body, "domain"), text(body, "channel"),
                 body != null && body.hasNonNull("debug") && body.get("debug").asBoolean(),
@@ -33,9 +45,58 @@ final class ParadigmRequests {
                 mergedFilters(body),
                 validatedTopK(body),
                 validatedExpansion(body),
-                null, null);
+                null, null,
+                accessId, source == null || source.isBlank() ? "api" : source,
+                trustedUserId, safeRequestJson(body));
     }
 
+    private static String safeRequestJson(JsonNode body) {
+        if (body == null || !body.isObject()) return "{}";
+        var safe = mapper().createObjectNode();
+        for (String field : REQUEST_FIELDS) {
+            JsonNode value = body.get(field);
+            if (value == null || value.isNull()) continue;
+            JsonNode sanitized = sanitize(value);
+            if ("paradigm".equals(field) && sanitized.isObject()) {
+                var graph = mapper().createObjectNode();
+                for (String graphField : PARADIGM_FIELDS) {
+                    JsonNode graphValue = sanitized.get(graphField);
+                    if (graphValue != null && !graphValue.isNull()) graph.set(graphField, graphValue);
+                }
+                sanitized = graph;
+            }
+            safe.set(field, sanitized);
+        }
+        return safe.toString();
+    }
+
+    private static JsonNode sanitize(JsonNode value) {
+        if (value == null || value.isNull() || value.isValueNode()) return value;
+        if (value.isArray()) {
+            var out = mapper().createArrayNode();
+            value.forEach(item -> out.add(sanitize(item)));
+            return out;
+        }
+        var out = mapper().createObjectNode();
+        value.fields().forEachRemaining(entry -> {
+            if (!sensitiveKey(entry.getKey())) out.set(entry.getKey(), sanitize(entry.getValue()));
+        });
+        return out;
+    }
+
+    private static boolean sensitiveKey(String key) {
+        String normalized = key.toLowerCase().replaceAll("[^a-z0-9]", "");
+        return SENSITIVE_MARKERS.stream().anyMatch(normalized::contains);
+    }
+
+    private static final Set<String> REQUEST_FIELDS = Set.of(
+            "paradigm", "query", "domain", "channel", "debug", "kbIds",
+            "within", "filters", "top_k", "expansion");
+    private static final Set<String> PARADIGM_FIELDS = Set.of(
+            "schemaVersion", "nodes", "edges", "output");
+    private static final Set<String> SENSITIVE_MARKERS = Set.of(
+            "authorization", "password", "passwd", "secret", "token", "cookie",
+            "uploadurl", "ticket", "apikey", "accesskey", "mcpkey", "jwt");
     static String text(JsonNode body, String field) {
         if (body == null) return null;
         JsonNode v = body.get(field);

@@ -1,35 +1,37 @@
 /**
- * 运维使用分析 API —— 经 main_control_service 代理转发到 mining 的 /api/ops/*。
+ * 首页检索摘要的兼容门面。
  *
- * **admin-only**：后端 require_admin 现查库，非 admin 一律 403。前端也要按角色藏起
- * 入口——不是为了安全（安全由后端负责），是因为给无权处理的人看服务指标只是噪声，
- * 而且响应里带用户输入原文。
+ * 完整记录页与首页都读取统一 `/api/retrieval-records/summary`。这里保留旧的
+ * OpsUsage 形状，避免首页展示迁移牵动知识资产仪表盘；系统状态页已不再使用它。
  */
 import { createProxyClient, extractOne } from '@/api/proxyClient'
 import type { OpsUsage } from '@/types/ops'
+import type { RetrievalRecordsSummary } from '@/types/retrievalRecords'
 
 export function useOpsApi() {
   const client = createProxyClient('mining')
 
   return {
-    /**
-     * 检索使用分析。days 只影响摘要与各列表；趋势折线固定 30 天（后端 TREND_DAYS），
-     * 好与挖掘趋势并排比较。
-     *
-     * 响应恒带 available：serving 从没启动过时那张表不存在，后端回一份形状相同的空壳，
-     * 调用方只需判这一个字段。
-     */
     async getUsage(
       domain: string,
       options: { days?: number; view?: 'full' | 'dashboard' } = {},
     ): Promise<OpsUsage> {
       const params: Record<string, string | number> = { domain }
       if (options.days !== undefined) params.days = options.days
-      if (options.view !== undefined) params.view = options.view
-      const { data } = await client.get('/api/ops/usage', {
-        params,
-      })
-      return extractOne<OpsUsage>(data)
+      const { data } = await client.get('/api/retrieval-records/summary', { params })
+      const value = extractOne<RetrievalRecordsSummary>(data)
+      return {
+        available: value.available,
+        days: value.days,
+        summary: {
+          queries: value.summary.total_calls,
+          no_result: value.summary.no_result,
+          no_result_rate: value.summary.no_result_rate,
+          failed: value.summary.failed,
+          failed_rate: value.summary.failure_rate,
+          p95_duration_ms: value.summary.p95_duration_ms,
+        },
+      }
     },
   }
 }

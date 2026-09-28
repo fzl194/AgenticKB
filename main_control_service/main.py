@@ -184,7 +184,8 @@ def create_app(
         ttl = auth_mw.token_ttl_seconds if auth_mw else 43200
         from main_control_service.jwt_util import encode as jwt_encode
         token = jwt_encode(
-            {"sub": u["username"], "role": u["site_role"], "name": u.get("display_name") or u["username"]},
+            {"sub": u["username"], "uid": u.get("id"), "role": u["site_role"],
+             "name": u.get("display_name") or u["username"]},
             secret, ttl=int(ttl),
         )
         return JSONResponse(content={"token": token, "user": u})

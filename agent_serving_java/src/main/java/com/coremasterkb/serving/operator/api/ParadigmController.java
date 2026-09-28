@@ -198,11 +198,15 @@ public class ParadigmController {
             @PathVariable String id,
             @RequestParam(required = false) Integer version,
             @RequestBody JsonNode body,
-            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser,
+            @RequestHeader(value = "X-KB-User-Id", required = false) String kbUserId,
+            @RequestHeader(value = "X-KB-Access-Id", required = false) String accessId,
+            @RequestHeader(value = "X-KB-Call-Source", required = false) String source) {
         ParadigmVersionEntity ve = paradigmService.resolveExecutableVersion(id, version);
         JsonNode graph = parseOrNull(ve.getGraphJson());
         return executionService.run(
-                graph, ParadigmRequests.toRunArgs(body, kbUser).withParadigm(id, ve.getVersion()));
+                graph, ParadigmRequests.toRunArgs(body, kbUser, kbUserId, accessId, source)
+                        .withParadigm(id, ve.getVersion()));
     }
 
     /** Compile-validate the draft (no execution). */
@@ -226,10 +230,14 @@ public class ParadigmController {
     public Map<String, Object> dryRun(
             @PathVariable String id,
             @RequestBody JsonNode body,
-            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser,
+            @RequestHeader(value = "X-KB-User-Id", required = false) String kbUserId,
+            @RequestHeader(value = "X-KB-Access-Id", required = false) String accessId,
+            @RequestHeader(value = "X-KB-Call-Source", required = false) String source) {
         JsonNode draft = paradigmService.resolveDraftGraph(id);
         return executionService.run(
-                draft, ParadigmRequests.toRunArgs(body, kbUser).withParadigm(id, null));
+                draft, ParadigmRequests.toRunArgs(body, kbUser, kbUserId, accessId, source)
+                        .withParadigm(id, null));
     }
 
     // ---- views ---------------------------------------------------------------------------

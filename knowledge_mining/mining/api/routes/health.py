@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from knowledge_mining.mining.services.retrieval_records import (
+    get_access_record_metrics,
+)
+
 router = APIRouter(tags=["health"])
 
 
@@ -23,6 +27,7 @@ async def health(request: Request) -> dict:
         "service": "mining-api",
         "version": "3.0.0",
         "postgresql": "connected" if db_ok else "disconnected",
+        **get_access_record_metrics(),
     }
 
 

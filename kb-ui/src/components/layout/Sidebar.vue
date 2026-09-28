@@ -42,7 +42,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Monitor, Management, Key,
-  Cpu, Setting, Connection, Files, Share, UserFilled,
+  Cpu, Setting, Connection, Files, Share, UserFilled, Tickets,
 } from '@element-plus/icons-vue'
 import { useDomainStore } from '@/stores/domain'
 import { useBrandStore, resolveIcon } from '@/stores/brand'
@@ -65,6 +65,7 @@ const logoSrc = computed(() => (brand.icon.trim() ? resolveIcon(brand.icon) : ''
 const ALL_NAV = [
   { path: '/', label: '概览', icon: Monitor, access: 'all' },
   { path: '/kb', label: '知识库', icon: Files, access: 'all' },
+  { path: '/retrieval-records', label: '检索记录', icon: Tickets, access: 'all' },
   { path: '/mcp', label: 'MCP 接入', icon: Key, access: 'all' },
   { path: '/users', label: '用户管理', icon: UserFilled, access: 'domain-users' },
   // 47 号：一张网接入（管理员：产品文档导入/重同步；KB 侧引用在知识库详情 tab）

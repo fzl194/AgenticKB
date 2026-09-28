@@ -20,7 +20,7 @@ databases/
 | 表 | DDL | 建表时机 |
 |---|---|---|
 | `operator_paradigm` / `operator_paradigm_version` | `db/operator/001_operator_paradigm.sql` | `ParadigmSchemaInitializer`，启动时建在非路由的 `defaultDataSource` 上 |
-| `serving_query_logs` | `db/serving/001_serving_query_logs.sql` | `ServingRuntimeSchemaInitializer` |
+| `knowledge_access_records` | `databases/kb/schemas/015_knowledge_access_records.sql` | versioned database upgrade/bootstrap |
 | `serving_query_cache` | `db/serving/002_serving_query_cache.sql` | 同上 |
 
 后两张表走 `@Primary` 的 `DomainRoutingDataSource`，所以**每个域会写进自己的库**

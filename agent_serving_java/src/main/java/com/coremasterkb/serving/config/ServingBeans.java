@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
  * Explicit wiring for plain-Java components that are not annotated with
  * {@code @Component}/{@code @Service}/{@code @Repository}.
  *
- * <p>Components already picked up by component scanning (QueryLogService,
+ * <p>Components already picked up by component scanning (KnowledgeAccessRecordService,
  * QueryLogAspect, AssetRepository) are NOT declared here.</p>
  */
 @Configuration

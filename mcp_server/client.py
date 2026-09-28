@@ -15,6 +15,7 @@ import time
 
 import httpx
 
+from mcp_server.access_records import current_access_call
 from mcp_server.identity import Identity
 from mcp_server.schemas import (
     HealthResult,
@@ -273,7 +274,15 @@ def _match(entries: list[dict], named: str) -> dict | None:
 
 def _identity_headers(identity: Identity) -> dict[str, str]:
     """X-KB-User 透传：serving 按密钥用户实时授权（private 库对 owner/member 可见）。"""
-    return {"X-KB-User": identity.username}
+    headers = {"X-KB-User": identity.username}
+    internal_auth = os.environ.get("SERVING_INTERNAL_AUTH_SECRET", "").strip()
+    if internal_auth:
+        headers["X-Internal-Auth"] = internal_auth
+    access = current_access_call.get()
+    if access and access.get("id"):
+        headers["X-KB-Access-Id"] = str(access["id"])
+        headers["X-KB-Call-Source"] = "mcp"
+    return headers
 
 
 def _resolve_paradigm(domain: str, kb_ids: list[str] | None) -> tuple[dict, str] | None:
@@ -325,6 +334,11 @@ def _search_via_paradigm(
     无内部 id/score/rank）；非该形状的响应按异常暴露，不冒充证据列表。
     """
     paradigm_id = target["paradigmId"]
+    access = current_access_call.get()
+    if access is not None:
+        access["paradigm_id"] = paradigm_id
+        if target.get("version") is not None:
+            access["paradigm_version"] = target["version"]
     payload: dict = {"query": inp.query, "domain": inp.domain, "debug": inp.debug}
     if kb_ids:
         payload["kbIds"] = kb_ids
@@ -350,11 +364,10 @@ def _search_via_paradigm(
         return {"error": str(exc), "message": "检索服务暂不可用，请稍后重试。"}
 
     if resp.status_code != 200:
+        access_id = str(access.get("id")) if access and access.get("id") else "unknown"
         logger.warning(
-            "paradigm search (%s) returned HTTP %d for query=%r",
-            paradigm_id,
-            resp.status_code,
-            inp.query[:80],
+            "paradigm search failed access_id=%s paradigm=%s status=%d query_length=%d",
+            access_id, paradigm_id, resp.status_code, len(inp.query),
         )
         # D2（2026-08-31 用户 E2E）：serving 的管线错误体 {"error": code, ...}
         # 必须转成结构化错误——裸泡 HTTP 500/404 会让 Agent 无从修正。

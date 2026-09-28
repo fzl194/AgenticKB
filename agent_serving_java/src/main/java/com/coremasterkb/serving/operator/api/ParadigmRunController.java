@@ -45,12 +45,15 @@ public class ParadigmRunController {
     @PostMapping("/run")
     public ResponseEntity<Map<String, Object>> run(
             @RequestBody JsonNode body,
-            @RequestHeader(value = "X-KB-User", required = false) String kbUser) {
+            @RequestHeader(value = "X-KB-User", required = false) String kbUser,
+            @RequestHeader(value = "X-KB-User-Id", required = false) String kbUserId,
+            @RequestHeader(value = "X-KB-Access-Id", required = false) String accessId,
+            @RequestHeader(value = "X-KB-Call-Source", required = false) String source) {
         JsonNode paradigm = body.get("paradigm");
         if (paradigm == null || paradigm.isNull()) {
             return ResponseEntity.badRequest().body(Map.of("error", "missing 'paradigm'"));
         }
-        var args = ParadigmRequests.toRunArgs(body, kbUser);
+        var args = ParadigmRequests.toRunArgs(body, kbUser, kbUserId, accessId, source);
         return ResponseEntity.ok(executionService.run(paradigm, args));
     }
 }

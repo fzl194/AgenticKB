@@ -388,7 +388,7 @@ describe('概览页（统计仪表盘）', () => {
     expect(opsApi.getUsage).toHaveBeenCalledWith(
       'cloud_core_network', { view: 'dashboard' },
     )
-    expect(wrapper.text()).toContain('运维概览')
+    expect(wrapper.text()).toContain('检索概况')
     expect(wrapper.text()).toContain('零结果率')
   })
 
@@ -407,13 +407,13 @@ describe('概览页（统计仪表盘）', () => {
     expect(wrapper.text()).toContain('零结果率')
   })
 
-  it('admin 能看到答不上来的问题原文——这是整块里最有行动价值的一段', async () => {
+  it('首页不再展示查询原文，统一下钻到检索记录', async () => {
     setRole('admin')
 
     const { wrapper } = await mountDash()
 
-    expect(wrapper.text()).toContain('SMF 会话建立超时')
-    expect(wrapper.text()).toContain('12 次')
+    expect(wrapper.text()).not.toContain('SMF 会话建立超时')
+    expect(wrapper.text()).toContain('查看检索记录')
   })
 
   it('运维接口挂掉不牵连知识库统计', async () => {
@@ -422,12 +422,12 @@ describe('概览页（统计仪表盘）', () => {
 
     const { wrapper } = await mountDash()
 
-    expect(wrapper.text()).toContain('运维数据加载失败')
+    expect(wrapper.text()).toContain('检索概况加载失败')
     expect(wrapper.text()).toContain('120')      // 检索单元数还在
     expect(wrapper.text()).toContain('KB-A')     // 卡片还在
   })
 
-  it('serving 没产出过日志时说明原因，而不是画一屏 0', async () => {
+  it('新表尚无记录时说明只从本版本开始，而不是画一屏 0', async () => {
     setRole('admin')
     opsApi.getUsage.mockResolvedValue(usage({
       available: false,
@@ -439,7 +439,7 @@ describe('概览页（统计仪表盘）', () => {
 
     const { wrapper } = await mountDash()
 
-    expect(wrapper.text()).toContain('尚未产生检索日志')
+    expect(wrapper.text()).toContain('本版本上线后开始产生')
     expect(wrapper.text()).not.toContain('零结果率')
   })
 
@@ -468,7 +468,7 @@ describe('概览页（统计仪表盘）', () => {
 
     const { wrapper } = await mountDash()
 
-    expect(wrapper.text()).toContain('建议从下面的清单补充知识')
+    expect(wrapper.text()).toContain('建议打开检索记录查看需要补充的知识')
   })
 
   it('切域时丢弃旧域的迟到响应（竞态守卫）', async () => {

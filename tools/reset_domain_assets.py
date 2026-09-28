@@ -71,7 +71,7 @@ PRESERVED_TABLES = frozenset({
     "asset_documents", "asset_storage_objects",
     "agent_llm_attempts", "agent_llm_events", "agent_llm_model_calls",
     "agent_llm_prompt_templates", "agent_llm_requests", "agent_llm_results",
-    "agent_llm_tasks", "serving_query_logs",
+    "agent_llm_tasks", "knowledge_access_records", "knowledge_access_record_payloads",
 })
 
 

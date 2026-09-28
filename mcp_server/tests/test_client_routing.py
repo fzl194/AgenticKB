@@ -152,6 +152,14 @@ def test_domain_default_goes_to_its_paradigm_with_identity(monkeypatch, calls):
     assert "kbIds=kb-1" in str(resolve_call.url)
 
 
+def test_identity_headers_include_serving_internal_auth(monkeypatch):
+    monkeypatch.setenv("SERVING_INTERNAL_AUTH_SECRET", "serving-secret")
+
+    headers = mcp_client._identity_headers(ident())
+
+    assert headers["X-KB-User"] == "alice"
+    assert headers["X-Internal-Auth"] == "serving-secret"
+
 def test_library_binding_wins_when_consistent(monkeypatch, calls):
     install(
         monkeypatch,

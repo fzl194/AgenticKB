@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from main_control_service.jwt_util import encode
+from main_control_service.jwt_util import decode, encode
 from main_control_service.main import create_app
 from main_control_service.proxy import _build_forward_headers
 
@@ -34,13 +34,14 @@ def _client(tmp_path: Path, *, registry: str | None = None) -> TestClient:
 def test_login_success_returns_token(tmp_path):
     with _client(tmp_path) as c:
         with patch("main_control_service.main.verify_user_via_mining", new_callable=AsyncMock) as m:
-            m.return_value = {"ok": True, "user": {"username": "alice", "display_name": "Alice", "site_role": "admin"}}
+            m.return_value = {"ok": True, "user": {"id": "user-1", "username": "alice", "display_name": "Alice", "site_role": "admin"}}
             r = c.post("/api/v1/auth/login", json={"username": "alice", "password": "pw"})
             assert r.status_code == 200, r.text
             body = r.json()
             assert "token" in body and body["token"].count(".") == 2
             assert body["user"]["username"] == "alice"
             assert body["user"]["site_role"] == "admin"
+            assert decode(body["token"], "s")["uid"] == "user-1"
 
 
 def test_login_bad_credentials_401(tmp_path):
@@ -171,16 +172,50 @@ def test_build_forward_headers_injects_kb_headers():
         headers={"x-some-header": "keep"},
         client=SimpleNamespace(host="1.2.3.4"),
         url=SimpleNamespace(scheme="http"),
-        state=SimpleNamespace(user={"username": "alice", "role": "member"}),
+        state=SimpleNamespace(user={"id": "user-1", "username": "alice", "role": "member"}),
         app=SimpleNamespace(state=SimpleNamespace(internal_verify_secret="ivs")),
     )
     h = _build_forward_headers(req)
     assert h["X-KB-User"] == "alice"
     assert h["X-KB-Role"] == "member"
+    assert h["X-KB-User-Id"] == "user-1"
     assert h["X-Internal-Auth"] == "ivs"
+    assert h["X-KB-Call-Source"] == "web"
+    assert len(h["X-KB-Access-Id"]) == 36
     assert h["x-some-header"] == "keep"
     assert h["X-Forwarded-For"] == "1.2.3.4"
 
+
+def test_serving_forward_headers_use_serving_secret_and_strip_spoof(monkeypatch):
+    monkeypatch.setenv("SERVING_INTERNAL_AUTH_SECRET", "serving-secret")
+    req = SimpleNamespace(
+        headers={"x-internal-auth": "browser-spoof"},
+        client=SimpleNamespace(host="1.2.3.4"),
+        url=SimpleNamespace(scheme="http"),
+        state=SimpleNamespace(user={"id": "user-1", "username": "alice", "role": "member"}),
+        app=SimpleNamespace(state=SimpleNamespace(internal_verify_secret="mining-secret")),
+    )
+
+    h = _build_forward_headers(req, service="serving")
+
+    assert h["X-Internal-Auth"] == "serving-secret"
+    assert "browser-spoof" not in h.values()
+
+
+def test_serving_forward_headers_do_not_fallback_when_secret_missing(monkeypatch):
+    monkeypatch.delenv("SERVING_INTERNAL_AUTH_SECRET", raising=False)
+    req = SimpleNamespace(
+        headers={"x-internal-auth": "browser-spoof"},
+        client=SimpleNamespace(host="1.2.3.4"),
+        url=SimpleNamespace(scheme="http"),
+        state=SimpleNamespace(user={"id": "user-1", "username": "alice", "role": "member"}),
+        app=SimpleNamespace(state=SimpleNamespace(internal_verify_secret="mining-secret")),
+    )
+
+    h = _build_forward_headers(req, service="serving")
+
+    assert "X-Internal-Auth" not in h
+    assert "x-internal-auth" not in h
 
 def test_build_forward_headers_no_user_skips_injection():
     """无 request.state.user（如 SKIP_PATH 的 login）→ 不注入 X-KB-*。"""
@@ -199,13 +234,36 @@ def test_build_forward_headers_no_user_skips_injection():
 def test_build_forward_headers_strips_authorization():
     """浏览器自带的 Authorization 必须被剥（不转发给 mining）。"""
     req = SimpleNamespace(
-        headers={"authorization": "Bearer jwt-secret", "cookie": "c"},
+        headers={
+            "authorization": "Bearer jwt-secret",
+            "cookie": "c",
+            "x-kb-access-id": "spoofed",
+            "x-kb-call-source": "mcp",
+            "x-kb-user-id": "spoofed-user",
+        },
         client=SimpleNamespace(host="1.2.3.4"),
         url=SimpleNamespace(scheme="http"),
-        state=SimpleNamespace(user={"username": "a", "role": "member"}),
+        state=SimpleNamespace(user={"id": "real-user", "username": "a", "role": "member"}),
         app=SimpleNamespace(state=SimpleNamespace(internal_verify_secret="ivs")),
     )
     h = _build_forward_headers(req)
     assert "authorization" not in h and "Authorization" not in h
     assert "cookie" not in h
     assert h["X-KB-User"] == "a"
+    assert h["X-KB-User-Id"] == "real-user"
+    assert h["X-KB-Call-Source"] == "web"
+    assert h["X-KB-Access-Id"] != "spoofed"
+
+
+def test_build_forward_headers_legacy_token_omits_user_id():
+    """旧 token 没有 uid 时不伪造 ID，由 serving 按用户名兼容回查。"""
+    req = SimpleNamespace(
+        headers={"x-kb-user-id": "spoofed-user"},
+        client=SimpleNamespace(host="1.2.3.4"),
+        url=SimpleNamespace(scheme="http"),
+        state=SimpleNamespace(user={"username": "legacy", "role": "member"}),
+        app=SimpleNamespace(state=SimpleNamespace(internal_verify_secret="ivs")),
+    )
+    h = _build_forward_headers(req)
+    assert "X-KB-User-Id" not in h
+    assert h["X-KB-User"] == "legacy"

@@ -148,7 +148,11 @@ def test_service_only_internal_auth_precedes_body_validation() -> None:
     app.state.pg_pool = object()  # 依赖解析需要；鉴权短路后不会真正触库
     client = TestClient(app)
     try:
-        for path in ("/api/kb/auth/identify", "/api/kb/auth/verify"):
+        for path in (
+            "/api/kb/auth/identify",
+            "/api/kb/auth/verify",
+            "/api/internal/retrieval-records",
+        ):
             response = client.post(path)
             assert response.status_code == 401, path
     finally:
@@ -165,11 +169,15 @@ def test_service_only_body_validation_applies_after_internal_auth(monkeypatch: p
     app.state.pg_pool = object()  # KbDB 惰性持有；body 校验不触库
     client = TestClient(app)
     try:
-        response = client.post(
+        for path in (
             "/api/kb/auth/verify",
-            headers={"X-Internal-Auth": "test-ivs"},
-        )
-        assert response.status_code == 422
+            "/api/internal/retrieval-records",
+        ):
+            response = client.post(
+                path,
+                headers={"X-Internal-Auth": "test-ivs"},
+            )
+            assert response.status_code == 422, path
     finally:
         client.close()
 

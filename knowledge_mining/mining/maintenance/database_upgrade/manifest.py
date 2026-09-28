@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -18,6 +19,44 @@ class ManifestError(ValueError):
 class AppliedMigrationMismatch(ManifestError):
     """A published migration differs from the version recorded in the database."""
 
+
+_PROTECTED_ACCESS_LEDGER_TABLES = (
+    "knowledge_access_records",
+    "knowledge_access_record_payloads",
+)
+_SQL_COMMENT_PATTERN = re.compile(r"--[^\n]*|/\*.*?\*/", re.DOTALL)
+
+
+def _validate_online_expand_sql(migration_id: str, sql_text: str) -> None:
+    """Reject destructive in-place changes to the durable access ledger."""
+
+    clean = _SQL_COMMENT_PATTERN.sub(" ", sql_text).replace('"', "").lower()
+    for statement in clean.split(";"):
+        normalized = " ".join(statement.split())
+        if not normalized:
+            continue
+        for table in _PROTECTED_ACCESS_LEDGER_TABLES:
+            qualified = rf"(?:public\.)?{re.escape(table)}"
+            if re.search(rf"\bdrop\s+table\b.*\b{qualified}\b", normalized):
+                raise ManifestError(
+                    f"{migration_id} online_expand 禁止 DROP {table}"
+                )
+            if re.search(r"\btruncate\b", normalized) and re.search(
+                rf"\b{qualified}\b", normalized,
+            ):
+                raise ManifestError(
+                    f"{migration_id} online_expand 禁止 TRUNCATE {table}"
+                )
+            delete_match = re.search(
+                rf"\bdelete\s+from\s+(?:only\s+)?{qualified}\b",
+                normalized,
+            )
+            if delete_match and not re.search(
+                r"\bwhere\b", normalized[delete_match.end():]
+            ):
+                raise ManifestError(
+                    f"{migration_id} online_expand 禁止无 WHERE DELETE {table}"
+                )
 
 class MigrationMode(str, Enum):
     """Operational safety class for a migration."""
@@ -105,6 +144,9 @@ def load_manifest(path: Path) -> MigrationManifest:
             raise ManifestError(f"{migration_id} path 越出 migrations 目录") from exc
         if sql_path.suffix.lower() != ".sql":
             raise ManifestError(f"{migration_id} 不是 SQL 文件")
+        sql_text = sql_path.read_text(encoding="utf-8")
+        if mode is MigrationMode.ONLINE_EXPAND:
+            _validate_online_expand_sql(migration_id, sql_text)
         actual_checksum = _file_checksum(sql_path)
         if actual_checksum != checksum:
             raise ManifestError(

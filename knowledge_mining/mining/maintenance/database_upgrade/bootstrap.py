@@ -22,7 +22,6 @@ from .validation import validate_schema
 
 
 JAVA_BOOTSTRAP_SQL = (
-    "agent_serving_java/src/main/resources/db/serving/001_serving_query_logs.sql",
     "agent_serving_java/src/main/resources/db/serving/013_user_domains.sql",
     "agent_serving_java/src/main/resources/db/operator/001_operator_paradigm.sql",
     "agent_serving_java/src/main/resources/db/operator/003_paradigm_domain_binding_retirement.sql",

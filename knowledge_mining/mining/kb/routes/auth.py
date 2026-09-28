@@ -179,6 +179,7 @@ async def verify_credentials(
     if user is None:
         raise HTTPException(401, "invalid credentials")
     return {"ok": True, "user": {
+        "id": user["id"],
         "username": user["username"],
         "display_name": user.get("display_name"),
         "site_role": user["site_role"],

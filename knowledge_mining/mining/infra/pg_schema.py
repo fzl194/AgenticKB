@@ -138,6 +138,18 @@ _USER_DOMAINS_DDL = (
 )
 # 51号批次2：MCP 多钥匙化——一人多把单域钥匙 + 钥匙级开放库。
 _MCP_KEYS_DDL = _REPO_ROOT / "databases" / "kb" / "schemas" / "014_mcp_keys.sql"
+# Unified Web/API/MCP access ledger. It belongs to the converged schema rather
+# than to a single runtime service.
+_KNOWLEDGE_ACCESS_RECORDS_DDL = (
+    _REPO_ROOT / "databases" / "kb" / "schemas" / "015_knowledge_access_records.sql"
+)
+_KNOWLEDGE_ACCESS_RECORD_PAYLOADS_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "kb"
+    / "schemas"
+    / "016_knowledge_access_record_payloads.sql"
+)
 # KB 硬删任务化（013）：status 加 deleting + kb_purge_tasks 进度表。
 _KB_PURGE_TASKS_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "013_kb_purge_tasks.sql"
@@ -247,6 +259,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _USER_DOMAINS_DDL,
         # 51号批次2：MCP 多钥匙（依赖 kb_users/knowledge_bases，链尾安全）。
         _MCP_KEYS_DDL,
+        _KNOWLEDGE_ACCESS_RECORDS_DDL,
+        _KNOWLEDGE_ACCESS_RECORD_PAYLOADS_DDL,
     )
 
 

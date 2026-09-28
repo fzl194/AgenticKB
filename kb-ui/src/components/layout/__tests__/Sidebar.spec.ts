@@ -39,14 +39,13 @@ describe('Sidebar navigation', () => {
     expect(wrapper.text()).not.toContain('知识图谱')
   })
 
-  it('member only sees 概览/知识库（批次6：独立检索菜单已下线）', () => {
+  it('member sees the unified retrieval records entry without exposing admin pages', () => {
     auth.siteRole = 'member'
     const wrapper = shallowMount(Sidebar)
     expect(wrapper.text()).toContain('概览')
     expect(wrapper.text()).toContain('知识库')
-    // 批次6：检索入口收进知识库详情的「检索」tab——member 侧边栏不再有 /search。
-    expect(wrapper.html()).not.toContain('/search')
-    expect(wrapper.text()).not.toContain('检索测试')
+    expect(wrapper.text()).toContain('检索记录')
+    expect(wrapper.html()).toContain('/retrieval-records')
     expect(wrapper.text()).not.toContain('检索范式')
     expect(wrapper.text()).not.toContain('挖掘范式')
     expect(wrapper.text()).not.toContain('系统设置')

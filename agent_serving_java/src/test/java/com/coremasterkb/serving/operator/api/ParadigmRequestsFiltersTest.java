@@ -199,4 +199,32 @@ class ParadigmRequestsFiltersTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("filter_value_invalid:section_scope");
     }
-}
+
+    @Test
+    @DisplayName("可信 user id、access id 与完整业务请求沿 RunArgs 透传")
+    void identityAndOriginalRequestArePreserved() throws Exception {
+        var args = ParadigmRequests.toRunArgs(
+                M.readTree("{\"query\":\"完整问题\",\"top_k\":7,"
+                        + "\"within\":{\"document_refs\":[\"doc_x\"]}}"),
+                "alice", "user-1", "access-1", "web");
+        assertThat(args.username()).isEqualTo("alice");
+        assertThat(args.userId()).isEqualTo("user-1");
+        assertThat(args.accessId()).isEqualTo("access-1");
+        assertThat(args.source()).isEqualTo("web");
+        assertThat(args.requestJson())
+                .contains("完整问题", "\"top_k\":7", "\"document_refs\":[\"doc_x\"]");
+    }
+
+    @Test
+    @DisplayName("请求快照仅保留业务字段并递归剔除敏感键")
+    void requestSnapshotIsWhitelistedAndRecursivelyRedacted() throws Exception {
+        var args = ParadigmRequests.toRunArgs(M.readTree("""
+                {"query":"正文 token=literal","authorization":"top-secret",
+                 "filters":{"asset_types":["table"]},
+                 "paradigm":{"nodes":[],"edges":[],"output":"out","secret":"hidden","metadata":{"jwt":"bad","api_key":"k"}},
+                 "ignored":"nope"}
+                """), "alice", "user-1", "access-1", "web");
+        assertThat(args.requestJson())
+                .contains("正文 token=literal", "nodes", "edges", "output", "asset_types")
+                .doesNotContain("authorization", "top-secret", "password", "api_key", "secret", "jwt", "ignored");
+    }}

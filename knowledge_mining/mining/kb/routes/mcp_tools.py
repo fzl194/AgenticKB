@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from datetime import datetime, timezone
 from hmac import compare_digest
 from typing import Any, AsyncIterator
 
@@ -32,6 +33,7 @@ from knowledge_mining.mining.kb.services.document_service import (
     UploadTooLarge,
     is_upload_archive,
 )
+from knowledge_mining.mining.services.retrieval_records import RetrievalRecordService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/kb/mcp-tools", tags=["kb-mcp-tools"])
@@ -57,13 +59,7 @@ def _require_internal_body(request: Request) -> dict[str, Any]:
 
 
 class _UploadTicketStore:
-    """一次性上传票据账本（capability URL 的服务端侧）。
-
-    票据即凭证：随机 192 位、TTL 内单次使用、绑定 (kb_id, user_id, username,
-    filename, key_id——51号批次2 起直传前还须钥匙 active)。进程内存储——
-    单实例部署约定；重启丢票据只是 10 分钟窗口内的
-    直传作废。过期清理在签发/兑换时顺手做，不起后台线程。
-    """
+    """One-time upload tickets; expired entries are returned for DB closure."""
 
     def __init__(self, ttl_seconds: int = UPLOAD_TICKET_TTL) -> None:
         self._ttl = ttl_seconds
@@ -71,37 +67,46 @@ class _UploadTicketStore:
 
     def issue(
         self, *, kb_id: str, user_id: str, username: str, filename: str,
-        key_id: str = "",
+        key_id: str = "", access_record_id: str = "",
+        access_record_total: int = 1, domain: str = "",
     ) -> dict[str, Any]:
-        self._sweep()
         ticket = f"up_{secrets.token_urlsafe(24)}"
         self._tickets[ticket] = {
             "kb_id": kb_id, "user_id": user_id, "username": username,
             "filename": filename, "key_id": key_id,
+            "access_record_id": access_record_id,
+            "access_record_total": access_record_total,
+            "domain": domain,
             "expires_at": time.monotonic() + self._ttl,
         }
         return {"ticket": ticket, "expires_in": self._ttl}
 
     def peek(self, ticket: str) -> dict[str, Any] | None:
-        """查看票据但不消费（过期判定与 redeem 共用；供兑换前的预检用）。"""
-        self._sweep()
         entry = self._tickets.get(ticket)
         if entry is None or entry["expires_at"] < time.monotonic():
             return None
         return entry
 
     def redeem(self, ticket: str) -> dict[str, Any] | None:
-        """取出并作废票据（单次使用；过期或未知返回 None）。"""
         entry = self.peek(ticket)
         if entry is not None:
-            self._tickets.pop(ticket, None)  # pop = 单次使用
+            self._tickets.pop(ticket, None)
         return entry
 
-    def _sweep(self) -> None:
+    def drain_expired(self) -> list[dict[str, Any]]:
         now = time.monotonic()
-        for stale in [k for k, v in self._tickets.items() if v["expires_at"] < now]:
-            del self._tickets[stale]
+        expired: list[dict[str, Any]] = []
+        for stale in [
+            key for key, value in self._tickets.items()
+            if value["expires_at"] < now
+        ]:
+            entry = self._tickets.pop(stale, None)
+            if entry is not None:
+                expired.append(entry)
+        return expired
 
+    def _sweep(self) -> None:
+        self.drain_expired()
 
 _TICKETS = _UploadTicketStore()
 
@@ -214,12 +219,14 @@ async def list_documents(
 @router.post("/begin-upload", dependencies=[Depends(_require_internal_body)])
 async def begin_upload(
     body: dict[str, Any],
+    request: Request,
     kbdb: KbDB = Depends(get_kb_db),
 ) -> dict[str, Any]:
     """直传第一步：校验权限与文件名，签发一次性上传票据。"""
+    await _expire_upload_tickets(request)
     username = str(body.get("username") or "")
     key_id = str(body.get("key_id") or "")
-    user_id, _key = await _key_scope(kbdb, username, key_id)
+    user_id, key = await _key_scope(kbdb, username, key_id)
     kb_id = str(body.get("kb_id") or "")
     await _visible_kb(kbdb, user_id, kb_id)
     if kb_id not in await kbdb.key_open_kb_ids(key_id=key_id):
@@ -228,6 +235,11 @@ async def begin_upload(
     if not await kbdb.can_write(kb_id=kb_id, user_id=user_id):
         raise HTTPException(403, "only owner or editor may upload")
     filename = _validated_filename(body.get("filename"))
+    access_record_id = str(body.get("access_record_id") or "")
+    try:
+        access_record_total = max(1, min(500, int(body.get("access_record_total") or 1)))
+    except (TypeError, ValueError):
+        access_record_total = 1
 
     # 归档（zip/hdx/chm）与网页上传同限（默认 500MB）；普通文件走 MCP 上限
     max_bytes = (
@@ -237,6 +249,9 @@ async def begin_upload(
     issued = _TICKETS.issue(
         kb_id=kb_id, user_id=user_id, username=username, filename=filename,
         key_id=key_id,
+        access_record_id=access_record_id,
+        access_record_total=access_record_total,
+        domain=str(key.get("domain") or ""),
     )
     logger.info("[mcp-tools] begin-upload by %s -> kb=%s file=%s ticket=%s",
                 username, kb_id, filename, issued["ticket"][:11] + "…")
@@ -290,10 +305,14 @@ async def upload_direct(
             file_max_bytes=MAX_UPLOAD_BYTES,
         )
     except UploadTooLarge as exc:
+        await _complete_upload_access_record(
+            request, entry, success=False, error_code="upload_too_large")
         raise HTTPException(
             413, f"file too large（上限 {exc.limit_bytes} 字节）"
         ) from exc
     except ValueError as exc:
+        await _complete_upload_access_record(
+            request, entry, success=False, error_code="upload_invalid")
         raise HTTPException(400, str(exc)) from None
     logger.info("[mcp-tools] upload-direct by %s -> kb=%s file=%s kind=%s",
                 username, entry["kb_id"], entry["filename"], result["kind"])
@@ -314,11 +333,12 @@ async def upload_direct(
     }
     if result["kind"] == "file":
         document = result["document"]
-        return _upload_response(document.get("id"), document.get("document_name"),
-                                auto, "已上传")
-    if result["kind"] == "archive":
+        response = _upload_response(
+            document.get("id"), document.get("document_name"), auto, "已上传"
+        )
+    elif result["kind"] == "archive":
         docs = result["documents"]
-        return {
+        response = {
             "kind": "archive",
             "document_count": len(docs),
             "documents": [
@@ -331,18 +351,142 @@ async def upload_direct(
                 f"{'入队挖掘' if auto.get('auto_mined') else '未自动挖掘'}"
             ),
         }
-    # 大归档后台解压中：挖掘 Run 已入队，认领时通常解压已完成（本地磁盘）
-    return {
-        "kind": "archive_task",
-        "archive_task_id": result["archive_task_id"],
-        "status": "processing",
-        **auto_fields,
-        "message": (
-            "归档较大，正在后台解压入库；解压完成后用 get_knowledge(kb_name=…) "
-            "可看到全部文档，挖掘任务已排队"
-        ),
-    }
+    else:
+        # 大归档后台解压中：挖掘 Run 已入队，认领时通常解压已完成（本地磁盘）
+        response = {
+            "kind": "archive_task",
+            "archive_task_id": result["archive_task_id"],
+            "status": "processing",
+            **auto_fields,
+            "message": (
+                "归档较大，正在后台解压入库；解压完成后用 get_knowledge(kb_name=…) "
+                "可看到全部文档，挖掘任务已排队"
+            ),
+        }
+    await _complete_upload_access_record(
+        request, entry, success=True, response_refs=_safe_upload_refs(response),
+    )
+    return response
 
+async def _expire_upload_tickets(request: Request) -> None:
+    for entry in _TICKETS.drain_expired():
+        await _complete_upload_access_record(
+            request, entry, success=False, error_code="upload_expired",
+        )
+
+
+async def _complete_upload_access_record(
+    request: Request,
+    entry: dict[str, Any],
+    *,
+    success: bool,
+    error_code: str | None = None,
+    response_refs: list[dict[str, Any]] | None = None,
+) -> None:
+    record_id = str(entry.get("access_record_id") or "")
+    domain = str(entry.get("domain") or "")
+    if not record_id or not domain:
+        return
+    total = max(1, int(entry.get("access_record_total") or 1))
+    try:
+        pool = await request.app.state.domain_pools.async_pool(domain)
+        service = RetrievalRecordService(pool)
+        if total > 1:
+            await service.complete_upload_file(
+                record_id=record_id,
+                success=success,
+                error_code=error_code,
+                response_refs=response_refs,
+            )
+            return
+
+        payload = None
+        if response_refs:
+            payload = {
+                "response_mode": "reference",
+                "response_json": None,
+                "response_refs_json": response_refs,
+                "response_truncated": False,
+                "response_omitted_count": 0,
+                "redactions_json": [],
+                "payload_schema_version": 1,
+            }
+        await service.write_record({
+            "id": record_id,
+            "occurred_at": None,
+            "completed_at": datetime.now(timezone.utc),
+            "domain": domain,
+            "actor_user_id": entry.get("user_id"),
+            "actor_username": entry.get("username"),
+            "source": "mcp",
+            "operation": "upload",
+            "tool_name": "upload_document",
+            "mcp_key_id": entry.get("key_id"),
+            "kb_ids": [entry.get("kb_id")] if entry.get("kb_id") else [],
+            "query_text": None,
+            "paradigm_id": None,
+            "paradigm_version": None,
+            "status": "success" if success else "failed",
+            "result_count": None,
+            "duration_ms": None,
+            "error_code": error_code if not success else None,
+            "details_json": {
+                "file_count": 1,
+                "completed_count": 1,
+                "uploaded_count": 1 if success else 0,
+                "failed_count": 0 if success else 1,
+                "terminal_owner": "mining",
+            },
+            **({"payload": payload} if payload is not None else {}),
+        })
+    except Exception as exc:
+        logger.warning(
+            "access_record_write_failed",
+            extra={
+                "record_id": record_id,
+                "tool": "upload_document",
+                "phase": "upload_complete",
+                "error_class": exc.__class__.__name__,
+            },
+        )
+
+
+def _safe_upload_refs(response: dict[str, Any]) -> list[dict[str, Any]]:
+    common = {
+        key: response[key]
+        for key in ("run_id", "auto_mined")
+        if key in response
+    }
+    if response.get("kind") == "file":
+        return [{
+            **common,
+            **{
+                key: response[key]
+                for key in ("document_id", "document_name")
+                if response.get(key) is not None
+            },
+        }]
+    if response.get("kind") == "archive":
+        return [
+            {
+                **common,
+                **{
+                    key: document[key]
+                    for key in ("document_id", "document_name")
+                    if document.get(key) is not None
+                },
+            }
+            for document in response.get("documents") or []
+            if isinstance(document, dict)
+        ]
+    return [{
+        **common,
+        **{
+            key: response[key]
+            for key in ("archive_task_id", "status")
+            if response.get(key) is not None
+        },
+    }]
 
 def _upload_response(document_id, document_name, auto, prefix) -> dict[str, Any]:
     if auto.get("auto_mined"):

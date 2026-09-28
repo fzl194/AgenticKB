@@ -32,6 +32,11 @@ const router = createRouter({
           component: () => import('@/views/McpAccessView.vue'),
         },
         {
+          path: 'retrieval-records',
+          name: 'retrieval-records',
+          component: () => import('@/views/RetrievalRecordsView.vue'),
+        },
+        {
           path: 'onenet',
           name: 'onenet-admin',
           component: () => import('@/views/onenet/OnenetAdminView.vue'),

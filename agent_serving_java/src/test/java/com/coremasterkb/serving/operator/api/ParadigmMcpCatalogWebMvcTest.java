@@ -1,5 +1,7 @@
 package com.coremasterkb.serving.operator.api;
 
+import com.coremasterkb.serving.api.TrustedIdentityHeaderFilter;
+import com.coremasterkb.serving.config.ServingProperties;
 import com.coremasterkb.serving.operator.paradigm.ParadigmCatalogService;
 import com.coremasterkb.serving.operator.paradigm.ParadigmService;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +59,9 @@ class ParadigmMcpCatalogWebMvcTest {
                         mock(ParadigmExecutionService.class)))
                 .setControllerAdvice(new OperatorExceptionHandler(
                         new com.coremasterkb.serving.api.GlobalExceptionHandler()))
+                .addFilters(new TrustedIdentityHeaderFilter(new ServingProperties(
+                        null, null, null, null, null, null,
+                        new ServingProperties.InternalAuth("test-serving-secret"))))
                 .build();
     }
 
@@ -83,7 +88,8 @@ class ParadigmMcpCatalogWebMvcTest {
     @Test
     @DisplayName("identified caller gets hidden with its reasons (publish-quality only)")
     void identifiedCallerGetsHidden() throws Exception {
-        mockMvc.perform(get("/api/v1/paradigm/mcp-catalog").header("X-KB-User", "admin"))
+        mockMvc.perform(get("/api/v1/paradigm/mcp-catalog").header("X-KB-User", "admin")
+                        .header("X-Internal-Auth", "test-serving-secret"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.hidden[0].id").value("pd-xyz"))
                 .andExpect(jsonPath("$.hidden[0].reason").value("not_servable"));
@@ -91,6 +97,25 @@ class ParadigmMcpCatalogWebMvcTest {
         verify(catalogService).build(isNull(), eq("admin"));
     }
 
+    @Test
+    @DisplayName("identity headers are rejected without the trusted internal credential")
+    void identityHeaderRequiresInternalAuth() throws Exception {
+        mockMvc.perform(get("/api/v1/paradigm/mcp-catalog")
+                        .header("X-KB-User", "spoofed"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("unauthenticated"));
+        verify(catalogService, never()).build(any(), eq("spoofed"));
+    }
+
+    @Test
+    @DisplayName("legacy username-only identity remains valid with trusted internal auth")
+    void trustedUsernameOnlyIdentityRemainsSupported() throws Exception {
+        mockMvc.perform(get("/api/v1/paradigm/mcp-catalog")
+                        .header("X-KB-User", "legacy")
+                        .header("X-Internal-Auth", "test-serving-secret"))
+                .andExpect(status().isOk());
+        verify(catalogService).build(isNull(), eq("legacy"));
+    }
     @Test
     @DisplayName("a blank X-KB-User is treated as anonymous, not as a user named \"\"")
     void blankHeaderIsAnonymous() throws Exception {

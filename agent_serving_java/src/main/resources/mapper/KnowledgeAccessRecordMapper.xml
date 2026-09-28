@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.coremasterkb.serving.mapper.KnowledgeAccessRecordMapper">
+    <insert id="insert" parameterType="com.coremasterkb.serving.entity.KnowledgeAccessRecord">
+        INSERT INTO knowledge_access_records (
+            id, occurred_at, completed_at, domain,
+            actor_user_id, actor_username, source, operation,
+            tool_name, mcp_key_id, kb_ids, query_text,
+            paradigm_id, paradigm_version, status, result_count,
+            duration_ms, error_code, details_json
+        ) VALUES (
+            #{id}, CAST(#{occurredAt} AS timestamptz), CAST(#{completedAt} AS timestamptz), #{domain},
+            COALESCE(#{actorUserId}, (
+                SELECT id FROM kb_users WHERE username = #{actorUsername} LIMIT 1
+            )), #{actorUsername}, #{source}, #{operation},
+            #{toolName}, #{mcpKeyId}, CAST(#{kbIdsJson} AS jsonb), #{queryText},
+            #{paradigmId}, #{paradigmVersion}, #{status}, #{resultCount},
+            #{durationMs}, #{errorCode}, CAST(#{detailsJson} AS jsonb)
+        )
+        ON CONFLICT (id) DO UPDATE SET
+            completed_at = EXCLUDED.completed_at,
+            status = EXCLUDED.status,
+            result_count = EXCLUDED.result_count,
+            duration_ms = EXCLUDED.duration_ms,
+            error_code = EXCLUDED.error_code,
+            details_json = knowledge_access_records.details_json || EXCLUDED.details_json
+        WHERE knowledge_access_records.status = 'pending'
+    </insert>
+
+    <insert id="upsertPayload" parameterType="com.coremasterkb.serving.entity.KnowledgeAccessRecordPayload">
+        INSERT INTO knowledge_access_record_payloads (
+            record_id, request_json, effective_context_json, response_mode,
+            response_json, response_refs_json, request_bytes, response_bytes,
+            response_truncated, response_original_bytes, response_omitted_count,
+            response_sha256, redactions_json, payload_schema_version
+        ) VALUES (
+            #{recordId}, CAST(#{requestJson} AS jsonb), CAST(#{effectiveContextJson} AS jsonb),
+            #{responseMode}, CAST(#{responseJson} AS jsonb), CAST(#{responseRefsJson} AS jsonb),
+            #{requestBytes}, #{responseBytes}, #{responseTruncated}, #{responseOriginalBytes},
+            #{responseOmittedCount}, #{responseSha256}, CAST(#{redactionsJson} AS jsonb),
+            #{payloadSchemaVersion}
+        )
+        ON CONFLICT (record_id) DO UPDATE SET
+            effective_context_json = EXCLUDED.effective_context_json,
+            response_mode = EXCLUDED.response_mode,
+            response_json = COALESCE(EXCLUDED.response_json, knowledge_access_record_payloads.response_json),
+            response_refs_json = EXCLUDED.response_refs_json,
+            response_bytes = COALESCE(EXCLUDED.response_bytes, knowledge_access_record_payloads.response_bytes),
+            response_truncated = EXCLUDED.response_truncated,
+            response_original_bytes = COALESCE(EXCLUDED.response_original_bytes, knowledge_access_record_payloads.response_original_bytes),
+            response_omitted_count = EXCLUDED.response_omitted_count,
+            response_sha256 = COALESCE(EXCLUDED.response_sha256, knowledge_access_record_payloads.response_sha256),
+            redactions_json = EXCLUDED.redactions_json,
+            payload_schema_version = EXCLUDED.payload_schema_version,
+            updated_at = now()
+    </insert></mapper>

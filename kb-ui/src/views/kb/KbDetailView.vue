@@ -83,7 +83,7 @@
         />
       </el-tab-pane>
       <el-tab-pane label="检索" name="search">
-        <KbSearchPanel
+        <KbSearchWorkspace
           :kb="kb" :can-write="canWrite" :readiness="readiness"
           @updated="reload" @go-mining="activeTab = 'mining'"
         />
@@ -127,7 +127,7 @@ import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import KbFileManager from '@/components/kb/KbFileManager.vue'
-import KbSearchPanel from '@/components/kb/KbSearchPanel.vue'
+import KbSearchWorkspace from '@/components/kb/KbSearchWorkspace.vue'
 import KbMembersPanel from '@/components/kb/KbMembersPanel.vue'
 import KbMiningPanel from '@/components/kb/KbMiningPanel.vue'
 import KbQualityPanel from '@/components/kb/KbQualityPanel.vue'

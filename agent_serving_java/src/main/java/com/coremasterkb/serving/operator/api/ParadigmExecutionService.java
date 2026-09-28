@@ -44,29 +44,50 @@ public class ParadigmExecutionService {
     public record RunArgs(String query, String domain, String channel, boolean debug,
                           String username, List<String> kbIds,
                           Map<String, Object> filters, Integer topK, String expansion,
-                          String paradigmId, Integer paradigmVersion) {
+                          String paradigmId, Integer paradigmVersion,
+                          String accessId, String source, String userId, String requestJson) {
 
         public RunArgs(String query, String domain, String channel, boolean debug) {
             this(query, domain, channel, debug, null);
         }
 
         public RunArgs(String query, String domain, String channel, boolean debug, String username) {
-            this(query, domain, channel, debug, username, null, null, null, null, null, null);
+            this(query, domain, channel, debug, username, null, null, null, null,
+                    null, null, null, "api", null, null);
         }
 
         /** 阶段 A：{@code kbIds} = 请求级库范围（可空；只对图内 scope 留空的范式生效）。 */
         public RunArgs withKbIds(List<String> kbIds) {
             return new RunArgs(query, domain, channel, debug, username, kbIds, filters, topK,
-                    expansion, paradigmId, paradigmVersion);
+                    expansion, paradigmId, paradigmVersion, accessId, source, userId, requestJson);
         }
 
         /** Attach the stored-paradigm reference for query-log attribution. */
         public RunArgs withParadigm(String id, Integer version) {
             return new RunArgs(query, domain, channel, debug, username, kbIds, filters, topK,
-                    expansion, id, version);
+                    expansion, id, version, accessId, source, userId, requestJson);
+        }
+
+        public RunArgs withAccess(String id, String callSource) {
+            return new RunArgs(query, domain, channel, debug, username, kbIds, filters, topK,
+                    expansion, paradigmId, paradigmVersion, id,
+                    callSource == null || callSource.isBlank() ? "api" : callSource,
+                    userId, requestJson);
+        }
+
+        public RunArgs withIdentity(String trustedUserId) {
+            return new RunArgs(query, domain, channel, debug, username, kbIds, filters, topK,
+                    expansion, paradigmId, paradigmVersion, accessId, source,
+                    trustedUserId == null || trustedUserId.isBlank() ? null : trustedUserId.trim(),
+                    requestJson);
+        }
+
+        public RunArgs withRequestJson(String originalRequestJson) {
+            return new RunArgs(query, domain, channel, debug, username, kbIds, filters, topK,
+                    expansion, paradigmId, paradigmVersion, accessId, source, userId,
+                    originalRequestJson);
         }
     }
-
     private final ParadigmCompiler compiler;
     private final ParadigmExecutor executor;
     private final DomainRegistry domainRegistry;

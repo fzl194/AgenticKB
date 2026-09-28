@@ -59,7 +59,7 @@
       </div>
     </section>
 
-    <!-- ── 区块 2.5：运维概览（仅 admin）────────────────────────────────
+    <!-- ── 区块 2.5：检索概况（沿用现有 admin 首页可见范围）──────────────
       放在「待处理」之后、知识库统计之前：它和待处理一样是"要人动手"的内容
       （零结果 = 该补知识），但优先级低于已经明确挂起的任务。
       member 完全看不到——服务指标对无权处理的人只是噪声，且这里含用户输入原文。
@@ -69,7 +69,7 @@
       :usage="opsUsage"
       :loading="opsLoading && !opsUsage"
       :error="opsError && !opsUsage"
-      @detail="router.push('/settings?tab=status')"
+      @detail="router.push('/retrieval-records')"
       @retry="load"
     />
 

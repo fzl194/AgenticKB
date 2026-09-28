@@ -26,6 +26,9 @@ from knowledge_mining.mining.api.routes.runs import router as runs_router
 from knowledge_mining.mining.api.routes.knowledge import router as knowledge_router
 from knowledge_mining.mining.api.routes.workflows import router as workflows_router
 from knowledge_mining.mining.api.routes.ops import router as ops_router
+from knowledge_mining.mining.api.routes.retrieval_records import (
+    router as retrieval_records_router,
+)
 from knowledge_mining.mining.kb.routes.kbs import router as kb_router
 from knowledge_mining.mining.kb.routes.documents import router as kb_documents_router
 from knowledge_mining.mining.kb.routes.mining import router as kb_mining_router
@@ -182,6 +185,7 @@ async def lifespan(app: FastAPI):
         domain_id for domain_id, entry in (registry.get("domains") or {}).items()
         if isinstance(entry, dict) and entry.get("enabled", True)
     )
+    app.state.enabled_domains = enabled_domains
 
     async def _wake_domain_queue(_run_id: str, domain: str) -> None:
         app.state.domain_run_dispatcher.kick(domain)
@@ -261,6 +265,8 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(runs_router)
     app.include_router(knowledge_router)
+    # Static /summary is declared before /{record_id} inside this router.
+    app.include_router(retrieval_records_router)
     # /api/ops/* —— 运维使用分析（admin-only）。独立 prefix，不与 /api/kb 的动态段相争。
     app.include_router(ops_router)
     # kb_auth_router / kb_overview_router 必须在 kb_router 之前注册：它们的静态路由

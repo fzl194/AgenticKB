@@ -1,14 +1,11 @@
-"""QueryLogStats 的 SQL 语义（`serving_query_logs` 只读聚合）。
+"""QueryLogStats 兼容适配器在统一记录表上的真 SQL 语义。
 
 路由装配与鉴权在 tests/test_ops_usage_route.py（假仓储，不需要库）；这里跑真 SQL。
 
 ⚠️ 需要 PostgreSQL（`_test` 结尾的可丢弃库）。
 
-**本文件顺带是一份契约声明**：`serving_query_logs` 由 serving（Java）建表，mining 的
-测试 schema 不会创建它，所以这里按 serving 的 DDL 自建。这意味着 serving 单方面改列
-时本文件**不会变红**——它钉住的是「mining 依赖哪些列、依赖它们是什么形状」，不是
-「serving 现在是什么形状」。真正的漂移只能靠联调发现，这一点是这套跨服务读取的固有
-代价，写在这里以免后人误以为有自动防线。
+DDL 来自 databases/kb/schemas/015_knowledge_access_records.sql；这里验证旧页面的
+响应适配仍从新账本读取，不再依赖已退役的 Java 日志表。
 """
 from __future__ import annotations
 
@@ -24,33 +21,27 @@ pytestmark = pytest.mark.asyncio
 
 DOMAIN = "cloud_core_network"
 
-# 按 serving 的 db/serving/001_serving_query_logs.sql 抄写，只保留 NOT NULL 与本模块
-# 用到的列（metadata_json 是 TEXT —— 取 paradigm_id 必须转型，这正是要钉的点之一）。
 _DDL = """
-CREATE TABLE IF NOT EXISTS serving_query_logs (
-    id                  TEXT    NOT NULL,
-    query_text          TEXT    NOT NULL,
-    domain              TEXT    NOT NULL DEFAULT 'default',
-    channel             TEXT    NOT NULL,
-    intent              TEXT,
-    normalizer_source   TEXT,
-    keywords_json       TEXT    NOT NULL DEFAULT '[]',
-    entities_json       TEXT    NOT NULL DEFAULT '[]',
-    scope_json          TEXT    NOT NULL DEFAULT '{}',
-    release_id          TEXT,
-    build_id            TEXT,
-    snapshot_count      INTEGER,
-    result_item_count   INTEGER,
-    result_seed_count   INTEGER,
-    result_has_result   BOOLEAN NOT NULL DEFAULT TRUE,
-    result_issues_json  TEXT    NOT NULL DEFAULT '[]',
-    result_items_json   TEXT    NOT NULL DEFAULT '[]',
-    result_sources_json TEXT    NOT NULL DEFAULT '[]',
-    result_relations_json TEXT  NOT NULL DEFAULT '[]',
-    duration_ms         INTEGER,
-    queried_at          TEXT    NOT NULL,
-    metadata_json       TEXT    NOT NULL DEFAULT '{}',
-    CONSTRAINT pk_serving_query_logs PRIMARY KEY (id)
+CREATE TABLE IF NOT EXISTS knowledge_access_records (
+    id TEXT PRIMARY KEY,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    domain TEXT NOT NULL,
+    actor_user_id TEXT,
+    actor_username TEXT,
+    source TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    tool_name TEXT,
+    mcp_key_id TEXT,
+    kb_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    query_text TEXT,
+    paradigm_id TEXT,
+    paradigm_version INTEGER,
+    status TEXT NOT NULL,
+    result_count INTEGER,
+    duration_ms INTEGER,
+    error_code TEXT,
+    details_json JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 """
 
@@ -62,12 +53,12 @@ async def qlog(async_pool):
     """建表 + 清空 + 交出仓储；用完把表删掉，不污染同库的其余用例。"""
     async with async_pool.connection() as conn:
         await conn.execute(_DDL)
-        await conn.execute("TRUNCATE TABLE serving_query_logs")
+        await conn.execute("TRUNCATE TABLE knowledge_access_records")
     try:
         yield QueryLogStats(async_pool)
     finally:
         async with async_pool.connection() as conn:
-            await conn.execute("DROP TABLE IF EXISTS serving_query_logs")
+            await conn.execute("TRUNCATE TABLE knowledge_access_records")
 
 
 def _today() -> str:
@@ -83,17 +74,15 @@ async def _log(
     has_result=True, duration_ms=100, at=None, paradigm_id=None, day_offset=0,
 ):
     stamp = at or f"{_days_ago(day_offset)}T03:00:00.000Z"
-    metadata = "{}"
-    if paradigm_id is not None:
-        metadata = f'{{"engine":"paradigm","paradigm_id":"{paradigm_id}"}}'
+    status = "success" if has_result else "no_result"
     async with pool.connection() as conn:
         await conn.execute(
-            """INSERT INTO serving_query_logs
-               (id, query_text, domain, channel, intent, result_has_result,
-                duration_ms, queried_at, metadata_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (uuid.uuid4().hex, query, domain, channel, intent, has_result,
-             duration_ms, stamp, metadata),
+            """INSERT INTO knowledge_access_records
+               (id, query_text, domain, source, operation, status,
+                duration_ms, occurred_at, paradigm_id)
+               VALUES (%s, %s, %s, %s, 'search', %s, %s, %s, %s)""",
+            (uuid.uuid4().hex, query, domain, channel, status,
+             duration_ms, stamp, paradigm_id),
         )
 
 
@@ -104,10 +93,28 @@ async def test_available_true_when_table_exists(qlog):
 
 
 async def test_available_false_when_table_missing(async_pool):
-    """serving 从没启动过的部署——表根本不存在，端点要据此降级而不是 500。"""
-    async with async_pool.connection() as conn:
-        await conn.execute("DROP TABLE IF EXISTS serving_query_logs")
-    assert await QueryLogStats(async_pool).is_available() is False
+    """统一记录表尚未迁移时端点降级而不是 500。"""
+
+    class _Rows:
+        async def fetchone(self):
+            return {"t": None}
+
+    class _Connection:
+        async def execute(self, *_args, **_kwargs):
+            return _Rows()
+
+    class _Context:
+        async def __aenter__(self):
+            return _Connection()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Pool:
+        def connection(self):
+            return _Context()
+
+    assert await QueryLogStats(_Pool()).is_available() is False
 
 
 # ── summary ─────────────────────────────────────────────────────────────────
@@ -216,7 +223,7 @@ async def test_top_queries_carry_their_no_result_count(qlog, async_pool):
 # ── paradigm_usage ──────────────────────────────────────────────────────────
 
 async def test_paradigm_usage_reads_id_out_of_metadata_json(qlog, async_pool):
-    """metadata_json 是 TEXT 不是 JSONB——转型写错这里就会整段报错。"""
+    """范式 id 从正式列聚合。"""
     await _log(async_pool, paradigm_id="p-1")
     await _log(async_pool, paradigm_id="p-1")
     await _log(async_pool, paradigm_id="p-2")
@@ -234,7 +241,7 @@ async def test_paradigm_usage_buckets_legacy_traffic(qlog, async_pool):
     await _log(async_pool, paradigm_id="p-1")
 
     by_id = {r["paradigm_id"]: r for r in await qlog.paradigm_usage(domain=DOMAIN, days=7)}
-    assert by_id["__legacy__"]["calls"] == 1
+    assert by_id["(none)"]["calls"] == 1
     assert by_id["p-1"]["calls"] == 1
 
 
@@ -247,19 +254,18 @@ async def test_paradigm_usage_sorted_by_calls_desc(qlog, async_pool):
     assert rows[0]["paradigm_id"] == "big"
 
 
-async def test_paradigm_usage_survives_empty_metadata(qlog, async_pool):
-    """metadata_json 的列默认值是 '{}'，但空串会让 ::jsonb 抛——抛一次整段就废了。"""
+async def test_paradigm_usage_survives_missing_paradigm(qlog, async_pool):
     async with async_pool.connection() as conn:
         await conn.execute(
-            """INSERT INTO serving_query_logs
-               (id, query_text, domain, channel, result_has_result, duration_ms,
-                queried_at, metadata_json)
-               VALUES (%s, 'q', %s, 'mcp', TRUE, 10, %s, '')""",
+            """INSERT INTO knowledge_access_records
+               (id, query_text, domain, source, operation, status, duration_ms,
+                occurred_at, paradigm_id)
+               VALUES (%s, 'q', %s, 'mcp', 'search', 'success', 10, %s, NULL)""",
             (uuid.uuid4().hex, DOMAIN, f"{_today()}T03:00:00.000Z"),
         )
 
     rows = await qlog.paradigm_usage(domain=DOMAIN, days=7)
-    assert {r["paradigm_id"] for r in rows} == {"__legacy__"}
+    assert {r["paradigm_id"] for r in rows} == {"(none)"}
 
 
 # ── trend ───────────────────────────────────────────────────────────────────
@@ -292,19 +298,17 @@ async def test_breakdown_by_intent_and_channel(qlog, async_pool):
     await _log(async_pool, intent="lookup", channel="api")
     await _log(async_pool, intent="howto", channel="mcp")
 
-    assert await qlog.breakdown(domain=DOMAIN, days=7, column="intent") == {
-        "lookup": 2, "howto": 1,
-    }
+    assert await qlog.breakdown(domain=DOMAIN, days=7, column="intent") == {}
     assert await qlog.breakdown(domain=DOMAIN, days=7, column="channel") == {
         "mcp": 2, "api": 1,
     }
 
 
 async def test_breakdown_labels_null_intent(qlog, async_pool):
-    """intent 可空。NULL 键在 JSON 里会变成 null，前端拿它当 key 会炸。"""
+    """旧 intent 维度退役后稳定返回空对象。"""
     await _log(async_pool, intent=None)
 
-    assert await qlog.breakdown(domain=DOMAIN, days=7, column="intent") == {"(未知)": 1}
+    assert await qlog.breakdown(domain=DOMAIN, days=7, column="intent") == {}
 
 
 async def test_breakdown_rejects_arbitrary_column(qlog):

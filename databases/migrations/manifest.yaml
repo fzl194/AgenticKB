@@ -1,4 +1,4 @@
-schema_version: 2026.09.domain-role-v1
+schema_version: 2026.09.retrieval-records-v2
 migrations:
   - id: core/20260918_bridge_51_tables
     path: core/20260918_000_bridge_51_tables.sql
@@ -20,3 +20,7 @@ migrations:
     path: core/20260926_003_validate_kb_domain_memberships.sql
     mode: online_expand
     checksum: ce71d771b6e81ae32f756add4434e2f6c28bdc09f16e2681fcc8ad227b0b5e43
+  - id: core/20260928_replace_serving_query_logs
+    path: core/20260928_004_replace_serving_query_logs.sql
+    mode: offline_rebase
+    checksum: 3763889f183cfe846f60d371f48ae8193d1e68b923468a68acd3864cd9f850f5

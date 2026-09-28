@@ -24,6 +24,8 @@ _SERVICE_ONLY_ROUTES = frozenset({
     ("POST", "/api/kb/mcp-tools/list-documents"),
     ("POST", "/api/kb/mcp-tools/begin-upload"),
     ("POST", "/api/kb/admin/reload-auth-config"),
+    ("POST", "/api/internal/retrieval-records"),
+    ("POST", "/api/internal/retrieval-records/expire-pending-uploads"),
 })
 
 #: 直传 PUT 是动态票据路径（内部密钥 + 票据 + 用户绑定三重校验在路由内）。

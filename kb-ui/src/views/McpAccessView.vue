@@ -63,8 +63,9 @@
       <el-table-column label="创建时间" width="150">
         <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
       </el-table-column>
-      <el-table-column v-if="hasActiveKeys" label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="270" fixed="right">
         <template #default="{ row }">
+          <el-button link type="primary" size="small" @click="viewRecords(row)">调用记录</el-button>
           <template v-if="row.status === 'active'">
             <el-button link type="primary" size="small" @click="openConfig(row)">配置</el-button>
             <el-button link type="warning" size="small" @click="quickRotate(row)">轮换</el-button>
@@ -127,6 +128,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
@@ -142,6 +144,7 @@ const MAX_KEYS = 10
 const kbApi = useKbApi()
 const domainStore = useDomainStore()
 const auth = useAuthStore()
+const router = useRouter()
 
 const keys = ref<McpKeyItem[]>([])
 const loading = ref(false)
@@ -161,7 +164,6 @@ const configDomainKbs = ref<{ id: string; name: string; document_count: number }
 
 const activeCount = computed(() => keys.value.filter(k => k.status === 'active').length)
 const atLimit = computed(() => activeCount.value >= MAX_KEYS)
-const hasActiveKeys = computed(() => activeCount.value > 0)
 const mcpEndpoint = computed(() => `${window.location.hostname}:9000/mcp`)
 
 const freshConfigJson = computed(() => {
@@ -200,6 +202,13 @@ async function reload() {
 function openCreate() {
   createForm.value = { name: '', domain: domainStore.currentDomain || '' }
   createVisible.value = true
+}
+
+function viewRecords(row: McpKeyItem) {
+  if (row.domain_bound && row.domain !== domainStore.currentDomain) {
+    domainStore.switchDomain(row.domain)
+  }
+  void router.push({ name: 'retrieval-records', query: { mcpKeyId: row.id } })
 }
 
 async function submitCreate() {

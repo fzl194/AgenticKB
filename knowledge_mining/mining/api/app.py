@@ -23,7 +23,6 @@ from knowledge_mining.mining.infra.pg_schema import assert_schema_contract
 from knowledge_mining.mining.infra.mining_config import MiningConfig
 from knowledge_mining.mining.api.routes.health import router as health_router
 from knowledge_mining.mining.api.routes.runs import router as runs_router
-from knowledge_mining.mining.api.routes.knowledge import router as knowledge_router
 from knowledge_mining.mining.api.routes.workflows import router as workflows_router
 from knowledge_mining.mining.api.routes.ops import router as ops_router
 from knowledge_mining.mining.api.routes.retrieval_records import (
@@ -264,7 +263,6 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(runs_router)
-    app.include_router(knowledge_router)
     # Static /summary is declared before /{record_id} inside this router.
     app.include_router(retrieval_records_router)
     # /api/ops/* —— 运维使用分析（admin-only）。独立 prefix，不与 /api/kb 的动态段相争。

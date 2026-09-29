@@ -185,7 +185,6 @@ def test_service_only_body_validation_applies_after_internal_auth(monkeypatch: p
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/knowledge/stats",
         "/api/ontology/versions",
         "/api/mining-workflows",
         "/api/system/status",
@@ -209,7 +208,7 @@ def test_real_app_rejects_anonymous_legacy_routes(path: str) -> None:
 
 
 def test_retired_routes_absent_from_app_surface() -> None:
-    """瘦身批次3/4 退役面：路由必须从 app 路由表中真实消失（而非仅被 401 遮蔽）。"""
+    """瘦身批次3/4 + 2026-09-29 知识资产下线退役面：路由必须从 app 路由表中真实消失（而非仅被 401 遮蔽）。"""
     from knowledge_mining.mining.api.app import create_app
 
     app = create_app()
@@ -217,6 +216,7 @@ def test_retired_routes_absent_from_app_surface() -> None:
 
     retired_prefixes = (
         "/api/builds", "/api/releases", "/api/config",
+        "/api/knowledge",
     )
     for prefix in retired_prefixes:
         assert not any(p.startswith(prefix) for p in paths), f"退役前缀仍挂载: {prefix}"
@@ -230,13 +230,11 @@ def test_retired_routes_absent_from_app_surface() -> None:
         "/api/knowledge/documents/{document_id}/download",
         "/api/knowledge/documents/{document_id}/segments",
         "/api/knowledge/documents/{document_id}/units",
+        "/api/knowledge/stats",
         "/api/kb/mcp-tools/get-document",
     }
     mounted = paths & retired_exact
     assert not mounted, f"退役路由仍在路由表: {sorted(mounted)}"
-
-    # 保留面健全性：stats 仍在
-    assert "/api/knowledge/stats" in paths
 
 
 def test_real_app_cors_allows_only_configured_local_origin() -> None:
@@ -245,14 +243,14 @@ def test_real_app_cors_allows_only_configured_local_origin() -> None:
     client = TestClient(create_app())
     try:
         allowed = client.options(
-            "/api/knowledge/stats",
+            "/api/runs",
             headers={
                 "Origin": "http://localhost:8080",
                 "Access-Control-Request-Method": "GET",
             },
         )
         blocked = client.options(
-            "/api/knowledge/stats",
+            "/api/runs",
             headers={
                 "Origin": "https://untrusted.example",
                 "Access-Control-Request-Method": "GET",

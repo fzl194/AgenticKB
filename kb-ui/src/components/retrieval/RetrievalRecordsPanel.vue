@@ -27,9 +27,15 @@
         <option value="">全部操作</option><option value="search">检索</option><option value="read">读取</option><option value="upload">上传</option>
       </select>
       <input v-model.trim="draft.tool" class="records-panel__input records-panel__input--tool" placeholder="Tool 名称" aria-label="Tool 名称" />
-      <input v-if="!kbId" v-model.trim="draft.kbId" class="records-panel__input records-panel__input--tool" placeholder="知识库 ID" aria-label="知识库 ID" />
+      <select v-if="!kbId" v-model="draft.kbId" class="records-panel__select" aria-label="知识库">
+        <option value="">全部知识库</option>
+        <option v-for="kb in kbFilterOptions" :key="kb.id" :value="kb.id">{{ kb.name }}</option>
+      </select>
       <input v-model.trim="draft.actorUserId" class="records-panel__input records-panel__input--tool" placeholder="用户 ID" aria-label="用户 ID" />
-      <input v-model.trim="draft.paradigmId" class="records-panel__input records-panel__input--tool" placeholder="范式 ID" aria-label="范式 ID" />
+      <select v-model="draft.paradigmId" class="records-panel__select" aria-label="范式">
+        <option value="">全部范式</option>
+        <option v-for="paradigm in paradigmFilterOptions" :key="paradigm.id" :value="paradigm.id">{{ paradigm.name }}</option>
+      </select>
       <button type="submit" class="records-panel__button">筛选</button>
       <button type="button" class="records-panel__button records-panel__button--plain" @click="resetFilters">重置</button>
     </form>
@@ -53,7 +59,7 @@
             <td>{{ sourceLabel(item.source) }}</td>
             <td>{{ item.tool_name || operationLabel(item.operation) }}</td>
             <td class="records-panel__query" :title="actionSummary(item)">{{ actionSummary(item) }}</td>
-            <td>{{ item.kb_ids.length ? item.kb_ids.join('、') : '—' }}</td>
+            <td>{{ item.kb_ids.length ? item.kb_ids.map(kbName).join('、') : '—' }}</td>
             <td>{{ paradigmText(item) }}</td>
             <td><span class="records-panel__status" :class="`is-${item.status}`">{{ statusLabel(item.status) }}</span></td>
             <td>{{ item.result_count ?? '—' }}</td>
@@ -82,7 +88,7 @@
             <dt>来源</dt><dd>{{ sourceLabel(detail.source) }}</dd>
             <dt>Tool / 操作</dt><dd>{{ detail.tool_name || operationLabel(detail.operation) }}</dd>
             <dt>查询内容</dt><dd>{{ detail.query_text || '—' }}</dd>
-            <dt>目标知识库</dt><dd>{{ detail.kb_ids.join('、') || '—' }}</dd>
+            <dt>目标知识库</dt><dd>{{ detail.kb_ids.map(kbName).join('、') || '—' }}</dd>
             <dt>范式</dt><dd>{{ paradigmText(detail) }}</dd>
             <dt>状态</dt><dd>{{ statusLabel(detail.status) }}</dd>
             <dt>结果数</dt><dd>{{ detail.result_count ?? '—' }}</dd>
@@ -139,11 +145,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRetrievalRecordsApi } from '@/api/retrievalRecords'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
 import StatsCard from '@/components/common/StatsCard.vue'
+import { useRetrievalNames } from '@/components/retrieval/useRetrievalNames'
 import type {
   RetrievalOperation, RetrievalRecord, RetrievalRecordFilters, RetrievalRecordsSummary,
   RetrievalSource, RetrievalStatus,
@@ -164,6 +171,8 @@ const STATUS_OPTIONS: Array<{ value: RetrievalStatus; label: string }> = [
 
 const api = useRetrievalRecordsApi()
 const domainStore = useDomainStore()
+// ID→名称映射：记录接口只回 ID，名称在这里解析（拉失败回落原始 ID）。
+const { state: nameOptions, load: loadNames, kbName, paradigmName } = useRetrievalNames()
 const summary = ref<RetrievalRecordsSummary | null>(null)
 const records = ref<RetrievalRecord[]>([])
 const nextCursor = ref<string | null>(null)
@@ -179,6 +188,27 @@ let loadGeneration = 0
 
 const draft = reactive({ days: 7, source: '', status: '', operation: '', tool: '', kbId: '', actorUserId: '', paradigmId: '' })
 const applied = reactive({ days: 7, source: '', status: '', operation: '', tool: '', kbId: '', actorUserId: '', paradigmId: '' })
+
+/**
+ * 筛选下拉的选项 = 名称映射 ∪ 当前已加载记录里出现过的未知 ID。
+ * 列表拉失败或库/范式已删除时，记录里仍会有它们的 ID——并入选项保证
+ * "看到的 ID 永远筛得到"，不因换下拉而丢掉原先手填 ID 的能力。
+ */
+const kbFilterOptions = computed(() => {
+  const known = new Set(nameOptions.kbOptions.map(option => option.id))
+  const extras = [...new Set(records.value.flatMap(item => item.kb_ids))]
+    .filter(id => id && !known.has(id))
+    .map(id => ({ id, name: id }))
+  return [...nameOptions.kbOptions, ...extras]
+})
+
+const paradigmFilterOptions = computed(() => {
+  const known = new Set(nameOptions.paradigmOptions.map(option => option.id))
+  const extras = [...new Set(records.value.map(item => item.paradigm_id).filter((id): id is string => !!id))]
+    .filter(id => !known.has(id))
+    .map(id => ({ id, name: id }))
+  return [...nameOptions.paradigmOptions, ...extras]
+})
 
 function appliedFilters(): RetrievalRecordFilters {
   return {
@@ -206,6 +236,8 @@ async function reload(): Promise<void> {
   const generation = ++loadGeneration
   loading.value = true
   error.value = ''
+  // 名称映射走自己的缓存与兜底，不并入下面的 Promise.all——它失败不该连累记录本体。
+  void loadNames(domain)
   try {
     const [summaryValue, page] = await Promise.all([
       api.getSummary(domain, appliedFilters()),
@@ -273,7 +305,7 @@ function formatRate(value?: number | null): string { return value == null ? '—
 function sourceLabel(value: RetrievalSource): string { return ({ web: '网页', mcp: 'MCP', api: 'API' })[value] }
 function operationLabel(value: string): string { return ({ search: '检索', read: '读取', upload: '上传' } as Record<string, string>)[value] ?? value }
 function statusLabel(value: RetrievalStatus): string { return STATUS_OPTIONS.find(item => item.value === value)?.label ?? value }
-function paradigmText(item: RetrievalRecord): string { return item.paradigm_id ? `${item.paradigm_id}${item.paradigm_version == null ? '' : ` v${item.paradigm_version}`}` : '—' }
+function paradigmText(item: RetrievalRecord): string { return item.paradigm_id ? `${paradigmName(item.paradigm_id)}${item.paradigm_version == null ? '' : ` v${item.paradigm_version}`}` : '—' }
 function detailText(item: RetrievalRecord, key: string): string | null {
   const value = item.details_json?.[key]
   return typeof value === 'string' && value ? value : null
@@ -344,7 +376,9 @@ function safeDetailFields(item: RetrievalRecord): Array<{ key: string; label: st
 }
 
 onMounted(reload)
-watch(() => domainStore.currentDomain, () => { cursorStack.value = []; currentCursor.value = undefined; void reload() })
+// 切域必须清 kbId 筛选：旧域的库 ID 在新域下拉里没有对应选项，留着就成了
+// 一个 UI 显示不出来也清不掉的隐形过滤器（范式跨域通用，无需清）。
+watch(() => domainStore.currentDomain, () => { cursorStack.value = []; currentCursor.value = undefined; draft.kbId = ''; applied.kbId = ''; void reload() })
 watch(() => [props.kbId, props.mcpKeyId], () => { cursorStack.value = []; currentCursor.value = undefined; void reload() })
 </script>
 

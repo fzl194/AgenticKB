@@ -365,7 +365,6 @@ defineExpose({ keys, deleteRevoked, reload })
   flex-direction: column;
   gap: 18px;
   padding: 4px;
-  max-width: 1060px;
 }
 
 .mcp-view__head {

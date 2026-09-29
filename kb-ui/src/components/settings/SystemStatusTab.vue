@@ -21,69 +21,18 @@
       <!-- 重启完成后刷新上方的健康卡。仅 site-admin 渲染（组件内部判定）。 -->
       <ServiceRestartCard @restarted="loadHealth" />
     </section>
-
-    <!-- ── 域级知识资产 ────────────────────────────────────────────── -->
-    <section class="sys-status__section">
-      <div class="sys-status__head">
-        <h3 class="sys-status__title">知识资产</h3>
-        <!--
-          口径必须写在脸上：这几个数只统计域级 active release 的范围。KB 挖掘
-          publish=false，永不产生 release，所以纯 KB 部署下它们恒为 0——那不是
-          「没有知识」，是「这个口径不适用」。
-        -->
-        <span class="sys-status__scope">口径：域级 active release</span>
-        <el-button text type="primary" size="small" :loading="statsLoading" @click="loadStats">
-          刷新
-        </el-button>
-      </div>
-
-      <div v-if="statsError" class="sys-status__notice sys-status__notice--error">
-        加载失败
-        <el-button text type="primary" size="small" @click="loadStats">重试</el-button>
-      </div>
-
-      <!--
-        用普通标记而不是 el-alert：文案是真正的文本节点，读屏与测试都能拿到
-        （el-alert 的 title/description 是 prop，渲染进组件内部）。
-      -->
-      <div v-else-if="noActiveRelease" class="sys-status__notice sys-status__notice--info">
-        <strong>该域无发布语料</strong>
-        <span>
-          当前域没有 active release，因此这里没有可统计的资产。KB 挖掘只 build 不发布
-          （publish=false），不会产生 release；域级发布语料只有 legacy /api/runs 那条线才产生。
-        </span>
-      </div>
-
-      <template v-else>
-        <div class="sys-status__stats">
-          <StatsCard label="文档" :value="stats?.documents ?? '-'" icon="📄" />
-          <StatsCard label="快照" :value="stats?.snapshots ?? '-'" icon="📸" />
-          <StatsCard label="段落" :value="stats?.segments ?? '-'" icon="📝" />
-          <StatsCard label="检索单元" :value="stats?.retrieval_units ?? '-'" icon="🔎" />
-          <StatsCard label="向量" :value="stats?.embeddings ?? '-'" icon="🧲" />
-        </div>
-
-        <div class="sys-status__chart">
-          <h4 class="sys-status__subtitle">检索单元类型分布</h4>
-          <PieChart v-if="unitTypeData.length" :data="unitTypeData" height="240px" />
-          <p v-else class="sys-status__muted">当前 release 内没有检索单元</p>
-        </div>
-      </template>
-    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDomainStore } from '@/stores/domain'
 import { useMiningApi } from '@/api/mining'
 import { useServingApi } from '@/api/serving'
 import { useLlmApi } from '@/api/llm'
-import type { HealthStatus, KnowledgeStats } from '@/types'
-import StatsCard from '@/components/common/StatsCard.vue'
+import type { HealthStatus } from '@/types'
 import ServiceHealthCard from '@/components/common/ServiceHealthCard.vue'
 import ServiceRestartCard from '@/components/settings/ServiceRestartCard.vue'
-import PieChart from '@/components/charts/PieChart.vue'
 
 type Health = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
 
@@ -92,9 +41,6 @@ const miningApi = useMiningApi()
 const servingApi = useServingApi()
 const llmApi = useLlmApi()
 
-const stats = ref<KnowledgeStats | null>(null)
-const statsLoading = ref(false)
-const statsError = ref(false)
 const healthLoading = ref(false)
 
 const services = ref([
@@ -103,51 +49,8 @@ const services = ref([
   { key: 'llm', name: 'LLM服务', icon: '🤖', status: 'unknown' as Health, detail: '' },
 ])
 
-/**
- * 「没有发布语料」与「发布了但里面是空的」是两回事，后端刻意保留了这个区分：
- * 撤回最后一个文档会发布一个**空**的 active build，那时的 0 是真的 0。
- * 所以判据是有没有 release，不是计数是不是 0。
- */
-const noActiveRelease = computed(() => {
-  if (!stats.value) return false
-  const releases = stats.value.active_releases
-  return Array.isArray(releases) ? releases.length === 0 : stats.value.releases === 0
-})
-
-const unitTypeData = computed(() => {
-  const byType = stats.value?.retrieval_units_by_type
-  if (!byType) return []
-  const nameMap: Record<string, string> = {
-    raw_text: '原始文本', contextual_text: '上下文文本', summary: '摘要',
-    generated_question: '生成问题', entity_card: '实体卡片',
-  }
-  return Object.entries(byType)
-    .filter(([, v]) => v > 0)
-    .map(([k, v]) => ({ name: nameMap[k] || k, value: v }))
-})
-
-// 切域竞态守卫：慢的旧域响应不得覆盖新域的数字（与概览页同一套路数）。
-// 两块**各用一个计数器**——共用一个的话，loadAll 里后调用的那个会把先调用的那个
-// 直接作废，健康检查结果永远落不下来。
-let statsGen = 0
+// 切域竞态守卫：慢的旧域健康结果不得覆盖新域的卡片。
 let healthGen = 0
-async function loadStats() {
-  const gen = ++statsGen
-  statsLoading.value = true
-  statsError.value = false
-  try {
-    const data = await miningApi.getStats()
-    if (gen !== statsGen) return
-    stats.value = data
-  } catch (e) {
-    if (gen !== statsGen) return
-    console.error('Failed to load knowledge stats:', e)
-    statsError.value = true
-    stats.value = null
-  } finally {
-    if (gen === statsGen) statsLoading.value = false
-  }
-}
 
 async function probe(fn: () => Promise<HealthStatus>): Promise<{ status: Health; detail: string }> {
   try {
@@ -187,18 +90,15 @@ async function loadHealth() {
 
 function loadAll() {
   if (!domainStore.currentDomain) {
-    statsGen++
     healthGen++
-    statsLoading.value = false
     healthLoading.value = false
     return
   }
   loadHealth()
-  loadStats()
 }
 
 onMounted(loadAll)
-onUnmounted(() => { statsGen++; healthGen++ })
+onUnmounted(() => { healthGen++ })
 watch(() => domainStore.currentDomain, loadAll)
 </script>
 
@@ -224,114 +124,9 @@ watch(() => domainStore.currentDomain, loadAll)
   margin: 0;
 }
 
-.sys-status__subtitle {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--kb-text-secondary);
-  margin: 0 0 10px;
-}
-
-.sys-status__scope {
-  font-size: 11px;
-  color: var(--kb-text-tertiary);
-  padding: 1px 8px;
-  border: 1px solid var(--kb-border-light);
-  border-radius: 10px;
-}
-
 .sys-status__health {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 14px;
 }
-
-.sys-status__stats {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
-}
-
-.sys-status__chart {
-  margin-top: 20px;
-  max-width: 420px;
-}
-
-.sys-status__notice {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--kb-text-tertiary);
-  padding: 16px 0;
-}
-
-.sys-status__notice--error {
-  color: var(--kb-danger);
-}
-
-.sys-status__notice--info {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 14px 16px;
-  background: var(--kb-accent-soft);
-  border-radius: var(--kb-radius-sm);
-  line-height: 1.6;
-}
-
-.sys-status__notice--info strong {
-  color: var(--kb-text-primary);
-}
-
-.sys-status__muted {
-  font-size: 12px;
-  color: var(--kb-text-tertiary);
-  margin: 0;
-}
-
-.sys-status__hint {
-  font-weight: 400;
-  font-size: 11px;
-  color: var(--kb-text-tertiary);
-  margin-left: 8px;
-}
-
-.sys-status__split {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 20px;
-  margin-top: 20px;
-}
-
-/* ── 各范式明细表 ── */
-.ptable {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.ptable th {
-  text-align: left;
-  font-weight: 600;
-  font-size: 11px;
-  color: var(--kb-text-tertiary);
-  letter-spacing: 0.5px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--kb-border-light);
-}
-
-.ptable td {
-  padding: 7px 8px;
-  border-bottom: 1px solid var(--kb-border-light);
-  color: var(--kb-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.ptable tr:last-child td { border-bottom: none; }
-
-.ptable__name {
-  color: var(--kb-text-primary);
-  font-weight: 500;
-}
-
 </style>

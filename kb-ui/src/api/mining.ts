@@ -1,5 +1,5 @@
 import type {
-  MiningRun, MiningRunStage, MiningRunDocument, KnowledgeStats, HealthStatus,
+  MiningRun, MiningRunStage, MiningRunDocument, HealthStatus,
   KnowledgeSegment, KnowledgeUnit,
   RunTrace,
 } from '@/types'
@@ -12,12 +12,6 @@ export function useMiningApi() {
     // Health
     async getHealth(): Promise<HealthStatus> {
       const { data } = await client.get('/health')
-      return data
-    },
-
-    // Stats
-    async getStats(): Promise<KnowledgeStats> {
-      const { data } = await client.get('/api/knowledge/stats')
       return data
     },
 

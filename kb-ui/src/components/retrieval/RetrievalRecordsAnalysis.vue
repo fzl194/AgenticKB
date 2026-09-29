@@ -50,6 +50,7 @@ import { useRetrievalRecordsApi } from '@/api/retrievalRecords'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
 import StatsCard from '@/components/common/StatsCard.vue'
+import { useRetrievalNames } from '@/components/retrieval/useRetrievalNames'
 import LineChart from '@/components/charts/LineChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
 import QueryList from '@/components/dashboard/QueryList.vue'
@@ -59,6 +60,8 @@ import type { RetrievalRecordsSummary } from '@/types/retrievalRecords'
 const props = withDefaults(defineProps<{ kbId?: string; mcpKeyId?: string }>(), { kbId: '', mcpKeyId: '' })
 const api = useRetrievalRecordsApi()
 const domainStore = useDomainStore()
+// 范式分布图按名称展示：接口只回 paradigm_id，这里解析（拉失败回落 ID）。
+const { load: loadNames, paradigmName } = useRetrievalNames()
 const summary = ref<RetrievalRecordsSummary | null>(null)
 const loading = ref(false)
 const error = ref('')
@@ -68,7 +71,7 @@ const trendLabels = computed(() => summary.value?.trend.map(item => item.date.sl
 const trendCalls = computed(() => summary.value?.trend.map(item => item.total_calls) ?? [])
 const trendNoResult = computed(() => summary.value?.trend.map(item => item.no_result) ?? [])
 const trendFailed = computed(() => summary.value?.trend.map(item => item.failed) ?? [])
-const paradigmBars = computed(() => summary.value?.paradigms.map(item => ({ name: item.paradigm_id, value: item.calls })) ?? [])
+const paradigmBars = computed(() => summary.value?.paradigms.map(item => ({ name: paradigmName(item.paradigm_id), value: item.calls })) ?? [])
 const toolBars = computed(() => summary.value?.tools.map(item => ({ name: item.tool_name || '非 MCP', value: item.calls })) ?? [])
 const sourceBars = computed(() => Object.entries(summary.value?.sources ?? {}).map(([name, value]) => ({ name: sourceLabel(name), value })))
 const noResultItems = computed<QueryListItem[]>(() => (summary.value?.no_result_queries ?? []).map(item => ({ text: item.query_text, count: item.count, note: item.last_at?.slice(0, 10) })))
@@ -80,6 +83,8 @@ async function load(): Promise<void> {
   const current = ++generation
   loading.value = true
   error.value = ''
+  // 名称映射走自己的缓存与兜底，失败不连累分析本体。
+  void loadNames(domain)
   try {
     const value = await api.getSummary(domain, { days: 7, kbId: props.kbId || undefined, mcpKeyId: props.mcpKeyId || undefined })
     if (current !== generation || domain !== domainStore.currentDomain) return

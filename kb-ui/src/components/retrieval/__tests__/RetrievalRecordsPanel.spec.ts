@@ -3,11 +3,16 @@ import { enableAutoUnmount, flushPromises, shallowMount } from '@vue/test-utils'
 
 const api = vi.hoisted(() => ({ getSummary: vi.fn(), list: vi.fn(), getOne: vi.fn() }))
 const domain = vi.hoisted(() => ({ currentDomain: 'domain-a' }))
+const kbApi = vi.hoisted(() => ({ listKbs: vi.fn() }))
+const operatorApi = vi.hoisted(() => ({ listParadigms: vi.fn() }))
 
 vi.mock('@/api/retrievalRecords', () => ({ useRetrievalRecordsApi: () => api }))
 vi.mock('@/stores/domain', () => ({ useDomainStore: () => domain }))
+vi.mock('@/api/kb', () => ({ useKbApi: () => kbApi }))
+vi.mock('@/api/operator', () => ({ useOperatorApi: () => operatorApi }))
 
 import RetrievalRecordsPanel from '@/components/retrieval/RetrievalRecordsPanel.vue'
+import { useRetrievalNames } from '@/components/retrieval/useRetrievalNames'
 
 enableAutoUnmount(afterEach)
 
@@ -97,6 +102,7 @@ const referenceRecord = {
 describe('RetrievalRecordsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useRetrievalNames().reset()
     domain.currentDomain = 'domain-a'
     api.getSummary.mockResolvedValue({
       days: 7,
@@ -106,6 +112,8 @@ describe('RetrievalRecordsPanel', () => {
     })
     api.list.mockResolvedValue({ items: [record], next_cursor: null, has_more: false, page_size: 25 })
     api.getOne.mockResolvedValue(record)
+    kbApi.listKbs.mockResolvedValue([{ id: 'kb-1', name: '云核心网手册' }, { id: 'kb-2', name: '传输手册' }])
+    operatorApi.listParadigms.mockResolvedValue([{ id: 'p-1', name: '告警范式' }, { id: 'p-2', name: '配置范式' }])
   })
 
   it('loads summary and the first page with a fixed knowledge base scope', async () => {
@@ -116,6 +124,18 @@ describe('RetrievalRecordsPanel', () => {
     expect(api.list).toHaveBeenCalledWith('domain-a', expect.objectContaining({ kbId: 'kb-1' }))
     expect(wrapper.text()).toContain('核心网告警')
     expect(wrapper.text()).toContain('search_knowledge')
+    // 目标知识库与范式显示名称而非原始 ID
+    expect(wrapper.text()).toContain('云核心网手册')
+    expect(wrapper.text()).toContain('告警范式 v2')
+  })
+
+  it('falls back to raw IDs when the name lists cannot be loaded', async () => {
+    kbApi.listKbs.mockRejectedValue(new Error('kb list down'))
+    operatorApi.listParadigms.mockRejectedValue(new Error('paradigm list down'))
+    const wrapper = shallowMount(RetrievalRecordsPanel)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('kb-1')
     expect(wrapper.text()).toContain('p-1 v2')
   })
 
@@ -131,9 +151,9 @@ describe('RetrievalRecordsPanel', () => {
     await wrapper.find('[aria-label="状态"]').setValue('failed')
     await wrapper.find('[aria-label="操作"]').setValue('read')
     await wrapper.find('[aria-label="Tool 名称"]').setValue('get_knowledge')
-    await wrapper.find('[aria-label="知识库 ID"]').setValue('kb-1')
+    await wrapper.find('[aria-label="知识库"]').setValue('kb-1')
     await wrapper.find('[aria-label="用户 ID"]').setValue('u-2')
-    await wrapper.find('[aria-label="范式 ID"]').setValue('p-2')
+    await wrapper.find('[aria-label="范式"]').setValue('p-2')
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 

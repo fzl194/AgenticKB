@@ -1,13 +1,14 @@
 /**
  * 设置 → 系统状态。
  *
- * 从概览页搬过来的运维内容。这里要钉的核心是：**把"没数据"和
- * "口径不适用"区分开**——纯 KB 部署下这些计数恒为 0，摆一排 0 会让人以为知识丢了。
+ * 知识资产区块已随域级 release 口径退役下线（后端 /api/knowledge/stats 在
+ * 瘦身批次4 改成 KB-scoped 必填 kb_id 后，前端就再也没跟上了）。本 tab 现在只
+ * 钉服务健康面：三个服务的探测、单点失败隔离、member 权限与切域竞态。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { enableAutoUnmount, mount, flushPromises } from '@vue/test-utils'
 
-const miningApi = vi.hoisted(() => ({ getStats: vi.fn(), getHealth: vi.fn() }))
+const miningApi = vi.hoisted(() => ({ getHealth: vi.fn() }))
 const servingApi = vi.hoisted(() => ({ getHealth: vi.fn() }))
 const llmApi = vi.hoisted(() => ({ getHealth: vi.fn() }))
 const controlPlaneApi = vi.hoisted(() => ({ getRestartStatus: vi.fn() }))
@@ -36,26 +37,10 @@ vi.mock('@/stores/domain', async () => {
     }),
   }
 })
-// 图表依赖 echarts 的真实布局，这里只关心渲不渲染
-vi.mock('@/components/charts/PieChart.vue', () => ({
-  default: { name: 'PieChart', template: '<div class="pie-stub" />' },
-}))
 
 import SystemStatusTab from '@/components/settings/SystemStatusTab.vue'
 
 enableAutoUnmount(afterEach)
-
-const RELEASE = { id: 'rel-1', domain: 'cloud_core_network', channel: 'prod' }
-
-function stats(over: Record<string, unknown> = {}) {
-  return {
-    documents: 42, snapshots: 42, segments: 900, relations: 120,
-    retrieval_units: 300, embeddings: 300, builds: 1, releases: 1,
-    retrieval_units_by_type: { raw_text: 200, summary: 100 },
-    active_releases: [RELEASE],
-    ...over,
-  }
-}
 
 async function mountTab() {
   const wrapper = mount(SystemStatusTab)
@@ -70,47 +55,7 @@ describe('系统状态 tab', () => {
     miningApi.getHealth.mockResolvedValue({ status: 'healthy', version: '3.0.0' })
     servingApi.getHealth.mockResolvedValue({ status: 'UP' })
     llmApi.getHealth.mockResolvedValue({ status: 'ok' })
-    miningApi.getStats.mockResolvedValue(stats())
     controlPlaneApi.getRestartStatus.mockResolvedValue({ state: 'idle', active: false })
-  })
-
-  it('标注口径，不让人把域级数字当成全部知识', async () => {
-    const wrapper = await mountTab()
-    expect(wrapper.text()).toContain('域级 active release')
-  })
-
-  it('无 active release 时说明口径不适用，而不是渲染一排 0', async () => {
-    miningApi.getStats.mockResolvedValue(stats({
-      documents: 0, snapshots: 0, segments: 0, relations: 0,
-      retrieval_units: 0, embeddings: 0, builds: 0, releases: 0,
-      retrieval_units_by_type: {},
-      active_releases: [],
-    }))
-
-    const wrapper = await mountTab()
-
-    expect(wrapper.text()).toContain('该域无发布语料')
-    // 知识资产那一组统计卡不渲染——0 在这个口径下没有意义。
-    const labels = wrapper.findAllComponents({ name: 'StatsCard' })
-      .map(c => c.props('label'))
-    expect(labels).not.toContain('快照')
-    expect(labels).not.toContain('段落')
-    expect(wrapper.text()).not.toContain('检索使用分析')
-  })
-
-  it('有 release 但内容为空时，0 是真的 0，照常渲染', async () => {
-    // 撤回最后一个文档会发布一个空的 active build，后端刻意保留这个区分
-    miningApi.getStats.mockResolvedValue(stats({
-      documents: 0, snapshots: 0, segments: 0, relations: 0,
-      retrieval_units: 0, embeddings: 0,
-      retrieval_units_by_type: {},
-      active_releases: [RELEASE],
-    }))
-
-    const wrapper = await mountTab()
-
-    expect(wrapper.text()).not.toContain('该域无发布语料')
-    expect(wrapper.findAllComponents({ name: 'StatsCard' }).length).toBeGreaterThan(0)
   })
 
   it('三个服务的健康都探测并展示', async () => {
@@ -124,15 +69,6 @@ describe('系统状态 tab', () => {
     expect(wrapper.text()).toContain('LLM服务')
   })
 
-  it('健康检查与资产统计各用一个竞态计数器——否则健康结果会被统计作废', async () => {
-    const wrapper = await mountTab()
-
-    // 两块都成功落地：共用一个 generation 时，后发起的 loadStats 会把 loadHealth 判为过期
-    const cards = wrapper.findAllComponents({ name: 'ServiceHealthCard' })
-    expect(cards).toHaveLength(3)
-    expect(cards.every(c => c.props('status') !== 'unknown')).toBe(true)
-  })
-
   it('某个服务探测失败只影响它自己', async () => {
     servingApi.getHealth.mockRejectedValue(new Error('down'))
 
@@ -144,21 +80,13 @@ describe('系统状态 tab', () => {
     expect(cards[2].props('status')).toBe('healthy')
   })
 
-  it('统计加载失败要看得见', async () => {
-    miningApi.getStats.mockRejectedValue(new Error('boom'))
-
-    const wrapper = await mountTab()
-
-    expect(wrapper.text()).toContain('加载失败')
-  })
-
   it('member 看不到一键重启入口', async () => {
     const wrapper = await mountTab()
 
     expect(wrapper.find('[data-testid="service-restart"]').exists()).toBe(false)
   })
 
-  it('域在退出时被清空后不再发起健康或统计请求', async () => {
+  it('域在退出时被清空后不再发起健康请求', async () => {
     domainRef.current!.value = ''
 
     await mountTab()
@@ -166,6 +94,12 @@ describe('系统状态 tab', () => {
     expect(miningApi.getHealth).not.toHaveBeenCalled()
     expect(servingApi.getHealth).not.toHaveBeenCalled()
     expect(llmApi.getHealth).not.toHaveBeenCalled()
-    expect(miningApi.getStats).not.toHaveBeenCalled()
+  })
+
+  it('知识资产区块已下线，页面不再渲染该口径', async () => {
+    const wrapper = await mountTab()
+
+    expect(wrapper.text()).not.toContain('知识资产')
+    expect(wrapper.text()).not.toContain('口径')
   })
 })

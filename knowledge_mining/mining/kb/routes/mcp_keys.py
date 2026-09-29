@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -32,6 +33,8 @@ from knowledge_mining.mining.kb.services.mcp_key_service import (
 )
 
 router = APIRouter(prefix="/api/kb/users/me/mcp-keys", tags=["kb-mcp-keys"])
+
+logger = logging.getLogger(__name__)
 
 
 def _get_service(kbdb: KbDB = Depends(get_kb_db)) -> McpKeyService:
@@ -67,6 +70,55 @@ async def list_my_keys(
         user_id=user["id"], is_admin=user.get("site_role") == "admin",
     )
     return {"keys": keys}
+
+
+# ------------------------------------------------------------ 工具默认文案与参数
+
+#: 进程内缓存：工具元数据来自 mcp_server 代码里的 docstring/schema（静态注册面），
+#: 只在首次请求时取一次。失效场景只有发版换码，进程重启自然重载。
+_TOOL_META_CACHE: dict[str, Any] | None = None
+
+
+async def _tool_meta() -> dict[str, Any]:
+    global _TOOL_META_CACHE
+    if _TOOL_META_CACHE is None:
+        # 同容器直接 import mcp_server 的 FastMCP 实例：docstring/schema 与线上
+        # MCP 服务同源零漂移，不走 HTTP。懒导入避免 mining 启动即背上 mcp 栈
+        # （首次导入约 1-2s，会占住事件循环——只发生一次，内网可接受）。
+        from mcp_server import server as mcp_server_module
+
+        tools = await mcp_server_module.mcp.list_tools(run_middleware=False)
+        _TOOL_META_CACHE = {
+            "instructions": mcp_server_module.DEFAULT_INSTRUCTIONS,
+            "tools": [
+                {
+                    "name": t.name,
+                    "description": t.description or "",
+                    "parameters": t.parameters or {},
+                }
+                for t in tools
+                if t.name in mcp_server_module.TOOL_NAMES
+            ],
+        }
+    return _TOOL_META_CACHE
+
+
+@router.get("/tool-meta")
+async def get_tool_meta(
+    user: dict[str, Any] = Depends(current_user),
+) -> dict[str, Any]:
+    """MCP 工具默认提示词/默认工具说明/参数 schema。
+
+    给钥匙配置抽屉用：预填默认文案、展示每个工具的参数表。只读静态面，
+    不涉及钥匙个性化数据；无 DB 依赖。
+    """
+    try:
+        return await _tool_meta()
+    except Exception:
+        # 缓存不落，下次请求重试；503 让前端回落到"不预填"而非误当无默认。
+        logger.warning("mcp tool-meta 装配失败（mcp_server import/list_tools）",
+                       exc_info=True)
+        raise HTTPException(503, "工具默认文案暂不可用，请稍后重试") from None
 
 
 # ------------------------------------------------------------ 生命周期

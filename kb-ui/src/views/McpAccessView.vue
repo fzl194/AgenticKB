@@ -82,7 +82,7 @@
     <el-dialog v-model="createVisible" title="新建 MCP 钥匙" width="440px">
       <el-form label-width="80px" @submit.prevent>
         <el-form-item label="名称" required>
-          <el-input v-model="createForm.name" maxlength="64" show-word-limit placeholder="例如：客服机器人" data-test="mcp-key-name" />
+          <el-input v-model="createForm.name" maxlength="64" show-word-limit placeholder="给钥匙起个名字，如：研发知识助手" data-test="mcp-key-name" />
         </el-form-item>
         <el-form-item label="知识域" required>
           <el-select v-model="createForm.domain" placeholder="选择该钥匙服务的知识域" style="width: 100%" data-test="mcp-key-domain">
@@ -115,8 +115,9 @@
       </template>
     </el-dialog>
 
-    <!-- 每把钥匙配置 drawer -->
-    <el-drawer v-model="configVisible" size="620px" :title="configKey ? `钥匙配置 · ${configKey.name}` : '钥匙配置'">
+    <!-- 每把钥匙配置 drawer。destroy-on-close：关闭即卸载面板——轮换后的
+         一次性明文随面板销毁，重开不再出现；会话内的列表刷新/保存不抹掉它。 -->
+    <el-drawer v-model="configVisible" size="620px" destroy-on-close :title="configKey ? `钥匙配置 · ${configKey.name}` : '钥匙配置'">
       <McpKeyConfigPanel
         v-if="configKey"
         :key-item="configKey"

@@ -11,7 +11,7 @@ import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
   DeletedKbRow, KbPurgeTask,
   KbOverview, KbRunRecord, KbStats, KbSummary, KbUpdateBody, KbUserCandidate,
-  McpKeyCreated, McpKeyItem, McpKeyRotateResult,
+  McpKeyCreated, McpKeyItem, McpKeyRotateResult, McpToolMeta,
   DocumentKnowledge,
 } from '@/types/kb'
 
@@ -124,6 +124,12 @@ export function useKbApi() {
     async listMcpKeys(): Promise<{ keys: McpKeyItem[] }> {
       const { data } = await client.get('/api/kb/users/me/mcp-keys')
       return extractOne<{ keys: McpKeyItem[] }>(data)
+    },
+
+    /** 工具默认提示词/默认说明/参数 schema（配置抽屉预填与参数表用）。 */
+    async getMcpToolMeta(): Promise<McpToolMeta> {
+      const { data } = await client.get('/api/kb/users/me/mcp-keys/tool-meta')
+      return extractOne<McpToolMeta>(data)
     },
 
     /** 新建钥匙：明文 key 仅本次响应返回。 */

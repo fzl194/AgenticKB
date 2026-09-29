@@ -174,11 +174,17 @@ class PersonalizationMiddleware(Middleware):
     ):
         await _recover_pending_uploads_once()
         ident = _identity_or_none()
-        # 已知限制（fastmcp 3.4.7）：initialize 响应在 middleware 返回路径之外组装
-        # （见 fastmcp/server/low_level.py 的 capture 注释），pre-set 实例属性不反映。
-        # 自定义 instructions 暂存不注入——工具描述动态化（on_list_tools）已生效，
-        # 那才是 Agent 选工具的主要依据；升级 fastmcp 后收口本项。
-        _ = ident
+        # 按会话注入自定义提示词（fastmcp 3.4.7 路径）：
+        # InitializeResult 在 call_next 内部由 SDK 组装并直接发往写流——中间件
+        # 拿到的返回值是发送后的捕获对象，事后改写无效；改 FastMCP 实例属性又
+        # 会串到其他连接。但每条连接的 ServerSession 持有自己的 _init_options，
+        # SDK 组装响应时才读取其中的 instructions——在 call_next 之前按会话改写
+        # 即生效且互不串扰。fastmcp 的 Context 在 init 阶段特意保留 session 引用
+        # （"For state ops during init"），升级 fastmcp/mcp SDK 时此处需回归验证。
+        if ident is not None and ident.instructions:
+            options = getattr(context.fastmcp_context.session, "_init_options", None)
+            if options is not None:
+                options.instructions = ident.instructions
         return await call_next(context)
 
     async def on_list_tools(

@@ -368,6 +368,25 @@ export interface McpKeyItem {
   tool_descriptions: Record<string, string> | null
 }
 
+/** 工具参数的 JSON Schema（fastmcp 从函数签名+docstring Args 段生成）。 */
+export interface McpToolParamSchema {
+  properties?: Record<string, Record<string, unknown>>
+  required?: string[]
+}
+
+/** tool-meta 单工具项：默认描述 + 参数 schema。 */
+export interface McpToolMetaItem {
+  name: string
+  description: string
+  parameters: McpToolParamSchema
+}
+
+/** tool-meta 响应：钥匙配置抽屉预填默认文案/展示参数表用。 */
+export interface McpToolMeta {
+  instructions: string
+  tools: McpToolMetaItem[]
+}
+
 /** 51号批次2：创建钥匙响应——明文 key 仅此一次返回。 */
 export interface McpKeyCreated {
   id: string

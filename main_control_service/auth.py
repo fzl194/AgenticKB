@@ -73,7 +73,16 @@ def _is_admin_only(method: str, path: str) -> bool:
             if (service == "serving" and method in {"POST", "PUT", "PATCH", "DELETE"}
                     and (upstream == "api/v1/paradigm"
                          or upstream.startswith("api/v1/paradigm/"))):
-                return True
+                # POST api/v1/paradigm/{id}/search 是检索执行（读操作），网页检索
+                # tab 对所有可检索用户开放——serving 端 KbAccessService 仍按
+                # X-KB-User 逐用户授权库可见性，放行网关闸不放大库权限。其余
+                # 范式 POST（run/validate/dryrun）与全部写操作 = 站点管理员。
+                segments = upstream.split("/")
+                if not (method == "POST"
+                        and len(segments) == 5
+                        and segments[3]
+                        and segments[4] == "search"):
+                    return True
             if (service == "mining" and method in {"POST", "PUT", "PATCH", "DELETE"}
                     and (upstream == "api/mining-workflows"
                          or upstream.startswith("api/mining-workflows/"))):

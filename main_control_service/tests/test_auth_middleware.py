@@ -151,6 +151,47 @@ def test_proxy_global_paradigm_write_requires_site_admin(tmp_path):
     assert admin.status_code == 200
 
 
+def test_proxy_paradigm_search_execution_available_to_member(tmp_path):
+    """POST {id}/search 是检索执行（读操作），网页检索 tab 对全员开放。
+
+    serving 端 KbAccessService 仍按 X-KB-User 逐用户授权库可见性——这里放行
+    的只是网关角色闸，不放大任何库权限。1.1.11 RBAC 的范式写闸曾把它一并
+    拦下，导致 member/域管理员网页检索 403 而 MCP（直连 serving）正常。
+    """
+    path = "/api/v1/proxy/generic/serving/api/v1/paradigm/p-1/search"
+    with TestClient(_mw_app(tmp_path)) as c:
+        member = c.post(path, headers={"Authorization": f"Bearer {_token('member')}"})
+        admin = c.post(path, headers={"Authorization": f"Bearer {_token('admin')}"})
+    assert member.status_code == 200
+    assert admin.status_code == 200
+
+
+def test_proxy_paradigm_carve_out_is_only_search(tmp_path):
+    """carve-out 精确到 {id}/search：编辑器/测试用的 POST 与更深路径仍限站点管理员。"""
+    for upstream in (
+        "api/v1/paradigm",
+        "api/v1/paradigm/run",
+        "api/v1/paradigm/validate",
+        "api/v1/paradigm/p-1/dryrun",
+        "api/v1/paradigm/p-1/search/extra",
+        "api/v1/paradigm//search",
+    ):
+        path = f"/api/v1/proxy/generic/serving/{upstream}"
+        with TestClient(_mw_app(tmp_path)) as c:
+            member = c.post(path, headers={"Authorization": f"Bearer {_token('member')}"})
+        assert member.status_code == 403, upstream
+
+
+def test_proxy_paradigm_search_other_methods_still_require_site_admin(tmp_path):
+    """carve-out 只认 POST：search 形状的 PUT/DELETE 依旧是范式写操作。"""
+    path = "/api/v1/proxy/generic/serving/api/v1/paradigm/p-1/search"
+    with TestClient(_mw_app(tmp_path)) as c:
+        put = c.put(path, headers={"Authorization": f"Bearer {_token('member')}"})
+        delete = c.delete(path, headers={"Authorization": f"Bearer {_token('member')}"})
+    assert put.status_code == 403
+    assert delete.status_code == 403
+
+
 def test_proxy_regular_domain_request_stays_available_to_member(tmp_path):
     path = "/api/v1/proxy/generic/mining/api/kb/overview"
     with TestClient(_mw_app(tmp_path)) as c:

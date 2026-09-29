@@ -124,8 +124,8 @@ def _build_forward_headers(
     headers["X-Forwarded-Proto"] = request.url.scheme
 
     # Phase 2：AuthMiddleware 已把身份挂 request.state.user；反代把派生头注入给 mining。
-    # X-KB-User/X-KB-Role/X-Internal-Auth 都不在 _STRIP_REQUEST_HEADERS，会被转发；
-    # 浏览器自带的 Authorization 仍被剥。mining 的 current_user 校验 X-Internal-Auth。
+    # 客户端自带的 X-KB-* / X-Internal-Auth 已在上面的 _STRIP_REQUEST_HEADERS 剥掉，
+    # 这里统一由网关按 JWT 重注——身份头不可伪造。mining/serving 各自校验 X-Internal-Auth。
     user = getattr(request.state, "user", None)
     if user:
         headers["X-KB-User"] = str(user.get("username", ""))

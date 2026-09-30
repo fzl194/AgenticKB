@@ -2437,6 +2437,9 @@ WITH latest AS (
             raise ValueError(f"unknown status filter: {status!r}")
         if order_by not in ("created_at", "modified_at"):
             raise ValueError(f"unknown order_by: {order_by!r}")
+        # PG DESC 默认 NULLS FIRST——modified_at 可空（legacy 行），跨库合并
+        # 口径把空值排最后，SQL 必须显式 NULLS LAST 与之对齐（codex P2）
+        nulls = " NULLS LAST" if order_by == "modified_at" else ""
         extra_sql, extra_params = _document_search_filters(
             query=query, directory_prefix=directory_prefix)
         clause = "d.kb_id = %s AND d.deleted_at IS NULL"
@@ -2450,14 +2453,14 @@ WITH latest AS (
             if status is None:
                 cur = await conn.execute(
                     f"{_DOCUMENT_LIST_SELECT_SQL} WHERE {clause}"
-                    f" ORDER BY d.{order_by} DESC LIMIT %s OFFSET %s",
+                    f" ORDER BY d.{order_by} DESC{nulls} LIMIT %s OFFSET %s",
                     [*params, limit, offset],
                 )
                 return [dict(r) for r in await cur.fetchall()]
             cur = await conn.execute(
                 f"SELECT * FROM ({_DOCUMENT_LIST_SELECT_SQL} WHERE {clause}) ds"
                 " WHERE ds.status = %s"
-                f" ORDER BY ds.{order_by} DESC LIMIT %s OFFSET %s",
+                f" ORDER BY ds.{order_by} DESC{nulls} LIMIT %s OFFSET %s",
                 [*params, status, limit, offset],
             )
             return [dict(r) for r in await cur.fetchall()]

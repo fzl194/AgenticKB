@@ -62,6 +62,19 @@ class ArchiveTaskRegistry:
             task["status"] = "failed"
             task["error"] = error[:500]
 
+    def note_mining(self, task_id: str, auto: dict) -> None:
+        """57号codex三审：解压完成回调入队后，把最终 auto_mined/run_id/reason
+        写回任务——202 响应不再提前宣称，结果以任务状态为准（前端轮询可见）。"""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return
+            task["auto_mine"] = {
+                "auto_mined": bool(auto.get("auto_mined")),
+                **({"run_id": auto["run_id"]} if auto.get("run_id") else {}),
+                **({"reason": auto["reason"]} if auto.get("reason") else {}),
+            }
+
     def get(self, task_id: str) -> dict[str, Any] | None:
         with self._lock:
             task = self._tasks.get(task_id)

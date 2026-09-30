@@ -499,6 +499,13 @@ def get_knowledge(
             "ref 与 kb_name/file_query 不能同时传：ref=深入某个引用，kb_name=浏览"
             "某个库，file_query=按文件名找文件。"
         )
+    # codex 三审：过滤参数对 ref 分支无意义——显式拒绝，不静默忽略
+    if has_ref and ((directory_prefix and str(directory_prefix).strip())
+                    or (status and str(status).strip())):
+        raise ToolError(
+            "directory_prefix/status 是文件搜索过滤参数，与 ref 互斥：要限定"
+            "检索目录请用 search_knowledge 的 filters.directory_prefix。"
+        )
     if has_ref:
         return _get_by_ref(ident, str(ref), domain, kb_names,
                            mode, relation, query, depth, limit, cursor)

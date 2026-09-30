@@ -468,9 +468,11 @@ async function loadFiles() {
     totalFiles.value = total
   } catch (e) {
     if (generation !== loadFilesGeneration) return
-    // codex P1-5：失败不留旧列表冒充当前口径（否则用户会对错误集合做批量操作）
+    // codex P1-5：失败不留旧列表冒充当前口径（否则用户会对错误集合做批量操作）；
+    // 隐藏的旧勾选一并清（codex 三审：不可对不可见选择做批量挖掘/删除）
     files.value = []
     totalFiles.value = 0
+    clearSelection()
     ElMessage.error(await apiErrorDetail(e))
   }
 }

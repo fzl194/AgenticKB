@@ -231,7 +231,7 @@ async def list_documents(
     try:
         limit = max(1, min(int(body.get("limit") or 50), 200))
         offset = max(0, int(body.get("offset") or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise HTTPException(422, "limit/offset 必须是整数。")
     kb_id = str(body.get("kb_id") or "")
 
@@ -381,13 +381,11 @@ async def upload_direct(
     key = await kbdb.get_mcp_key(key_id=str(entry.get("key_id") or ""))
     if key is None or key["status"] != "active":
         raise HTTPException(404, "upload ticket invalid or expired")
-    # codex P2：票据签发后钥匙开放集可能被收窄——消费时复核（10 分钟窗口内
-    # 的最小权限收敛），与"权限收窄即时生效"的库可见性语义对齐。
-    try:
-        open_ids = await kbdb.key_open_kb_ids(key_id=str(entry.get("key_id") or ""))
-    except Exception:
-        open_ids = None
-    if open_ids is not None and str(entry.get("kb_id") or "") not in open_ids:
+    # codex P2/P1：票据签发后钥匙开放集可能被收窄——消费时复核（10 分钟窗口内
+    # 的最小权限收敛）。授权检查必须 fail-closed：查询异常 → 503 可重试，
+    # 不消费票据（本检查在 redeem 之前，Agent 重试同一 ticket 不白吃）。
+    open_ids = await kbdb.key_open_kb_ids(key_id=str(entry.get("key_id") or ""))
+    if str(entry.get("kb_id") or "") not in open_ids:
         raise HTTPException(404, "upload ticket invalid or expired")
     entry = _TICKETS.redeem(ticket)
     if entry is None:
@@ -400,18 +398,20 @@ async def upload_direct(
             yield chunk
 
     async def _mine_after_archive(task: dict[str, Any]) -> None:
-        """codex P1-2：大归档解压完成后才入队（与网页 202 路径同一修法）。"""
+        """codex P1-2：大归档解压完成后才入队（与网页 202 路径同一修法）。
+        最终入队结果写回归档任务（registry.note_mining）供前端轮询展示。"""
         kb = None
         try:
             kb = await kbdb.get_kb(entry["kb_id"])
         except Exception:
             logger.exception("[mcp-tools] get_kb failed in archive callback")
-        if kb is None:
-            return
-        await auto_mine.enqueue_auto_mining(
-            app_state=request.app.state, kbdb=kbdb, kb=kb,
-            user_id=entry["user_id"], username=username,
-            triggered_by="mcp_upload")
+        auto: dict[str, Any] = {"auto_mined": False, "reason": "internal"}
+        if kb is not None:
+            auto = await auto_mine.enqueue_auto_mining(
+                app_state=request.app.state, kbdb=kbdb, kb=kb,
+                user_id=entry["user_id"], username=username,
+                triggered_by="mcp_upload")
+        _note_mining_outcome(task.get("task_id"), auto)
 
     replace_doc_id = str(entry.get("document_id") or "")
 
@@ -499,24 +499,34 @@ async def upload_direct(
     logger.info("[mcp-tools] upload-direct by %s -> kb=%s file=%s kind=%s",
                 username, entry["kb_id"], entry["filename"], result["kind"])
 
-    # 自动挖掘入队：失败只降级，绝不影响上传结果（含入队前的 get_kb）
-    try:
-        kb = await kbdb.get_kb(entry["kb_id"])
-    except Exception:
-        logger.exception("[mcp-tools] get_kb failed after upload")
+    # 自动挖掘入队：失败只降级，绝不影响上传结果（含入队前的 get_kb）。
+    # codex P2：archive_task（大归档异步解压）**不入队**——文档集未成形，
+    # 唯一入队点是 _mine_after_archive 回调（否则会挖到部分成员且重复入队）。
+    if result["kind"] == "archive_task":
         kb = None
-    auto = (
-        await auto_mine.enqueue_auto_mining(
-            app_state=request.app.state, kbdb=kbdb, kb=kb,
-            user_id=entry["user_id"], username=username,
+        auto: dict[str, Any] = {"deferred": True}
+    else:
+        try:
+            kb = await kbdb.get_kb(entry["kb_id"])
+        except Exception:
+            logger.exception("[mcp-tools] get_kb failed after upload")
+            kb = None
+        auto = (
+            await auto_mine.enqueue_auto_mining(
+                app_state=request.app.state, kbdb=kbdb, kb=kb,
+                user_id=entry["user_id"], username=username,
+                triggered_by="mcp_upload",
+            )
+            if kb is not None else {"auto_mined": False, "reason": "internal"}
         )
-        if kb is not None else {"auto_mined": False, "reason": "internal"}
+    auto_fields = (
+        {"auto_mine_status": "pending"}  # 解压完成后回调入队，结果见任务查询
+        if auto.get("deferred") else {
+            "auto_mined": bool(auto.get("auto_mined")),
+            **({"run_id": auto["run_id"]} if auto.get("run_id") else {}),
+            **({"reason": auto["reason"]} if auto.get("reason") else {}),
+        }
     )
-    auto_fields = {
-        "auto_mined": bool(auto.get("auto_mined")),
-        **({"run_id": auto["run_id"]} if auto.get("run_id") else {}),
-        **({"reason": auto["reason"]} if auto.get("reason") else {}),
-    }
     if result["kind"] == "file":
         document = result["document"]
         response = _upload_response(
@@ -538,12 +548,13 @@ async def upload_direct(
             ),
         }
     elif result["kind"] == "archive_task":
-        # 大归档后台解压中：解压完成后 _mine_after_archive 回调入队（codex P1-2）
+        # 大归档后台解压中：解压完成后 _mine_after_archive 回调入队
+        # （codex 三审：此刻什么都没入队，不得宣称 auto_mined=true）
         response = {
             "kind": "archive_task",
             "archive_task_id": result["archive_task_id"],
             "status": "processing",
-            "auto_mined": True,  # 解压完成后回调入队（此刻尚未发生）
+            "auto_mine_status": "pending",
             "message": (
                 "归档较大，正在后台解压入库；解压完成后自动排队挖掘，"
                 "届时用 get_knowledge(kb_name=…) 可看到全部文档"
@@ -553,6 +564,16 @@ async def upload_direct(
         request, entry, success=True, response_refs=_safe_upload_refs(response),
     )
     return response
+
+def _note_mining_outcome(task_id: object, auto: dict[str, Any]) -> None:
+    """归档任务回调入队的最终结果写回注册表（失败只记日志）。"""
+    from knowledge_mining.mining.kb.services.archive_tasks import registry
+
+    try:
+        registry.note_mining(str(task_id or ""), auto)
+    except Exception:
+        logger.warning("archive note_mining failed (task=%s)", task_id)
+
 
 async def _expire_upload_tickets(request: Request) -> None:
     for entry in _TICKETS.drain_expired():

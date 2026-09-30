@@ -164,11 +164,18 @@ async def upload_document(
 
     async def _mine_after_archive(task: dict[str, Any]) -> None:
         """codex P1-2：大归档解压完成后才入队（202 时文档集未成形，
-        提前入队会 kb_empty 或只挖到部分成员且无补入队）。"""
+        提前入队会 kb_empty 或只挖到部分成员且无补入队）。最终结果写回
+        注册表（registry.note_mining）——响应侧只宣称 pending。"""
         auto = await _enqueue_auto_mine_after_write(
             request, kbdb, kb_id, user, triggered_by="web_upload")
         logger.info("[auto-mine] archive task %s done -> auto_mined=%s run=%s",
                     task.get("task_id"), auto.get("auto_mined"), auto.get("run_id"))
+        try:
+            from knowledge_mining.mining.kb.services.archive_tasks import registry
+            registry.note_mining(str(task.get("task_id") or ""), auto)
+        except Exception:
+            logger.warning("[auto-mine] note_mining failed (task=%s)",
+                           task.get("task_id"))
 
     try:
         result = await svc.intake_upload(
@@ -197,10 +204,12 @@ async def upload_document(
     # 异步归档（archive_task）由 _mine_after_archive 回调在解压完成后入队
     # （codex P1-2：立即入队会 kb_empty/部分成员，且无补入队）。入队失败只降级。
     if result["kind"] == "archive_task":
+        # codex 三审：此刻什么都没入队——auto_mine_status=pending（不宣称
+        # auto_mined=true）；最终结果由回调写回任务状态（轮询可见）
         return JSONResponse(status_code=202, content={
             "archive_task_id": result["archive_task_id"],
             "status": "processing",
-            "auto_mined": True,  # 解压完成后回调入队（此刻尚未发生）
+            "auto_mine_status": "pending",
             "message": (f"归档 {filename!r} 正在后台解压入库，"
                         f"解压完成后自动排队挖掘"),
         })

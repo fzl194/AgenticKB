@@ -259,11 +259,12 @@ final class ParadigmRequests {
                     "filter_value_invalid:directory_prefix: 长度超过上限 "
                             + MAX_DIRECTORY_PREFIX_LENGTH);
         }
-        // trim（ASCII 空白）+ 去首尾 '/'：全索引扫描，一次 substring
+        // trim（Character.isWhitespace——与 String.trim() 同覆盖：tab/换行等）
+        // + 去首尾 '/'：全索引扫描，一次 substring
         int start = 0;
         int end = raw.length();
-        while (start < end && (raw.charAt(start) == ' ' || raw.charAt(start) == '/')) start++;
-        while (end > start && (raw.charAt(end - 1) == ' ' || raw.charAt(end - 1) == '/')) end--;
+        while (start < end && (Character.isWhitespace(raw.charAt(start)) || raw.charAt(start) == '/')) start++;
+        while (end > start && (Character.isWhitespace(raw.charAt(end - 1)) || raw.charAt(end - 1) == '/')) end--;
         String normalized = raw.substring(start, end);
         if (normalized.isEmpty() || normalized.length() > MAX_DIRECTORY_PREFIX_LENGTH) {
             throw new IllegalArgumentException(

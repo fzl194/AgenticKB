@@ -184,3 +184,47 @@ def test_magic_unchecked_suffixes_pass(tmp_path):
     # md/txt/html/json/chm/hdx 无可靠魔数——不校验（挖掘层兜底）
     for suffix in (".md", ".txt", ".html", ".json", ".chm", ".hdx", ".doc", ".xls"):
         _validate_magic_bytes(_tmp(tmp_path, b"\x00\x01garbage"), suffix)
+
+
+def test_upload_direct_open_set_check_fails_closed():
+    """codex 三审 P1 源码契约：upload_direct 的开放集复核不得有 try/except
+    放行（fail-open）——授权检查 fail-closed（行为级用例归 PG 门禁）。"""
+    import inspect
+
+    src = inspect.getsource(mcp_tools.upload_direct)
+    seg = src[src.find("open_ids = await"):src.find("entry = _TICKETS.redeem")]
+    assert "open_ids = await kbdb.key_open_kb_ids" in seg
+    assert "except" not in seg and "open_ids = None" not in seg
+
+
+def test_archive_task_is_not_enqueued_immediately():
+    """codex 三审 P2 控制流契约（AST）：archive_task 分支不 enqueue（置
+    deferred）、共享 enqueue 只在 else 分支——唯一入队点是解压完成回调。"""
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(mcp_tools.upload_direct)))
+
+    def calls(node, name):
+        found = []
+        for n in ast.walk(node):
+            if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == name):
+                found.append(n)
+        return found
+
+    guard = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            test_src = ast.unparse(node.test)  # unparse 用单引号——匹配不依赖引号
+            if "archive_task" in test_src and "kind" in test_src:
+                guard = node
+                break
+    assert guard is not None, "archive_task 分流守卫不存在"
+    # 只查守卫 body（不含 else）；else 分支必须立即入队
+    body_only = ast.Module(body=guard.body, type_ignores=[])
+    assert not calls(body_only, "enqueue_auto_mining"), "archive_task 分支不得入队"
+    assert guard.orelse, "守卫必须有 else（file/archive/sync 路径仍立即入队）"
+    else_only = ast.Module(body=guard.orelse, type_ignores=[])
+    assert calls(else_only, "enqueue_auto_mining"), "else 分支应含共享入队"

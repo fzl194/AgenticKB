@@ -58,6 +58,7 @@
         v-model="directoryScope"
         class="kb-search__dir"
         size="large" clearable placeholder="不限目录"
+        :disabled="searching"
         data-testid="kb-search-directory"
       >
         <el-option v-for="p in folderOptions" :key="p" :label="p" :value="p" />
@@ -278,6 +279,10 @@ async function reload() {
   const kbId = props.kb.id
   if (!domain) return
   const generation = ++reloadGeneration
+  // codex 三审：上下文重载（切库/切域/挂载）作废在途检索并复位 loading——
+  // 否则旧请求 finally 因代际失效跳过 searching=false，页面永久禁用
+  searchGeneration++
+  searching.value = false
   selectedParadigmId.value = props.kb.default_paradigm_id ?? null
   configurationError.value = ''
   void loadFolderOptions(generation, kbId) // 57号目录过滤选项：失败自吞（可选增强）
@@ -344,9 +349,10 @@ async function run() {
   }
   searching.value = true
   error.value = ''
-  // codex P1-4：请求代际快照——A 库/旧目录的慢响应不得覆盖切换后的页面
+  // codex P1-4：请求代际+目录快照——A 库/旧目录的慢响应不得覆盖切换后的页面
   const generation = ++searchGeneration
   const kbId = props.kb.id
+  const dirSnapshot = directoryScope.value
   try {
     const out = await servingApi.runParadigmSearch(resolved.paradigmId, q, {
       domain: domainStore.currentDomain ?? undefined,
@@ -356,7 +362,8 @@ async function run() {
         : scopeDocumentRef.value ? { document_refs: [scopeDocumentRef.value] } : undefined,
       filters: directoryScope.value ? { directory_prefix: directoryScope.value } : undefined,
     })
-    if (generation !== searchGeneration || kbId !== props.kb.id) return
+    if (generation !== searchGeneration || kbId !== props.kb.id
+        || dirSnapshot !== directoryScope.value) return
     evidence.value = out.evidenceResponse?.evidence ?? []
     hasMore.value = out.evidenceResponse?.has_more ?? false
     effective.value = {
@@ -366,7 +373,8 @@ async function run() {
     }
     searched.value = true
   } catch (e) {
-    if (generation !== searchGeneration || kbId !== props.kb.id) return
+    if (generation !== searchGeneration || kbId !== props.kb.id
+        || dirSnapshot !== directoryScope.value) return
     error.value = await apiErrorDetail(e)
     evidence.value = []
     hasMore.value = false

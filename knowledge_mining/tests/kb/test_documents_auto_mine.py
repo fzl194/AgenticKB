@@ -93,8 +93,9 @@ async def test_upload_archive_task_defers_mining_to_callback(enqueued):
     import json
     body = json.loads(out.body)
     assert body["archive_task_id"] == "t-1"
-    assert body["auto_mined"] is True  # 语义=解压完成后将入队（此刻未发生）
-    assert "run_id" not in body
+    # codex 三审：此刻未入队——auto_mine_status=pending（不宣称 auto_mined）
+    assert body["auto_mine_status"] == "pending"
+    assert "auto_mined" not in body and "run_id" not in body
     assert enqueued == []              # 响应时零入队
     # 回调被透传给 intake_upload（由 _run_archive_task 在解压成功后调用）
     assert callable(svc.intake_calls[0].get("on_archive_complete"))

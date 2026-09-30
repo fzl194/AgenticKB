@@ -182,13 +182,16 @@ async def list_kbs(body: dict[str, Any], kbdb: KbDB = Depends(get_kb_db)) -> dic
 def _document_list_item(
     d: dict[str, Any], *, referenced: bool = False, kb_name: str | None = None,
 ) -> dict[str, Any]:
-    """文件清单/搜索结果的统一条目形状（57 号：+content_revision/+directory_path）。
+    """文件清单/搜索结果的统一条目形状（57 号：+content_revision/+directory_path；
+    58 号：字段名统一 document_id=asset_documents.id——唯一的文件管理身份，
+    manage_files 替换就认它；外部引用（referenced）条目给 None=不可替换标记，
+    不给属主库的 id——否则 Agent 拿去替换必吃 404）。
 
-    content_revision 是 upload_document 替换语义的「版本暗号」来源——Agent
-    从这里读到当前值，替换时原样回传。
+    content_revision 是替换语义的「版本暗号」来源——Agent 从这里读到当前值，
+    替换时原样回传（expected_revision）。
     """
     item = {
-        "id": d["id"],
+        "document_id": None if referenced else d["id"],
         "name": d.get("document_name"),
         "status": "referenced" if referenced else d.get("status"),
         "file_size": d.get("file_size"),

@@ -331,9 +331,11 @@ def test_upload_document_replace_unresolvable_ref_guides_retry(monkeypatch) -> N
                                replace_document_ref="doc_GONE")
 
 
-def test_doc_view_strips_internal_document_id(monkeypatch) -> None:
-    """get_knowledge doc_ 分支剥 document_id（Agent 只见 ref+暗号），revision 保留。"""
-    calls = _patch_backend(monkeypatch)
+def test_doc_view_keeps_document_id(monkeypatch) -> None:
+    """58号：doc_ 分支的 source 保留 document_id——它是文件管理身份（manage_files
+    替换入口），与 doc_（内容引用）并存不互斥；revision 保留=替换暗号。
+    （57号"剥内部 id"决定已被 58号推翻。）"""
+    _patch_backend(monkeypatch)
     monkeypatch.setattr(
         server.backend, "get_document",
         lambda *a, **k: {"source": {"document_id": "d-9", "content_revision": 2,
@@ -341,7 +343,7 @@ def test_doc_view_strips_internal_document_id(monkeypatch) -> None:
                          "segments": []})
     out = server.get_knowledge(ref="doc_X")
     assert out["view"] == "document_content"
-    assert "document_id" not in out["source"]
+    assert out["source"]["document_id"] == "d-9"
     assert out["source"]["content_revision"] == 2
 
 

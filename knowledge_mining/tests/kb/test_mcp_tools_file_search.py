@@ -1,5 +1,7 @@
-"""57 号：MCP 文件清单/搜索条目形状（纯函数，不需要 PostgreSQL）。
+"""57 号/58 号：MCP 文件清单/搜索条目形状（纯函数，不需要 PostgreSQL）。
 
+58 号：字段名统一 document_id（= asset_documents.id，非新 ID）；外部引用
+（referenced）条目 document_id=None——本库语境不可替换，不给必吃 404 的 id。
 跨库搜索/鉴权行为（kb_id 可选、query 必填、422 矩阵）走真库用例——
 见 test_mcp_tools_file_search_pg.py。
 """
@@ -20,7 +22,7 @@ def _own_doc() -> dict:
 def test_own_document_item_shape():
     item = _document_list_item(_own_doc())
     assert item == {
-        "id": "doc-1",
+        "document_id": "doc-1",  # 58号：id → document_id（分支未发布不留别名）
         "name": "设备X手册.pdf",
         "status": "mined",
         "file_size": 1024,
@@ -31,7 +33,9 @@ def test_own_document_item_shape():
     }
 
 
-def test_referenced_item_shape():
+def test_referenced_item_document_id_is_null():
+    """58号：外部引用文档 document_id=None——manage_files 不可替换（属主库的
+    id 不给，否则 Agent 拿去必吃 404；referenced=true 即"不可替换"标记）。"""
     d = {
         "id": "doc-r", "document_name": "引用文档.md", "file_size": 10,
         "referenced_at": "2026-09-29T08:00:00+00:00",
@@ -40,6 +44,7 @@ def test_referenced_item_shape():
     item = _document_list_item(d, referenced=True)
     assert item["status"] == "referenced"
     assert item["referenced"] is True
+    assert item["document_id"] is None
     assert item["content_revision"] is None  # 引用文档无替换语义
     assert item["modified_at"] == "2026-09-29T08:00:00+00:00"
     assert "kb" not in item
@@ -47,11 +52,13 @@ def test_referenced_item_shape():
 
 def test_cross_kb_item_carries_kb_name():
     item = _document_list_item(_own_doc(), kb_name="设备库")
+    assert item["document_id"] == "doc-1"
     assert item["kb"] == "设备库"
 
 
 def test_missing_fields_degrade_to_none_not_crash():
     item = _document_list_item({"id": "doc-2", "document_name": "x.md"})
+    assert item["document_id"] == "doc-2"
     assert item["status"] is None
     assert item["content_revision"] is None
     assert item["modified_at"] == ""

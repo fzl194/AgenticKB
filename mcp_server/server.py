@@ -552,11 +552,9 @@ def _get_by_ref(ident: Identity, ref: str, domain: str | None,
             )
         out = _serving_call(
             backend.get_document, username, kb_ids, resolved, ref, limit, cursor)
-        source = out.get("source") if isinstance(out.get("source"), dict) else None
-        if source is not None:
-            # 57号：内部 document_id 剥掉（Agent 用 doc_ ref + upload_document 的
-            # 替换参数即可，无需内部 id）；content_revision 保留=替换暗号。
-            source.pop("document_id", None)
+        # 58号：source 保留 document_id（文件管理身份，manage_files 替换入口）——
+        # 与 doc_（内容引用）并存；content_revision=替换暗号。（57号"剥内部 id"
+        # 决定已推翻：id 非秘密，防探测靠权限检查不靠藏 id。）
         return {**out, "view": "document_content"}
 
     # st_（或其他形状）：query > relation > 能力报告

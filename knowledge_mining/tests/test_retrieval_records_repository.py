@@ -98,6 +98,38 @@ async def test_summary_counts_searches_separately_from_read_and_upload_calls() -
     assert result["summary"]["failure_rate"] == pytest.approx(1 / 3, abs=0.0001)
 
 
+@pytest.mark.asyncio
+async def test_summary_tools_scope_and_word_cloud_raw_queries() -> None:
+    """MCP Tool 分布只统计带 tool_name 的调用；问句列表是词云原料。
+
+    钉三件事：
+    1. tools 分组 SQL 带 tool_name IS NOT NULL——网页/API 调用（tool_name 为
+       NULL）不得混进"MCP Tool 分布"的 (none) 桶（内网 2026-09-30 实发）；
+    2. no_result_queries 查询已退役（"答不上来的问题"卡片下线，少跑一次库）；
+    3. top_queries 上限是词云用的 300，不再是原句 top20。
+    """
+    connection = _Connection()
+    repository = RetrievalRecordRepository(_Pool(connection))
+
+    result = await repository.summary(
+        domain="d1",
+        days=7,
+        actor_user_id=None,
+        kb_id=None,
+        visible_kb_ids=["kb-1"],
+    )
+
+    # 语句序：counts → trend → sources → tools → paradigms → top_queries
+    assert len(connection.statements) == 6
+    tools_sql, tools_params = connection.statements[3]
+    assert "tool_name IS NOT NULL" in tools_sql
+    queries_sql, queries_params = connection.statements[5]
+    assert "query_text IS NOT NULL" in queries_sql
+    assert queries_params["query_limit"] == 300
+    assert "no_result_queries" not in result
+    assert "top_queries" in result
+
+
 def test_kb_visibility_clause_uses_only_existing_visible_ids() -> None:
     clauses, params = RetrievalRecordRepository._where(
         domain="d1", visible_kb_ids=["kb-1", "kb-2"]

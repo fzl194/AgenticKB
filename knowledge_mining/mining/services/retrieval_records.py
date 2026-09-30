@@ -237,6 +237,5 @@ def _empty_summary(days: int) -> dict[str, Any]:
         "sources": {},
         "tools": [],
         "paradigms": [],
-        "no_result_queries": [],
         "top_queries": [],
     }

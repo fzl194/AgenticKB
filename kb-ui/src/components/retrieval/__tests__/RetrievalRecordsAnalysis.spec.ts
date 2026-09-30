@@ -28,8 +28,10 @@ describe('RetrievalRecordsAnalysis', () => {
       sources: { web: 4, mcp: 6 },
       tools: [{ tool_name: 'search_knowledge', calls: 5, no_result: 1 }],
       paradigms: [{ paradigm_id: 'p-1', calls: 7, no_result: 2 }],
-      no_result_queries: [{ query_text: '未命中的问题', count: 2, no_result: 2, last_at: '2026-09-28T00:00:00Z' }],
-      top_queries: [{ query_text: '热门问题', count: 5, no_result: 0, last_at: '2026-09-28T00:00:00Z' }],
+      top_queries: [
+        { query_text: '5GC 计费规则是什么', count: 5, no_result: 0, last_at: '2026-09-28T00:00:00Z' },
+        { query_text: '计费', count: 3, no_result: 0, last_at: '2026-09-28T00:00:00Z' },
+      ],
     })
   })
 
@@ -45,8 +47,28 @@ describe('RetrievalRecordsAnalysis', () => {
     // 范式分布按名称展示，不露原始 ID
     const paradigmBars = wrapper.findAllComponents({ name: 'BarChart' })[0]
     expect(paradigmBars.props('data')[0].name).toBe('告警范式')
-    const queryLists = wrapper.findAllComponents({ name: 'QueryList' })
-    expect(queryLists[0].props('items')[0].text).toBe('未命中的问题')
-    expect(queryLists[1].props('items')[0].text).toBe('热门问题')
+  })
+
+  it('热门查询走分词词云：WordCloud 按词频喂词，QueryList/答不上来卡片已下线', async () => {
+    const wrapper = shallowMount(RetrievalRecordsAnalysis)
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('答不上来的问题')
+    expect(wrapper.findComponent({ name: 'QueryList' }).exists()).toBe(false)
+
+    const cloud = wrapper.findComponent({ name: 'WordCloud' })
+    expect(cloud.exists()).toBe(true)
+    const names = cloud.props('items').map((i: { name: string }) => i.name)
+    // 两句都含"计费"，词频合并后它排最前；"是什么"是功能词被过滤
+    expect(names[0]).toBe('计费')
+    expect(names).not.toContain('是什么')
+  })
+
+  it('MCP Tool 分布直接用 tool_name，不再有"非 MCP"兜底桶', async () => {
+    const wrapper = shallowMount(RetrievalRecordsAnalysis)
+    await flushPromises()
+
+    const toolBars = wrapper.findAllComponents({ name: 'BarChart' })[1]
+    expect(toolBars.props('data')).toEqual([{ name: 'search_knowledge', value: 5 }])
   })
 })

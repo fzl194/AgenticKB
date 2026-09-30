@@ -5,6 +5,10 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+# 词云原料上限：窗口内去重问句按次数取前 N 条。300 条 × LEFT(...,200) 截断，
+# 响应体最坏 ~60KB，足够 7 天窗口的词频统计
+_WORD_CLOUD_QUERY_LIMIT = 300
+
 
 def _since(days: int) -> datetime:
     today = datetime.now(timezone.utc).date()
@@ -549,18 +553,17 @@ class RetrievalRecordRepository:
                 })
 
             sources = await self._breakdown_on_conn(conn, where, params, "source")
-            tools = await self._group_usage_on_conn(conn, where, params, "tool_name")
+            # tools 只统计真实带 tool_name 的 MCP 调用——网页/API 调用 tool_name 为
+            # NULL，混进来会在"MCP Tool 分布"图里多出一根无意义的 (none) 桶
+            tools = await self._group_usage_on_conn(
+                conn, where + " AND tool_name IS NOT NULL", params, "tool_name"
+            )
             paradigms = await self._group_usage_on_conn(
                 conn, where + " AND operation = 'search'", params, "paradigm_id"
             )
-            no_result_queries = await self._query_usage_on_conn(
-                conn,
-                where + " AND operation = 'search' AND status = 'no_result'",
-                params,
-                10,
-            )
+            # 去重问句（带次数）是前端分词词云的原料，原句 top20 无法支撑词频统计
             top_queries = await self._query_usage_on_conn(
-                conn, where + " AND operation = 'search'", params, 20
+                conn, where + " AND operation = 'search'", params, _WORD_CLOUD_QUERY_LIMIT
             )
         return {
             "available": True,
@@ -580,7 +583,6 @@ class RetrievalRecordRepository:
             "sources": sources,
             "tools": tools,
             "paradigms": paradigms,
-            "no_result_queries": no_result_queries,
             "top_queries": top_queries,
         }
 

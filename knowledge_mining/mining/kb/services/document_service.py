@@ -98,12 +98,13 @@ async def _run_archive_task(
     task_id: str, svc: "DocumentService", *,
     kb_id: str, owner_id: str, archive_path: Path,
     archive_name: str, max_member_bytes: int | None,
-    on_complete: Any = None,
+    on_complete: Any = None, base_directory: str | None = None,
 ) -> None:
     """后台解压任务：进度回写注册表，结束删暂存包。
 
     57号P1-2：解压**成功后**才触发 on_complete（调用方的自动挖掘入队）——
     202 响应时文档集尚未成形，提前入队会 kb_empty 或只挖到部分成员。
+    58号§2.5：base_directory 透传（大包异步路径与同步路径同落位规则）。
     """
     from knowledge_mining.mining.kb.services.archive_tasks import registry
 
@@ -111,7 +112,7 @@ async def _run_archive_task(
         docs = await svc.upload_archive_path(
             kb_id=kb_id, owner_id=owner_id, archive_path=archive_path,
             archive_name=archive_name, persist_archive=True,
-            max_member_bytes=max_member_bytes,
+            max_member_bytes=max_member_bytes, base_directory=base_directory,
             on_progress=lambda done, total, name: registry.update(
                 task_id, done=done, total=total),
         )
@@ -327,12 +328,19 @@ class DocumentService:
         - ``{"kind": "archive", "documents": [...]}``        归档同步解压完成
         - ``{"kind": "archive_task", "archive_task_id", "status": "processing"}``
           大归档后台解压中（调用方提示轮询/稍后查看）
+
+        58号§2.5：directory_path 同样作用于归档——落位
+        ``{directory_path}/{压缩包名}/…``（根目录 = ``{压缩包名}/…``）。此前
+        归档分支不透传 directory（网页在子文件夹传 ZIP 落到库根目录的现存
+        bug，本方法即为修复点：服务层修一遍，网页+MCP 同时受益）。
         """
         cfg = UploadConfig()
+        # 归一一次，两个分支共用同一目录口径（upload_stream 内还会再归一，幂等）
+        normalized_directory = _normalize_directory(directory_path)
         if not is_upload_archive(filename):
             document = await self.upload_stream(
                 kb_id=kb_id, owner_id=owner_id, filename=filename,
-                stream=stream, directory_path=directory_path,
+                stream=stream, directory_path=normalized_directory,
                 document_type=document_type, mime=mime,
                 max_bytes=(
                     file_max_bytes
@@ -371,6 +379,7 @@ class DocumentService:
                 docs = await self.upload_archive_path(
                     kb_id=kb_id, owner_id=owner_id, archive_path=archive_path,
                     archive_name=filename, persist_archive=True,
+                    base_directory=normalized_directory,
                 )
                 return {"kind": "archive", "documents": docs}
 
@@ -378,7 +387,10 @@ class DocumentService:
             # 清理），后台解压，返回任务 ID 供轮询。
             from knowledge_mining.mining.kb.services.archive_tasks import registry
 
-            task_id = registry.create(kb_id=kb_id, archive_name=filename)
+            task_id = registry.create(
+                kb_id=kb_id, archive_name=filename,
+                directory=normalized_directory,
+            )
             staging_dir = Path(tempfile.gettempdir()) / "agentickb-archive-tasks"
             staging_dir.mkdir(parents=True, exist_ok=True)
             staging_path = staging_dir / f"{task_id}{archive_path.suffix}"
@@ -387,7 +399,7 @@ class DocumentService:
                 task_id, self, kb_id=kb_id, owner_id=owner_id,
                 archive_path=staging_path, archive_name=filename,
                 max_member_bytes=cfg.upload_max_file_size,
-                on_complete=on_archive_complete,
+                on_complete=on_archive_complete, base_directory=normalized_directory,
             ))
             _archive_bg_tasks.add(task)
             task.add_done_callback(_archive_bg_tasks.discard)
@@ -647,6 +659,7 @@ class DocumentService:
         max_members: int | None = None,
         persist_archive: bool = False,
         on_progress=None,
+        base_directory: str | None = None,
     ) -> list[dict[str, Any]]:
         """归档上传统一入口（批次2b）：.zip/.hdx/.chm 与 zip 同构处理。
 
@@ -654,6 +667,9 @@ class DocumentService:
           .chm → 库存 7z 提取器（hh.exe 回退链，容器内已有 7z）
         - **统一以压缩包名建总文件夹**（产品文档.hdx → 「产品文档/」），
           成员保留内部目录结构——多个包互不混
+        - base_directory（58号§2.5）：落位前缀——ZIP 上传到指定目录时成员
+          落 ``{base_directory}/{压缩包名}/…``；缺省（根目录）仍落
+          ``{压缩包名}/…``
         - 解压额度（成员数/单成员/总量）+ 成员流式入库（批次2 通道复用）
         - persist_archive=True 时原始包本体也内容寻址存入对象存储
           （批次2c 决策：可追溯/可重新解压）
@@ -706,10 +722,13 @@ class DocumentService:
                     raise ValueError(result.error)
                 extracted_files = result.extracted_files
 
-            # 统一以压缩包名建总文件夹（批次2b 决策）：成员目录 = 包名/内部路径
+            # 统一以压缩包名建总文件夹（批次2b 决策）：成员目录 = 包名/内部路径；
+            # 58号§2.5：指定目录上传时前缀 base_directory → {目录}/{包名}/…
+            base_parts = tuple(
+                p for p in (base_directory or "").split("/") if p not in ("", "."))
             all_dirs, members = set(), []
             for rel in extracted_files:
-                parts = (archive_stem, *Path(rel).parts)
+                parts = (*base_parts, archive_stem, *Path(rel).parts)
                 members.append(parts)
                 if len(parts) > 1:
                     all_dirs.add("/".join(parts[:-1]))

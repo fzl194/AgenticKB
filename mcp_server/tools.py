@@ -222,6 +222,7 @@ def begin_upload(
     kb_id: str,
     filename: str,
     *,
+    directory: str = "",
     document_id: str = "",
     expected_revision: int | None = None,
     access_record_id: str = "",
@@ -229,6 +230,8 @@ def begin_upload(
 ) -> dict:
     """直传第一步：签发一次性上传票据（mining 校验权限/文件名后返回）。
 
+    directory（58号§2.5）= 上传目标目录（根=空串/不传）：mining 校验形状与
+    存在性（不自动创建）后绑定进票据，PUT 无从篡改。
     document_id + expected_revision（57号D5）= 替换语义票据：mining 即时校验
     同扩展名与版本暗号（不匹配 409）。
     """
@@ -238,6 +241,8 @@ def begin_upload(
         "access_record_id": access_record_id,
         "access_record_total": access_record_total,
     }
+    if directory:
+        payload["directory"] = directory
     if document_id:
         payload["document_id"] = document_id
         payload["expected_revision"] = expected_revision or 0

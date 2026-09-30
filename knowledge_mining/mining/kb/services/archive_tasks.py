@@ -18,13 +18,15 @@ class ArchiveTaskRegistry:
         self._tasks: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
         self._max_entries = max_entries
 
-    def create(self, *, kb_id: str, archive_name: str) -> str:
+    def create(self, *, kb_id: str, archive_name: str, directory: str = "") -> str:
         task_id = f"arch_{uuid.uuid4().hex[:16]}"
         with self._lock:
             self._tasks[task_id] = {
                 "task_id": task_id,
                 "kb_id": kb_id,
                 "archive_name": archive_name,
+                # 58号§2.5：目标目录（根=空串）——任务可观测 + 排障
+                "directory": directory,
                 "status": "processing",
                 "progress": {"done": 0, "total": None},
                 "document_count": None,

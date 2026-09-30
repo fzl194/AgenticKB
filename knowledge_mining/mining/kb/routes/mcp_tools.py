@@ -76,6 +76,7 @@ class _UploadTicketStore:
         key_id: str = "", access_record_id: str = "",
         access_record_total: int = 1, domain: str = "",
         document_id: str = "", expected_revision: int | None = None,
+        directory: str = "",
     ) -> dict[str, Any]:
         ticket = f"up_{secrets.token_urlsafe(24)}"
         self._tickets[ticket] = {
@@ -86,6 +87,9 @@ class _UploadTicketStore:
             "domain": domain,
             "document_id": document_id,
             "expected_revision": expected_revision,
+            # 58号§2.5：目录在签票时校验并绑定——PUT 无参数可篡改（presigned
+            # 模型），消费侧只认票据上的目录。
+            "directory": directory,
             "expires_at": time.monotonic() + self._ttl,
         }
         return {"ticket": ticket, "expires_in": self._ttl}
@@ -153,6 +157,32 @@ def _validated_filename(raw: Any) -> str:
     if not filename or "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(422, "invalid filename")
     return filename
+
+
+#: 58号§2.5：上传目录长度上限（与 serving 侧 directory_prefix 的 512 对齐）。
+_MAX_TICKET_DIRECTORY_LENGTH = 512
+
+
+def _validated_directory(raw: Any) -> str:
+    """58号§2.5：上传目录形状校验（begin-upload 边界）。根目录=空串。
+
+    拒绝：反斜杠、绝对路径（首 `/`）、空段（含尾斜杠/双斜杠）、`.`/`..` 段、
+    超长。存在性校验在调用方（查 kb_folders，不自动创建）。
+    """
+    directory = str(raw or "").strip()
+    if not directory:
+        return ""
+    if "\\" in directory or directory.startswith("/"):
+        raise HTTPException(
+            422, "directory 非法：路径分隔符只认 /，且不能以 / 开头（绝对路径）。")
+    if len(directory) > _MAX_TICKET_DIRECTORY_LENGTH:
+        raise HTTPException(
+            422, f"directory 过长：最多 {_MAX_TICKET_DIRECTORY_LENGTH} 个字符。")
+    for segment in directory.split("/"):
+        if segment in ("", ".", ".."):
+            raise HTTPException(
+                422, "directory 非法：含空段或点段（./..）；根目录请传空字符串或不传。")
+    return directory
 
 
 @router.post("/list-kbs", dependencies=[Depends(_require_internal_body)])
@@ -291,6 +321,9 @@ async def begin_upload(
     57号D5：body 可选带 document_id + expected_revision = 替换语义（新字节
     替换该文档，名称/目录/身份不变）。签发时即校验：文档存在且属于该库、
     同扩展名、版本暗号匹配（不匹配 409——并发替换互相不盲覆盖）。
+    58号§2.5：body 可选带 directory = 上传目标目录（根=空串/不传）。签发时
+    校验形状与存在性（不自动创建，防拼写错误制造幽灵目录）并绑定进票据——
+    PUT 无参数可篡改目录，消费侧只认票据绑定值。
     """
     await _expire_upload_tickets(request)
     username = str(body.get("username") or "")
@@ -304,14 +337,26 @@ async def begin_upload(
     if not await kbdb.can_write(kb_id=kb_id, user_id=user_id):
         raise HTTPException(403, "only owner or editor may upload")
     filename = _validated_filename(body.get("filename"))
+    directory = _validated_directory(body.get("directory"))
     access_record_id = str(body.get("access_record_id") or "")
     try:
         access_record_total = max(1, min(500, int(body.get("access_record_total") or 1)))
     except (TypeError, ValueError):
         access_record_total = 1
 
-    # 57号D5 替换目标校验（全部即时 4xx，票据只签发校验通过的目标）
+    # 58号§2.5：替换保持原目录不变——directory 只属于 upload 语义
     document_id = str(body.get("document_id") or "")
+    if document_id and directory:
+        raise HTTPException(
+            400, "替换不接受 directory：替换保持原文档目录不变（directory 只用于上传新文件）。")
+    # 上传目录必须已存在（不自动创建）；ZIP 落位 {directory}/{压缩包名}/…
+    if directory and await kbdb.find_folder_by_path(kb_id=kb_id, path=directory) is None:
+        raise HTTPException(
+            422,
+            f"directory 不存在：{directory!r}（不自动创建，防止拼写错误制造幽灵目录；"
+            f"请先浏览目录确认写法或到网页端创建后再上传）。")
+
+    # 57号D5 替换目标校验（全部即时 4xx，票据只签发校验通过的目标）
     expected_revision: int | None = None
     if document_id:
         raw_revision = body.get("expected_revision")
@@ -349,9 +394,11 @@ async def begin_upload(
         domain=str(key.get("domain") or ""),
         document_id=document_id,
         expected_revision=expected_revision,
+        directory=directory,
     )
-    logger.info("[mcp-tools] begin-upload by %s -> kb=%s file=%s ticket=%s replace=%s",
-                username, kb_id, filename, issued["ticket"][:11] + "…", bool(document_id))
+    logger.info("[mcp-tools] begin-upload by %s -> kb=%s file=%s ticket=%s replace=%s dir=%s",
+                username, kb_id, filename, issued["ticket"][:11] + "…",
+                bool(document_id), directory or "(root)")
     return {
         "ticket": issued["ticket"],
         "upload_path": f"/api/kb/mcp-tools/upload-direct/{issued['ticket']}",
@@ -482,10 +529,13 @@ async def upload_direct(
         return response
 
     try:
-        # 与网页上传同源（intake_upload）：普通文件直传 / zip/hdx/chm 自动解压
+        # 与网页上传同源（intake_upload）：普通文件直传 / zip/hdx/chm 自动解压。
+        # 58号§2.5：目录只取票据绑定值——PUT 无参数可指定/篡改目录（presigned
+        # 模型），ZIP 落位 {directory}/{压缩包名}/…（根目录= {压缩包名}/…）。
         result = await doc_svc.intake_upload(
             kb_id=entry["kb_id"], owner_id=entry["user_id"],
             filename=entry["filename"], stream=_stream(),
+            directory_path=str(entry.get("directory") or "") or None,
             file_max_bytes=MAX_UPLOAD_BYTES,
             on_archive_complete=_mine_after_archive,
         )

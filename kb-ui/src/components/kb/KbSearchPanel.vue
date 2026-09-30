@@ -53,6 +53,15 @@
           <el-button :loading="searching" @click="run">检索</el-button>
         </template>
       </el-input>
+      <el-select
+        v-if="folderOptions.length"
+        v-model="directoryScope"
+        class="kb-search__dir"
+        size="large" clearable placeholder="不限目录"
+        data-testid="kb-search-directory"
+      >
+        <el-option v-for="p in folderOptions" :key="p" :label="p" :value="p" />
+      </el-select>
     </div>
 
     <!-- A2 范围徽标：本节/本节及子节（从文档页大纲进入），可一键回整篇 -->
@@ -190,6 +199,19 @@ function clearScope() {
 }
 const scopeModeLabel = computed(() =>
   scope.value?.mode === 'descendants' ? '本节及子节' : '本节')
+
+// 57号目录范围（含子目录递归）：目录树来自 folders 接口，filters.directory_prefix
+// 直收服务端递归语义；与章节/整篇范围可叠加（serving 平铺合并为 AND）。
+const folderOptions = ref<string[]>([])
+const directoryScope = ref('')
+async function loadFolderOptions() {
+  try {
+    const folders = await kbApi.listFolders(props.kb.id)
+    folderOptions.value = folders.map((f) => f.path).sort((a, b) => a.localeCompare(b))
+  } catch {
+    folderOptions.value = [] // 目录过滤是可选增强，加载失败不阻断检索
+  }
+}
 const searched = ref(false)
 const error = ref('')
 const evidence = ref<EvidenceItem[]>([])
@@ -250,6 +272,7 @@ async function reload() {
   const generation = ++reloadGeneration
   selectedParadigmId.value = props.kb.default_paradigm_id ?? null
   configurationError.value = ''
+  void loadFolderOptions() // 57号目录过滤选项：失败自吞（可选增强）
   try {
     paradigms.value = await operatorApi.listParadigms()
     if (generation !== reloadGeneration || domain !== domainStore.currentDomain || kbId !== props.kb.id) return
@@ -320,6 +343,7 @@ async function run() {
       within: scope.value
         ? { section_refs: [scope.value.ref], section_scope: scope.value.mode }
         : scopeDocumentRef.value ? { document_refs: [scopeDocumentRef.value] } : undefined,
+      filters: directoryScope.value ? { directory_prefix: directoryScope.value } : undefined,
     })
     evidence.value = out.evidenceResponse?.evidence ?? []
     hasMore.value = out.evidenceResponse?.has_more ?? false
@@ -484,6 +508,11 @@ onMounted(reload)
 .kb-search__bar :deep(.el-input-group__append) {
   padding: 0 6px;
 }
+
+/* 57号目录范围选择器：与搜索框同行，窄屏换行 */
+.kb-search__bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.kb-search__bar > .el-input { flex: 1 1 320px; }
+.kb-search__dir { width: 220px; flex: 0 0 auto; }
 
 .kb-search__effective {
   padding: 6px 12px;

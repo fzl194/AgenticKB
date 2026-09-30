@@ -70,7 +70,7 @@ class FtsOperatorTest {
     @Test
     @DisplayName("query is jieba-tokenized and pushed down as a lexical query string")
     void queryTokenizedBeforeDb() {
-        when(mapper.searchFtsV2(anyString(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
+        when(mapper.searchFtsV2(anyString(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyString(), anyInt()))
                 .thenReturn(List.of());
         SlotValues in = new SlotValues();
         in.put("query", "接入网设备功耗");
@@ -81,13 +81,13 @@ class FtsOperatorTest {
         verify(mapper).searchFtsV2(
                 argThat(q -> q != null && !q.isBlank() && !q.equals("接入网设备功耗")),
                 eq(List.of("snap-1")), anyList(), anyList(), anyList(), anyList(),
-                anyBoolean(), anyInt());
+                anyBoolean(), anyString(), anyInt());
     }
 
     @Test
     @DisplayName("hard filters are pushed down before Top-K (jsonb params + typed lists)")
     void filtersPushedDown() {
-        when(mapper.searchFtsV2(anyString(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
+        when(mapper.searchFtsV2(anyString(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyString(), anyInt()))
                 .thenReturn(List.of());
         SlotValues in = new SlotValues();
         in.put("query", "功耗");
@@ -102,13 +102,13 @@ class FtsOperatorTest {
                 eq(List.of("{\"document\":\"doc-1\"}")),
                 eq(List.of("prose")),
                 eq(List.of()), eq(List.of()),
-                anyBoolean(), intThat(limit -> limit > 0));
+                anyBoolean(), anyString(), intThat(limit -> limit > 0));
     }
 
     @Test
     @DisplayName("rows aggregate by canonical; empty rows are a normal empty result")
     void canonicalAggregationAndEmptyResult() {
-        when(mapper.searchFtsV2(anyString(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyInt()))
+        when(mapper.searchFtsV2(anyString(), anyList(), anyList(), anyList(), anyList(), anyList(), anyBoolean(), anyString(), anyInt()))
                 .thenReturn(List.of(
                         row("rep-a", "ev-1", 0.9),
                         row("rep-b", "ev-1", 0.8),

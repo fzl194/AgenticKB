@@ -111,4 +111,27 @@ class ScopeFilterPushdownTest {
 
         assertThat(ScopeFilterPushdown.none().sectionScopeDescendants()).isFalse();
     }
+
+    @Test
+    @DisplayName("57号: directory_prefix → 原样映射并做 LIKE 转义（%/_/反斜杠按字面匹配）")
+    void directoryPrefixMappedAndEscaped() {
+        var p = ScopeFilterPushdown.fromFilters(Map.of("directory_prefix", "产品文档/手册"));
+        assertThat(p.directoryPrefix()).isEqualTo("产品文档/手册");
+        assertThat(p.isEmpty()).isFalse();
+
+        var esc = ScopeFilterPushdown.fromFilters(Map.of("directory_prefix", "a%b_c\\d"));
+        assertThat(esc.directoryPrefix()).isEqualTo("a\\%b\\_c\\\\d");
+
+        // 无该键 → 空串（宽检索）
+        assertThat(ScopeFilterPushdown.fromFilters(Map.of()).directoryPrefix()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("57号: directory_prefix 非字符串/空白 → 空约束（请求边界已 typed 400，这里防御性忽略）")
+    void directoryPrefixInvalidIgnoredDefensively() {
+        assertThat(ScopeFilterPushdown.fromFilters(
+                Map.of("directory_prefix", "  ")).directoryPrefix()).isEmpty();
+        assertThat(ScopeFilterPushdown.fromFilters(
+                Map.of("directory_prefix", List.of("a"))).directoryPrefix()).isEmpty();
+    }
 }

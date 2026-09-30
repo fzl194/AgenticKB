@@ -43,10 +43,16 @@ public record ActiveScope(
      * <p>A2（39 号 §2.2）新增 {@code section_scope}（字符串，{@code exact|descendants}，
      * 缺省 exact）：section_refs 的范围语义——descendants 在召回前展开章节闭包并
      * 与 FTS/dense 共用同一 predicate 下推（越界率=0 的结构性保证）。</p>
+     *
+     * <p>57 号新增 {@code directory_prefix}（单个字符串，目录路径如
+     * {@code 产品文档/手册}）：限定目录及全部子目录检索。投影写入的
+     * {@code facets.document} 本身就是 {@code doc:/{目录}/{文件名}}——前缀匹配
+     * 即递归子树语义，免投影改动、免存量回填（'/' 边界保证 '产品' 不误中
+     * '产品文档'）。</p>
      */
     public static final Set<String> SUPPORTED_FILTER_KEYS = Set.of(
             "document_refs", "section_refs", "section_scope",
-            "evidence_types", "asset_types");
+            "evidence_types", "asset_types", "directory_prefix");
 
     /** section_scope 合法值（exact=本节精确；descendants=本节及全部子节）。 */
     public static final Set<String> SECTION_SCOPE_MODES = Set.of("exact", "descendants");

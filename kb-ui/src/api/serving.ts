@@ -178,6 +178,8 @@ export function useServingApi() {
         debug?: boolean
         /** A2 章节范围（39 号 §2.2）：within.section_refs + section_scope */
         within?: { document_refs?: string[]; section_refs?: string[]; section_scope?: 'exact' | 'descendants' }
+        /** 57号目录范围（含子目录递归）：filters.directory_prefix */
+        filters?: { directory_prefix?: string }
       },
     ): Promise<ParadigmSearchResult> {
       const payload: Record<string, unknown> = {
@@ -187,6 +189,7 @@ export function useServingApi() {
       }
       if (options?.kbIds?.length) payload.kbIds = options.kbIds
       if (options?.within) payload.within = options.within
+      if (options?.filters) payload.filters = options.filters
       try {
         const { data } = await client.post(`/api/v1/paradigm/${paradigmId}/search`, payload)
         return data

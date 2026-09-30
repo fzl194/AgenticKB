@@ -28,6 +28,8 @@ public interface AssetRetrievalUnitV2Mapper {
      * @param targetRefs          section_refs 值（section_ref IN 主匹配 + 存量 NULL 行
      *                             target_ref 回落；descendants 时作闭包种子；空 = 不过滤）
      * @param sectionScopeDescendants A2：true = 闭包展开（WITH RECURSIVE，SQL 内完成）
+     * @param directoryPrefix      57号：目录前缀（LIKE 转义值；facets.document LIKE
+     *                             'doc:/{prefix}/%' 递归子树；空 = 不过滤）
      * @param limit               有界召回窗口（Top-K 前于 canonical 聚合的多表示冗余预留）
      */
     List<UnitV2Row> searchFtsV2(
@@ -38,6 +40,7 @@ public interface AssetRetrievalUnitV2Mapper {
             @Param("contentTypes") List<String> contentTypes,
             @Param("targetRefs") List<String> targetRefs,
             @Param("sectionScopeDescendants") boolean sectionScopeDescendants,
+            @Param("directoryPrefix") String directoryPrefix,
             @Param("limit") int limit);
 
     /**
@@ -58,6 +61,7 @@ public interface AssetRetrievalUnitV2Mapper {
             @Param("contentTypes") List<String> contentTypes,
             @Param("targetRefs") List<String> targetRefs,
             @Param("sectionScopeDescendants") boolean sectionScopeDescendants,
+            @Param("directoryPrefix") String directoryPrefix,
             @Param("limit") int limit);
 
     /**

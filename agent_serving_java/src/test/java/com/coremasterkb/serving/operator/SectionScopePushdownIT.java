@@ -87,7 +87,7 @@ class SectionScopePushdownIT {
     void exactScope() {
         List<UnitV2Row> rows = mapper.searchFtsV2(
                 "content", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(S0), false, 50);
+                List.of(S0), false, "", 50);
         assertThat(rows).extracting(UnitV2Row::getRepresentationId)
                 .containsExactly("u-s0");
     }
@@ -97,7 +97,7 @@ class SectionScopePushdownIT {
     void descendantsScope() {
         List<UnitV2Row> rows = mapper.searchFtsV2(
                 "content", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(S0), true, 50);
+                List.of(S0), true, "", 50);
         assertThat(rows).extracting(UnitV2Row::getRepresentationId)
                 .containsExactlyInAnyOrder("u-s0", "u-s00", "u-s01", "u-legacy");
     }
@@ -107,7 +107,7 @@ class SectionScopePushdownIT {
     void descendantsFromChild() {
         List<UnitV2Row> rows = mapper.searchFtsV2(
                 "content", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(S00), true, 50);
+                List.of(S00), true, "", 50);
         assertThat(rows).extracting(UnitV2Row::getRepresentationId)
                 .containsExactlyInAnyOrder("u-s00", "u-legacy");
     }
@@ -117,14 +117,14 @@ class SectionScopePushdownIT {
     void legacyFallback() {
         List<UnitV2Row> exact = mapper.searchFtsV2(
                 "legacy", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(S00), false, 50);
+                List.of(S00), false, "", 50);
         assertThat(exact).extracting(UnitV2Row::getRepresentationId)
                 .containsExactly("u-legacy");
 
         // 旧语义回归：父节 exact 不吞子节（37 号 D4 的旧行为仅对存量行保留）
         List<UnitV2Row> parentExact = mapper.searchFtsV2(
                 "content", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(S0), false, 50);
+                List.of(S0), false, "", 50);
         assertThat(parentExact).extracting(UnitV2Row::getRepresentationId)
                 .doesNotContain("u-legacy", "u-s00");
     }
@@ -149,6 +149,50 @@ class SectionScopePushdownIT {
                         + "(snapshot_id, node_type, ref, parent_ref, ordinal, title) "
                         + "VALUES (?,?,?,?,?,?)",
                 SNAP, type, ref, parentRef, 0, ref);
+    }
+
+    @Test
+    @DisplayName("57号 directory_prefix：目录子树递归命中，兄弟前缀目录零误中")
+    void directoryPrefixScope() {
+        insertUnitWithFacets("u-dir-a", "prose", S1, "foxtrot dir a content",
+                "{\"document\": \"doc:/产品文档/手册/设备A.pdf\"}");
+        insertUnitWithFacets("u-dir-b", "prose", S1, "golf dir b content",
+                "{\"document\": \"doc:/产品文档/设备B.pdf\"}");
+        insertUnitWithFacets("u-dir-c", "prose", S1, "hotel dir c content",
+                "{\"document\": \"doc:/产品文档2/设备C.pdf\"}");
+
+        List<UnitV2Row> subtree = mapper.searchFtsV2(
+                "content", List.of(SNAP), List.of(), List.of(), List.of(),
+                List.of(), false, "产品文档/手册", 50);
+        assertThat(subtree).extracting(UnitV2Row::getRepresentationId)
+                .containsExactly("u-dir-a");
+
+        // '产品文档' 命中自身+子树，不误中兄弟前缀 '产品文档2'
+        List<UnitV2Row> whole = mapper.searchFtsV2(
+                "content", List.of(SNAP), List.of(), List.of(), List.of(),
+                List.of(), false, "产品文档", 50);
+        assertThat(whole).extracting(UnitV2Row::getRepresentationId)
+                .containsExactlyInAnyOrder("u-dir-a", "u-dir-b");
+
+        // facets.document 为空的存量行（facets '{}'）不进入目录过滤结果
+        List<UnitV2Row> unscoped = mapper.searchFtsV2(
+                "content", List.of(SNAP), List.of(), List.of(), List.of(),
+                List.of(), false, "", 50);
+        assertThat(unscoped).extracting(UnitV2Row::getRepresentationId)
+                .contains("u-s1");
+    }
+
+    /** 57号：带 facets.document（doc:/{目录}/{文件名}）的检索单元。 */
+    private void insertUnitWithFacets(String repId, String type, String sectionRef,
+                                      String text, String facetsJson) {
+        jdbc.update(
+                "INSERT INTO asset_retrieval_units_v2 (representation_id, snapshot_id, "
+                        + "representation_type, content_type, content_text, lexical_text, "
+                        + "target_type, target_ref, canonical_evidence_id, section_ref, "
+                        + "lexical_eligible, dense_eligible, returnable, facets_json) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,TRUE,FALSE,TRUE,?::jsonb)",
+                repId, SNAP, type, type, text, text, type,
+                sectionRef, repId, sectionRef, facetsJson);
     }
 
     private void insertUnit(String repId, String type, String sectionRef, String text) {

@@ -150,6 +150,9 @@ final class ParadigmRequests {
     /** 单个 filter 值的形状校验 + 边界规范化（数组、非空串、长度上限、ref kind、类型枚举）。 */
     private static Object normalizeFilterValue(String key, Object value) {
         validateFilterValue(key, value);
+        if ("directory_prefix".equals(key)) {
+            return normalizeDirectoryPrefix(value);
+        }
         if (!"evidence_types".equals(key)) {
             return value;
         }
@@ -172,6 +175,12 @@ final class ParadigmRequests {
                 throw new IllegalArgumentException(
                         "filter_value_invalid:section_scope: 必须是 exact 或 descendants");
             }
+            return;
+        }
+        // 57号：directory_prefix 是单个字符串（目录路径，含子目录递归），
+        // 规范化后经 normalizeFilterValue 落库到 hardFilters。
+        if ("directory_prefix".equals(key)) {
+            normalizeDirectoryPrefix(value);
             return;
         }
         if (!(value instanceof List<?> list)) {
@@ -223,12 +232,47 @@ final class ParadigmRequests {
         return ref.substring(0, ref.indexOf('_') > 0 ? Math.min(ref.indexOf('_') + 1, cut + 1) : cut) + "…";
     }
 
+    /**
+     * 57号：directory_prefix 规范化（trim + 去首尾斜杠）——非法形状 typed 400，
+     * 绝不静默退化成宽检索（与其他 filter 键同一边界纪律）。
+     */
+    static String normalizeDirectoryPrefix(Object value) {
+        if (!(value instanceof String raw)) {
+            throw new IllegalArgumentException(
+                    "filter_value_invalid:directory_prefix: 必须是非空字符串（目录路径，如 产品文档/手册）");
+        }
+        String normalized = raw.trim();
+        while (normalized.startsWith("/")) normalized = normalized.substring(1);
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        if (normalized.isEmpty() || normalized.length() > MAX_DIRECTORY_PREFIX_LENGTH) {
+            throw new IllegalArgumentException(
+                    "filter_value_invalid:directory_prefix: 规范化后必须非空且长度 ≤ "
+                            + MAX_DIRECTORY_PREFIX_LENGTH);
+        }
+        if (normalized.contains("\\") || normalized.startsWith("doc:")) {
+            throw new IllegalArgumentException(
+                    "filter_value_invalid:directory_prefix: 路径分隔符只认 /，且不接受 doc: 开头的 document ref");
+        }
+        for (String segment : normalized.split("/", -1)) {
+            if (segment.isBlank() || ".".equals(segment) || "..".equals(segment)) {
+                throw new IllegalArgumentException(
+                        "filter_value_invalid:directory_prefix: 含空段或点段（./..）");
+            }
+        }
+        return normalized;
+    }
+
     /** 源内容类型枚举（asset_types 值域；projector content_type 词表）。 */
     private static final Set<String> ASSET_TYPES = Set.of(
             "paragraph", "table", "table_row", "list", "code", "formula",
             "figure", "figure_caption", "section", "document");
 
     private static final int MAX_FILTER_VALUES = 64;
+
+    /** 57号：directory_prefix 规范化后的长度上限。 */
+    private static final int MAX_DIRECTORY_PREFIX_LENGTH = 512;
 
     private static void copyObject(Map<String, Object> target, JsonNode node) {
         if (node == null || !node.isObject()) return;

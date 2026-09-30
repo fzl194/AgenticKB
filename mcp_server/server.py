@@ -384,11 +384,14 @@ def search_knowledge(
             opaque ref（服务端解码为内部范围）。只支持这两个键——其他键
             （如 structure_ref/include_descendants）会返回 400。
         filters: 可选过滤（hard filter）：{"asset_types": ["table"],
-            "evidence_types": ["table_row"]}。evidence_types 用公开类型词
-            （prose/section/document/table/table_row/list/code/formula/
-            figure_caption——即 search 返回 evidence[].type 的取值，可原样
-            回传筛选）。当前只支持这两个键；路径/日期过滤尚未提供，传入会
-            返回 400（不支持显式报错，不静默忽略）。
+            "evidence_types": ["table_row"], "directory_prefix": "产品文档/手册"}。
+            evidence_types 用公开类型词（prose/section/document/table/table_row/
+            list/code/formula/figure_caption——即 search 返回 evidence[].type 的
+            取值，可原样回传筛选）。directory_prefix（单个字符串）限定目录及
+            全部子目录检索——要"整库内这块业务资料"，从证据 source.relative_path
+            或 get_knowledge 文件清单的 directory_path 可得目录写法。其余键
+            （路径其余形式/日期）尚未提供，传入会返回 400（不支持显式报错，
+            不静默忽略）。
         expansion: 可选展开模式 {"mode": "auto|exact|window|parent|whole_document"}，
             控制 evidence 内容的粒度（默认 auto）。
         top_k: 可选结果面上限（1-200，服务端按各阶段上限收敛）。

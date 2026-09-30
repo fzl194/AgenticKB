@@ -227,4 +227,43 @@ class ParadigmRequestsFiltersTest {
         assertThat(args.requestJson())
                 .contains("正文 token=literal", "nodes", "edges", "output", "asset_types")
                 .doesNotContain("authorization", "top-secret", "password", "api_key", "secret", "jwt", "ignored");
-    }}
+    }
+
+    @Test
+    @DisplayName("57号: directory_prefix 字符串规范化（trim + 去首尾斜杠）进 requestFilters")
+    void directoryPrefixNormalized() throws Exception {
+        var args = ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"directory_prefix\": \" /产品文档/手册/ \"}}"), null);
+        assertThat(args.filters()).containsEntry("directory_prefix", "产品文档/手册");
+    }
+
+    @Test
+    @DisplayName("57号: directory_prefix 非法值 typed 400（数组/空/反斜杠/doc:前缀/点段/超长）")
+    void directoryPrefixInvalidRejected() throws Exception {
+        // 数组（其余 filter 键都是数组——这里必须是单个字符串）
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"directory_prefix\": [\"产品文档\"]}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:directory_prefix");
+        // 规范化后为空
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"directory_prefix\": \" / \"}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:directory_prefix");
+        // 反斜杠（路径分隔符只认 /；JSON 文本里写 a\\b，解析后值为 a\b）
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"directory_prefix\": \"a\\\\b\"}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:directory_prefix");
+        // doc: 前缀（把 document ref 误当目录）
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"directory_prefix\": \"doc:/产品文档\"}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:directory_prefix");
+        // .. 段
+        assertThatThrownBy(() -> ParadigmRequests.toRunArgs(M.readTree(
+                "{\"query\": \"q\", \"filters\": {\"directory_prefix\": \"产品文档/../机密\"}}"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("filter_value_invalid:directory_prefix");
+    }
+}

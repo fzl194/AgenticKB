@@ -30,7 +30,7 @@ describe('explicit file replacement', () => {
   it('requires file selection and explicit confirmation, then refreshes without mining', async () => {
     const wrapper = create()
     expect(wrapper.text()).toContain('文件名和所在目录保持不变')
-    expect(wrapper.text()).toContain('重新挖掘')
+    expect(wrapper.text()).toContain('自动排队挖掘')
     expect(wrapper.get('[data-testid="replace-confirm"]').attributes('disabled')).toBeDefined()
     const file = await selectFile(wrapper)
     expect(api.replaceDocumentContent).not.toHaveBeenCalled()
@@ -38,7 +38,18 @@ describe('explicit file replacement', () => {
     await flushPromises()
     expect(api.replaceDocumentContent).toHaveBeenCalledWith('kb-1', 'doc-1', file, 4)
     expect(wrapper.emitted('replaced')).toHaveLength(1)
-    expect(messages.success).toHaveBeenCalledWith(expect.stringContaining('重新挖掘'))
+    // 未触发自动挖掘（auto_mined 缺省）→ 引导手动挖掘
+    expect(messages.success).toHaveBeenCalledWith(expect.stringContaining('手动发起挖掘'))
+    wrapper.unmount()
+  })
+
+  it('auto-mined replacement success message reflects queued mining', async () => {
+    api.replaceDocumentContent.mockResolvedValue({ ...document, content_revision: 5, auto_mined: true, run_id: 'r-1' })
+    const wrapper = create()
+    await selectFile(wrapper)
+    await wrapper.get('[data-testid="replace-confirm"]').trigger('click')
+    await flushPromises()
+    expect(messages.success).toHaveBeenCalledWith(expect.stringContaining('已自动排队挖掘'))
     wrapper.unmount()
   })
 

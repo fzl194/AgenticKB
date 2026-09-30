@@ -545,6 +545,13 @@ async function pollArchiveTask(taskId: string, name: string) {
   ElMessage.warning(`「${name}」解压耗时较长，可稍后刷新文件列表查看结果`)
 }
 
+/** 57号：自动挖掘入队信息的提示后缀（未触发时给可读原因）。 */
+function autoMineSuffix(auto?: { auto_mined?: boolean; reason?: string }): string {
+  if (auto?.auto_mined) return '（已自动排队挖掘）'
+  if (auto && auto.reason) return '（自动挖掘未触发，可到「挖掘」tab 手动发起）'
+  return ''
+}
+
 async function handleUpload(opts: UploadRequestOptions) {
   const file = opts.file as File
   uploading.value += 1
@@ -553,16 +560,16 @@ async function handleUpload(opts: UploadRequestOptions) {
     if (ARCHIVE_EXTS.some((e) => lower.endsWith(e))) {
       const r = await kbApi.uploadArchive(props.kbId, file, currentPath.value || undefined)
       if (r.archiveTaskId) {
-        ElMessage.info(`「${file.name}」较大，正在后台解压入库…`)
+        ElMessage.info(`「${file.name}」较大，正在后台解压入库…${autoMineSuffix(r)}`)
         // 后台跑着：解除上传锁，轮询完成后再刷新树
         pollArchiveTask(r.archiveTaskId, file.name).finally(() => reload())
       } else {
-        ElMessage.success(`已解压上传 ${r.documents?.length ?? 0} 个文档`)
+        ElMessage.success(`已解压上传 ${r.documents?.length ?? 0} 个文档${autoMineSuffix(r)}`)
         await reload()
       }
     } else {
-      await kbApi.uploadDocument(props.kbId, file, { directory: currentPath.value || undefined })
-      ElMessage.success(`已上传 ${file.name}`)
+      const r = await kbApi.uploadDocument(props.kbId, file, { directory: currentPath.value || undefined })
+      ElMessage.success(`已上传 ${file.name}${autoMineSuffix(r)}`)
       await loadFiles()
     }
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }

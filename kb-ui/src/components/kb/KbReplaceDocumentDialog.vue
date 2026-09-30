@@ -10,7 +10,7 @@
     @update:model-value="close"
   >
     <p>将替换「{{ document.document_name }}」的原文件，文件名和所在目录保持不变。</p>
-    <p>替换后需要重新挖掘；已有的当前可搜索知识继续可用，直到新内容挖掘成功。</p>
+    <p>替换后自动排队挖掘；已有的当前可搜索知识继续可用，直到新内容挖掘成功。</p>
     <label class="replace-file__label">
       选择新文件
       <input type="file" :disabled="uploading || blocked" @change="selectFile" />
@@ -62,7 +62,10 @@ async function replace() {
     const result = await api.replaceDocumentContent(
       props.kbId, props.document.id, file.value, props.document.content_revision!,
     )
-    ElMessage.success('原文件已替换，请重新挖掘以更新当前可搜索知识')
+    // 57号：替换后自动排队挖掘——挖完前旧知识继续可检索（不再要求手动重挖）
+    ElMessage.success(result.auto_mined
+      ? '原文件已替换，已自动排队挖掘；挖完前旧知识继续可检索'
+      : '原文件已替换，请到「挖掘」tab 手动发起挖掘以更新知识')
     emit('replaced', result)
   } catch (error) {
     const status = (error as { response?: { status?: number } })?.response?.status

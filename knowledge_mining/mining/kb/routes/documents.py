@@ -25,9 +25,36 @@ from knowledge_mining.mining.kb.services.document_service import (
     ContentRevisionConflict, DocumentService, UploadTooLarge,
 )
 from knowledge_mining.mining.kb.services.folder_service import FolderService
+from knowledge_mining.mining.kb.services import auto_mine
 from knowledge_mining.mining.kb.services.kb_service import Duplicate, Forbidden, NotFound
 
 router = APIRouter(prefix="/api/kb/{kb_id}/documents", tags=["kb-documents"])
+
+
+async def _enqueue_auto_mine_after_write(
+    request: Request, kbdb: KbDB, kb_id: str, user: dict[str, Any],
+) -> dict[str, Any]:
+    """57号：网页上传/替换成功后自动入队整库增量挖掘（与 MCP/一张网对齐）。
+
+    复用 auto_mine 契约——任何失败只降级为 auto_mined=False，绝不向上抛；
+    响应只增不改（旧前端忽略未知键）。
+    """
+    kb = await kbdb.get_kb(kb_id)
+    if kb is None:
+        return {"auto_mined": False, "reason": "internal"}
+    return await auto_mine.enqueue_auto_mining(
+        app_state=request.app.state, kbdb=kbdb, kb=kb,
+        user_id=str(user.get("id") or ""), username=str(user.get("username") or ""),
+    )
+
+
+def _auto_mine_fields(auto: dict[str, Any]) -> dict[str, Any]:
+    """响应附加字段（ additive）：auto_mined 必有，run_id/reason 按需。"""
+    return {
+        "auto_mined": bool(auto.get("auto_mined")),
+        **({"run_id": auto["run_id"]} if auto.get("run_id") else {}),
+        **({"reason": auto["reason"]} if auto.get("reason") else {}),
+    }
 
 class DocPatch(BaseModel):
     document_name: str | None = None
@@ -115,11 +142,13 @@ async def _upload_file_chunks(file: UploadFile) -> AsyncIterator[bytes]:
 @router.post("", status_code=201)
 async def upload_document(
     kb_id: str,
+    request: Request,
     file: UploadFile = File(...),
     directory: str | None = Form(None),
     document_type: str | None = Form(None),
     user: dict[str, Any] = Depends(current_user),
     svc: DocumentService = Depends(get_document_service),
+    kbdb: KbDB = Depends(get_kb_db),
 ):
     filename = file.filename or "unnamed"
     try:
@@ -144,15 +173,20 @@ async def upload_document(
             409, f"Document named {filename!r} already exists in this KB"
         ) from None
 
+    # 57号D4：上传成功自动入队挖掘（含归档异步任务——Run 认领时解压通常已完成，
+    # 与 MCP 直传同语义）；入队失败只降级，不影响上传结果。
+    auto = await _enqueue_auto_mine_after_write(request, kbdb, kb_id, user)
+    fields = _auto_mine_fields(auto)
     if result["kind"] == "file":
-        return result["document"]
+        return {**result["document"], **fields}
     if result["kind"] == "archive":
-        return {"documents": result["documents"]}
+        return {"documents": result["documents"], **fields}
     return JSONResponse(status_code=202, content={
         "archive_task_id": result["archive_task_id"],
         "status": "processing",
         "message": (f"归档 {filename!r} 正在后台解压入库，"
                     f"请轮询任务状态获取进度"),
+        **fields,
     })
 
 
@@ -268,14 +302,16 @@ async def patch_document(
 async def replace_document_content(
     kb_id: str,
     document_id: str,
+    request: Request,
     file: UploadFile = File(...),
     expected_revision: int = Form(..., ge=0),
     user: dict[str, Any] = Depends(current_user),
     svc: DocumentService = Depends(get_document_service),
+    kbdb: KbDB = Depends(get_kb_db),
 ):
     """Explicitly replace current bytes; never silently overwrite on upload."""
     try:
-        return await svc.replace_content(
+        updated = await svc.replace_content(
             kb_id=kb_id, document_id=document_id, user_id=user["id"],
             filename=file.filename or "", expected_revision=expected_revision,
             stream=_upload_file_chunks(file), max_bytes=UploadConfig().upload_max_file_size,
@@ -288,6 +324,9 @@ async def replace_document_content(
         raise HTTPException(413, "替换文件超过上传大小限制。") from None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
+    # 57号D4：替换成功同样自动入队挖掘——旧知识继续可检索，新版本挖完即接替。
+    auto = await _enqueue_auto_mine_after_write(request, kbdb, kb_id, user)
+    return {**updated, **_auto_mine_fields(auto)}
 
 
 @router.get("/{document_id}/preview-url")

@@ -41,6 +41,13 @@ export interface DocumentSearchFilter {
   status?: string
 }
 
+/** 57 号：上传/替换响应附加的自动挖掘入队信息（additive，auto_mined 必有）。 */
+export interface AutoMineFields {
+  auto_mined?: boolean
+  run_id?: string
+  reason?: string
+}
+
 export function useKbApi() {
   const client = createProxyClient('mining')
 
@@ -260,19 +267,19 @@ export function useKbApi() {
       kbId: string,
       file: File,
       opts?: { directory?: string; documentType?: string },
-    ): Promise<KbDocument> {
+    ): Promise<KbDocument & AutoMineFields> {
       const form = new FormData()
       form.append('file', file)
       if (opts?.directory) form.append('directory', opts.directory)
       if (opts?.documentType) form.append('document_type', opts.documentType)
       const { data } = await client.post(`/api/kb/${kbId}/documents`, form)
-      return extractOne<KbDocument>(data)
+      return extractOne<KbDocument & AutoMineFields>(data)
     },
 
-    /** 显式替换原件；保留文档身份、名称、目录和已生效知识，不自动挖掘。 */
+    /** 显式替换原件；保留文档身份、名称、目录和已生效知识（57号：替换后自动排队挖掘）。 */
     async replaceDocumentContent(
       kbId: string, docId: string, file: File, expectedRevision: number,
-    ): Promise<KbDocument> {
+    ): Promise<KbDocument & AutoMineFields> {
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
         throw new Error('文件版本信息无效，请刷新后重试')
       }
@@ -280,22 +287,25 @@ export function useKbApi() {
       form.append('file', file)
       form.append('expected_revision', String(expectedRevision))
       const { data } = await client.post(`/api/kb/${kbId}/documents/${docId}/content`, form)
-      return extractOne<KbDocument>(data)
+      return extractOne<KbDocument & AutoMineFields>(data)
     },
 
     /** 归档上传（zip/hdx/chm）：小包同步返回文档列表；大包返回任务 ID（HTTP 202）。 */
     async uploadArchive(
       kbId: string, file: File, directory?: string,
-    ): Promise<{ documents?: KbDocument[]; archiveTaskId?: string }> {
+    ): Promise<{ documents?: KbDocument[]; archiveTaskId?: string } & AutoMineFields> {
       const form = new FormData()
       form.append('file', file)
       if (directory) form.append('directory', directory)
       const response = await client.post(`/api/kb/${kbId}/documents`, form)
       const data = response.data as {
         documents?: KbDocument[]; archive_task_id?: string
+      } & AutoMineFields
+      const auto = {
+        auto_mined: data.auto_mined, run_id: data.run_id, reason: data.reason,
       }
-      if (data.archive_task_id) return { archiveTaskId: data.archive_task_id }
-      return { documents: data.documents ?? [] }
+      if (data.archive_task_id) return { archiveTaskId: data.archive_task_id, ...auto }
+      return { documents: data.documents ?? [], ...auto }
     },
 
     /** 归档后台解压任务状态轮询（批次2c）。 */

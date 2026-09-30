@@ -38,13 +38,14 @@ class EvidenceToolServiceDocumentPageTest {
     private StructureRefService refService;
     private StructureToolMapper toolMapper;
     private EvidenceToolService service;
+    private EvidenceSourceV2Mapper sourceMapper;
 
     @BeforeEach
     void setUp() {
         EvidenceRefCodec codec = EvidenceRefCodec.forSecret("test-secret");
         refService = mock(StructureRefService.class);
         toolMapper = mock(StructureToolMapper.class);
-        EvidenceSourceV2Mapper sourceMapper = mock(EvidenceSourceV2Mapper.class);
+        sourceMapper = mock(EvidenceSourceV2Mapper.class);
         EvidenceHydrateOperator hydrate = mock(EvidenceHydrateOperator.class);
         service = new EvidenceToolService(refService, sourceMapper, toolMapper, hydrate, codec);
 
@@ -82,6 +83,30 @@ class EvidenceToolServiceDocumentPageTest {
                             .limit(limit)
                             .toList();
                 });
+    }
+
+    @Test
+    @DisplayName("57号D5：source 携带 content_revision 与 document_id（内部端点契约）")
+    void sourceCarriesRevisionAndDocumentId() {
+        stubSegments(0);
+        // setUp 的行没有 revision/documentId——单独 stub 一个带全字段的行
+        EvidenceDocumentRow full = new EvidenceDocumentRow();
+        full.setSnapshotId(SNAP);
+        full.setDocumentId("doc-9");
+        full.setDocumentName("spec.pdf");
+        full.setKbName("规范库");
+        full.setRelativePath("规范/spec.pdf");
+        full.setContentRevision(4);
+        org.mockito.Mockito.when(sourceMapper.selectDocumentSources(anyList()))
+                .thenReturn(java.util.List.of(full));
+
+        var out = service.getDocument("doc_x", null, null, "odn", List.of("kb-1"), "alice");
+
+        assertThat(out.source())
+                .containsEntry("content_revision", 4)
+                .containsEntry("document_id", "doc-9")
+                .containsEntry("file_name", "spec.pdf")
+                .containsEntry("relative_path", "规范/spec.pdf");
     }
 
     @Test

@@ -269,6 +269,10 @@ public class EvidenceToolService {
             source.put("knowledge_base", doc.getKbName());
             source.put("file_name", doc.getDocumentName());
             source.put("relative_path", doc.getRelativePath());
+            // 57号D5：替换暗号与内部文档 id——内部端点契约；MCP 层转发给 Agent 前
+            // 剥 document_id（不透明引用原则），content_revision 原样保留。
+            source.put("content_revision", doc.getContentRevision());
+            source.put("document_id", doc.getDocumentId());
         }
 
         // 下一页游标记录本页最后一条实际 ordinal——编号稀疏时仍不漏不重

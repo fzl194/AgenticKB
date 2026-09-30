@@ -264,6 +264,83 @@ def test_upload_document_rejects_path_like_filename(monkeypatch) -> None:
         server.upload_document(kb_name="网络手册库", filenames=[])
 
 
+# ── 57号D5：upload_document 替换模式（doc_ ref + 版本暗号）─────────────────
+
+
+def _patch_for_replace(monkeypatch, *, live_revision=3, document_id="doc-internal-1"):
+    calls: list[tuple] = []
+    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
+    monkeypatch.setattr(
+        server.backend, "get_document",
+        lambda *a, **k: (calls.append(("resolve",) + a),
+                         {"source": {"document_id": document_id,
+                                     "content_revision": live_revision,
+                                     "file_name": "手册.pdf"},
+                          "segments": []})[1])
+    monkeypatch.setattr(
+        server.backend, "begin_upload",
+        lambda *a, **k: (calls.append(("begin",) + a + tuple(k.values())),
+                         {"ticket": "up_r", "max_bytes": 1, "expires_in": 600})[1])
+    monkeypatch.setattr(
+        server, "get_http_headers", lambda include=None: {"host": "kb.example.com"})
+    return calls
+
+
+def test_upload_document_replace_defaults_to_live_revision(monkeypatch) -> None:
+    calls = _patch_for_replace(monkeypatch, live_revision=7)
+    out = server.upload_document(
+        kb_name="网络手册库", filenames=["手册.pdf"], replace_document_ref="doc_ABC")
+    assert out["uploads"][0]["mode"] == "replace"
+    assert out["uploads"][0]["document_ref"] == "doc_ABC"
+    begin = [c for c in calls if c[0] == "begin"][0]
+    assert "doc-internal-1" in begin      # 内部 id 只到 mining，不进返回
+    assert 7 in begin                     # 暗号缺省=解析到的当前版本
+    assert "doc-internal-1" not in str(out)
+
+
+def test_upload_document_replace_explicit_revision_passthrough(monkeypatch) -> None:
+    calls = _patch_for_replace(monkeypatch, live_revision=5)
+    server.upload_document(
+        kb_name="网络手册库", filenames=["手册.pdf"],
+        replace_document_ref="doc_ABC", expected_revision=4)
+    begin = [c for c in calls if c[0] == "begin"][0]
+    assert 4 in begin and 5 not in begin
+
+
+def test_upload_document_replace_rejects_bad_shapes(monkeypatch) -> None:
+    _patch_for_replace(monkeypatch)
+    with pytest.raises(ToolError, match="doc_ 前缀"):
+        server.upload_document(kb_name="网络手册库", filenames=["a.pdf"],
+                               replace_document_ref="st_X")
+    with pytest.raises(ToolError, match="一次只能替换一个"):
+        server.upload_document(kb_name="网络手册库", filenames=["a.pdf", "b.pdf"],
+                               replace_document_ref="doc_X")
+    with pytest.raises(ToolError, match="非负整数"):
+        server.upload_document(kb_name="网络手册库", filenames=["a.pdf"],
+                               replace_document_ref="doc_X", expected_revision=-1)
+
+
+def test_upload_document_replace_unresolvable_ref_guides_retry(monkeypatch) -> None:
+    _patch_for_replace(monkeypatch, document_id="")
+    with pytest.raises(ToolError, match="无法解析该文档引用"):
+        server.upload_document(kb_name="网络手册库", filenames=["a.pdf"],
+                               replace_document_ref="doc_GONE")
+
+
+def test_doc_view_strips_internal_document_id(monkeypatch) -> None:
+    """get_knowledge doc_ 分支剥 document_id（Agent 只见 ref+暗号），revision 保留。"""
+    calls = _patch_backend(monkeypatch)
+    monkeypatch.setattr(
+        server.backend, "get_document",
+        lambda *a, **k: {"source": {"document_id": "d-9", "content_revision": 2,
+                                    "file_name": "x.pdf"},
+                         "segments": []})
+    out = server.get_knowledge(ref="doc_X")
+    assert out["view"] == "document_content"
+    assert "document_id" not in out["source"]
+    assert out["source"]["content_revision"] == 2
+
+
 def test_upload_document_limits_filename_count_and_length(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     with pytest.raises(ToolError, match="最多"):

@@ -143,6 +143,35 @@ class ContentRevisionConflict(Exception):
 
 _SPILL_CHUNK = 256 * 1024
 
+# 57号D5 开箱检查：文件头魔数 → 扩展名（只校验有可靠魔数的格式；
+# md/txt/html/json/chm/hdx 等无廉价可靠签名，维持挖掘层失败兜底）。
+_MAGIC_SIGNATURES: dict[str, tuple[bytes, ...]] = {
+    ".pdf": (b"%PDF-",),
+    ".zip": (b"PK\x03\x04", b"PK\x05\x06"),
+    ".docx": (b"PK\x03\x04", b"PK\x05\x06"),
+    ".xlsx": (b"PK\x03\x04", b"PK\x05\x06"),
+    ".pptx": (b"PK\x03\x04", b"PK\x05\x06"),
+}
+_MAGIC_HEAD_BYTES = 8
+
+
+def _validate_magic_bytes(staging: Path, suffix: str) -> None:
+    """替换路径的廉价开箱检查：文件头与扩展名不符 → ValueError（HTTP 400）。
+
+    空 zip（PK\\x05\\x06 结尾目录）合法；非 zip 容器的 office 老格式（.doc/.xls）
+    与文本类不在此列——同名规则交给同扩展名校验。
+    """
+    expected = _MAGIC_SIGNATURES.get(suffix.lower())
+    if not expected:
+        return
+    with staging.open("rb") as fh:
+        head = fh.read(_MAGIC_HEAD_BYTES)
+    if not any(head.startswith(sig) for sig in expected):
+        raise ValueError(
+            f"文件内容与扩展名不符（{suffix} 的文件头不对）：请确认上传的是真实的"
+            f"{suffix[1:].upper()} 文件，或改用正确的扩展名作为新文件上传。"
+        )
+
 
 def _file_chunks(path: Path) -> AsyncIterator[bytes]:
     """从磁盘文件分块读出（异步生成器）。"""
@@ -374,11 +403,14 @@ class DocumentService:
     async def _store_source_stream(
         self, stream: AsyncIterator[bytes], *, mime: str | None,
         max_bytes: int | None = None,
+        expect_suffix: str | None = None,
     ) -> StorageObjectRecord:
         """流式落 source 对象：分块暂存 + 增量 sha256 → 去重检查 → 流式上传。
 
         内容寻址要求先有哈希才知道 object_key——单遍暂存（磁盘）+ 第二遍
         从暂存文件流式 put_stream，全程不在内存持有整包。
+        expect_suffix（57号D5 开箱检查）：非 None 时校验暂存文件头与扩展名
+        匹配（PDF/zip 容器族），挡"改了扩展名的假文件"——只挂替换路径。
         """
         if self._object_store is None or self._storage_objects is None or not self._source_bucket:
             raise RuntimeError("KB object storage is not configured")
@@ -398,6 +430,8 @@ class DocumentService:
                         )
                     fh.write(chunk)
                     sha.update(chunk)
+            if expect_suffix:
+                _validate_magic_bytes(staging, expect_suffix)
             digest = sha.hexdigest()
             object_key = build_object_key("source", digest)
             existing = await self._storage_objects.find_by_location(
@@ -843,6 +877,7 @@ class DocumentService:
         obj = await self._store_source_stream(
             stream, mime=resolve_upload_mime(doc["document_name"], None),
             max_bytes=max_bytes if max_bytes is not None else UploadConfig().upload_max_file_size,
+            expect_suffix=suffix,  # 57号D5：开箱检查（同扩展名且魔数相符才收）
         )
         # Recheck authorization after potentially long I/O, then CAS the revision
         # in the database. A concurrent replacement/delete cannot be overwritten.

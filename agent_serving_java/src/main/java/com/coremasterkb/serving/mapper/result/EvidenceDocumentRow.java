@@ -16,6 +16,7 @@ public class EvidenceDocumentRow {
     private String kbId;
     private String kbName;
     private String relativePath;
+    private Integer contentRevision;
 
     public String getSnapshotId() { return snapshotId; }
     public void setSnapshotId(String snapshotId) { this.snapshotId = snapshotId; }
@@ -38,4 +39,8 @@ public class EvidenceDocumentRow {
 
     public String getRelativePath() { return relativePath; }
     public void setRelativePath(String relativePath) { this.relativePath = relativePath; }
+
+    /** 57号：文档当前内容版本（替换暗号）——内部端点透传，MCP 面剥 document_id 后保留。 */
+    public Integer getContentRevision() { return contentRevision; }
+    public void setContentRevision(Integer contentRevision) { this.contentRevision = contentRevision; }
 }

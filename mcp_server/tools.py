@@ -222,16 +222,26 @@ def begin_upload(
     kb_id: str,
     filename: str,
     *,
+    document_id: str = "",
+    expected_revision: int | None = None,
     access_record_id: str = "",
     access_record_total: int = 1,
 ) -> dict:
-    """直传第一步：签发一次性上传票据（mining 校验权限/文件名后返回）。"""
-    return _post("/api/kb/mcp-tools/begin-upload", {
+    """直传第一步：签发一次性上传票据（mining 校验权限/文件名后返回）。
+
+    document_id + expected_revision（57号D5）= 替换语义票据：mining 即时校验
+    同扩展名与版本暗号（不匹配 409）。
+    """
+    payload: dict = {
         "username": username, "key_id": key_id, "kb_id": kb_id,
         "filename": filename,
         "access_record_id": access_record_id,
         "access_record_total": access_record_total,
-    })
+    }
+    if document_id:
+        payload["document_id"] = document_id
+        payload["expected_revision"] = expected_revision or 0
+    return _post("/api/kb/mcp-tools/begin-upload", payload)
 
 
 async def put_upload_direct(ticket: str, stream) -> tuple[int, dict]:

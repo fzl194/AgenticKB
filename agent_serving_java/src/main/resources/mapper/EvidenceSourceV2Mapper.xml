@@ -231,7 +231,8 @@
                d.document_name,
                d.kb_id,
                k.name AS kb_name,
-               l.relative_path
+               l.relative_path,
+               d.content_revision
         FROM asset_document_snapshot_links l
         JOIN asset_documents d ON d.id = l.document_id AND d.deleted_at IS NULL
         LEFT JOIN knowledge_bases k ON k.id = d.kb_id

@@ -537,6 +537,11 @@ def _get_by_ref(ident: Identity, ref: str, domain: str | None,
             )
         out = _serving_call(
             backend.get_document, username, kb_ids, resolved, ref, limit, cursor)
+        source = out.get("source") if isinstance(out.get("source"), dict) else None
+        if source is not None:
+            # 57号：内部 document_id 剥掉（Agent 用 doc_ ref + upload_document 的
+            # 替换参数即可，无需内部 id）；content_revision 保留=替换暗号。
+            source.pop("document_id", None)
         return {**out, "view": "document_content"}
 
     # st_（或其他形状）：query > relation > 能力报告
@@ -638,8 +643,13 @@ def _browse_top(ident: Identity, domain: str | None) -> dict:
 
 
 @mcp.tool()
-def upload_document(kb_name: str, filenames: list[str]) -> dict:
-    """上传一个或多个文件到开放的知识库——两步直传（原始字节），自动排队挖掘。
+def upload_document(
+    kb_name: str, filenames: list[str],
+    replace_document_ref: str | None = None,
+    expected_revision: int | None = None,
+) -> dict:
+    """上传一个或多个文件到开放的知识库——两步直传（原始字节），自动排队挖掘；
+    也可替换既有文件的内容（57号：报 doc_ 引用 + 版本暗号）。
 
     用法（两步）：
     1. 调本工具，传入目标库名与文件名列表 → 返回每个文件的 upload_url
@@ -657,10 +667,19 @@ def upload_document(kb_name: str, filenames: list[str]) -> dict:
     或合并。挖掘完成后内容才可被检索到——刚上传的文件用 search_knowledge
     查不到是正常的，需等挖掘完成。上传需要对该库有编辑权限。
 
+    替换模式（更新既有文件的内容，名称/目录/身份不变）：
+    - replace_document_ref = 该文档的 doc_ 引用（search 证据的
+      source.document_ref，或 get_knowledge ref=doc_… 读取时的那个 ref）；
+    - expected_revision = 你看到的 content_revision（get_knowledge 文件
+      清单/文档读取都返回它）。省略时按当前版本尝试；
+    - 此时 filenames 恰好一个，且扩展名必须与当前文件相同（PDF 换 PDF）；
+    - 版本对不上会 409——说明有人先改了，重新读取 content_revision 再试；
+      替换成功同样自动排队挖掘，挖完前旧知识继续可检索。
+
     多文件也可以打包：把若干文件压成一个 zip 只传一个 URL，服务端会
     **自动解压成多个文档**（与网页端上传 zip 完全一致，解压后的文档在
     "压缩包名/" 目录下）。两种方式任选：少量大文件逐个传；大量小文件
-    打包传更高效。
+    打包传更高效。（替换模式不支持 zip。）
 
     票据超时或 PUT 失败：重调本工具取新 URL 重传即可。普通文件上限
     50MB；zip/hdx/chm 归档上限与网页端一致（500MB）。可被挖掘的格式：
@@ -671,6 +690,9 @@ def upload_document(kb_name: str, filenames: list[str]) -> dict:
         kb_name: 目标知识库名称（get_knowledge 顶层浏览返回的 name）。
         filenames: 文件名列表（含扩展名，如 ["手册.pdf", "notes.md"]；
             单文件传一个元素的列表）。每个文件名不含路径分隔符。
+        replace_document_ref: 可选，替换模式——要替换的文档 doc_ 引用。
+        expected_revision: 可选，替换模式——你看到的该文档 content_revision
+            （版本暗号，防并发互相覆盖）。
     """
     ident = _identity()
     kb_id = _resolve_open_kb(ident, kb_name)
@@ -685,6 +707,39 @@ def upload_document(kb_name: str, filenames: list[str]) -> dict:
             raise ToolError(
                 f"filename 过长：最多 {MAX_UPLOAD_FILENAME_LENGTH} 个字符。"
             )
+
+    # 57号D5 替换模式：先经 serving 解析 doc_ 引用（形状翻译——Agent 不见内部 id）
+    document_id = ""
+    if replace_document_ref and str(replace_document_ref).strip():
+        ref = str(replace_document_ref).strip()
+        if not ref.startswith("doc_"):
+            raise ToolError(
+                "replace_document_ref 必须是 doc_ 前缀的文档引用（来自 search 证据的"
+                " source.document_ref 或 get_knowledge 的文档读取）。"
+            )
+        if len(filenames) != 1:
+            raise ToolError("替换模式一次只能替换一个文件：filenames 恰好一个元素。")
+        out = _serving_call(
+            backend.get_document, ident.username, _scope_kbs(ident, None),
+            _domain(ident, None), ref)
+        src = out.get("source") or {}
+        document_id = str(src.get("document_id") or "")
+        live_revision = src.get("content_revision")
+        if not document_id:
+            raise ToolError(
+                "无法解析该文档引用（可能已删除或不可访问）：请重新 search_knowledge "
+                "获取新的 document_ref。"
+            )
+        if expected_revision is None:
+            expected_revision = (
+                int(live_revision) if isinstance(live_revision, int) else 0
+            )
+    if expected_revision is not None and (
+        isinstance(expected_revision, bool)
+        or not isinstance(expected_revision, int)
+        or expected_revision < 0
+    ):
+        raise ToolError("expected_revision 必须是非负整数（该文档的 content_revision）。")
 
     headers = get_http_headers(include={"host", "x-forwarded-proto"}) or {}
 
@@ -702,6 +757,8 @@ def upload_document(kb_name: str, filenames: list[str]) -> dict:
         try:
             issued = backend.begin_upload(
                 ident.username, ident.key_id, kb_id, str(filename),
+                document_id=document_id,
+                expected_revision=expected_revision,
                 access_record_id=str((current_access_call.get() or {}).get("id") or ""),
                 access_record_total=len(filenames),
             )
@@ -719,6 +776,8 @@ def upload_document(kb_name: str, filenames: list[str]) -> dict:
             "content_type": "application/octet-stream",
             "max_bytes": issued.get("max_bytes"),
             "expires_in": issued.get("expires_in"),
+            **({"mode": "replace", "document_ref": str(replace_document_ref).strip()}
+               if document_id else {}),
         })
     return {
         "uploads": uploads,

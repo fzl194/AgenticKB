@@ -20,6 +20,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from hmac import compare_digest
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -69,6 +70,7 @@ class _UploadTicketStore:
         self, *, kb_id: str, user_id: str, username: str, filename: str,
         key_id: str = "", access_record_id: str = "",
         access_record_total: int = 1, domain: str = "",
+        document_id: str = "", expected_revision: int | None = None,
     ) -> dict[str, Any]:
         ticket = f"up_{secrets.token_urlsafe(24)}"
         self._tickets[ticket] = {
@@ -77,6 +79,8 @@ class _UploadTicketStore:
             "access_record_id": access_record_id,
             "access_record_total": access_record_total,
             "domain": domain,
+            "document_id": document_id,
+            "expected_revision": expected_revision,
             "expires_at": time.monotonic() + self._ttl,
         }
         return {"ticket": ticket, "expires_in": self._ttl}
@@ -269,7 +273,12 @@ async def begin_upload(
     request: Request,
     kbdb: KbDB = Depends(get_kb_db),
 ) -> dict[str, Any]:
-    """直传第一步：校验权限与文件名，签发一次性上传票据。"""
+    """直传第一步：校验权限与文件名，签发一次性上传票据。
+
+    57号D5：body 可选带 document_id + expected_revision = 替换语义（新字节
+    替换该文档，名称/目录/身份不变）。签发时即校验：文档存在且属于该库、
+    同扩展名、版本暗号匹配（不匹配 409——并发替换互相不盲覆盖）。
+    """
     await _expire_upload_tickets(request)
     username = str(body.get("username") or "")
     key_id = str(body.get("key_id") or "")
@@ -288,10 +297,33 @@ async def begin_upload(
     except (TypeError, ValueError):
         access_record_total = 1
 
-    # 归档（zip/hdx/chm）与网页上传同限（默认 500MB）；普通文件走 MCP 上限
+    # 57号D5 替换目标校验（全部即时 4xx，票据只签发校验通过的目标）
+    document_id = str(body.get("document_id") or "")
+    expected_revision: int | None = None
+    if document_id:
+        raw_revision = body.get("expected_revision")
+        if isinstance(raw_revision, bool) or not isinstance(raw_revision, int) or raw_revision < 0:
+            raise HTTPException(
+                422, "expected_revision 必须是非负整数（该文档当前 content_revision）。")
+        expected_revision = raw_revision
+        doc = await kbdb.get_document_identity(document_id)
+        if doc is None or doc.get("kb_id") != kb_id:
+            raise HTTPException(404, f"document not found: {document_id}")
+        target_suffix = Path(str(doc.get("document_name") or "")).suffix.lower()
+        if Path(filename).suffix.lower() != target_suffix:
+            raise HTTPException(
+                400, "替换文件须与当前文件格式相同；其他格式请作为新文件上传。")
+        if doc.get("content_revision") != expected_revision:
+            raise HTTPException(
+                409,
+                "文件版本已变化（content_revision 不匹配）：请重新读取该文档的"
+                " content_revision 后重试。")
+
+    # 归档（zip/hdx/chm）与网页上传同限（默认 500MB）；普通文件走 MCP 上限。
+    # 替换目标不可能是归档（同扩展名约束下只能是单文件）。
     max_bytes = (
         UploadConfig().upload_max_archive_size
-        if is_upload_archive(filename) else MAX_UPLOAD_BYTES
+        if is_upload_archive(filename) and not document_id else MAX_UPLOAD_BYTES
     )
     issued = _TICKETS.issue(
         kb_id=kb_id, user_id=user_id, username=username, filename=filename,
@@ -299,9 +331,11 @@ async def begin_upload(
         access_record_id=access_record_id,
         access_record_total=access_record_total,
         domain=str(key.get("domain") or ""),
+        document_id=document_id,
+        expected_revision=expected_revision,
     )
-    logger.info("[mcp-tools] begin-upload by %s -> kb=%s file=%s ticket=%s",
-                username, kb_id, filename, issued["ticket"][:11] + "…")
+    logger.info("[mcp-tools] begin-upload by %s -> kb=%s file=%s ticket=%s replace=%s",
+                username, kb_id, filename, issued["ticket"][:11] + "…", bool(document_id))
     return {
         "ticket": issued["ticket"],
         "upload_path": f"/api/kb/mcp-tools/upload-direct/{issued['ticket']}",
@@ -343,6 +377,63 @@ async def upload_direct(
     async def _stream() -> AsyncIterator[bytes]:
         async for chunk in request.stream():
             yield chunk
+
+    replace_doc_id = str(entry.get("document_id") or "")
+
+    async def _fail(status: int, message: str, code: str) -> HTTPException:
+        await _complete_upload_access_record(
+            request, entry, success=False, error_code=code)
+        return HTTPException(status, message)
+
+    if replace_doc_id:
+        # 57号D5 替换直传：与网页替换同源（replace_content）——CAS 版本暗号 +
+        # 同扩展名 + 开箱检查 + 旧知识保底全部继承；成功后同样自动入队挖掘。
+        from knowledge_mining.mining.kb.services.document_service import (
+            ContentRevisionConflict,
+        )
+        from knowledge_mining.mining.infra.upload_config import UploadConfig as _UC
+        try:
+            updated = await doc_svc.replace_content(
+                kb_id=entry["kb_id"], document_id=replace_doc_id,
+                user_id=entry["user_id"], filename=entry["filename"],
+                expected_revision=int(entry.get("expected_revision") or 0),
+                stream=_stream(), max_bytes=_UC().upload_max_file_size,
+            )
+        except ContentRevisionConflict as exc:
+            raise await _fail(
+                409, f"{exc} 请重新读取该文档的 content_revision 后重试。",
+                "revision_conflict")
+        except UploadTooLarge as exc:
+            raise await _fail(
+                413, f"file too large（上限 {exc.limit_bytes} 字节）",
+                "upload_too_large")
+        except ValueError as exc:
+            raise await _fail(400, str(exc), "upload_invalid")
+        kb = await kbdb.get_kb(entry["kb_id"])
+        auto = (
+            await auto_mine.enqueue_auto_mining(
+                app_state=request.app.state, kbdb=kbdb, kb=kb,
+                user_id=entry["user_id"], username=username,
+            )
+            if kb is not None else {"auto_mined": False, "reason": "internal"}
+        )
+        response = {
+            "kind": "replace",
+            "document_id": updated.get("id"),
+            "document_name": updated.get("document_name"),
+            "content_revision": updated.get("content_revision"),
+            "auto_mined": bool(auto.get("auto_mined")),
+            **({"run_id": auto["run_id"]} if auto.get("run_id") else {}),
+            **({"reason": auto["reason"]} if auto.get("reason") else {}),
+            "message": (
+                "已替换原文件并自动排队挖掘；挖完前旧知识继续可检索"
+                if auto.get("auto_mined")
+                else "已替换原文件；自动挖掘未触发，可请管理员在平台手动发起"
+            ),
+        }
+        await _complete_upload_access_record(
+            request, entry, success=True, response_refs=_safe_upload_refs(response))
+        return response
 
     try:
         # 与网页上传同源（intake_upload）：普通文件直传 / zip/hdx/chm 自动解压
@@ -504,7 +595,7 @@ def _safe_upload_refs(response: dict[str, Any]) -> list[dict[str, Any]]:
         for key in ("run_id", "auto_mined")
         if key in response
     }
-    if response.get("kind") == "file":
+    if response.get("kind") in ("file", "replace"):
         return [{
             **common,
             **{

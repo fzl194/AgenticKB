@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from knowledge_mining.mining.file_management.repositories_memory import MemoryStorageObjectRepository
 from knowledge_mining.mining.infra.object_store.fake import FakeObjectStore
 from knowledge_mining.mining.kb.auth import current_user
-from knowledge_mining.mining.kb.deps import get_document_service
+from knowledge_mining.mining.kb.deps import get_document_service, get_kb_db
 from knowledge_mining.mining.kb.routes.documents import router
 from knowledge_mining.mining.kb.services.document_service import DocumentService, UploadTooLarge
 from knowledge_mining.mining.kb.services.kb_service import Forbidden, NotFound
@@ -151,6 +151,14 @@ async def test_http_replace_then_stale_retry_and_read(tmp_path):
     app.include_router(router)
     app.dependency_overrides[current_user] = lambda: {"id": "writer"}
     app.dependency_overrides[get_document_service] = lambda: service
+
+    class _RouteKbDB:
+        """57号：替换路由成功后自动入队挖掘需要的最小 kb 查询（无范式→快速降级）。"""
+
+        async def get_kb(self, kb_id):
+            return {"id": kb_id, "domain": "generic", "mining_workflow_id": None}
+
+    app.dependency_overrides[get_kb_db] = lambda: _RouteKbDB()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
         url = "/api/kb/k1/documents/d1/content"
         response = await client.post(url, data={"expected_revision": "1"},

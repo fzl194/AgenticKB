@@ -31,9 +31,10 @@ from knowledge_mining.mining.kb.deps import get_document_service, get_kb_db
 from knowledge_mining.mining.kb.db import KbDB
 from knowledge_mining.mining.kb.services import auto_mine
 from knowledge_mining.mining.kb.services.document_service import (
-    UploadTooLarge,
+    ContentRevisionConflict, UploadTooLarge,
     is_upload_archive,
 )
+from knowledge_mining.mining.kb.services.kb_service import Forbidden, NotFound
 from knowledge_mining.mining.services.retrieval_records import RetrievalRecordService
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,10 @@ router = APIRouter(prefix="/api/kb/mcp-tools", tags=["kb-mcp-tools"])
 
 #: 直传硬上限（与常规上传上限独立、更保守：Agent 场景）。
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+#: 跨库文件搜索的单库取回上限（开放库数量小，每库取回后按 modified_at 合并
+#: 再窗口分页——单库命中超过此数的深层结果会被截断，Agent 可缩小关键词）。
+CROSS_KB_PER_KB_LIMIT = 200
 
 #: 票据有效期（秒）。窗口内未完成的直传作废，Agent 重取即可。
 UPLOAD_TICKET_TTL = 600
@@ -239,7 +244,7 @@ async def list_documents(
             try:
                 docs = await kbdb.list_documents_in_kb(
                     kb_id=open_id, query=query, directory_prefix=directory_prefix,
-                    status=status, limit=200, offset=0,
+                    status=status, limit=CROSS_KB_PER_KB_LIMIT, offset=0,
                 )
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from None
@@ -261,7 +266,8 @@ async def list_documents(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     out = [_document_list_item(d) for d in docs]
-    if offset == 0 and not query:
+    # 引用面（referenced）无状态/目录过滤语义——只在纯浏览（无任何过滤条件）时合并
+    if offset == 0 and not query and not directory_prefix and status is None:
         for d in await kbdb.list_referenced_documents(kb_id):
             out.append(_document_list_item(d, referenced=True))
     return {"documents": out}
@@ -322,8 +328,11 @@ async def begin_upload(
     # 归档（zip/hdx/chm）与网页上传同限（默认 500MB）；普通文件走 MCP 上限。
     # 替换目标不可能是归档（同扩展名约束下只能是单文件）。
     max_bytes = (
-        UploadConfig().upload_max_archive_size
-        if is_upload_archive(filename) and not document_id else MAX_UPLOAD_BYTES
+        # 替换走 replace_content（消费侧按 upload_max_file_size 强制）——票据
+        # 宣告口径与消费侧一致，避免"宣告 50MB 实收更大"的契约漂移。
+        UploadConfig().upload_max_file_size if document_id else
+        (UploadConfig().upload_max_archive_size
+         if is_upload_archive(filename) else MAX_UPLOAD_BYTES)
     )
     issued = _TICKETS.issue(
         kb_id=kb_id, user_id=user_id, username=username, filename=filename,
@@ -388,17 +397,19 @@ async def upload_direct(
     if replace_doc_id:
         # 57号D5 替换直传：与网页替换同源（replace_content）——CAS 版本暗号 +
         # 同扩展名 + 开箱检查 + 旧知识保底全部继承；成功后同样自动入队挖掘。
-        from knowledge_mining.mining.kb.services.document_service import (
-            ContentRevisionConflict,
-        )
-        from knowledge_mining.mining.infra.upload_config import UploadConfig as _UC
         try:
             updated = await doc_svc.replace_content(
                 kb_id=entry["kb_id"], document_id=replace_doc_id,
                 user_id=entry["user_id"], filename=entry["filename"],
                 expected_revision=int(entry.get("expected_revision") or 0),
-                stream=_stream(), max_bytes=_UC().upload_max_file_size,
+                stream=_stream(), max_bytes=UploadConfig().upload_max_file_size,
             )
+        except NotFound as exc:
+            # 票据 TTL 窗口内被删/库不可见——与库族路由同防探测口径
+            raise await _fail(404, f"document not found: {exc}", "upload_failed")
+        except Forbidden:
+            raise await _fail(
+                403, "当前身份无权替换该文件（需要库的编辑权限）。", "upload_failed")
         except ContentRevisionConflict as exc:
             raise await _fail(
                 409, f"{exc} 请重新读取该文档的 content_revision 后重试。",
@@ -409,7 +420,12 @@ async def upload_direct(
                 "upload_too_large")
         except ValueError as exc:
             raise await _fail(400, str(exc), "upload_invalid")
-        kb = await kbdb.get_kb(entry["kb_id"])
+        # 入队前的查询失败只降级（替换已成功落库，绝不 5xx）
+        try:
+            kb = await kbdb.get_kb(entry["kb_id"])
+        except Exception:
+            logger.exception("[mcp-tools] get_kb failed after replace")
+            kb = None
         auto = (
             await auto_mine.enqueue_auto_mining(
                 app_state=request.app.state, kbdb=kbdb, kb=kb,
@@ -455,8 +471,12 @@ async def upload_direct(
     logger.info("[mcp-tools] upload-direct by %s -> kb=%s file=%s kind=%s",
                 username, entry["kb_id"], entry["filename"], result["kind"])
 
-    # 自动挖掘入队：失败只降级，绝不影响上传结果
-    kb = await kbdb.get_kb(entry["kb_id"])
+    # 自动挖掘入队：失败只降级，绝不影响上传结果（含入队前的 get_kb）
+    try:
+        kb = await kbdb.get_kb(entry["kb_id"])
+    except Exception:
+        logger.exception("[mcp-tools] get_kb failed after upload")
+        kb = None
     auto = (
         await auto_mine.enqueue_auto_mining(
             app_state=request.app.state, kbdb=kbdb, kb=kb,

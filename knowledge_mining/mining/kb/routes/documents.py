@@ -4,8 +4,11 @@
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -39,7 +42,12 @@ async def _enqueue_auto_mine_after_write(
     复用 auto_mine 契约——任何失败只降级为 auto_mined=False，绝不向上抛；
     响应只增不改（旧前端忽略未知键）。
     """
-    kb = await kbdb.get_kb(kb_id)
+    try:
+        kb = await kbdb.get_kb(kb_id)
+    except Exception:
+        # 上传/替换已成功落库——入队前的查询失败只降级，绝不把响应变成 5xx
+        logger.exception("[auto-mine] get_kb failed after write (kb=%s)", kb_id)
+        return {"auto_mined": False, "reason": "internal"}
     if kb is None:
         return {"auto_mined": False, "reason": "internal"}
     return await auto_mine.enqueue_auto_mining(

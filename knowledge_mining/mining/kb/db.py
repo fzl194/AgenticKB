@@ -2938,7 +2938,9 @@ WITH latest AS (
         expected_document_name: str | None = None,
     ) -> dict[str, Any] | None:
         """CAS advances uploaded content; serving selections remain untouched."""
-        if expected_revision < 1 or file_size < 0 or not storage_object_id or not source_raw_hash:
+        # content_revision=0 是合法态（008 迁移默认；legacy 本地路径未写过 1）
+        # ——只拒负数；revision/字节/对象三要素齐全才允许 CAS。
+        if expected_revision < 0 or file_size < 0 or not storage_object_id or not source_raw_hash:
             raise ValueError("invalid content replacement")
         name_match = " AND document_name = %(expected_name)s" if expected_document_name is not None else ""
         now = _utcnow()

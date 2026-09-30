@@ -25,6 +25,15 @@ class EvidenceSourceV2MapperXmlTest {
     }
 
     @Test
+    @DisplayName("57号审查H-1回归：content_revision 必须有显式 resultMap 映射（驼峰未开启，缺行则恒 null）")
+    void contentRevisionExplicitlyMapped() throws Exception {
+        String xml = mapperXml();
+        assertThat(xml).contains(
+                "<result column=\"content_revision\" property=\"contentRevision\"/>");
+        assertThat(xml).contains("d.content_revision");
+    }
+
+    @Test
     @DisplayName("canonical lookup filters returnable=TRUE — alias rows never come back")
     void aliasExcludedByReturnable() throws Exception {
         String xml = mapperXml();

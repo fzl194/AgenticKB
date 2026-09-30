@@ -395,7 +395,7 @@ const childFolders = computed(() => folders.value.filter((f) => f.parent_id === 
 // ── 文件搜索（57 号）：名 + 目录 + 状态；搜索态下隐藏文件夹行、结果带所在目录 ──
 const STATUS_FILTERS = [
   { value: 'uploaded', label: '未挖掘' },
-  { value: 'mining', label: '挖掘中' },
+  { value: 'mining', label: '处理中' },
   { value: 'mined', label: '已入库' },
   { value: 'failed', label: '挖掘失败' },
   { value: 'update_failed', label: '更新失败' },
@@ -408,6 +408,9 @@ const isSearching = computed(
   () => searchKeyword.value.trim() !== '' || searchStatus.value !== '',
 )
 const visibleChildFolders = computed(() => (isSearching.value ? [] : childFolders.value))
+
+/** 57号审查H-1：loadFiles 竞态守卫——慢网下后发先至时旧响应不得覆盖新口径。 */
+let loadFilesGeneration = 0
 
 function onSearchTrigger() {
   filePage.value = 1
@@ -438,6 +441,7 @@ const breadcrumb = computed(() => {
 
 async function loadFolders() { folders.value = await kbApi.listFolders(props.kbId) }
 async function loadFiles() {
+  const generation = ++loadFilesGeneration
   const offset = (filePage.value - 1) * filePageSize.value
   const search = activeSearchFilter()
   const [pageData, total] = await Promise.all([
@@ -446,6 +450,7 @@ async function loadFiles() {
       filePageSize.value, offset, search),
     kbApi.countDocuments(props.kbId, search ? undefined : currentPath.value, search),
   ])
+  if (generation !== loadFilesGeneration) return // 已有更新口径的请求，丢弃本响应
   files.value = pageData
   totalFiles.value = total
 }
@@ -772,6 +777,9 @@ watch(() => props.kbId, () => {
   closeCtx()
   currentFolderId.value = null
   selectedFileIds.value = []
+  selectedFolderIds.value = []          // 57号审查L-1：文件夹多选态一并清空
+  folderContributedIds.value = {}
+  forceRedo.value = false
   searchKeyword.value = ''
   searchStatus.value = ''
   filePage.value = 1

@@ -172,4 +172,21 @@ describe('KbFileManager 文件搜索（57 号）', () => {
     expect(w.findAll('.fm__row--folder')).toHaveLength(1)
     w.unmount()
   })
+
+  it('切库重置搜索态——回到新库浏览口径（审查L-1/搜索态重置）', async () => {
+    const w = mountFm()
+    await flushPromises()
+    // 进入搜索态 + 翻到第 2 页
+    await w.find('[data-testid="fm-search-native"]').setValue('手册')
+    await w.find('[data-testid="fm-search-native"]').trigger('keyup.enter')
+    await flushPromises()
+
+    await w.setProps({ kbId: 'kb-2' })
+    await flushPromises()
+    // 新库：浏览口径（directory=''、无搜索过滤）+ 页码回 1
+    expect(kbApi.listDocuments).toHaveBeenLastCalledWith('kb-2', '', 50, 0, undefined)
+    const input = w.find('[data-testid="fm-search-native"]').element as HTMLInputElement
+    expect(input.value).toBe('')
+    w.unmount()
+  })
 })

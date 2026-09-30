@@ -119,4 +119,26 @@ describe('KbSearchPanel 目录范围（57号）', () => {
     expect(servingApi.runParadigmSearch).toHaveBeenCalled()
     w.unmount()
   })
+
+  it('切库重置目录范围——旧库 prefix 不静默过滤新库（审查H-2）', async () => {
+    const w = await mountPanel()
+    await w.find('.kb-search__dir [data-testid="dir-pick"]').trigger('click')
+    await runSearch(w)
+    const first = servingApi.runParadigmSearch.mock.calls[0][2] as { filters?: { directory_prefix?: string } }
+    expect(first.filters).toEqual({ directory_prefix: '产品文档/手册' })
+
+    // 切到无文件夹的新库：选择器隐藏，且后续检索不再携带旧 prefix
+    kbApi.listFolders.mockResolvedValue([])
+    await w.setProps({ kb: { id: 'kb-2', name: 'B库', visibility: 'private', created_at: 'x' } as never })
+    await flushPromises()
+    expect(w.find('.kb-search__dir').exists()).toBe(false)
+    await runSearch(w)
+    // 面板每次触发可能产生多次 run()（既有自动检索机制）——断言末次调用
+    const last = servingApi.runParadigmSearch.mock.calls.at(-1)![2] as {
+      filters?: unknown; kbIds?: string[]
+    }
+    expect(last.kbIds).toEqual(['kb-2'])
+    expect(last.filters).toBeUndefined()
+    w.unmount()
+  })
 })

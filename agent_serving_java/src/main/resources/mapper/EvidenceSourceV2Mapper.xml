@@ -221,6 +221,8 @@
         <result column="kb_id"          property="kbId"/>
         <result column="kb_name"        property="kbName"/>
         <result column="relative_path"  property="relativePath"/>
+        <!-- 57号D5：显式映射（mapUnderscoreToCamelCase 未开启，缺此行则恒 null） -->
+        <result column="content_revision" property="contentRevision"/>
     </resultMap>
 
     <!-- snapshot 主键回查文档/库投影：document_key 非全局唯一，跨库同名路径只能靠 snapshot 消歧 -->

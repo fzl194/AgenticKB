@@ -204,11 +204,14 @@ const scopeModeLabel = computed(() =>
 // 直收服务端递归语义；与章节/整篇范围可叠加（serving 平铺合并为 AND）。
 const folderOptions = ref<string[]>([])
 const directoryScope = ref('')
-async function loadFolderOptions() {
+async function loadFolderOptions(generation: number, kbId: string) {
   try {
     const folders = await kbApi.listFolders(props.kb.id)
+    // 57号审查M-1：快速切库时旧库的目录树不得落到新库（下拉显示 A 库目录）
+    if (generation !== reloadGeneration || kbId !== props.kb.id) return
     folderOptions.value = folders.map((f) => f.path).sort((a, b) => a.localeCompare(b))
   } catch {
+    if (generation !== reloadGeneration || kbId !== props.kb.id) return
     folderOptions.value = [] // 目录过滤是可选增强，加载失败不阻断检索
   }
 }
@@ -272,7 +275,7 @@ async function reload() {
   const generation = ++reloadGeneration
   selectedParadigmId.value = props.kb.default_paradigm_id ?? null
   configurationError.value = ''
-  void loadFolderOptions() // 57号目录过滤选项：失败自吞（可选增强）
+  void loadFolderOptions(generation, kbId) // 57号目录过滤选项：失败自吞（可选增强）
   try {
     paradigms.value = await operatorApi.listParadigms()
     if (generation !== reloadGeneration || domain !== domainStore.currentDomain || kbId !== props.kb.id) return
@@ -458,6 +461,10 @@ watch(() => props.kb.id, () => {
   effective.value = null
   scope.value = null
   scopeDocumentRef.value = null
+  // 57号审查H-2：目录范围一并清——否则 A 库的 prefix 静默过滤 B 库（且 B 库
+  // 无文件夹时选择器隐藏，过滤条件生效却不可见不可清）。
+  directoryScope.value = ''
+  folderOptions.value = []
   searched.value = false
   error.value = ''
   reload()

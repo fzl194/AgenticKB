@@ -174,6 +174,17 @@ class SectionScopePushdownIT {
         assertThat(whole).extracting(UnitV2Row::getRepresentationId)
                 .containsExactlyInAnyOrder("u-dir-a", "u-dir-b");
 
+        // 目录名本身含 LIKE 通配符：% 与 _ 按字面匹配（Java 转义 → PG 默认 escape）
+        insertUnitWithFacets("u-dir-wild", "prose", S1, "india wildcard content",
+                "{\"document\": \"doc:/100%_覆盖/手册.pdf\"}");
+        insertUnitWithFacets("u-dir-sib", "prose", S1, "juliet sibling content",
+                "{\"document\": \"doc:/100X Y覆盖/手册.pdf\"}");
+        List<UnitV2Row> wild = mapper.searchFtsV2(
+                "content", List.of(SNAP), List.of(), List.of(), List.of(),
+                List.of(), false, "100%_覆盖", 50);
+        assertThat(wild).extracting(UnitV2Row::getRepresentationId)
+                .containsExactly("u-dir-wild");  // 兄弟目录 100X Y覆盖 不命中
+
         // facets.document 为空的存量行（facets '{}'）不进入目录过滤结果
         List<UnitV2Row> unscoped = mapper.searchFtsV2(
                 "content", List.of(SNAP), List.of(), List.of(), List.of(),

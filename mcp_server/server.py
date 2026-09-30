@@ -696,6 +696,10 @@ def upload_document(
     """
     ident = _identity()
     kb_id = _resolve_open_kb(ident, kb_name)
+    if expected_revision is not None and not (replace_document_ref or "").strip():
+        raise ToolError(
+            "expected_revision 只在替换模式有意义：请同时传 replace_document_ref。"
+        )
     if not filenames:
         raise ToolError("filenames 不能为空：至少给出一个文件名。")
     if len(filenames) > MAX_UPLOAD_FILENAMES:
@@ -731,9 +735,13 @@ def upload_document(
                 "获取新的 document_ref。"
             )
         if expected_revision is None:
-            expected_revision = (
-                int(live_revision) if isinstance(live_revision, int) else 0
-            )
+            if isinstance(live_revision, bool) or not isinstance(live_revision, int):
+                raise ToolError(
+                    "无法获取该文档的当前 content_revision（服务端未返回）：请显式传 "
+                    "expected_revision（get_knowledge 文件清单/文档读取里的 "
+                    "content_revision 值）。"
+                )
+            expected_revision = live_revision
     if expected_revision is not None and (
         isinstance(expected_revision, bool)
         or not isinstance(expected_revision, int)

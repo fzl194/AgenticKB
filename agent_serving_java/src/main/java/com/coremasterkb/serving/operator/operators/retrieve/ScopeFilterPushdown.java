@@ -101,6 +101,11 @@ public final class ScopeFilterPushdown {
     /**
      * 57号：directory_prefix → LIKE 转义串（%/_/\ 按字面匹配；PG LIKE 默认转义符
      * 即反斜杠）。非字符串/空白 → 空串（请求边界已 typed 400，这里防御性忽略）。
+     *
+     * <p>单一入口假设：本方法收到的值已经过 ParadigmRequests.normalizeDirectoryPrefix
+     * （trim+去首尾斜杠）——hardFilters 的唯一生产入口是请求边界。这里不复用
+     * normalize 是刻意的（pushdown 保持纯映射、不引入 api 包依赖）；若未来出现
+     * 第二入口，须在此重放规范化，否则带尾斜杠的前缀会零命中（fail-closed）。</p>
      */
     private static String directoryPrefixValue(Object value) {
         if (!(value instanceof String raw)) return "";

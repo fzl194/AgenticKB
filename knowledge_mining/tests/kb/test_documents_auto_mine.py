@@ -59,8 +59,9 @@ def _request():
 def enqueued(monkeypatch):
     calls: list[dict] = []
 
-    async def _fake(*, app_state, kbdb, kb, user_id, username):
-        calls.append({"kb_id": kb["id"], "user_id": user_id, "username": username})
+    async def _fake(*, app_state, kbdb, kb, user_id, username, triggered_by=""):
+        calls.append({"kb_id": kb["id"], "user_id": user_id, "username": username,
+                      "triggered_by": triggered_by})
         return {"auto_mined": True, "run_id": "run-9", "merged": False, "detail": "已入队"}
 
     monkeypatch.setattr(auto_mine, "enqueue_auto_mining", _fake)
@@ -76,10 +77,12 @@ async def test_upload_file_enqueues_auto_mine_and_adds_fields(enqueued):
     )
     assert out == {"id": "d-1", "document_name": "a.pdf",
                    "auto_mined": True, "run_id": "run-9"}
-    assert enqueued == [{"kb_id": "kb-1", "user_id": "u-1", "username": "alice"}]
+    assert enqueued == [{"kb_id": "kb-1", "user_id": "u-1", "username": "alice",
+                         "triggered_by": "web_upload"}]
 
 
-async def test_upload_archive_task_response_carries_fields(enqueued):
+async def test_upload_archive_task_defers_mining_to_callback(enqueued):
+    """codex P1-2：202 异步归档**不在响应时入队**——解压完成后回调才入队。"""
     svc = _FakeSvc({"kind": "archive_task", "archive_task_id": "t-1", "status": "processing"})
     out = await routes.upload_document(
         kb_id="kb-1", request=_request(), file=_FakeUploadFile("big.zip"),
@@ -90,8 +93,15 @@ async def test_upload_archive_task_response_carries_fields(enqueued):
     import json
     body = json.loads(out.body)
     assert body["archive_task_id"] == "t-1"
-    assert body["auto_mined"] is True and body["run_id"] == "run-9"
-    assert len(enqueued) == 1
+    assert body["auto_mined"] is True  # 语义=解压完成后将入队（此刻未发生）
+    assert "run_id" not in body
+    assert enqueued == []              # 响应时零入队
+    # 回调被透传给 intake_upload（由 _run_archive_task 在解压成功后调用）
+    assert callable(svc.intake_calls[0].get("on_archive_complete"))
+    cb = svc.intake_calls[0]["on_archive_complete"]
+    await cb({"task_id": "t-1", "status": "completed"})
+    assert enqueued == [{"kb_id": "kb-1", "user_id": "u-1", "username": "alice",
+                         "triggered_by": "web_upload"}]
 
 
 async def test_replace_content_enqueues_auto_mine(enqueued):
@@ -139,3 +149,32 @@ async def test_kb_missing_degrades_without_raise(monkeypatch):
         kbdb=_FakeKbDB(None),
     )
     assert out["auto_mined"] is False and out["reason"] == "internal"
+
+
+async def test_web_upload_triggered_by_label(enqueued):
+    """codex P3：网页入队的 triggered_by 不再冒充 mcp_upload。"""
+    svc = _FakeSvc({"kind": "file", "document": {"id": "d-1"}})
+    captured: list[str] = []
+
+    async def _fake(*, app_state, kbdb, kb, user_id, username, triggered_by="x"):
+        captured.append(triggered_by)
+        return {"auto_mined": True, "run_id": "r-1"}
+
+    from knowledge_mining.mining.kb.services import auto_mine
+    import knowledge_mining.mining.kb.routes.documents as documents_mod
+    orig = documents_mod.auto_mine.enqueue_auto_mining
+    documents_mod.auto_mine.enqueue_auto_mining = _fake  # type: ignore[assignment]
+    try:
+        out = await routes.upload_document(
+            kb_id="kb-1", request=_request(), file=_FakeUploadFile("a.pdf"),
+            directory=None, document_type=None, user=USER, svc=svc,
+            kbdb=_FakeKbDB({"id": "kb-1"}),
+        )
+        await routes.replace_document_content(
+            kb_id="kb-1", document_id="d-1", request=_request(),
+            file=_FakeUploadFile("a.pdf"), expected_revision=0,
+            user=USER, svc=svc, kbdb=_FakeKbDB({"id": "kb-1"}),
+        )
+    finally:
+        documents_mod.auto_mine.enqueue_auto_mining = orig  # type: ignore[assignment]
+    assert captured == ["web_upload", "web_replace"]

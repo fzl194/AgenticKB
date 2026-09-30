@@ -60,11 +60,15 @@ public class GlobalExceptionHandler {
         // ---- 27号审查修复：scope hard filter 契约（显式拒绝优于静默忽略） ----
         if (ex.getMessage() != null && ex.getMessage().startsWith("unsupported_scope_filter:")) {
             String key = ex.getMessage().substring("unsupported_scope_filter:".length());
+            // 支持键清单以 ActiveScope.SUPPORTED_FILTER_KEYS 为单一真相源
+            // （codex P3：硬编码清单已漂移——漏 A2 的 section_scope 与 57 号的
+            // directory_prefix；改从真相源拼接，永不再次漂移）
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "unsupported_scope_filter",
                             "message", "Filter key '" + key
-                                    + "' is not supported yet. Supported: document_refs, "
-                                    + "section_refs, evidence_types, asset_types"));
+                                    + "' is not supported yet. Supported: "
+                                    + String.join(", ", com.coremasterkb.serving.domain.ActiveScope
+                                            .SUPPORTED_FILTER_KEYS.stream().sorted().toList())));
         }
         if (ex.getMessage() != null && ex.getMessage().startsWith("invalid_scope_ref")) {
             return ResponseEntity.badRequest()

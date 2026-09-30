@@ -174,16 +174,21 @@ class SectionScopePushdownIT {
         assertThat(whole).extracting(UnitV2Row::getRepresentationId)
                 .containsExactlyInAnyOrder("u-dir-a", "u-dir-b");
 
-        // 目录名本身含 LIKE 通配符：% 与 _ 按字面匹配（Java 转义 → PG 默认 escape）
+        // 目录名本身含 LIKE 通配符：% 与 _ 按字面匹配——生产链路是
+        // ScopeFilterPushdown.directoryPrefixValue 先转义再绑定（codex P2：
+        // 直传裸串会让 %/_ 当通配符，绕过转义层）。IT 走同一转义入口。
         insertUnitWithFacets("u-dir-wild", "prose", S1, "india wildcard content",
                 "{\"document\": \"doc:/100%_覆盖/手册.pdf\"}");
         insertUnitWithFacets("u-dir-sib", "prose", S1, "juliet sibling content",
                 "{\"document\": \"doc:/100X Y覆盖/手册.pdf\"}");
+        String escapedWild = com.coremasterkb.serving.operator.operators.retrieve.ScopeFilterPushdown
+                .fromFilters(java.util.Map.of("directory_prefix", "100%_覆盖"))
+                .directoryPrefix();
         List<UnitV2Row> wild = mapper.searchFtsV2(
                 "content", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(), false, "100%_覆盖", 50);
+                List.of(), false, escapedWild, 50);
         assertThat(wild).extracting(UnitV2Row::getRepresentationId)
-                .containsExactly("u-dir-wild");  // 兄弟目录 100X Y覆盖 不命中
+                .containsExactly("u-dir-wild");  // 兄弟目录 100X Y覆盖 不命中（%/_ 已字面化）
 
         // facets.document 为空的存量行（facets '{}'）不进入目录过滤结果
         List<UnitV2Row> unscoped = mapper.searchFtsV2(

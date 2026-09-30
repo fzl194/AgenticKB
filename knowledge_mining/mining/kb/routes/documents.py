@@ -36,6 +36,7 @@ router = APIRouter(prefix="/api/kb/{kb_id}/documents", tags=["kb-documents"])
 
 async def _enqueue_auto_mine_after_write(
     request: Request, kbdb: KbDB, kb_id: str, user: dict[str, Any],
+    *, triggered_by: str = "web_upload",
 ) -> dict[str, Any]:
     """57号：网页上传/替换成功后自动入队整库增量挖掘（与 MCP/一张网对齐）。
 
@@ -53,6 +54,7 @@ async def _enqueue_auto_mine_after_write(
     return await auto_mine.enqueue_auto_mining(
         app_state=request.app.state, kbdb=kbdb, kb=kb,
         user_id=str(user.get("id") or ""), username=str(user.get("username") or ""),
+        triggered_by=triggered_by,
     )
 
 
@@ -159,12 +161,22 @@ async def upload_document(
     kbdb: KbDB = Depends(get_kb_db),
 ):
     filename = file.filename or "unnamed"
+
+    async def _mine_after_archive(task: dict[str, Any]) -> None:
+        """codex P1-2：大归档解压完成后才入队（202 时文档集未成形，
+        提前入队会 kb_empty 或只挖到部分成员且无补入队）。"""
+        auto = await _enqueue_auto_mine_after_write(
+            request, kbdb, kb_id, user, triggered_by="web_upload")
+        logger.info("[auto-mine] archive task %s done -> auto_mined=%s run=%s",
+                    task.get("task_id"), auto.get("auto_mined"), auto.get("run_id"))
+
     try:
         result = await svc.intake_upload(
             kb_id=kb_id, owner_id=user["id"], filename=filename,
             stream=_upload_file_chunks(file),
             directory_path=directory, document_type=document_type,
             mime=file.content_type,
+            on_archive_complete=_mine_after_archive,
         )
     except UploadTooLarge as exc:
         raise HTTPException(
@@ -181,21 +193,22 @@ async def upload_document(
             409, f"Document named {filename!r} already exists in this KB"
         ) from None
 
-    # 57号D4：上传成功自动入队挖掘（含归档异步任务——Run 认领时解压通常已完成，
-    # 与 MCP 直传同语义）；入队失败只降级，不影响上传结果。
+    # 57号D4：上传成功自动入队挖掘。单文件/同步归档内容已全部落库——立即入队；
+    # 异步归档（archive_task）由 _mine_after_archive 回调在解压完成后入队
+    # （codex P1-2：立即入队会 kb_empty/部分成员，且无补入队）。入队失败只降级。
+    if result["kind"] == "archive_task":
+        return JSONResponse(status_code=202, content={
+            "archive_task_id": result["archive_task_id"],
+            "status": "processing",
+            "auto_mined": True,  # 解压完成后回调入队（此刻尚未发生）
+            "message": (f"归档 {filename!r} 正在后台解压入库，"
+                        f"解压完成后自动排队挖掘"),
+        })
     auto = await _enqueue_auto_mine_after_write(request, kbdb, kb_id, user)
     fields = _auto_mine_fields(auto)
     if result["kind"] == "file":
         return {**result["document"], **fields}
-    if result["kind"] == "archive":
-        return {"documents": result["documents"], **fields}
-    return JSONResponse(status_code=202, content={
-        "archive_task_id": result["archive_task_id"],
-        "status": "processing",
-        "message": (f"归档 {filename!r} 正在后台解压入库，"
-                    f"请轮询任务状态获取进度"),
-        **fields,
-    })
+    return {"documents": result["documents"], **fields}
 
 
 @router.get("/archive-tasks/{task_id}")
@@ -333,7 +346,8 @@ async def replace_document_content(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     # 57号D4：替换成功同样自动入队挖掘——旧知识继续可检索，新版本挖完即接替。
-    auto = await _enqueue_auto_mine_after_write(request, kbdb, kb_id, user)
+    auto = await _enqueue_auto_mine_after_write(
+        request, kbdb, kb_id, user, triggered_by="web_replace")
     return {**updated, **_auto_mine_fields(auto)}
 
 

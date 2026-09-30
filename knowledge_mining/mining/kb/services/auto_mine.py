@@ -53,6 +53,7 @@ async def enqueue_auto_mining(
     kb: dict[str, Any],
     user_id: str,
     username: str,
+    triggered_by: str = "mcp_upload",
 ) -> dict[str, Any]:
     """上传成功后自动入队一条整库增量挖掘 Run（排队语义）。
 
@@ -61,7 +62,8 @@ async def enqueue_auto_mining(
     """
     kb_id = str(kb["id"])
     try:
-        return await _enqueue(app_state, kbdb, kb, kb_id, user_id, username)
+        return await _enqueue(
+            app_state, kbdb, kb, kb_id, user_id, username, triggered_by)
     except Exception:  # noqa: BLE001 - 上传不能因自动触发失败而失败
         logger.exception("[auto-mine] enqueue failed for kb=%s", kb_id)
         return {"auto_mined": False, "reason": "internal"}
@@ -74,6 +76,7 @@ async def _enqueue(
     kb_id: str,
     user_id: str,
     username: str,
+    triggered_by: str = "mcp_upload",
 ) -> dict[str, Any]:
     mining_workflow_id = kb.get("mining_workflow_id")
     if not mining_workflow_id:
@@ -128,7 +131,7 @@ async def _enqueue(
         "publish": False,
         "force_redo": False,
         "signature": signature,
-        "triggered_by": "mcp_upload",
+        "triggered_by": triggered_by,
         "submitted_by_user_id": user_id,
         "submitted_by_username": username,
     }

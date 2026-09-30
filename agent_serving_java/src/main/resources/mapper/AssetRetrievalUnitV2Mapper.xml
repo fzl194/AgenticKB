@@ -51,9 +51,11 @@
         <if test="directoryPrefix != null and directoryPrefix != ''">
             <!-- 57号目录范围：投影写入的 facets.document 即 doc:/{目录}/{文件名}——
                  前缀匹配即"该目录及全部子目录"（'/' 边界保证 产品 不误中 产品文档）。
+                 必须用 -&gt;&gt;（text）：单箭头返回 jsonb，LIKE 无 jsonb 运算符会 42883，
+                 且召回算子 SKIP_WITH_EMPTY 会把异常降级成静默空结果（codex P1）。
                  值已在 Java 侧做 LIKE 转义（%/_/\ 按字面），参数化绑定不拼接输入。
                  FTS 与 dense 共用本片段（unitPushdownFilters）。 -->
-            AND un.facets_json-&gt;'document' LIKE 'doc:/' || #{directoryPrefix} || '/%'
+            AND un.facets_json-&gt;&gt;'document' LIKE 'doc:/' || #{directoryPrefix} || '/%'
         </if>
         <if test="targetRefs != null and targetRefs.size() > 0">
             <!-- A2 章节范围（39 号 §2.2）：section_ref 物理列为主键匹配（覆盖章节内

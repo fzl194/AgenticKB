@@ -228,8 +228,11 @@ async def list_documents(
     query = str(body.get("query") or "").strip() or None
     directory_prefix = str(body.get("directory_prefix") or "").strip() or None
     status = str(body.get("status") or "").strip() or None
-    limit = min(int(body.get("limit") or 50), 200)
-    offset = max(int(body.get("offset") or 0), 0)
+    try:
+        limit = max(1, min(int(body.get("limit") or 50), 200))
+        offset = max(0, int(body.get("offset") or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "limit/offset 必须是整数。")
     kb_id = str(body.get("kb_id") or "")
 
     if not kb_id:
@@ -244,7 +247,8 @@ async def list_documents(
             try:
                 docs = await kbdb.list_documents_in_kb(
                     kb_id=open_id, query=query, directory_prefix=directory_prefix,
-                    status=status, limit=CROSS_KB_PER_KB_LIMIT, offset=0,
+                    status=status, order_by="modified_at",
+                    limit=CROSS_KB_PER_KB_LIMIT, offset=0,
                 )
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from None
@@ -377,6 +381,14 @@ async def upload_direct(
     key = await kbdb.get_mcp_key(key_id=str(entry.get("key_id") or ""))
     if key is None or key["status"] != "active":
         raise HTTPException(404, "upload ticket invalid or expired")
+    # codex P2：票据签发后钥匙开放集可能被收窄——消费时复核（10 分钟窗口内
+    # 的最小权限收敛），与"权限收窄即时生效"的库可见性语义对齐。
+    try:
+        open_ids = await kbdb.key_open_kb_ids(key_id=str(entry.get("key_id") or ""))
+    except Exception:
+        open_ids = None
+    if open_ids is not None and str(entry.get("kb_id") or "") not in open_ids:
+        raise HTTPException(404, "upload ticket invalid or expired")
     entry = _TICKETS.redeem(ticket)
     if entry is None:
         # peek 与 redeem 之间被并发消费——同语义 404
@@ -386,6 +398,20 @@ async def upload_direct(
     async def _stream() -> AsyncIterator[bytes]:
         async for chunk in request.stream():
             yield chunk
+
+    async def _mine_after_archive(task: dict[str, Any]) -> None:
+        """codex P1-2：大归档解压完成后才入队（与网页 202 路径同一修法）。"""
+        kb = None
+        try:
+            kb = await kbdb.get_kb(entry["kb_id"])
+        except Exception:
+            logger.exception("[mcp-tools] get_kb failed in archive callback")
+        if kb is None:
+            return
+        await auto_mine.enqueue_auto_mining(
+            app_state=request.app.state, kbdb=kbdb, kb=kb,
+            user_id=entry["user_id"], username=username,
+            triggered_by="mcp_upload")
 
     replace_doc_id = str(entry.get("document_id") or "")
 
@@ -430,6 +456,7 @@ async def upload_direct(
             await auto_mine.enqueue_auto_mining(
                 app_state=request.app.state, kbdb=kbdb, kb=kb,
                 user_id=entry["user_id"], username=username,
+                triggered_by="mcp_replace",
             )
             if kb is not None else {"auto_mined": False, "reason": "internal"}
         )
@@ -457,6 +484,7 @@ async def upload_direct(
             kb_id=entry["kb_id"], owner_id=entry["user_id"],
             filename=entry["filename"], stream=_stream(),
             file_max_bytes=MAX_UPLOAD_BYTES,
+            on_archive_complete=_mine_after_archive,
         )
     except UploadTooLarge as exc:
         await _complete_upload_access_record(
@@ -509,16 +537,16 @@ async def upload_direct(
                 f"{'入队挖掘' if auto.get('auto_mined') else '未自动挖掘'}"
             ),
         }
-    else:
-        # 大归档后台解压中：挖掘 Run 已入队，认领时通常解压已完成（本地磁盘）
+    elif result["kind"] == "archive_task":
+        # 大归档后台解压中：解压完成后 _mine_after_archive 回调入队（codex P1-2）
         response = {
             "kind": "archive_task",
             "archive_task_id": result["archive_task_id"],
             "status": "processing",
-            **auto_fields,
+            "auto_mined": True,  # 解压完成后回调入队（此刻尚未发生）
             "message": (
-                "归档较大，正在后台解压入库；解压完成后用 get_knowledge(kb_name=…) "
-                "可看到全部文档，挖掘任务已排队"
+                "归档较大，正在后台解压入库；解压完成后自动排队挖掘，"
+                "届时用 get_knowledge(kb_name=…) 可看到全部文档"
             ),
         }
     await _complete_upload_access_record(

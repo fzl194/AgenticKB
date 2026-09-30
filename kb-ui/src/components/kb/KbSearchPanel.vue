@@ -212,11 +212,16 @@ async function loadFolderOptions(generation: number, kbId: string) {
     folderOptions.value = folders.map((f) => f.path).sort((a, b) => a.localeCompare(b))
   } catch {
     if (generation !== reloadGeneration || kbId !== props.kb.id) return
-    folderOptions.value = [] // 目录过滤是可选增强，加载失败不阻断检索
+    // codex P2：加载失败不仅清选项——已选目录范围也必须清（控件隐藏后
+    // 旧 prefix 会变成"看不见却生效"的过滤）
+    folderOptions.value = []
+    directoryScope.value = ''
   }
 }
 const searched = ref(false)
 const error = ref('')
+/** codex P1-4：检索请求代际——kb 切换（reloadGeneration 递增）与新旧响应隔离。 */
+let searchGeneration = 0
 const evidence = ref<EvidenceItem[]>([])
 // 证据展开（2026-09-01）：默认长文本折叠 400 字，点「查看完整」取回全文
 const expanded = ref<Record<string, boolean>>({})
@@ -339,6 +344,9 @@ async function run() {
   }
   searching.value = true
   error.value = ''
+  // codex P1-4：请求代际快照——A 库/旧目录的慢响应不得覆盖切换后的页面
+  const generation = ++searchGeneration
+  const kbId = props.kb.id
   try {
     const out = await servingApi.runParadigmSearch(resolved.paradigmId, q, {
       domain: domainStore.currentDomain ?? undefined,
@@ -348,6 +356,7 @@ async function run() {
         : scopeDocumentRef.value ? { document_refs: [scopeDocumentRef.value] } : undefined,
       filters: directoryScope.value ? { directory_prefix: directoryScope.value } : undefined,
     })
+    if (generation !== searchGeneration || kbId !== props.kb.id) return
     evidence.value = out.evidenceResponse?.evidence ?? []
     hasMore.value = out.evidenceResponse?.has_more ?? false
     effective.value = {
@@ -357,12 +366,13 @@ async function run() {
     }
     searched.value = true
   } catch (e) {
+    if (generation !== searchGeneration || kbId !== props.kb.id) return
     error.value = await apiErrorDetail(e)
     evidence.value = []
     hasMore.value = false
     searched.value = true
   } finally {
-    searching.value = false
+    if (generation === searchGeneration) searching.value = false
   }
 }
 
@@ -465,6 +475,7 @@ watch(() => props.kb.id, () => {
   // 无文件夹时选择器隐藏，过滤条件生效却不可见不可清）。
   directoryScope.value = ''
   folderOptions.value = []
+  searchGeneration++ // codex P1-4：作废在途响应，晚到的 A 库结果不落 B 库
   searched.value = false
   error.value = ''
   reload()

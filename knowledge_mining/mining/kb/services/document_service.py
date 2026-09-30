@@ -6,6 +6,8 @@ KB 独占 asset_documents 写（身份 + 文件位置）。mining 读文档产 s
 from __future__ import annotations
 
 import asyncio
+import inspect
+import logging
 import hashlib
 import shutil
 import tempfile
@@ -96,8 +98,13 @@ async def _run_archive_task(
     task_id: str, svc: "DocumentService", *,
     kb_id: str, owner_id: str, archive_path: Path,
     archive_name: str, max_member_bytes: int | None,
+    on_complete: Any = None,
 ) -> None:
-    """后台解压任务：进度回写注册表，结束删暂存包。"""
+    """后台解压任务：进度回写注册表，结束删暂存包。
+
+    57号P1-2：解压**成功后**才触发 on_complete（调用方的自动挖掘入队）——
+    202 响应时文档集尚未成形，提前入队会 kb_empty 或只挖到部分成员。
+    """
     from knowledge_mining.mining.kb.services.archive_tasks import registry
 
     try:
@@ -109,6 +116,14 @@ async def _run_archive_task(
                 task_id, done=done, total=total),
         )
         registry.complete(task_id, document_count=len(docs), failed=0)
+        if on_complete is not None:
+            try:
+                outcome = on_complete(registry.get(task_id) or {})
+                if inspect.isawaitable(outcome):
+                    await outcome
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "archive on_complete callback failed (task=%s)", task_id)
     except Exception as exc:
         registry.fail(task_id, f"{type(exc).__name__}: {exc}")
     finally:
@@ -160,8 +175,11 @@ def _validate_magic_bytes(staging: Path, suffix: str) -> None:
 
     空 zip（PK\\x05\\x06 结尾目录）合法；非 zip 容器的 office 老格式（.doc/.xls）
     与文本类不在此列——同名规则交给同扩展名校验。
+    OOXML（docx/xlsx/pptx）额外验包结构（codex P2：仅 PK 头挡不住任意 zip
+    冒充）——[Content_Types].xml + 对应入口目录必须在包内。
     """
-    expected = _MAGIC_SIGNATURES.get(suffix.lower())
+    suffix = suffix.lower()
+    expected = _MAGIC_SIGNATURES.get(suffix)
     if not expected:
         return
     with staging.open("rb") as fh:
@@ -171,6 +189,23 @@ def _validate_magic_bytes(staging: Path, suffix: str) -> None:
             f"文件内容与扩展名不符（{suffix} 的文件头不对）：请确认上传的是真实的"
             f"{suffix[1:].upper()} 文件，或改用正确的扩展名作为新文件上传。"
         )
+    ooxml_entry = {".docx": "word/", ".xlsx": "xl/", ".pptx": "ppt/"}.get(suffix)
+    if ooxml_entry:
+        import zipfile
+        try:
+            with zipfile.ZipFile(staging) as zf:
+                names = zf.namelist()
+        except Exception:
+            raise ValueError(
+                f"文件内容与扩展名不符（{suffix} 不是有效的 zip 包）：请确认上传的"
+                f"是真实的 {suffix[1:].upper()} 文件。"
+            ) from None
+        if ("[Content_Types].xml" not in names
+                or not any(n.startswith(ooxml_entry) for n in names)):
+            raise ValueError(
+                f"文件内容与扩展名不符（{suffix} 包内缺少 [Content_Types].xml 或 "
+                f"{ooxml_entry} 结构）：请确认是真实的 {suffix[1:].upper()} 文件。"
+            )
 
 
 def _file_chunks(path: Path) -> AsyncIterator[bytes]:
@@ -280,6 +315,7 @@ class DocumentService:
         document_type: str | None = None,
         mime: str | None = None,
         file_max_bytes: int | None = None,
+        on_archive_complete: Any = None,
     ) -> dict[str, Any]:
         """统一上传入口（同源收敛）：普通文件直传 / 归档解压，一个方法两个入口。
 
@@ -351,6 +387,7 @@ class DocumentService:
                 task_id, self, kb_id=kb_id, owner_id=owner_id,
                 archive_path=staging_path, archive_name=filename,
                 max_member_bytes=cfg.upload_max_file_size,
+                on_complete=on_archive_complete,
             ))
             _archive_bg_tasks.add(task)
             task.add_done_callback(_archive_bg_tasks.discard)

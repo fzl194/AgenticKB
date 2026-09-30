@@ -476,10 +476,12 @@ def get_knowledge(
             字段名以能力报告 assets[].columns[].name 为准——不是模糊搜索。
         file_query: 文件名关键词（子串匹配）。只传它=跨全部开放库搜文件；与
             kb_name 组合=该库内搜。与 ref 互斥。
-        directory_prefix: 可选，文件搜索限定目录（含子目录），如 "产品文档/手册"。
+        directory_prefix: 可选，文件搜索限定目录（含子目录），如 "产品文档/手册"
+            （仅在 file_query/kb_name+file_query 场景生效，单独传会显式报错）。
         status: 可选，文件按状态过滤：uploaded 待挖掘 / mining 挖掘中 /
             mined 已入库 / failed 挖掘失败 / update_failed 更新失败。
-            例：file_query 不传、kb_name+status=failed = 该库挖失败清单。
+            例：kb_name+status=failed = 该库挖失败清单（无需 file_query）；
+            两者都不传时过滤参数显式报错（不静默忽略）。
         depth: 仅 relation=ancestors/descendants：层数（默认 1，上限 3）。
         limit: 条数上限：doc_ 每页切片（≤200 默认100）/ navigation 条数（≤200
             默认50）/ documents·file_results 每页（≤200 默认50）。
@@ -508,6 +510,12 @@ def get_knowledge(
     if has_file_query:
         return _search_files_across_kbs(
             ident, str(file_query).strip(), directory_prefix, status, limit, offset)
+    # codex P3：过滤参数不能脱离搜索上下文被静默忽略（不支持显式报错的工具哲学）
+    if (directory_prefix and str(directory_prefix).strip()) or (status and str(status).strip()):
+        raise ToolError(
+            "directory_prefix/status 只在 file_query（跨库搜文件）或 kb_name+file_query"
+            "（库内搜文件）场景下生效：请同时传 file_query，或去掉过滤参数。"
+        )
     return _browse_top(ident, domain)
 
 

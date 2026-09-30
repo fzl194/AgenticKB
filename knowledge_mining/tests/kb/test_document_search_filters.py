@@ -171,3 +171,14 @@ async def test_count_documents_status_uses_subquery():
     assert "SELECT COUNT(*) FROM (" in pool.cursor.sql
     assert "ds.status = %s" in pool.cursor.sql
     assert pool.cursor.params[-1] == "uploaded"
+
+
+async def test_list_documents_order_by_whitelist():
+    pool = _CapturePool()
+    await KbDB(pool).list_documents_in_kb(kb_id="kb-1", order_by="modified_at")
+    assert "ORDER BY d.modified_at DESC" in pool.cursor.sql
+
+    import pytest
+    with pytest.raises(ValueError):
+        await KbDB(_CapturePool()).list_documents_in_kb(
+            kb_id="kb-1", order_by="file_size; DROP TABLE x")

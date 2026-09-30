@@ -403,10 +403,14 @@ const STATUS_FILTERS = [
 const searchKeyword = ref('')
 const searchStatus = ref('')
 const searchScope = ref<'tree' | 'all'>('tree')
-/** 搜索态 = 有关键词或选了状态（状态单独选 = 管理清单场景，如「挖失败清单」）。 */
-const isSearching = computed(
-  () => searchKeyword.value.trim() !== '' || searchStatus.value !== '',
-)
+/**
+ * codex P1-5/P2：已应用口径快照——列表数据的真实过滤条件。输入框只是草稿
+ * （回车/改筛选才应用），避免"草稿已切换搜索态但列表仍是旧口径"的错位；
+ * 失败时清空列表（旧数据不得冒充当前口径的结果）。
+ */
+const appliedSearch = ref<{ query: string; status: string; scope: 'tree' | 'all' } | null>(null)
+/** 搜索态 = 已应用口径非空（状态单独选 = 管理清单场景，如「挖失败清单」）。 */
+const isSearching = computed(() => appliedSearch.value !== null)
 const visibleChildFolders = computed(() => (isSearching.value ? [] : childFolders.value))
 
 /** 57号审查H-1：loadFiles 竞态守卫——慢网下后发先至时旧响应不得覆盖新口径。 */
@@ -414,15 +418,23 @@ let loadFilesGeneration = 0
 
 function onSearchTrigger() {
   filePage.value = 1
+  appliedSearch.value = (searchKeyword.value.trim() || searchStatus.value)
+    ? {
+        query: searchKeyword.value.trim(),
+        status: searchStatus.value,
+        scope: searchScope.value,
+      }
+    : null
   void loadFiles()
 }
 function activeSearchFilter() {
-  if (!isSearching.value) return undefined
+  const applied = appliedSearch.value
+  if (!applied) return undefined
   return {
-    ...(searchKeyword.value.trim() ? { query: searchKeyword.value.trim() } : {}),
-    ...(searchStatus.value ? { status: searchStatus.value } : {}),
-    // 「当前目录及子目录」在根目录 = 整库，prefix 省略
-    ...(searchScope.value === 'tree' && currentPath.value
+    ...(applied.query ? { query: applied.query } : {}),
+    ...(applied.status ? { status: applied.status } : {}),
+    // 「当前目录及子目录」在根目录 = 整库，prefix 省略；目录导航时按当前路径取值
+    ...(applied.scope === 'tree' && currentPath.value
       ? { directory_prefix: currentPath.value } : {}),
   }
 }
@@ -444,15 +456,23 @@ async function loadFiles() {
   const generation = ++loadFilesGeneration
   const offset = (filePage.value - 1) * filePageSize.value
   const search = activeSearchFilter()
-  const [pageData, total] = await Promise.all([
-    kbApi.listDocuments(
-      props.kbId, search ? undefined : currentPath.value,
-      filePageSize.value, offset, search),
-    kbApi.countDocuments(props.kbId, search ? undefined : currentPath.value, search),
-  ])
-  if (generation !== loadFilesGeneration) return // 已有更新口径的请求，丢弃本响应
-  files.value = pageData
-  totalFiles.value = total
+  try {
+    const [pageData, total] = await Promise.all([
+      kbApi.listDocuments(
+        props.kbId, search ? undefined : currentPath.value,
+        filePageSize.value, offset, search),
+      kbApi.countDocuments(props.kbId, search ? undefined : currentPath.value, search),
+    ])
+    if (generation !== loadFilesGeneration) return // 已有更新口径的请求，丢弃本响应
+    files.value = pageData
+    totalFiles.value = total
+  } catch (e) {
+    if (generation !== loadFilesGeneration) return
+    // codex P1-5：失败不留旧列表冒充当前口径（否则用户会对错误集合做批量操作）
+    files.value = []
+    totalFiles.value = 0
+    ElMessage.error(await apiErrorDetail(e))
+  }
 }
 async function reload() {
   loading.value = true
@@ -782,6 +802,7 @@ watch(() => props.kbId, () => {
   forceRedo.value = false
   searchKeyword.value = ''
   searchStatus.value = ''
+  appliedSearch.value = null            // codex P1-5：口径快照随库重置
   filePage.value = 1
   reload()
 })

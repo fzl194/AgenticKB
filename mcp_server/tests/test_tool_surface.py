@@ -133,10 +133,14 @@ def test_ref_rejects_file_query_like_kb_name(monkeypatch) -> None:
         server.get_knowledge(ref="ev_X", file_query="手册")
 
 
-def test_bare_status_without_file_query_still_browses_tree(monkeypatch) -> None:
-    """status/directory_prefix 只在 file_query/kb_name 场景有意义；裸传不改变分流。"""
+def test_bare_filters_without_search_context_rejected(monkeypatch) -> None:
+    """codex P3：status/directory_prefix 脱离搜索上下文（无 kb_name/file_query）
+    = 显式报错，不静默忽略（kb_name+status 的库内清单场景不受影响）。"""
     _patch_backend(monkeypatch)
-    assert server.get_knowledge(status="failed")["view"] == "kb_tree"
+    with pytest.raises(ToolError, match="只在 file_query"):
+        server.get_knowledge(status="failed")
+    with pytest.raises(ToolError, match="只在 file_query"):
+        server.get_knowledge(directory_prefix="产品文档")
 
 
 def test_bare_ref_semantics_per_ref_type(monkeypatch) -> None:

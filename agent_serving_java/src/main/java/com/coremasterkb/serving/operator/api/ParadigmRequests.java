@@ -177,10 +177,19 @@ final class ParadigmRequests {
             }
             return;
         }
-        // 57号：directory_prefix 是单个字符串（目录路径，含子目录递归），
-        // 规范化后经 normalizeFilterValue 落库到 hardFilters。
+        // 57号：directory_prefix 是单个字符串（目录路径，含子目录递归）。
+        // 这里只做廉价形状检查（类型 + 原始长度上限）；完整规范化在
+        // normalizeFilterValue 只执行一次（避免每请求重复整串处理）。
         if ("directory_prefix".equals(key)) {
-            normalizeDirectoryPrefix(value);
+            if (!(value instanceof String raw) || raw.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "filter_value_invalid:directory_prefix: 必须是非空字符串（目录路径，如 产品文档/手册）");
+            }
+            if (raw.length() > MAX_DIRECTORY_PREFIX_LENGTH + 64) {
+                throw new IllegalArgumentException(
+                        "filter_value_invalid:directory_prefix: 长度超过上限 "
+                                + MAX_DIRECTORY_PREFIX_LENGTH);
+            }
             return;
         }
         if (!(value instanceof List<?> list)) {
@@ -235,17 +244,27 @@ final class ParadigmRequests {
     /**
      * 57号：directory_prefix 规范化（trim + 去首尾斜杠）——非法形状 typed 400，
      * 绝不静默退化成宽检索（与其他 filter 键同一边界纪律）。
+     *
+     * <p>codex P1：索引线性扫描、单次截取——绝不用循环 substring 逐字符剥
+     * （超长斜杠串会 O(n²) 复制，请求线程 DoS）；原始长度上限在
+     * validateFilterValue 已先拒，这里只做防御性复查。</p>
      */
     static String normalizeDirectoryPrefix(Object value) {
         if (!(value instanceof String raw)) {
             throw new IllegalArgumentException(
                     "filter_value_invalid:directory_prefix: 必须是非空字符串（目录路径，如 产品文档/手册）");
         }
-        String normalized = raw.trim();
-        while (normalized.startsWith("/")) normalized = normalized.substring(1);
-        while (normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
+        if (raw.length() > MAX_DIRECTORY_PREFIX_LENGTH + 64) {
+            throw new IllegalArgumentException(
+                    "filter_value_invalid:directory_prefix: 长度超过上限 "
+                            + MAX_DIRECTORY_PREFIX_LENGTH);
         }
+        // trim（ASCII 空白）+ 去首尾 '/'：全索引扫描，一次 substring
+        int start = 0;
+        int end = raw.length();
+        while (start < end && (raw.charAt(start) == ' ' || raw.charAt(start) == '/')) start++;
+        while (end > start && (raw.charAt(end - 1) == ' ' || raw.charAt(end - 1) == '/')) end--;
+        String normalized = raw.substring(start, end);
         if (normalized.isEmpty() || normalized.length() > MAX_DIRECTORY_PREFIX_LENGTH) {
             throw new IllegalArgumentException(
                     "filter_value_invalid:directory_prefix: 规范化后必须非空且长度 ≤ "

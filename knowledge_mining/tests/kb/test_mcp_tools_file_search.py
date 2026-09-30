@@ -55,3 +55,14 @@ def test_missing_fields_degrade_to_none_not_crash():
     assert item["status"] is None
     assert item["content_revision"] is None
     assert item["modified_at"] == ""
+
+
+def test_limit_bounds_are_clamped_and_typed():
+    """codex P2：负数/非整数 limit 不得造成 SQL 500 或绕过跨库上限（形状守卫：
+    路由源码必须含钳制逻辑——行为级验证在 PG 门禁的 test_mcp_tools_keys）。"""
+    import inspect
+    from knowledge_mining.mining.kb.routes import mcp_tools
+
+    src = inspect.getsource(mcp_tools.list_documents)
+    assert "max(1, min(int(body.get(\"limit\") or 50), 200))" in src
+    assert "422" in src

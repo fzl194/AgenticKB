@@ -148,9 +148,36 @@ def test_magic_fake_pdf_rejected(tmp_path):
 
 
 def test_magic_zip_family_ok(tmp_path):
-    for suffix in (".zip", ".docx", ".xlsx", ".pptx"):
-        _validate_magic_bytes(_tmp(tmp_path, b"PK\x03\x04 zip"), suffix)
+    _validate_magic_bytes(_tmp(tmp_path, b"PK\x03\x04 zip"), ".zip")
     _validate_magic_bytes(_tmp(tmp_path, b"PK\x05\x06 empty zip"), ".zip")  # 空包
+
+
+def _ooxml(tmp_path: Path, suffix: str, entries: list[str]) -> Path:
+    import zipfile
+    p = tmp_path / f"staged{suffix}"
+    with zipfile.ZipFile(p, "w") as zf:
+        for name in entries:
+            zf.writestr(name, "<x/>")
+    return p
+
+
+def test_magic_ooxml_deep_check(tmp_path):
+    """codex P2：OOXML 深检——真实包结构（[Content_Types].xml + 入口目录）放行，
+    任意 zip 冒充 docx/xlsx/pptx 拒绝。"""
+    _validate_magic_bytes(
+        _ooxml(tmp_path, ".docx", ["[Content_Types].xml", "word/x.xml"]), ".docx")
+    _validate_magic_bytes(
+        _ooxml(tmp_path, ".xlsx", ["[Content_Types].xml", "xl/x.xml"]), ".xlsx")
+    _validate_magic_bytes(
+        _ooxml(tmp_path, ".pptx", ["[Content_Types].xml", "ppt/x.xml"]), ".pptx")
+
+    for suffix, entry in ((".docx", "word/"), (".xlsx", "xl/"), (".pptx", "ppt/")):
+        # 任意 zip（无 OOXML 结构）冒充 → 拒
+        with pytest.raises(ValueError, match="文件内容与扩展名不符"):
+            _validate_magic_bytes(_ooxml(tmp_path, suffix, ["random/file.txt"]), suffix)
+        # 有入口目录但缺 [Content_Types].xml → 拒
+        with pytest.raises(ValueError, match="文件内容与扩展名不符"):
+            _validate_magic_bytes(_ooxml(tmp_path, suffix, [entry + "x.xml"]), suffix)
 
 
 def test_magic_unchecked_suffixes_pass(tmp_path):

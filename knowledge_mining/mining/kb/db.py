@@ -2418,6 +2418,7 @@ WITH latest AS (
         self, *, kb_id: str, directory: str | None = None,
         query: str | None = None, directory_prefix: str | None = None,
         status: str | None = None,
+        order_by: str = "created_at",
         limit: int = 200, offset: int = 0,
     ) -> list[dict[str, Any]]:
         """列 KB 内文档，**状态内联派生**（一次 SQL，避免 N+1 远程查询）。
@@ -2429,9 +2430,13 @@ WITH latest AS (
         - directory_prefix 目录前缀（含子目录；'产品' 不误中 '产品文档'）
         - status           派生状态精确匹配——status 是 SELECT 内联派生列，
           过滤须经子查询层（ORDER/LIMIT 移到外层）
+        - order_by         排序列白名单 created_at（默认）/modified_at——
+          跨库文件搜索用 modified_at 与合并排序口径一致（codex P2）
         """
         if status is not None and status not in DOCUMENT_STATUS_VALUES:
             raise ValueError(f"unknown status filter: {status!r}")
+        if order_by not in ("created_at", "modified_at"):
+            raise ValueError(f"unknown order_by: {order_by!r}")
         extra_sql, extra_params = _document_search_filters(
             query=query, directory_prefix=directory_prefix)
         clause = "d.kb_id = %s AND d.deleted_at IS NULL"
@@ -2445,14 +2450,14 @@ WITH latest AS (
             if status is None:
                 cur = await conn.execute(
                     f"{_DOCUMENT_LIST_SELECT_SQL} WHERE {clause}"
-                    " ORDER BY d.created_at DESC LIMIT %s OFFSET %s",
+                    f" ORDER BY d.{order_by} DESC LIMIT %s OFFSET %s",
                     [*params, limit, offset],
                 )
                 return [dict(r) for r in await cur.fetchall()]
             cur = await conn.execute(
                 f"SELECT * FROM ({_DOCUMENT_LIST_SELECT_SQL} WHERE {clause}) ds"
                 " WHERE ds.status = %s"
-                " ORDER BY ds.created_at DESC LIMIT %s OFFSET %s",
+                f" ORDER BY ds.{order_by} DESC LIMIT %s OFFSET %s",
                 [*params, status, limit, offset],
             )
             return [dict(r) for r in await cur.fetchall()]

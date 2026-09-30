@@ -45,6 +45,23 @@ class StructureBoundSqlRegressionTest {
     }
 
     @Test
+    void directoryPrefixUsesTextArrowNotJsonb() throws Exception {
+        // codex P1 回归钉：LIKE 左侧必须是 text（->>）——单箭头返回 jsonb，
+        // PG 无 jsonb~~text 运算符（42883），且 SKIP_WITH_EMPTY 会把异常静默成空结果。
+        // 免 PG 的门禁只能靠展开语句的文本形态守住箭头位数。
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put("snapshotIds", List.of("snapshot"));
+        parameters.put("directoryPrefix", "产品文档");
+        for (String statement : List.of("searchFtsV2", "searchDenseV2")) {
+            String generated = sql("AssetRetrievalUnitV2Mapper", statement, parameters);
+            assertThat(generated)
+                    .as("%s 的 directory_prefix 断言必须用 ->>'document'", statement)
+                    .contains("facets_json->>'document' LIKE")
+                    .doesNotContain("->'document'");  // 单箭头（jsonb）形式
+        }
+    }
+
+    @Test
     void explicitRowIndexColumnOrdersByCellValue() throws Exception {
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("criteria", List.of());

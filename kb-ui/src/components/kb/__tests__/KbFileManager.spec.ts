@@ -110,7 +110,7 @@ describe('文件管理器：默认分页', () => {
 
   it('首页只请求 50 条（服务端 limit/offset），分页器展示总数', async () => {
     const wrapper = await mountFm()
-    expect(kbApi.listDocuments).toHaveBeenCalledWith('kb-1', '', 50, 0)
+    expect(kbApi.listDocuments).toHaveBeenCalledWith('kb-1', '', 50, 0, undefined)
     // 行渲染 = 当前页 50 条（不是全量 60，也不是旧版静默截断 200）
     expect(wrapper.findAll('.fm__row--file')).toHaveLength(50)
     expect(wrapper.find('[data-testid="fm-pagination"]').exists()).toBe(true)
@@ -121,7 +121,7 @@ describe('文件管理器：默认分页', () => {
     await wrapper.find('[data-testid="fm-pagination"] .pager-next').trigger('click')
     await flushPromises()
     expect(kbApi.listDocuments).toHaveBeenLastCalledWith(
-      'kb-1', '', 50, 50,
+      'kb-1', '', 50, 50, undefined,
     )
   })
 

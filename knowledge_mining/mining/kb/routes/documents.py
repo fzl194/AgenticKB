@@ -176,6 +176,9 @@ async def get_archive_task(
 async def list_documents(
     kb_id: str,
     directory: str | None = None,
+    query: str | None = Query(None, max_length=200),
+    directory_prefix: str | None = Query(None, max_length=512),
+    status: str | None = Query(None),
     limit: int = Query(200, ge=1, le=500),
     offset: int = Query(0, ge=0),
     user: dict[str, Any] = Depends(current_user),
@@ -185,20 +188,30 @@ async def list_documents(
 
     2026-09-08 修复：此前 limit 固定 200 且无 offset——大库（万级文件）
     被静默截断且前端无感知。前端默认 50/页 + count 端点拿总数。
+
+    57 号文件搜索（可组合，与 /count 同口径）：query=文件名子串；
+    directory_prefix=目录前缀（含子目录）；status=uploaded/mining/mined/
+    failed/update_failed。
     """
     try:
         return await svc.list_documents(
             kb_id=kb_id, user_id=user["id"], directory=directory,
+            query=query, directory_prefix=directory_prefix, status=status,
             limit=limit, offset=offset,
         )
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 @router.get("/count")
 async def count_documents(
     kb_id: str,
     directory: str | None = None,
+    query: str | None = Query(None, max_length=200),
+    directory_prefix: str | None = Query(None, max_length=512),
+    status: str | None = Query(None),
     user: dict[str, Any] = Depends(current_user),
     svc: DocumentService = Depends(get_document_service),
 ):
@@ -210,9 +223,12 @@ async def count_documents(
     try:
         total = await svc.count_documents(
             kb_id=kb_id, user_id=user["id"], directory=directory,
+            query=query, directory_prefix=directory_prefix, status=status,
         )
     except (NotFound, Forbidden) as exc:
         raise _map_error(exc) from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
     return {"total": total}
 
 

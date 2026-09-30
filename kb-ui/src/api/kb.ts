@@ -34,6 +34,13 @@ export interface KbQualityReport {
   locator: { denominator: number; resolved: number; degraded: number }
 }
 
+/** 57 号文件搜索过滤（与后端 /documents 的 query/directory_prefix/status 同名）。 */
+export interface DocumentSearchFilter {
+  query?: string
+  directory_prefix?: string
+  status?: string
+}
+
 export function useKbApi() {
   const client = createProxyClient('mining')
 
@@ -305,23 +312,37 @@ export function useKbApi() {
     /**
      * 目录内文件（2026-09-08 起服务端分页：limit ≤500 / offset——此前后端
      * 固定 limit=200 静默截断，大库文件列表不完整且前端无感知）。
+     *
+     * 57 号文件搜索：search 可选（query 文件名子串 / directory_prefix 目录
+     * 前缀含子目录 / status 派生状态）——传了 search 就不要再传 directory。
      */
     async listDocuments(
       kbId: string, directory?: string, limit = 200, offset = 0,
+      search?: DocumentSearchFilter,
     ): Promise<KbDocument[]> {
       const { data } = await client.get(`/api/kb/${kbId}/documents`, {
         params: {
           ...(directory !== undefined ? { directory } : {}),
           limit, offset,
+          ...(search?.query ? { query: search.query } : {}),
+          ...(search?.directory_prefix ? { directory_prefix: search.directory_prefix } : {}),
+          ...(search?.status ? { status: search.status } : {}),
         },
       })
       return extractItems<KbDocument>(data)
     },
 
     /** 文件总数（与 listDocuments 同过滤口径）——分页总数。 */
-    async countDocuments(kbId: string, directory?: string): Promise<number> {
+    async countDocuments(
+      kbId: string, directory?: string, search?: DocumentSearchFilter,
+    ): Promise<number> {
       const { data } = await client.get(`/api/kb/${kbId}/documents/count`, {
-        params: directory !== undefined ? { directory } : undefined,
+        params: {
+          ...(directory !== undefined ? { directory } : {}),
+          ...(search?.query ? { query: search.query } : {}),
+          ...(search?.directory_prefix ? { directory_prefix: search.directory_prefix } : {}),
+          ...(search?.status ? { status: search.status } : {}),
+        },
       })
       return Number(data?.total ?? 0)
     },

@@ -37,7 +37,7 @@ describe('file manager replacement entry', () => {
     dialog.vm.$emit('replaced', { ...doc, content_revision: 5 })
     await flushPromises()
     expect(api.listDocuments).toHaveBeenCalledTimes(2)
-    expect(api.listDocuments).toHaveBeenLastCalledWith('kb-1', '', 50, 0)
+    expect(api.listDocuments).toHaveBeenLastCalledWith('kb-1', '', 50, 0, undefined)
     expect(api.countDocuments).toHaveBeenCalledTimes(2)
     expect(wrapper.findComponent(KbReplaceDocumentDialog).exists()).toBe(false)
     expect(wrapper.get('[data-testid="knowledge-outdated"]').text()).toBe('待更新（旧知识可用）')

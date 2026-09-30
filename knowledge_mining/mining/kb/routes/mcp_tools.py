@@ -170,49 +170,96 @@ async def list_kbs(body: dict[str, Any], kbdb: KbDB = Depends(get_kb_db)) -> dic
     return {"knowledge_bases": out}
 
 
+def _document_list_item(
+    d: dict[str, Any], *, referenced: bool = False, kb_name: str | None = None,
+) -> dict[str, Any]:
+    """文件清单/搜索结果的统一条目形状（57 号：+content_revision/+directory_path）。
+
+    content_revision 是 upload_document 替换语义的「版本暗号」来源——Agent
+    从这里读到当前值，替换时原样回传。
+    """
+    item = {
+        "id": d["id"],
+        "name": d.get("document_name"),
+        "status": "referenced" if referenced else d.get("status"),
+        "file_size": d.get("file_size"),
+        "modified_at": str(
+            d.get("referenced_at") if referenced
+            else (d.get("modified_at") or d.get("created_at"))
+            or ""
+        ),
+        "referenced": referenced,
+        "content_revision": None if referenced else d.get("content_revision"),
+        "directory_path": d.get("directory_path"),
+    }
+    if kb_name is not None:
+        item["kb"] = kb_name
+    return item
+
+
 @router.post("/list-documents", dependencies=[Depends(_require_internal_body)])
 async def list_documents(
     body: dict[str, Any], kbdb: KbDB = Depends(get_kb_db),
 ) -> dict[str, Any]:
-    """库内文件清单（软删过滤，状态内联派生）。limit≤200，offset 分页。
+    """库内文件清单 / 跨库文件搜索（57 号）。limit≤200，offset 分页。
 
-    47 号引用：外部引用文档合并在后（referenced=true，只读语义），Agent
-    看到的是「自有 + 引用」的完整可用知识面。
+    - 带 kb_id：该库清单（软删过滤，状态内联派生）。offset=0 时外部引用
+      文档合并在后（referenced=true，只读语义，47 号）。
+    - 不带 kb_id：**跨该钥匙全部开放库按文件名搜索**（query 必填）——每库
+      取回后按 modified_at 合并排序再窗口分页（开放库数量小，近似全局有序）；
+      跨库结果不含外部引用文档，条目带 kb=库名。
+
+    状态词表（status 过滤）：uploaded 待挖掘 / mining 挖掘中 / mined 已入库 /
+    failed 挖掘失败 / update_failed 更新失败（旧知识仍可检索）。
     """
     key_id = str(body.get("key_id") or "")
     user_id, _key = await _key_scope(
         kbdb, str(body.get("username") or ""), key_id,
     )
+    query = str(body.get("query") or "").strip() or None
+    directory_prefix = str(body.get("directory_prefix") or "").strip() or None
+    status = str(body.get("status") or "").strip() or None
+    limit = min(int(body.get("limit") or 50), 200)
+    offset = max(int(body.get("offset") or 0), 0)
     kb_id = str(body.get("kb_id") or "")
+
+    if not kb_id:
+        if not query:
+            raise HTTPException(
+                422, "跨库文件搜索必须提供 query（不带 kb_id 时不可纯浏览）。")
+        merged: list[dict[str, Any]] = []
+        for open_id in await kbdb.key_open_kb_ids(key_id=key_id):
+            kb = await kbdb.get_kb(open_id)
+            if kb is None or not await kbdb.is_visible(kb_id=open_id, user_id=user_id):
+                continue  # 开放后软删/权限收窄：即时从结果消失
+            try:
+                docs = await kbdb.list_documents_in_kb(
+                    kb_id=open_id, query=query, directory_prefix=directory_prefix,
+                    status=status, limit=200, offset=0,
+                )
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
+            merged.extend(
+                _document_list_item(d, kb_name=str(kb.get("name") or "")) for d in docs
+            )
+        merged.sort(key=lambda item: str(item["modified_at"] or ""), reverse=True)
+        return {"documents": merged[offset:offset + limit], "query": query}
+
     await _visible_kb(kbdb, user_id, kb_id)
     if kb_id not in await kbdb.key_open_kb_ids(key_id=key_id):
         # 钥匙开放集之外的库：与不可见同语义（404 防探测）
         raise HTTPException(404, f"knowledge base not found: {kb_id}")
-    limit = min(int(body.get("limit") or 50), 200)
-    offset = max(int(body.get("offset") or 0), 0)
-    docs = await kbdb.list_documents_in_kb(kb_id=kb_id, limit=limit, offset=offset)
-    out = [
-        {
-            "id": d["id"],
-            "name": d["document_name"],
-            "status": d.get("status"),
-            "file_size": d.get("file_size"),
-            "modified_at": str(d.get("modified_at") or d.get("created_at") or ""),
-            "referenced": False,
-        }
-        for d in docs
-    ]
-    if offset == 0:
+    try:
+        docs = await kbdb.list_documents_in_kb(
+            kb_id=kb_id, query=query, directory_prefix=directory_prefix,
+            status=status, limit=limit, offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    out = [_document_list_item(d) for d in docs]
+    if offset == 0 and not query:
         for d in await kbdb.list_referenced_documents(kb_id):
-            out.append({
-                "id": d["id"],
-                "name": d.get("document_name"),
-                "status": "referenced",
-                "file_size": d.get("file_size"),
-                "modified_at": str(d.get("referenced_at") or ""),
-                "referenced": True,
-                "directory_path": d.get("directory_path"),
-            })
+            out.append(_document_list_item(d, referenced=True))
     return {"documents": out}
 
 

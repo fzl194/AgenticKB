@@ -413,6 +413,9 @@ def get_knowledge(
     mode: str | None = None,
     relation: str | None = None,
     query: dict | None = None,
+    file_query: str | None = None,
+    directory_prefix: str | None = None,
+    status: str | None = None,
     depth: int | None = None,
     limit: int | None = None,
     cursor: str | None = None,
@@ -422,13 +425,15 @@ def get_knowledge(
     """深入读取知识——一切读取行为都在这一个工具里，按你给的入口自动分流。
 
     知识层级：知识域（domain）→ 知识库（knowledge base）→ 文档（document）→
-    证据（evidence）→ 结构（structure）。入口优先级：ref > kb_name > 空。
+    证据（evidence）→ 结构（structure）。入口优先级：ref > kb_name > file_query > 空。
 
     分流矩阵（返回都带 "view" 字段自标识）：
     | 你给的入口                        | 行为                     | view            |
     |-----------------------------------|--------------------------|-----------------|
     | 什么都不传                        | 域→库 顶层浏览           | kb_tree         |
     | 只传 kb_name                      | 该库文件清单（分页）     | documents       |
+    | kb_name + file_query              | 该库内搜文件             | documents       |
+    | 只传 file_query                   | **跨全部开放库搜文件**   | file_results    |
     | ref=ev_（mode 可选）              | 证据原文展开             | evidence_content|
     | ref=doc_（limit/cursor 可选）     | 整篇文档分页             | document_content|
     | 只传 ref=st_                      | **能力报告**（默认）：   | capabilities    |
@@ -443,11 +448,17 @@ def get_knowledge(
     结果 evidence[].ref（truncated=true 时加 mode 取全）；doc_ 来自
     source.document_ref；st_ 来自 structure_ref 或导航结果。
 
+    file_query 是**找文件**（按文件名，秒回，不依赖挖掘——未挖掘/挖掘失败的
+    文件也能搜到，正是它相对 search_knowledge 的独特价值）；search_knowledge 是
+    **搜内容**。文件条目带 status/content_revision/directory_path（+跨库时的 kb），
+    其中 content_revision 是 upload_document 替换文件时要回传的版本暗号。
+
     Args:
         ref: 上游返回的引用。ev_ → 可用 mode；doc_ → 可用 limit/cursor；
-            st_ → 可用 query 或 relation；只传它 = 能力报告。
-        kb_name: 要看的目标知识库名（顶层浏览返回的 name）——传了列该库文件清单，
-            不能与 ref 同时传。
+            st_ → 可用 query 或 relation；只传它 = 能力报告。与 kb_name/file_query
+            互斥。
+        kb_name: 要看的目标知识库名（顶层浏览返回的 name）——传了列该库文件清单
+            （可与 file_query 组合为库内搜索），不能与 ref 同时传。
         domain: 可选，仅校验：必须等于本钥匙绑定的知识域，不传即钥匙域
             （顶层浏览始终只展示钥匙域下的开放库）。
         mode: 仅 ref=ev_ 有效：展开粒度 auto|exact|window|parent|whole_document
@@ -460,24 +471,40 @@ def get_knowledge(
             "order_by": [{"field":"列名","direction":"asc"}], "limit": 20}；
             聚合 {"aggregate": {"op":"avg","field":"列名"}, "where":[…]}。
             字段名以能力报告 assets[].columns[].name 为准——不是模糊搜索。
+        file_query: 文件名关键词（子串匹配）。只传它=跨全部开放库搜文件；与
+            kb_name 组合=该库内搜。与 ref 互斥。
+        directory_prefix: 可选，文件搜索限定目录（含子目录），如 "产品文档/手册"。
+        status: 可选，文件按状态过滤：uploaded 待挖掘 / mining 挖掘中 /
+            mined 已入库 / failed 挖掘失败 / update_failed 更新失败。
+            例：file_query 不传、kb_name+status=failed = 该库挖失败清单。
         depth: 仅 relation=ancestors/descendants：层数（默认 1，上限 3）。
         limit: 条数上限：doc_ 每页切片（≤200 默认100）/ navigation 条数（≤200
-            默认50）/ documents 每页（≤200 默认50）。
+            默认50）/ documents·file_results 每页（≤200 默认50）。
         cursor: 分页游标：上一页返回的 cursor 原样传回（doc_ 与 navigation）。
-        offset: 仅 documents 视图：分页偏移。
+        offset: 仅 documents/file_results 视图：分页偏移。
         kb_names: 仅 ref 分支：限定库范围（与 search_knowledge 的 kb_names 同义，
             默认全部开放库）。注意与 kb_name（浏览目标库）是两回事。
     """
     ident = _identity()
     has_ref = bool(ref and str(ref).strip())
     has_kb = bool(kb_name and str(kb_name).strip())
-    if has_ref and has_kb:
-        raise ToolError("ref 与 kb_name 不能同时传：ref=深入某个引用，kb_name=浏览某个库。")
+    has_file_query = bool(file_query and str(file_query).strip())
+    if has_ref and (has_kb or has_file_query):
+        raise ToolError(
+            "ref 与 kb_name/file_query 不能同时传：ref=深入某个引用，kb_name=浏览"
+            "某个库，file_query=按文件名找文件。"
+        )
     if has_ref:
         return _get_by_ref(ident, str(ref), domain, kb_names,
                            mode, relation, query, depth, limit, cursor)
     if has_kb:
-        return _list_kb_documents(ident, str(kb_name), limit, offset)
+        return _list_kb_documents(
+            ident, str(kb_name),
+            str(file_query).strip() if has_file_query else None,
+            directory_prefix, status, limit, offset)
+    if has_file_query:
+        return _search_files_across_kbs(
+            ident, str(file_query).strip(), directory_prefix, status, limit, offset)
     return _browse_top(ident, domain)
 
 
@@ -536,16 +563,48 @@ def _get_by_ref(ident: Identity, ref: str, domain: str | None,
     return {**out, "view": "capabilities"}
 
 
-def _list_kb_documents(ident: Identity, kb_name: str,
-                       limit: int | None, offset: int | None) -> dict:
+def _list_kb_documents(
+    ident: Identity, kb_name: str, file_query: str | None,
+    directory_prefix: str | None, status: str | None,
+    limit: int | None, offset: int | None,
+) -> dict:
+    """该库文件清单/库内搜索（file_query 可选）。"""
     kb_id = _resolve_open_kb(ident, kb_name)
     try:
-        out = backend.list_documents(ident.username, ident.key_id, kb_id,
-                                     limit if limit is not None else 50,
-                                     offset or 0)
+        out = backend.list_documents(
+            ident.username, ident.key_id, kb_id,
+            limit if limit is not None else 50,
+            offset or 0,
+            query=file_query, directory_prefix=directory_prefix, status=status,
+        )
     except backend.ToolBackendError as exc:
         raise _upstream_tool_error(exc) from None
     return {**out, "view": "documents"}
+
+
+def _search_files_across_kbs(
+    ident: Identity, file_query: str,
+    directory_prefix: str | None, status: str | None,
+    limit: int | None, offset: int | None,
+) -> dict:
+    """跨全部开放库按文件名搜文件（kb_id=None 由 mining 遍历开放集）。"""
+    try:
+        out = backend.list_documents(
+            ident.username, ident.key_id, None,
+            limit if limit is not None else 50,
+            offset or 0,
+            query=file_query, directory_prefix=directory_prefix, status=status,
+        )
+    except backend.ToolBackendError as exc:
+        raise _upstream_tool_error(exc) from None
+    return {
+        **out,
+        "view": "file_results",
+        "hint": (
+            "条目带 kb（所在库）与 directory_path；要读内容用 search_knowledge，"
+            "要替换文件用 upload_document 的替换参数（content_revision 即版本暗号）。"
+        ),
+    }
 
 
 def _browse_top(ident: Identity, domain: str | None) -> dict:
@@ -568,7 +627,10 @@ def _browse_top(ident: Identity, domain: str | None) -> dict:
         "view": "kb_tree",
         "domains": [{"domain": resolved, "knowledge_bases": kbs}],
         "default_domain": resolved,
-        "hint": "检索用 search_knowledge；domain 可不传（自动使用本钥匙绑定的知识域）。",
+        "hint": (
+            "检索内容用 search_knowledge；按文件名找文件用 get_knowledge 传 "
+            "file_query（跨库）；domain 可不传（自动使用本钥匙绑定的知识域）。"
+        ),
     }
 
 

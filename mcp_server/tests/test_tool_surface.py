@@ -64,8 +64,9 @@ def _patch_backend(monkeypatch, ident=SINGLE):
     monkeypatch.setattr(server, "_identity", lambda: ident)
 
     def note(kind, ret=None):
-        def _fn(*args):
-            calls.append((kind,) + args)
+        def _fn(*args, **kwargs):
+            # 关键字实参按传入顺序追加（57 号文件搜索过滤走 kwargs）
+            calls.append((kind,) + args + tuple(kwargs.values()))
             return ret if ret is not None else {}
         return _fn
 
@@ -96,7 +97,46 @@ def test_kb_name_lists_documents(monkeypatch) -> None:
     calls = _patch_backend(monkeypatch)
     out = server.get_knowledge(kb_name="网络手册库", limit=10, offset=5)
     assert out["view"] == "documents"
-    assert calls == [("docs", "alice", "key-1", "kb-1", 10, 5)]
+    assert calls == [("docs", "alice", "key-1", "kb-1", 10, 5, None, None, None)]
+
+
+# ── 57 号：文件搜索（file_query / directory_prefix / status）─────────────
+
+
+def test_file_query_without_kb_name_searches_across_open_kbs(monkeypatch) -> None:
+    """只传 file_query（无 kb_name/ref）= 跨全部开放库搜文件（view=file_results）。"""
+    calls = _patch_backend(monkeypatch)
+    out = server.get_knowledge(file_query="手册", status="failed", limit=20)
+    assert out["view"] == "file_results"
+    assert calls == [
+        ("docs", "alice", "key-1", None, 20, 0,
+         "手册", None, "failed"),
+    ]
+
+
+def test_kb_name_with_file_query_filters_within_kb(monkeypatch) -> None:
+    """kb_name + file_query = 该库内搜文件（view=documents，搜索模式）。"""
+    calls = _patch_backend(monkeypatch)
+    out = server.get_knowledge(
+        kb_name="网络手册库", file_query="告警", directory_prefix="产品文档", limit=5)
+    assert out["view"] == "documents"
+    assert calls == [
+        ("docs", "alice", "key-1", "kb-1", 5, 0,
+         "告警", "产品文档", None),
+    ]
+
+
+def test_ref_rejects_file_query_like_kb_name(monkeypatch) -> None:
+    """ref 与 file_query 互斥：ref=深入引用，file_query=找文件。"""
+    _patch_backend(monkeypatch)
+    with pytest.raises(ToolError, match="ref 与 kb_name/file_query 不能同时传"):
+        server.get_knowledge(ref="ev_X", file_query="手册")
+
+
+def test_bare_status_without_file_query_still_browses_tree(monkeypatch) -> None:
+    """status/directory_prefix 只在 file_query/kb_name 场景有意义；裸传不改变分流。"""
+    _patch_backend(monkeypatch)
+    assert server.get_knowledge(status="failed")["view"] == "kb_tree"
 
 
 def test_bare_ref_semantics_per_ref_type(monkeypatch) -> None:
@@ -143,7 +183,7 @@ def test_st_ref_with_relation_navigates(monkeypatch) -> None:
 def test_parameter_conflicts_are_explicit_errors(monkeypatch) -> None:
     _patch_backend(monkeypatch)
     # ref 与 kb_name 互斥
-    with pytest.raises(ToolError, match="ref 与 kb_name 不能同时传"):
+    with pytest.raises(ToolError, match="ref 与 kb_name/file_query 不能同时传"):
         server.get_knowledge(ref="st_X", kb_name="网络手册库")
     # ev_ 不支持导航/查表 → 指向 structure_ref
     with pytest.raises(ToolError, match="structure_ref"):

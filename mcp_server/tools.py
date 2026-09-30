@@ -191,12 +191,25 @@ def list_knowledge_bases(username: str, key_id: str) -> dict:
 
 
 def list_documents(
-    username: str, key_id: str, kb_id: str, limit: int = 50, offset: int = 0
+    username: str, key_id: str, kb_id: str | None,
+    limit: int = 50, offset: int = 0,
+    *, query: str | None = None, directory_prefix: str | None = None,
+    status: str | None = None,
 ) -> dict:
-    return _post("/api/kb/mcp-tools/list-documents", {
-        "username": username, "key_id": key_id, "kb_id": kb_id,
+    """库内文件清单（kb_id 必给）或跨开放库文件搜索（kb_id=None 时 query 必给）。"""
+    payload: dict = {
+        "username": username, "key_id": key_id,
         "limit": limit, "offset": offset,
-    })
+    }
+    if kb_id:
+        payload["kb_id"] = kb_id
+    if query:
+        payload["query"] = query
+    if directory_prefix:
+        payload["directory_prefix"] = directory_prefix
+    if status:
+        payload["status"] = status
+    return _post("/api/kb/mcp-tools/list-documents", payload)
 
 
 # 注：批次8 R8 起 get_document 切 serving document_ref 通道（见上方 get_document）。

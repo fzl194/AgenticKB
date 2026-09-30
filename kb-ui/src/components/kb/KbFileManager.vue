@@ -36,6 +36,29 @@
       支持 Markdown、文本、HTML、PDF、Word（.doc/.docx）、Excel（.xls/.xlsx）及 ZIP 等格式
     </div>
 
+    <!-- 文件搜索（57 号）：未挖掘/挖失败的文件也能搜到——这是它相对内容检索的独特价值 -->
+    <div class="fm__search">
+      <el-input
+        v-model="searchKeyword"
+        :placeholder="isSearching ? '搜索中…（清空关键词退出搜索）' : '按文件名搜索（未挖掘/失败的文件也能搜到）'"
+        size="small" clearable data-testid="fm-search-input"
+        @keyup.enter="onSearchTrigger" @clear="onSearchTrigger"
+      >
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
+      <el-select
+        v-model="searchStatus" size="small" class="fm__search-status"
+        data-testid="fm-search-status" @change="onSearchTrigger"
+      >
+        <el-option label="全部状态" value="" />
+        <el-option v-for="opt in STATUS_FILTERS" :key="opt.value" :label="opt.label" :value="opt.value" />
+      </el-select>
+      <el-radio-group v-model="searchScope" size="small" @change="onSearchTrigger">
+        <el-radio-button value="tree">当前目录及子目录</el-radio-button>
+        <el-radio-button value="all">整个库</el-radio-button>
+      </el-radio-group>
+    </div>
+
     <!-- 批量操作栏（多选文件后出现） -->
     <div v-if="selectedCount > 0" class="fm__batch">
       <span class="fm__batch-count" data-testid="fm-batch-count">
@@ -86,15 +109,15 @@
       </div>
 
       <div
-        v-if="currentFolderId !== null && dragId"
+        v-if="!isSearching && currentFolderId !== null && dragId"
         class="fm__rootdrop"
         @dragover.prevent
         @drop.stop="dropToRoot"
       >拖到此处 = 移到根目录</div>
 
-      <!-- folders -->
+      <!-- folders（搜索态隐藏：结果只按文件过滤呈现） -->
       <div
-        v-for="f in childFolders"
+        v-for="f in visibleChildFolders"
         :key="f.id"
         class="fm__row fm__row--folder"
         :class="{ 'fm__row--dragover': dragOverId === f.id, 'fm__row--sel': selId === f.id }"
@@ -148,12 +171,19 @@
         </div>
         <div class="fm__col fm__col--name" @click.stop>
           <el-icon class="fm__icon" :class="fileIconClass(file)"><component :is="fileIcon(file)" /></el-icon>
-          <span
-            class="fm__name"
-            :title="file.document_name"
-            @click="onNameClick('file', file)"
-            @dblclick="onNameDblClick('file', file)"
-          >{{ file.document_name }}</span>
+          <div class="fm__name-wrap">
+            <span
+              class="fm__name"
+              :title="file.document_name"
+              @click="onNameClick('file', file)"
+              @dblclick="onNameDblClick('file', file)"
+            >{{ file.document_name }}</span>
+            <span
+              v-if="isSearching && file.directory_path"
+              class="fm__dir" :title="file.directory_path"
+              data-testid="fm-search-dir"
+            >{{ file.directory_path }}/</span>
+          </div>
         </div>
         <div class="fm__col fm__col--type">{{ extOf(file.document_name) || '文件' }}</div>
         <div class="fm__col fm__col--size">{{ humanSize(file.file_size) }}</div>
@@ -185,8 +215,10 @@
       </div>
 
       <EmptyState
-        v-if="!loading && !childFolders.length && !files.length"
-        :text="canWrite ? '空文件夹，上传文件或新建子文件夹（右键更多操作）' : '空文件夹'"
+        v-if="!loading && !visibleChildFolders.length && !files.length"
+        :text="isSearching
+          ? '没有匹配的文件'
+          : (canWrite ? '空文件夹，上传文件或新建子文件夹（右键更多操作）' : '空文件夹')"
       />
     </div>
 
@@ -219,7 +251,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  Folder, FolderAdd, UploadFilled, Refresh,
+  Folder, FolderAdd, UploadFilled, Refresh, Search,
   Document, Picture, Tickets, Cpu, Delete,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -360,6 +392,38 @@ const currentFolder = computed(() => folders.value.find((f) => f.id === currentF
 const currentPath = computed(() => currentFolder.value?.path ?? '')
 const childFolders = computed(() => folders.value.filter((f) => f.parent_id === currentFolderId.value))
 
+// ── 文件搜索（57 号）：名 + 目录 + 状态；搜索态下隐藏文件夹行、结果带所在目录 ──
+const STATUS_FILTERS = [
+  { value: 'uploaded', label: '未挖掘' },
+  { value: 'mining', label: '挖掘中' },
+  { value: 'mined', label: '已入库' },
+  { value: 'failed', label: '挖掘失败' },
+  { value: 'update_failed', label: '更新失败' },
+] as const
+const searchKeyword = ref('')
+const searchStatus = ref('')
+const searchScope = ref<'tree' | 'all'>('tree')
+/** 搜索态 = 有关键词或选了状态（状态单独选 = 管理清单场景，如「挖失败清单」）。 */
+const isSearching = computed(
+  () => searchKeyword.value.trim() !== '' || searchStatus.value !== '',
+)
+const visibleChildFolders = computed(() => (isSearching.value ? [] : childFolders.value))
+
+function onSearchTrigger() {
+  filePage.value = 1
+  void loadFiles()
+}
+function activeSearchFilter() {
+  if (!isSearching.value) return undefined
+  return {
+    ...(searchKeyword.value.trim() ? { query: searchKeyword.value.trim() } : {}),
+    ...(searchStatus.value ? { status: searchStatus.value } : {}),
+    // 「当前目录及子目录」在根目录 = 整库，prefix 省略
+    ...(searchScope.value === 'tree' && currentPath.value
+      ? { directory_prefix: currentPath.value } : {}),
+  }
+}
+
 const breadcrumb = computed(() => {
   const segs: { id: string; name: string }[] = []
   const parts = currentPath.value ? currentPath.value.split('/') : []
@@ -375,9 +439,12 @@ const breadcrumb = computed(() => {
 async function loadFolders() { folders.value = await kbApi.listFolders(props.kbId) }
 async function loadFiles() {
   const offset = (filePage.value - 1) * filePageSize.value
+  const search = activeSearchFilter()
   const [pageData, total] = await Promise.all([
-    kbApi.listDocuments(props.kbId, currentPath.value, filePageSize.value, offset),
-    kbApi.countDocuments(props.kbId, currentPath.value),
+    kbApi.listDocuments(
+      props.kbId, search ? undefined : currentPath.value,
+      filePageSize.value, offset, search),
+    kbApi.countDocuments(props.kbId, search ? undefined : currentPath.value, search),
   ])
   files.value = pageData
   totalFiles.value = total
@@ -698,6 +765,9 @@ watch(() => props.kbId, () => {
   closeCtx()
   currentFolderId.value = null
   selectedFileIds.value = []
+  searchKeyword.value = ''
+  searchStatus.value = ''
+  filePage.value = 1
   reload()
 })
 // 切回文件 Tab 时刷新：挖掘结束后文件状态（uploaded→mined 等）能即时看到
@@ -715,6 +785,15 @@ watch(() => props.active, (now, prev) => {
 .fm__crumb-root:hover, .fm__crumb-seg:hover { text-decoration: underline; }
 .fm__actions { display: flex; gap: 8px; align-items: center; }
 .fm__formats { color: var(--kb-text-secondary); font-size: 12px; line-height: 1.5; }
+
+.fm__search { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fm__search .el-input { width: 280px; }
+.fm__search-status { width: 120px; }
+.fm__name-wrap { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fm__dir {
+  font-size: 11px; color: var(--kb-text-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .fm__list {
   background: var(--kb-bg-card); border: 1px solid var(--kb-border-light);

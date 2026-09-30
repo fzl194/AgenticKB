@@ -699,12 +699,17 @@ class DocumentService:
 
     async def list_documents(
         self, *, kb_id: str, user_id: str, directory: str | None = None,
+        query: str | None = None, directory_prefix: str | None = None,
+        status: str | None = None,
         limit: int = 200, offset: int = 0,
     ) -> list[dict[str, Any]]:
         await self._svc._assert_read(kb_id, user_id)
         # 状态由 list_documents_in_kb 内联派生（一条 SQL），不再 N+1。
+        # 57 号：query/directory_prefix/status 搜索过滤透传（db 层校验 status 词表）。
         docs = await self._db.list_documents_in_kb(
-            kb_id=kb_id, directory=directory, limit=limit, offset=offset,
+            kb_id=kb_id, directory=directory, query=query,
+            directory_prefix=directory_prefix, status=status,
+            limit=limit, offset=offset,
         )
         for d in docs:
             self._fill_meta(d)  # 旧文件 file_size 为空时本地 stat 补（本地磁盘，非远程查询）
@@ -712,10 +717,13 @@ class DocumentService:
 
     async def count_documents(
         self, *, kb_id: str, user_id: str, directory: str | None = None,
+        query: str | None = None, directory_prefix: str | None = None,
+        status: str | None = None,
     ) -> int:
         await self._svc._assert_read(kb_id, user_id)
         return await self._db.count_documents_in_kb(
-            kb_id=kb_id, directory=directory,
+            kb_id=kb_id, directory=directory, query=query,
+            directory_prefix=directory_prefix, status=status,
         )
 
     def _fill_meta(self, doc: dict[str, Any]) -> None:

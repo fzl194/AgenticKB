@@ -160,6 +160,55 @@ _KNOWLEDGE_OUTDATED_SQL = """COALESCE(
 # 完整派生 = 归属收敛的 run 关联 + KB Build 成员关联。
 _STATUS_JOIN_SQL = _RUN_DOC_JOIN_SQL + _KB_BUILD_JOIN_SQL
 
+# 派生状态词表（57 号文件搜索的 status 过滤合法值；与 _STATUS_CASE_SQL 同源）。
+DOCUMENT_STATUS_VALUES = ("uploaded", "mining", "mined", "failed", "update_failed")
+
+# 列表/按状态计数共用的完整 SELECT（派生列依赖 join，不能只查 asset_documents）。
+_DOCUMENT_LIST_SELECT_SQL = f"""SELECT d.id, d.domain, d.kb_id, d.document_key, d.document_name,
+                           d.document_type, d.storage_path, d.directory_path, d.owner_id,
+                           d.created_at, d.file_size, d.modified_at,
+                           d.storage_object_id, d.source_raw_hash, d.content_revision, d.folder_id,
+                           {_KNOWLEDGE_OUTDATED_SQL} AS knowledge_outdated,
+                           rs.rd_action,
+                           {_STATUS_CASE_SQL} AS status
+                    FROM asset_documents d
+                    {_STATUS_JOIN_SQL}"""
+
+
+def _escape_like(value: str) -> str:
+    """LIKE/ILIKE 默认转义符是反斜杠——把用户输入里的 %/_/\\ 恢复为字面匹配。"""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _normalize_directory_prefix(prefix: str | None) -> str:
+    """目录前缀规范化：去首尾空白与斜杠。规范化后为空 = 不过滤（整库）。"""
+    if prefix is None:
+        return ""
+    return prefix.strip().strip("/")
+
+
+def _document_search_filters(
+    *, query: str | None, directory_prefix: str | None,
+) -> tuple[str, list[Any]]:
+    """57 号文件搜索过滤条件（可组合）：文件名子串 + 目录前缀（含子目录）。
+
+    返回 (" AND …", params)；无有效条件返回 ("", [])，调用方拼接后与既有浏览口径
+    零差异。目录递归边界由 '/%' 保证——'产品' 前缀不会命中 '产品文档'。
+    """
+    parts: list[str] = []
+    params: list[Any] = []
+    keyword = (query or "").strip()
+    if keyword:
+        parts.append("d.document_name ILIKE %s")
+        params.append(f"%{_escape_like(keyword)}%")
+    prefix = _normalize_directory_prefix(directory_prefix)
+    if prefix:
+        parts.append("(d.directory_path = %s OR d.directory_path LIKE %s)")
+        params.extend([prefix, _escape_like(prefix) + "/%"])
+    if not parts:
+        return "", []
+    return " AND " + " AND ".join(parts), params
+
 #: 对外检索单元类型（A0-5 公开九词；与 Java EvidenceTypeVocabulary.PUBLIC_TYPES
 #: 同一套词表——两侧修改必须同步，契约测试各自钉住九词全集）。
 _REP_TYPE_TO_PUBLIC: dict[str, str] = {
@@ -2332,48 +2381,79 @@ WITH latest AS (
 
     async def count_documents_in_kb(
         self, *, kb_id: str, directory: str | None = None,
+        query: str | None = None, directory_prefix: str | None = None,
+        status: str | None = None,
     ) -> int:
-        """文件数（与 list_documents_in_kb 同过滤口径）——前端默认分页的总数。"""
+        """文件数（与 list_documents_in_kb 同过滤口径）——前端默认分页的总数。
+
+        57 号：无 status 的搜索计数保持轻量（不引入派生 join）；status 过滤
+        走与 list 相同的子查询口径。
+        """
+        if status is not None and status not in DOCUMENT_STATUS_VALUES:
+            raise ValueError(f"unknown status filter: {status!r}")
+        extra_sql, extra_params = _document_search_filters(
+            query=query, directory_prefix=directory_prefix)
         clause = "d.kb_id = %s AND d.deleted_at IS NULL"
         params: list[Any] = [kb_id]
         if directory is not None:
             clause += " AND d.directory_path = %s"
             params.append(directory)
+        clause += extra_sql
+        params.extend(extra_params)
         async with self._pool.connection() as conn:
-            cur = await conn.execute(
-                f"SELECT COUNT(*) FROM asset_documents d WHERE {clause}", params,
-            )
+            if status is None:
+                cur = await conn.execute(
+                    f"SELECT COUNT(*) FROM asset_documents d WHERE {clause}", params,
+                )
+            else:
+                cur = await conn.execute(
+                    f"SELECT COUNT(*) FROM ({_DOCUMENT_LIST_SELECT_SQL} WHERE {clause})"
+                    " ds WHERE ds.status = %s",
+                    [*params, status],
+                )
             row = await cur.fetchone()
         return int(row["count"]) if row else 0
 
     async def list_documents_in_kb(
         self, *, kb_id: str, directory: str | None = None,
+        query: str | None = None, directory_prefix: str | None = None,
+        status: str | None = None,
         limit: int = 200, offset: int = 0,
     ) -> list[dict[str, Any]]:
         """列 KB 内文档，**状态内联派生**（一次 SQL，避免 N+1 远程查询）。
 
-        状态优先级与原 derive_document_status 一致：published > failed > mining > withdrawn > uploaded。
+        状态优先级：update_failed > failed > mining > mined > uploaded。
+
+        57 号可选搜索过滤（可组合；全不传 = 既有浏览口径，零行为差异）：
+        - query            文件名子串（ILIKE，%/_/\\ 按字面转义）
+        - directory_prefix 目录前缀（含子目录；'产品' 不误中 '产品文档'）
+        - status           派生状态精确匹配——status 是 SELECT 内联派生列，
+          过滤须经子查询层（ORDER/LIMIT 移到外层）
         """
+        if status is not None and status not in DOCUMENT_STATUS_VALUES:
+            raise ValueError(f"unknown status filter: {status!r}")
+        extra_sql, extra_params = _document_search_filters(
+            query=query, directory_prefix=directory_prefix)
         clause = "d.kb_id = %s AND d.deleted_at IS NULL"
         params: list[Any] = [kb_id]
         if directory is not None:
             clause += " AND d.directory_path = %s"
             params.append(directory)
-        params.extend([limit, offset])
+        clause += extra_sql
+        params.extend(extra_params)
         async with self._pool.connection() as conn:
+            if status is None:
+                cur = await conn.execute(
+                    f"{_DOCUMENT_LIST_SELECT_SQL} WHERE {clause}"
+                    " ORDER BY d.created_at DESC LIMIT %s OFFSET %s",
+                    [*params, limit, offset],
+                )
+                return [dict(r) for r in await cur.fetchall()]
             cur = await conn.execute(
-                f"""SELECT d.id, d.domain, d.kb_id, d.document_key, d.document_name,
-                           d.document_type, d.storage_path, d.directory_path, d.owner_id,
-                           d.created_at, d.file_size, d.modified_at,
-                           d.storage_object_id, d.source_raw_hash, d.content_revision, d.folder_id,
-                           {_KNOWLEDGE_OUTDATED_SQL} AS knowledge_outdated,
-                           rs.rd_action,
-                           {_STATUS_CASE_SQL} AS status
-                    FROM asset_documents d
-                    {_STATUS_JOIN_SQL}
-                    WHERE {clause}
-                    ORDER BY d.created_at DESC LIMIT %s OFFSET %s""",
-                params,
+                f"SELECT * FROM ({_DOCUMENT_LIST_SELECT_SQL} WHERE {clause}) ds"
+                " WHERE ds.status = %s"
+                " ORDER BY ds.created_at DESC LIMIT %s OFFSET %s",
+                [*params, status, limit, offset],
             )
             return [dict(r) for r in await cur.fetchall()]
 

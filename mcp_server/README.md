@@ -7,7 +7,7 @@
 - **不做语义判断**：检索结果原样交给 Agent，Server 不评估证据是否充分、不改写内容
 - **instructions 承载精华**：SKILL 中的使用指南、证据理解规则、回答行为、推理护栏全部内嵌在 MCP instructions 中，Agent 拿到即可正确使用
 - **Agent 自主判断**：证据是否充分、如何回答，完全由 Agent（LLM）决定，Server 不做评估
-- **九件套 tool**（批次8）：`search_knowledge`（纯 EvidenceResponse 检索）、`get_evidence`（证据原文下钻，替代已退役的 get_segment_fulltext）、`get_document`、`inspect_knowledge`、`navigate_structure`、`query_structured_asset`、`list_knowledge_bases`、`list_documents`、`upload_document`。无 resource、无 prompt
+- **三件套 tool**（2026-08-31 两轮收敛 9→3；58号 `upload_document` → `manage_files` 改名）：`search_knowledge`（搜内容）、`get_knowledge`（一切读取行为：层级浏览/目录逐层浏览/证据原文/整篇文档/能力报告/结构导航/表格查询/文件清单与搜索）、`manage_files`（文件管理：上传到目录/替换任意本地文件；**不提供删除、移动、重命名**）。无 resource、无 prompt
 
 > ⚠️ **不再是「纯透传」**。为了让「发布检索范式后 MCP 自动用上」成立，client 现在做两件加工：按 domain 解析该用哪条检索引擎，以及把两条引擎不同的响应外壳归一化。详见下节。
 
@@ -295,17 +295,21 @@ Body:
 
 | 工具 | 用途 |
 |------|------|
-| `search_knowledge` | 检索知识库，返回纯 EvidenceResponse（query/evidence/has_more） |
-| `get_evidence` | 按 `ev_` ref 取回某条证据的完整原文（可调展开粒度） |
-| `get_document` | 按 `doc_` ref 读取某文件的结构化内容 |
-| `inspect_knowledge` | 渐进披露结构能力与表格资产（st_ ref 清单） |
-| `navigate_structure` | 按 parent/children/order 等白名单关系导航 |
-| `query_structured_asset` | 按 `st_` ref 对表格资产做 schema 化查询与聚合 |
-| `list_knowledge_bases` | 列出密钥主人开放的知识库 |
-| `list_documents` | 列出某库的文件清单 |
-| `upload_document` | 上传一个或多个文件（两步直传 + 自动排队挖掘；zip/hdx/chm 自动解压） |
+| `search_knowledge` | 搜内容：检索知识库，返回纯 EvidenceResponse（query/evidence/has_more）；evidence[].source 同时带 document_id 与 document_ref |
+| `get_knowledge` | 一切读取行为：域→库顶层浏览（kb_tree）、目录逐层浏览（browse_directory，view=directory）、文件清单/文件名搜索（documents/file_results）、证据原文（ev_）、整篇文档（doc_）、能力报告与结构导航与表格查询（st_） |
+| `manage_files` | 管理文件：`action="upload"` 上传新文件（可指定已存在目录 directory_path，ZIP 落位 {目录}/{包名}/…）或 `action="replace"` 按 document_id+expected_revision 替换任意本地文件（五种状态均可，不要求已挖掘）；两步直传 + 自动排队挖掘；**不提供删除、移动、重命名** |
 
-工具开关按用户级 open_tools 控制；含已退役工具名的历史配置会在验钥时自动迁移（剔除退役名 + 补齐新结构工具）。
+**文件身份三分法（58号，Agent 侧约定）**：
+
+- `document_id` = `asset_documents.id`：文件管理身份，上传即有、永不换。文件清单、目录浏览、整篇阅读、search 证据 source 全部返回同一个值；`manage_files(action="replace")` 只认它。
+- `doc_`（document_ref）：某次挖掘快照的内容引用，重挖会变、未挖掘文件没有——只用于 `get_knowledge` 读整篇内容。
+- `content_revision`：文件内容版本号（每次替换 +1），替换时的 CAS 暗号（expected_revision），不是 ID。
+
+两条闭环路径使用同一个 document_id：路径 A `get_knowledge`（浏览/清单）→ `manage_files(replace)`；路径 B `search_knowledge` → `source.document_id` → `manage_files(replace)`。referenced=true 的外部引用文档 document_id 为 null，不可替换。
+
+**browse_directory 与 directory_prefix 的分工**：前者是"打开文件夹看一眼"（直属子目录+直属文件，空目录可见，根目录传 `""`）；后者是"搜索时限定该目录及全部子目录"的递归过滤（配 file_query/search filters 用）。
+
+工具开关按用户级 open_tools 控制；含已退役/改名工具名的历史配置会在验钥时自动迁移（剔除退役名 + 改名映射 1:1 不扩权，如 upload_document → manage_files）。58号起老钥匙的自定义 instructions 已随迁移清空（以官方默认为准），自定义工具描述按工具名查找、旧名挂载的自动失效。
 
 传输相关的 `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT` 见上文「两种运行模式」；后端相关的环境变量见上文那张表（**以那张为准**）。
 
@@ -318,9 +322,13 @@ Body:
    search_knowledge(..., filters={"evidence_types": ["table_row"]})
    （不支持的结构化过滤键返回 typed 400，不静默忽略）
 3. 需要准确引用/更大粒度时：
-   get_evidence(ref=条目.ref, domain=..., mode="parent")
+   get_knowledge(ref=条目.ref, mode="parent")
 4. 结构化追问：
-   inspect_knowledge(ref=条目.source.document_ref) → query_structured_asset(
-       ref=st_…, query={"filter": {...}, "aggregate": {...}})
-5. Agent 自行判断证据是否充分，决定如何回答
+   get_knowledge(ref=条目.source.document_ref)   → 能力报告
+   get_knowledge(ref=st_…, query={"aggregate": {...}})  → 表格查询
+5. 文件管理（浏览 → 上传/替换）：
+   get_knowledge(kb_name=..., browse_directory="")        → 逐层看目录
+   manage_files(action="upload", ..., directory_path="产品文档/交换机")
+   manage_files(action="replace", ..., document_id=..., expected_revision=…)
+6. Agent 自行判断证据是否充分，决定如何回答
 ```

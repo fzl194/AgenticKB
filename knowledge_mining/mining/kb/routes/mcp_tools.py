@@ -310,6 +310,68 @@ async def list_documents(
     return {"documents": out}
 
 
+@router.post("/browse-directory", dependencies=[Depends(_require_internal_body)])
+async def browse_directory(
+    body: dict[str, Any], request: Request,
+    kbdb: KbDB = Depends(get_kb_db),
+) -> dict[str, Any]:
+    """目录逐层浏览（58号§3）：当前目录的直属子目录 + 直属文件。
+
+    与 57号 directory_prefix 的分工——本端点是"打开文件夹看一眼"（精确匹配
+    本层，空目录可见）；directory_prefix 是"搜索时限定目录及全部子目录"。
+    复用 kb_folders（FolderService 同一数据源）与 list_documents_in_kb 的
+    directory 精确过滤（与网页文件管理器同底座）；不创建 folder_ref，目录以
+    path 标识；referenced 外部引用不入目录树（其目录属属主库）。
+    """
+    await _expire_upload_tickets(request)
+    key_id = str(body.get("key_id") or "")
+    user_id, _key = await _key_scope(kbdb, str(body.get("username") or ""), key_id)
+    kb_id = str(body.get("kb_id") or "")
+    await _visible_kb(kbdb, user_id, kb_id)
+    if kb_id not in await kbdb.key_open_kb_ids(key_id=key_id):
+        raise HTTPException(404, f"knowledge base not found: {kb_id}")
+    directory = _validated_directory(body.get("directory"))
+    try:
+        limit = max(1, min(int(body.get("limit") or 50), 200))
+        offset = max(0, int(body.get("offset") or 0))
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(422, "limit/offset 必须是整数。")
+    kb = await kbdb.get_kb(kb_id)
+    if kb is None:
+        raise HTTPException(404, f"knowledge base not found: {kb_id}")
+
+    # 直属子目录：父路径 == 当前目录（根=上层 name 为 "" 的顶层目录）；空目录可见
+    folders = await kbdb.list_folders(kb_id)
+    if directory and await kbdb.find_folder_by_path(kb_id=kb_id, path=directory) is None:
+        raise HTTPException(
+            422,
+            f"directory 不存在：{directory!r}（不自动创建；请从根目录 browse_directory=\"\""
+            f" 逐层确认写法，或到网页端查看目录树）。")
+    children = [
+        {"name": f["name"], "path": f["path"]}
+        for f in folders
+        if (f["path"].rsplit("/", 1)[0] if "/" in f["path"] else "") == directory
+    ]
+    children.sort(key=lambda c: c["name"])
+
+    docs = await kbdb.list_documents_in_kb(
+        kb_id=kb_id, directory=directory, limit=limit, offset=offset,
+    )
+    return {
+        "view": "directory",
+        "kb": str(kb.get("name") or ""),
+        "current_directory": directory,
+        # 根目录无上层=Null；非根目录的上层必是真实路径（顶层目录的上层=根""）
+        "parent_directory": (
+            directory.rsplit("/", 1)[0] if "/" in directory else ""),
+        **({} if directory else {"parent_directory": None}),
+        "child_directories": children,
+        "documents": [_document_list_item(d) for d in docs],
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @router.post("/begin-upload", dependencies=[Depends(_require_internal_body)])
 async def begin_upload(
     body: dict[str, Any],

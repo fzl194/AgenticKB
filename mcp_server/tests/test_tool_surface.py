@@ -100,6 +100,54 @@ def test_kb_name_lists_documents(monkeypatch) -> None:
     assert calls == [("docs", "alice", "key-1", "kb-1", 10, 5, None, None, None)]
 
 
+# ── 58号§3：目录逐层浏览（browse_directory）─────────────────────────────
+
+
+def test_browse_root_returns_directory_view(monkeypatch) -> None:
+    calls: list[tuple] = []
+
+    def note(*args, **kwargs):
+        calls.append(args + tuple(kwargs.values()))
+        return {"view": "directory", "child_directories": [], "documents": []}
+
+    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
+    monkeypatch.setattr(server.backend, "browse_directory", note)
+    out = server.get_knowledge(kb_name="网络手册库", browse_directory="")
+    assert out["view"] == "directory"
+    assert calls[0][:4] == ("alice", "key-1", "kb-1", "")  # 第5参=limit 默认 50
+
+
+def test_browse_subdirectory_passes_path(monkeypatch) -> None:
+    calls: list[tuple] = []
+
+    def note(*args, **kwargs):
+        calls.append(args + tuple(kwargs.values()))
+        return {"view": "directory", "child_directories": [], "documents": []}
+
+    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
+    monkeypatch.setattr(server.backend, "browse_directory", note)
+    server.get_knowledge(kb_name="网络手册库", browse_directory="产品文档/手册",
+                         limit=10, offset=5)
+    assert calls[0][3] == "产品文档/手册"
+
+
+def test_browse_requires_kb_name_and_exclusivity(monkeypatch) -> None:
+    _patch_backend(monkeypatch)
+    with pytest.raises(ToolError, match="kb_name"):
+        server.get_knowledge(browse_directory="")
+    with pytest.raises(ToolError, match="browse_directory"):
+        server.get_knowledge(kb_name="网络手册库", browse_directory="",
+                             file_query="手册")
+    with pytest.raises(ToolError, match="browse_directory"):
+        server.get_knowledge(kb_name="网络手册库", browse_directory="",
+                             directory_prefix="产品文档")
+    with pytest.raises(ToolError, match="browse_directory"):
+        server.get_knowledge(kb_name="网络手册库", browse_directory="",
+                             status="failed")
+    with pytest.raises(ToolError, match="ref"):
+        server.get_knowledge(ref="ev_X", browse_directory="")
+
+
 # ── 57 号：文件搜索（file_query / directory_prefix / status）─────────────
 
 

@@ -426,6 +426,7 @@ def get_knowledge(
     mode: str | None = None,
     relation: str | None = None,
     query: dict | None = None,
+    browse_directory: str | None = None,
     file_query: str | None = None,
     directory_prefix: str | None = None,
     status: str | None = None,
@@ -444,6 +445,9 @@ def get_knowledge(
     | 你给的入口                        | 行为                     | view            |
     |-----------------------------------|--------------------------|-----------------|
     | 什么都不传                        | 域→库 顶层浏览           | kb_tree         |
+    | kb_name + browse_directory        | **目录逐层浏览**：直属   | directory       |
+    |                                   | 子目录（空目录可见）+    |                 |
+    |                                   | 直属文件（不递归）       |                 |
     | 只传 kb_name                      | 该库文件清单（分页）     | documents       |
     | kb_name + file_query              | 该库内搜文件             | documents       |
     | 只传 file_query                   | **跨全部开放库搜文件**   | file_results    |
@@ -461,17 +465,26 @@ def get_knowledge(
     结果 evidence[].ref（truncated=true 时加 mode 取全）；doc_ 来自
     source.document_ref；st_ 来自 structure_ref 或导航结果。
 
+    browse_directory 与 directory_prefix 的分工（都用 / 分隔的目录路径，如
+    "产品文档/手册"）：browse_directory=**打开文件夹看一眼**（只列本层直属
+    子目录与直属文件，空目录可见，根目录传 ""）；directory_prefix=**搜索时
+    限定"该目录及全部子目录"的递归过滤**（配 file_query 用）。manage_files
+    上传的 directory_path 写法从 browse_directory 的 child_directories[].path
+    抄——不自动创建目录，拼错会 422。
+
     file_query 是**找文件**（按文件名，秒回，不依赖挖掘——未挖掘/挖掘失败的
     文件也能搜到，正是它相对 search_knowledge 的独特价值）；search_knowledge 是
-    **搜内容**。文件条目带 status/content_revision/directory_path（+跨库时的 kb），
-    其中 content_revision 是 manage_files(action="replace") 要回传的版本暗号（expected_revision）。
+    **搜内容**。文件条目带 document_id/status/content_revision/directory_path
+    （+跨库时的 kb），其中 content_revision 是 manage_files(action="replace") 要
+    回传的版本暗号（expected_revision），document_id 是替换目标。
 
     Args:
         ref: 上游返回的引用。ev_ → 可用 mode；doc_ → 可用 limit/cursor；
             st_ → 可用 query 或 relation；只传它 = 能力报告。与 kb_name/file_query
             互斥。
         kb_name: 要看的目标知识库名（顶层浏览返回的 name）——传了列该库文件清单
-            （可与 file_query 组合为库内搜索），不能与 ref 同时传。
+            （可与 file_query 组合为库内搜索，或与 browse_directory 组合逐层看
+            目录），不能与 ref 同时传。
         domain: 可选，仅校验：必须等于本钥匙绑定的知识域，不传即钥匙域
             （顶层浏览始终只展示钥匙域下的开放库）。
         mode: 仅 ref=ev_ 有效：展开粒度 auto|exact|window|parent|whole_document
@@ -484,6 +497,9 @@ def get_knowledge(
             "order_by": [{"field":"列名","direction":"asc"}], "limit": 20}；
             聚合 {"aggregate": {"op":"avg","field":"列名"}, "where":[…]}。
             字段名以能力报告 assets[].columns[].name 为准——不是模糊搜索。
+        browse_directory: 目录逐层浏览（须配 kb_name）：" "=库根目录，
+            "产品文档/手册"=该目录直属内容（child_directories+documents，
+            空目录可见，不递归）。与 ref/file_query/directory_prefix/status 互斥。
         file_query: 文件名关键词（子串匹配）。只传它=跨全部开放库搜文件；与
             kb_name 组合=该库内搜。与 ref 互斥。
         directory_prefix: 可选，文件搜索限定目录（含子目录），如 "产品文档/手册"
@@ -494,9 +510,10 @@ def get_knowledge(
             两者都不传时过滤参数显式报错（不静默忽略）。
         depth: 仅 relation=ancestors/descendants：层数（默认 1，上限 3）。
         limit: 条数上限：doc_ 每页切片（≤200 默认100）/ navigation 条数（≤200
-            默认50）/ documents·file_results 每页（≤200 默认50）。
+            默认50）/ documents·file_results·directory 的 documents 每页
+            （≤200 默认50）。
         cursor: 分页游标：上一页返回的 cursor 原样传回（doc_ 与 navigation）。
-        offset: 仅 documents/file_results 视图：分页偏移。
+        offset: 仅 documents/file_results/directory 视图：分页偏移。
         kb_names: 仅 ref 分支：限定库范围（与 search_knowledge 的 kb_names 同义，
             默认全部开放库）。注意与 kb_name（浏览目标库）是两回事。
     """
@@ -504,6 +521,25 @@ def get_knowledge(
     has_ref = bool(ref and str(ref).strip())
     has_kb = bool(kb_name and str(kb_name).strip())
     has_file_query = bool(file_query and str(file_query).strip())
+    # 58号§3：browse_directory 与 ref/搜索过滤互斥（浏览是浏览，搜索是搜索）
+    if browse_directory is not None:
+        if has_ref:
+            raise ToolError(
+                "browse_directory 与 ref 不能同时传：browse_directory=逐层看目录，"
+                "ref=深入某个内容引用。"
+            )
+        if has_file_query or (directory_prefix and str(directory_prefix).strip()) \
+                or (status and str(status).strip()):
+            raise ToolError(
+                "browse_directory 与 file_query/directory_prefix/status 不能同时传："
+                "要搜索文件请去掉 browse_directory 用 file_query（递归限目录加"
+                " directory_prefix）；要看目录结构只传 browse_directory。"
+            )
+        if not has_kb:
+            raise ToolError(
+                "browse_directory 必须与 kb_name 同传：先明确浏览哪个库"
+                "（顶层浏览返回的 name）。"
+            )
     if has_ref and (has_kb or has_file_query):
         raise ToolError(
             "ref 与 kb_name/file_query 不能同时传：ref=深入某个引用，kb_name=浏览"
@@ -519,6 +555,9 @@ def get_knowledge(
     if has_ref:
         return _get_by_ref(ident, str(ref), domain, kb_names,
                            mode, relation, query, depth, limit, cursor)
+    if browse_directory is not None:
+        return _browse_directory(ident, str(kb_name), str(browse_directory),
+                                 limit, offset)
     if has_kb:
         return _list_kb_documents(
             ident, str(kb_name),
@@ -592,6 +631,31 @@ def _get_by_ref(ident: Identity, ref: str, domain: str | None,
         )
     out = _serving_call(backend.inspect_knowledge, username, kb_ids, resolved, ref)
     return {**out, "view": "capabilities"}
+
+
+def _browse_directory(
+    ident: Identity, kb_name: str, directory: str,
+    limit: int | None, offset: int | None,
+) -> dict:
+    """58号§3：目录逐层浏览（直属子目录+直属文件）——形状翻译转发 mining 端点。"""
+    kb_id = _resolve_open_kb(ident, kb_name)
+    try:
+        out = backend.browse_directory(
+            ident.username, ident.key_id, kb_id, directory,
+            limit if limit is not None else 50, offset or 0,
+        )
+    except backend.ToolBackendError as exc:
+        raise _upstream_tool_error(exc) from None
+    return {
+        **out,
+        "view": "directory",
+        "hint": (
+            "child_directories=直属子目录（path 可直接作 browse_directory 与"
+            " manage_files 上传 directory_path 的值）；documents=直属文件"
+            "（document_id/content_revision 供 manage_files 替换）。"
+            "要看该目录及全部子目录的搜索结果请用 file_query+directory_prefix。"
+        ),
+    }
 
 
 def _list_kb_documents(

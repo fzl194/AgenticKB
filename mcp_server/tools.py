@@ -212,6 +212,17 @@ def list_documents(
     return _post("/api/kb/mcp-tools/list-documents", payload)
 
 
+def browse_directory(
+    username: str, key_id: str, kb_id: str,
+    directory: str, limit: int = 50, offset: int = 0,
+) -> dict:
+    """目录逐层浏览（58号§3）：直属子目录（空目录可见）+ 直属文件（不递归）。"""
+    return _post("/api/kb/mcp-tools/browse-directory", {
+        "username": username, "key_id": key_id, "kb_id": kb_id,
+        "directory": directory, "limit": limit, "offset": offset,
+    })
+
+
 # 注：批次8 R8 起 get_document 切 serving document_ref 通道（见上方 get_document）。
 # mining 的旧 /api/kb/mcp-tools/get-document 端点已随代码瘦身批次3 删除。
 

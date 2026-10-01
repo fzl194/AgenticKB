@@ -210,40 +210,56 @@ def test_parameter_conflicts_are_explicit_errors(monkeypatch) -> None:
 def test_tool_registry_is_the_three_piece_family() -> None:
     from mcp_server.identity import TOOL_NAMES
     assert TOOL_NAMES == frozenset({
-        "search_knowledge", "get_knowledge", "upload_document",
+        "search_knowledge", "get_knowledge", "manage_files",
     })
 
 
-# ── upload_document 两步直传（2026-09-11 改造：无 base64） ────────────────
+# ── manage_files 两步直传（58号：upload/replace 双 action） ────────────────
 
 
-def test_upload_document_returns_direct_upload_urls(monkeypatch) -> None:
+def _patch_begin_upload(monkeypatch, calls=None):
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     monkeypatch.setattr(
         server.backend, "begin_upload",
-        lambda username, key_id, kb_id, filename, **kwargs: {
-            "ticket": f"up_{filename}", "max_bytes": 52_428_800,
-            "expires_in": 600,
-        },
-    )
+        lambda *a, **k: (calls.append({"args": a, "kwargs": k}) if calls is not None
+                         else None,
+                         {"ticket": f"up_{a[3]}", "max_bytes": 52_428_800,
+                          "expires_in": 600})[1])
     monkeypatch.setattr(
         server, "get_http_headers",
         lambda include=None: {"host": "kb.example.com:9000"},
     )
 
-    out = server.upload_document(kb_name="网络手册库",
-                                 filenames=["手册.pdf", "notes.md"])
+
+def test_manage_files_upload_returns_direct_upload_urls(monkeypatch) -> None:
+    calls: list[dict] = []
+    _patch_begin_upload(monkeypatch, calls)
+
+    out = server.manage_files(action="upload", kb_name="网络手册库",
+                              filenames=["手册.pdf", "notes.md"])
 
     assert [u["filename"] for u in out["uploads"]] == ["手册.pdf", "notes.md"]
-    assert out["uploads"][0]["upload_url"] ==         "http://kb.example.com:9000/upload/up_手册.pdf"
+    assert out["uploads"][0]["upload_url"] == "http://kb.example.com:9000/upload/up_手册.pdf"
     assert out["uploads"][0]["method"] == "PUT"
     assert out["uploads"][0]["max_bytes"] == 52_428_800
     assert out["uploads"][0]["expires_in"] == 600
     assert "不要 base64" in out["usage"]
     assert "zip" in out["batch_tip"]
+    # upload 模式不携带替换参数
+    assert all("document_id" not in kw["kwargs"] for kw in calls)
 
 
-def test_upload_document_respects_forwarded_proto(monkeypatch) -> None:
+def test_manage_files_upload_passes_directory(monkeypatch) -> None:
+    calls: list[dict] = []
+    _patch_begin_upload(monkeypatch, calls)
+    out = server.manage_files(action="upload", kb_name="网络手册库",
+                              filenames=["手册.pdf"],
+                              directory_path="产品文档/交换机")
+    assert calls[0]["kwargs"].get("directory") == "产品文档/交换机"
+    assert out["uploads"][0]["directory"] == "产品文档/交换机"
+
+
+def test_manage_files_respects_forwarded_proto(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     monkeypatch.setattr(
         server.backend, "begin_upload",
@@ -254,81 +270,109 @@ def test_upload_document_respects_forwarded_proto(monkeypatch) -> None:
         lambda include=None: {"host": "kb.example.com",
                               "x-forwarded-proto": "https"},
     )
-    out = server.upload_document(kb_name="网络手册库", filenames=["a.md"])
+    out = server.manage_files(action="upload", kb_name="网络手册库",
+                              filenames=["a.md"])
     assert out["uploads"][0]["upload_url"].startswith("https://kb.example.com/upload/")
 
 
-def test_upload_document_rejects_path_like_filename(monkeypatch) -> None:
+def test_manage_files_rejects_path_like_filename(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     with pytest.raises(ToolError, match="filename 非法"):
-        server.upload_document(kb_name="网络手册库", filenames=["../evil.md"])
+        server.manage_files(action="upload", kb_name="网络手册库",
+                            filenames=["../evil.md"])
     with pytest.raises(ToolError, match="filename 非法"):
-        server.upload_document(kb_name="网络手册库", filenames=["a/b.md"])
+        server.manage_files(action="upload", kb_name="网络手册库",
+                            filenames=["a/b.md"])
     with pytest.raises(ToolError, match="不能为空"):
-        server.upload_document(kb_name="网络手册库", filenames=[])
+        server.manage_files(action="upload", kb_name="网络手册库", filenames=[])
 
 
-# ── 57号D5：upload_document 替换模式（doc_ ref + 版本暗号）─────────────────
+def test_manage_files_rejects_unknown_action(monkeypatch) -> None:
+    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
+    with pytest.raises(ToolError, match="action"):
+        server.manage_files(action="delete", kb_name="网络手册库",
+                            filenames=["a.md"])
 
 
-def _patch_for_replace(monkeypatch, *, live_revision=3, document_id="doc-internal-1"):
-    calls: list[tuple] = []
+def test_manage_files_upload_forbids_replace_params(monkeypatch) -> None:
+    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
+    with pytest.raises(ToolError, match="只用于 replace"):
+        server.manage_files(action="upload", kb_name="网络手册库",
+                            filenames=["a.md"], document_id="abc123")
+    with pytest.raises(ToolError, match="只用于 replace"):
+        server.manage_files(action="upload", kb_name="网络手册库",
+                            filenames=["a.md"], expected_revision=4)
+
+
+def test_manage_files_upload_rejects_bad_directory_shape(monkeypatch) -> None:
+    monkeypatch.setattr(server, "_identity", lambda: SINGLE)
+    for bad in ("a\\b", "/绝对", "a//b", "a/./b", "a/../b"):
+        with pytest.raises(ToolError, match="directory"):
+            server.manage_files(action="upload", kb_name="网络手册库",
+                                filenames=["a.md"], directory_path=bad)
+
+
+# ── 58号D2：replace 模式（document_id 直连——不经 serving 反查 doc_） ───────
+
+
+def _patch_for_replace(monkeypatch, *, calls=None):
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     monkeypatch.setattr(
         server.backend, "get_document",
-        lambda *a, **k: (calls.append(("resolve",) + a),
-                         {"source": {"document_id": document_id,
-                                     "content_revision": live_revision,
-                                     "file_name": "手册.pdf"},
-                          "segments": []})[1])
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("replace 不得经 serving get_document 反查 doc_")))
     monkeypatch.setattr(
         server.backend, "begin_upload",
-        lambda *a, **k: (calls.append(("begin",) + a + tuple(k.values())),
+        lambda *a, **k: (calls.append({"args": a, "kwargs": k}) if calls is not None
+                         else None,
                          {"ticket": "up_r", "max_bytes": 1, "expires_in": 600})[1])
     monkeypatch.setattr(
         server, "get_http_headers", lambda include=None: {"host": "kb.example.com"})
     return calls
 
 
-def test_upload_document_replace_defaults_to_live_revision(monkeypatch) -> None:
-    calls = _patch_for_replace(monkeypatch, live_revision=7)
-    out = server.upload_document(
-        kb_name="网络手册库", filenames=["手册.pdf"], replace_document_ref="doc_ABC")
+def test_manage_files_replace_passes_document_id_directly(monkeypatch) -> None:
+    calls: list[dict] = []
+    _patch_for_replace(monkeypatch, calls=calls)
+    out = server.manage_files(
+        action="replace", kb_name="网络手册库", filenames=["手册.pdf"],
+        document_id="doc-internal-1", expected_revision=4)
     assert out["uploads"][0]["mode"] == "replace"
-    assert out["uploads"][0]["document_ref"] == "doc_ABC"
-    begin = [c for c in calls if c[0] == "begin"][0]
-    assert "doc-internal-1" in begin      # 内部 id 只到 mining，不进返回
-    assert 7 in begin                     # 暗号缺省=解析到的当前版本
-    assert "doc-internal-1" not in str(out)
+    assert out["uploads"][0]["document_id"] == "doc-internal-1"
+    begin = calls[0]
+    assert begin["kwargs"].get("document_id") == "doc-internal-1"
+    assert begin["kwargs"].get("expected_revision") == 4
+    assert "directory" not in begin["kwargs"]
 
 
-def test_upload_document_replace_explicit_revision_passthrough(monkeypatch) -> None:
-    calls = _patch_for_replace(monkeypatch, live_revision=5)
-    server.upload_document(
-        kb_name="网络手册库", filenames=["手册.pdf"],
-        replace_document_ref="doc_ABC", expected_revision=4)
-    begin = [c for c in calls if c[0] == "begin"][0]
-    assert 4 in begin and 5 not in begin
-
-
-def test_upload_document_replace_rejects_bad_shapes(monkeypatch) -> None:
+def test_manage_files_replace_requires_revision_and_single_file(monkeypatch) -> None:
     _patch_for_replace(monkeypatch)
-    with pytest.raises(ToolError, match="doc_ 前缀"):
-        server.upload_document(kb_name="网络手册库", filenames=["a.pdf"],
-                               replace_document_ref="st_X")
-    with pytest.raises(ToolError, match="一次只能替换一个"):
-        server.upload_document(kb_name="网络手册库", filenames=["a.pdf", "b.pdf"],
-                               replace_document_ref="doc_X")
+    with pytest.raises(ToolError, match="必须传 expected_revision"):
+        server.manage_files(action="replace", kb_name="网络手册库",
+                            filenames=["a.pdf"], document_id="abc123")
+    with pytest.raises(ToolError, match="必须传 document_id"):
+        server.manage_files(action="replace", kb_name="网络手册库",
+                            filenames=["a.pdf"], expected_revision=1)
+    with pytest.raises(ToolError, match="恰好一个"):
+        server.manage_files(action="replace", kb_name="网络手册库",
+                            filenames=["a.pdf", "b.pdf"],
+                            document_id="abc123", expected_revision=1)
     with pytest.raises(ToolError, match="非负整数"):
-        server.upload_document(kb_name="网络手册库", filenames=["a.pdf"],
-                               replace_document_ref="doc_X", expected_revision=-1)
+        server.manage_files(action="replace", kb_name="网络手册库",
+                            filenames=["a.pdf"], document_id="abc123",
+                            expected_revision=-1)
+    with pytest.raises(ToolError, match="非负整数"):
+        server.manage_files(action="replace", kb_name="网络手册库",
+                            filenames=["a.pdf"], document_id="abc123",
+                            expected_revision="4")
 
 
-def test_upload_document_replace_unresolvable_ref_guides_retry(monkeypatch) -> None:
-    _patch_for_replace(monkeypatch, document_id="")
-    with pytest.raises(ToolError, match="无法解析该文档引用"):
-        server.upload_document(kb_name="网络手册库", filenames=["a.pdf"],
-                               replace_document_ref="doc_GONE")
+def test_manage_files_replace_forbids_directory(monkeypatch) -> None:
+    _patch_for_replace(monkeypatch)
+    with pytest.raises(ToolError, match="只用于 upload"):
+        server.manage_files(action="replace", kb_name="网络手册库",
+                            filenames=["a.pdf"], document_id="abc123",
+                            expected_revision=4, directory_path="产品文档")
 
 
 def test_doc_view_keeps_document_id(monkeypatch) -> None:
@@ -347,24 +391,24 @@ def test_doc_view_keeps_document_id(monkeypatch) -> None:
     assert out["source"]["content_revision"] == 2
 
 
-def test_upload_document_limits_filename_count_and_length(monkeypatch) -> None:
+def test_manage_files_limits_filename_count_and_length(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     with pytest.raises(ToolError, match="最多"):
-        server.upload_document(
-            kb_name="网络手册库",
+        server.manage_files(
+            action="upload", kb_name="网络手册库",
             filenames=[f"{index}.md" for index in range(101)],
         )
     with pytest.raises(ToolError, match="过长"):
-        server.upload_document(
-            kb_name="网络手册库",
+        server.manage_files(
+            action="upload", kb_name="网络手册库",
             filenames=["x" * 256],
         )
 
 
-def test_upload_document_rejects_kb_not_open(monkeypatch) -> None:
+def test_manage_files_rejects_kb_not_open(monkeypatch) -> None:
     monkeypatch.setattr(server, "_identity", lambda: SINGLE)
     with pytest.raises(ToolError, match="未开放或不存在"):
-        server.upload_document(kb_name="别的库", filenames=["a.md"])
+        server.manage_files(action="upload", kb_name="别的库", filenames=["a.md"])
 
 
 @pytest.mark.asyncio

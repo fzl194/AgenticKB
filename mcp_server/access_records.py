@@ -339,7 +339,7 @@ def _capture_payload(
         }:
             response_mode = "reference"
             response_refs_json = [_without_content(safe_response)]
-        elif tool_name == "upload_document":
+        elif tool_name == "manage_files":
             response_mode = "reference"
             response_refs_json = [safe_response]
         else:
@@ -412,7 +412,7 @@ def build_access_payload(
         "actor_user_id": identity.user_id if identity else None,
         "actor_username": identity.username if identity else None,
         "source": "mcp",
-        "operation": _operation(tool_name),
+        "operation": _operation(tool_name, arguments),
         "tool_name": tool_name,
         "mcp_key_id": identity.key_id if identity else None,
         "kb_ids": _kb_ids(arguments, identity),
@@ -595,11 +595,13 @@ def _domain(arguments: dict[str, Any], identity: Identity | None) -> str:
     return str(explicit).strip() if explicit and str(explicit).strip() else "unknown"
 
 
-def _operation(tool_name: str) -> str:
+def _operation(tool_name: str, arguments: dict[str, Any]) -> str:
+    """58号§5：manage_files 按 action 分记——upload（新增）/replace（替换）。"""
+    if tool_name == "manage_files":
+        return "replace" if str(arguments.get("action") or "") == "replace" else "upload"
     return {
         "search_knowledge": "search",
         "get_knowledge": "read",
-        "upload_document": "upload",
     }.get(tool_name, "read")
 
 
@@ -664,7 +666,7 @@ def _status(
             return "failed", safe_code
         safe = code if _ERROR_CODE.fullmatch(code) else "tool_failed"
         return ("timeout" if "timeout" in safe else "failed"), safe
-    if tool_name == "upload_document":
+    if tool_name == "manage_files":
         return "pending", None
     if tool_name == "search_knowledge" and not (body.get("evidence") or []):
         return "no_result", None
@@ -689,9 +691,10 @@ def _result_count(
 def _details(
     tool_name: str, arguments: dict[str, Any], body: dict[str, Any],
 ) -> dict[str, Any]:
-    if tool_name == "upload_document":
+    if tool_name == "manage_files":
         filenames = arguments.get("filenames")
-        return {"file_count": len(filenames) if isinstance(filenames, list) else 0}
+        return {"file_count": len(filenames) if isinstance(filenames, list) else 0,
+                "action": str(arguments.get("action") or "")}
     if tool_name != "get_knowledge":
         return {}
     view = str(body.get("view") or _read_action(arguments))

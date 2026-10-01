@@ -64,18 +64,21 @@ MAX_KEY_NAME_LEN = 64
 KEY_PREFIX_TAG = "kbm_"
 _KEY_RANDOM_BYTES = 32
 
-#: MCP 工具族三件套（2026-08-31 用户两轮拍板"功能类似必须合并"）——open_tools
+#: MCP 工具族三件套（2026-08-31 用户两轮拍板"功能类似必须合并"；58号
+#: upload_document → manage_files 改名——上传/替换双 action）——open_tools
 #: 白名单与描述键的校验基线，与 mcp_server 的工具注册一一对应：
 #: - get_knowledge = get_content + browse_knowledge + inspect_knowledge +
 #:   navigate_structure + query_structured_asset（一切读取行为）
 MCP_TOOL_NAMES = frozenset({
     "search_knowledge",
     "get_knowledge",
-    "upload_document",
+    "manage_files",
 })
 
-#: 工具族合并改名映射（2026-08-31 两轮 9→7→3）：旧名 → 新名。任一旧源开启
-#: 即新工具开启；全部旧源都不在清单（=显式关闭）则新工具不开启（关闭语义优先）。
+#: 工具族合并改名映射（2026-08-31 两轮 9→7→3 + 58号 manage_files 改名）：
+#: 旧名 → 新名。任一旧源开启即新工具开启；全部旧源都不在清单（=显式关闭）
+#: 则新工具不开启（关闭语义优先）。58号：upload_document 本就含上传+替换，
+#: 1:1 映射到 manage_files **不扩权**；新写入只收 manage_files（白名单拒旧名）。
 _RENAMED_TOOLS = {
     "get_evidence": "get_knowledge",
     "get_document": "get_knowledge",
@@ -86,6 +89,7 @@ _RENAMED_TOOLS = {
     "inspect_knowledge": "get_knowledge",
     "navigate_structure": "get_knowledge",
     "query_structured_asset": "get_knowledge",
+    "upload_document": "manage_files",
 }
 
 

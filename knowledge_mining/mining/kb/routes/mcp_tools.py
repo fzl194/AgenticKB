@@ -679,8 +679,9 @@ async def _complete_upload_access_record(
             "actor_user_id": entry.get("user_id"),
             "actor_username": entry.get("username"),
             "source": "mcp",
-            "operation": "upload",
-            "tool_name": "upload_document",
+            # 58号§5：manage_files 按票据语义分记 upload/replace
+            "operation": "replace" if entry.get("document_id") else "upload",
+            "tool_name": "manage_files",
             "mcp_key_id": entry.get("key_id"),
             "kb_ids": [entry.get("kb_id")] if entry.get("kb_id") else [],
             "query_text": None,
@@ -704,7 +705,7 @@ async def _complete_upload_access_record(
             "access_record_write_failed",
             extra={
                 "record_id": record_id,
-                "tool": "upload_document",
+                "tool": "manage_files",
                 "phase": "upload_complete",
                 "error_class": exc.__class__.__name__,
             },

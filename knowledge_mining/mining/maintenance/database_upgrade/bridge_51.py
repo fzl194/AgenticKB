@@ -61,10 +61,11 @@ class Bridge51Policy:
     allowed_domains: frozenset[str]
 
 
+# 58号：upload_document → manage_files（1:1 不扩权）
 _CURRENT_MCP_TOOLS = frozenset({
     "search_knowledge",
     "get_knowledge",
-    "upload_document",
+    "manage_files",
 })
 _LEGACY_TOOL_RENAMES = {
     "get_evidence": "get_knowledge",
@@ -76,6 +77,7 @@ _LEGACY_TOOL_RENAMES = {
     "inspect_knowledge": "get_knowledge",
     "navigate_structure": "get_knowledge",
     "query_structured_asset": "get_knowledge",
+    "upload_document": "manage_files",
 }
 
 

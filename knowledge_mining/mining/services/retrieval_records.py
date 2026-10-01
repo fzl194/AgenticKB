@@ -180,7 +180,7 @@ class RetrievalRecordService:
         except Exception as exc:
             _record_write_failure(
                 record_id=record_id,
-                tool="upload_document",
+                tool="manage_files",
                 phase="upload_complete",
                 error=exc,
             )
@@ -198,7 +198,7 @@ class RetrievalRecordService:
         except Exception as exc:
             _record_write_failure(
                 record_id="",
-                tool="upload_document",
+                tool="manage_files",
                 phase="upload_expire",
                 error=exc,
             )

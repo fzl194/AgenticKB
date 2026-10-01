@@ -212,7 +212,8 @@ async def test_get_and_upload_use_read_and_pending_without_sensitive_arguments(
         return {"uploads": [{"upload_url": "https://example/secret-ticket"}]}
 
     await server.PersonalizationMiddleware().on_call_tool(
-        context("upload_document", {
+        context("manage_files", {
+            "action": "upload",
             "kb_name": "Manual", "filenames": ["customer-secret.pdf"],
         }),
         upload_result,
@@ -221,11 +222,26 @@ async def test_get_and_upload_use_read_and_pending_without_sensitive_arguments(
     assert records[-1]["operation"] == "upload"
     assert records[-1]["status"] == "pending"
     assert records[-1]["kb_ids"] == ["kb-1"]
-    assert records[-1]["details_json"] == {"file_count": 1}
+    assert records[-1]["details_json"] == {"file_count": 1, "action": "upload"}
     assert records[-1]["payload"]["request_json"]["filenames"] == [
         "customer-secret.pdf",
     ]
     assert "secret-ticket" not in str(records[-1]["payload"])
+
+    # 58号§5：manage_files 的 replace 动作在账本里独立分类（operation=replace）
+    async def replace_result(_context):
+        return {"uploads": [{"upload_url": "https://example/secret-ticket"}]}
+
+    await server.PersonalizationMiddleware().on_call_tool(
+        context("manage_files", {
+            "action": "replace",
+            "kb_name": "Manual", "filenames": ["customer-secret.pdf"],
+            "document_id": "doc-1", "expected_revision": 4,
+        }),
+        replace_result,
+    )
+    assert records[-1]["operation"] == "replace"
+    assert records[-1]["status"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -604,8 +620,9 @@ async def test_mcp_health_exposes_access_record_write_failures() -> None:
 
 def test_upload_completion_adds_safe_document_and_run_references() -> None:
     pending = build_access_payload(
-        call_id="upload-refs", tool_name="upload_document",
-        arguments={"kb_name": "Manual", "filenames": ["guide.pdf"]},
+        call_id="upload-refs", tool_name="manage_files",
+        arguments={"action": "upload",
+                   "kb_name": "Manual", "filenames": ["guide.pdf"]},
         identity=IDENTITY,
         result={"uploads": [{
             "filename": "guide.pdf",

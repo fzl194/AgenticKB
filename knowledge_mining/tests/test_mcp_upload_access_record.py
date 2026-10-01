@@ -156,7 +156,7 @@ async def test_mining_write_failure_increments_metric_and_is_structured(
         with pytest.raises(RuntimeError, match="ledger down"):
             await service.write_record({
                 "id": "call-failed",
-                "tool_name": "upload_document",
+                "tool_name": "manage_files",
             })
 
     assert records_service.get_access_record_metrics() == {
@@ -167,7 +167,7 @@ async def test_mining_write_failure_increments_metric_and_is_structured(
         if record.getMessage() == "access_record_write_failed"
     )
     assert warning.record_id == "call-failed"
-    assert warning.tool == "upload_document"
+    assert warning.tool == "manage_files"
     assert warning.error_class == "RuntimeError"
 
 
@@ -194,7 +194,7 @@ async def test_mining_health_exposes_access_record_write_failures() -> None:
     records_service.reset_access_record_metrics()
     records_service._record_write_failure(
         record_id="call-health",
-        tool="upload_document",
+        tool="manage_files",
         phase="test",
         error=RuntimeError("down"),
     )

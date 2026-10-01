@@ -48,7 +48,7 @@ const META = {
       },
     },
     { name: 'get_knowledge', description: '默认：深入读取', parameters: { properties: {}, required: [] } },
-    { name: 'upload_document', description: '默认：上传文件', parameters: { properties: {}, required: [] } },
+    { name: 'manage_files', description: '默认：管理文件', parameters: { properties: {}, required: [] } },
   ],
 }
 

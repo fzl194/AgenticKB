@@ -45,14 +45,15 @@ class IdentityError(Exception):
     """无钥/错钥/后端不可达。message 面向 Agent（中文），可直接作为工具错误返回。"""
 
 
-#: MCP 工具族三件套（2026-08-31 用户两轮拍板"功能类似必须合并"）：
+#: MCP 工具族三件套（2026-08-31 用户两轮拍板"功能类似必须合并"；
+#: 58号 upload_document → manage_files 改名——上传/替换双 action，不扩权）：
 #: - get_knowledge = get_content + browse_knowledge + inspect_knowledge +
 #:   navigate_structure + query_structured_asset（一切读取行为，ref/库分流）
 #: 与 mining mcp_key_service.MCP_TOOL_NAMES 一一对应。
 TOOL_NAMES = frozenset({
     "search_knowledge",
     "get_knowledge",
-    "upload_document",
+    "manage_files",
 })
 
 

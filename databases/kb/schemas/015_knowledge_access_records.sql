@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS knowledge_access_records (
     error_code TEXT,
     details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     CONSTRAINT ck_knowledge_access_source CHECK (source IN ('web', 'mcp', 'api')),
-    CONSTRAINT ck_knowledge_access_operation CHECK (operation IN ('search', 'read', 'upload')),
+    CONSTRAINT ck_knowledge_access_operation CHECK (operation IN ('search', 'read', 'upload', 'replace')),
     CONSTRAINT ck_knowledge_access_status CHECK (status IN ('pending', 'success', 'no_result', 'denied', 'invalid', 'timeout', 'failed')),
     CONSTRAINT ck_knowledge_access_kb_ids_array CHECK (jsonb_typeof(kb_ids) = 'array'),
     CONSTRAINT ck_knowledge_access_details_object CHECK (jsonb_typeof(details_json) = 'object'),

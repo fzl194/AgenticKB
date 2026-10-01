@@ -12,7 +12,8 @@
 - get_knowledge：一切读取行为（ref 分流 ev_/doc_/st_ + 层级浏览 + 能力报告默认），
   合并了 get_content / browse_knowledge / inspect_knowledge / navigate_structure /
   query_structured_asset 五件——Agent 只需知道"有了 ref 或库名就调它"
-- upload_document：上传（两步直传：工具发一次性 URL，Agent PUT 原始字节）
+- manage_files：文件管理（上传到目录/替换任意本地文件；两步直传：工具发
+  一次性 URL，Agent PUT 原始字节；不提供删除/移动/重命名——58号改名自 upload_document）
 """
 from __future__ import annotations
 
@@ -58,6 +59,8 @@ logger = logging.getLogger(__name__)
 _post_access_record = post_access_record
 MAX_UPLOAD_FILENAMES = 100
 MAX_UPLOAD_FILENAME_LENGTH = 255
+#: 58号：upload 的 directory_path 长度上限（与 mining/serving 侧 512 对齐）
+MAX_DIRECTORY_PATH_LENGTH = 512
 _pending_upload_recovery_lock = asyncio.Lock()
 
 
@@ -73,7 +76,7 @@ async def _recover_pending_uploads_once() -> None:
                 "access_record_write_failed",
                 extra={
                     "record_id": "",
-                    "tool": "upload_document",
+                    "tool": "manage_files",
                     "phase": "startup_expire",
                     "error_class": exc.__class__.__name__,
                 },
@@ -130,17 +133,24 @@ async def _safe_post_access_record(
 DEFAULT_INSTRUCTIONS = """\
 你是多领域知识证据检索服务（用户级接入：调用必须携带 Bearer 密钥）。
 
-只有三个工具：search_knowledge 模糊找、get_knowledge 深入读、upload_document 上传
-（两步：先拿 upload_url，再 PUT 文件原始字节，不要 base64）。
+只有三个工具：search_knowledge 搜内容、get_knowledge 浏览与深读、manage_files
+管理文件（上传到目录 / 替换任意本地文件；不提供删除、移动、重命名）。
 
 知识按三层组织：知识域（domain）→ 知识库（knowledge base）→ 文档（document）。
 密钥主人决定开放哪些知识库；每把钥匙绑定一个知识域——domain 参数可不传
 （自动使用钥匙绑定域），传了也必须等于绑定域，跨域访问请换对应域的钥匙。
 不要根据问题内容猜测领域。
 
-工作流：先用 get_knowledge 不带参数看自己有什么（返回域→库树），或直接
-search_knowledge 模糊检索（返回证据列表 evidence，每条带 ref/type/content/source）。
-之后一切深入都走 get_knowledge——它按你给的入口自动分流：
+文件有两个"名字"，用途不同：
+- document_id：文件的身份证（上传即有、永不换）——manage_files 替换文件就认它；
+- doc_（document_ref）：某次挖掘快照的内容引用（重挖会变）——get_knowledge
+  读整篇内容用它。content_revision 是版本暗号，替换时原样回传防互相覆盖。
+
+工作流：先用 get_knowledge 不带参数看自己有什么（返回域→库树），或
+browse_directory="" 逐层看目录；要更新文件就 search_knowledge / get_knowledge
+拿到 document_id + content_revision 后走 manage_files(action="replace")。
+search_knowledge 模糊检索返回证据列表 evidence（每条带 ref/type/content/source），
+source 里同时有 document_id 和 document_ref。之后一切深入都走 get_knowledge：
 - ref 是 ev_（search 结果 evidence[].ref）：给内容原文，truncated=true 时加 mode
   选更大粒度 auto/exact/window/parent/whole_document；
 - ref 是 doc_（source.document_ref）：limit/cursor 分页读整篇文档；
@@ -273,7 +283,7 @@ class PersonalizationMiddleware(Middleware):
                     duration_ms=duration_ms,
                     forced_status=forced_status,
                 )
-                if name == "upload_document" and payload["status"] == "pending":
+                if name == "manage_files" and payload["status"] == "pending":
                     register_upload_tickets(payload, result)
                 await _safe_post_access_record(payload, phase="complete")
             finally:
@@ -454,7 +464,7 @@ def get_knowledge(
     file_query 是**找文件**（按文件名，秒回，不依赖挖掘——未挖掘/挖掘失败的
     文件也能搜到，正是它相对 search_knowledge 的独特价值）；search_knowledge 是
     **搜内容**。文件条目带 status/content_revision/directory_path（+跨库时的 kb），
-    其中 content_revision 是 upload_document 替换文件时要回传的版本暗号。
+    其中 content_revision 是 manage_files(action="replace") 要回传的版本暗号（expected_revision）。
 
     Args:
         ref: 上游返回的引用。ev_ → 可用 mode；doc_ → 可用 limit/cursor；
@@ -623,7 +633,7 @@ def _search_files_across_kbs(
         "view": "file_results",
         "hint": (
             "条目带 kb（所在库）与 directory_path；要读内容用 search_knowledge，"
-            "要替换文件用 upload_document 的替换参数（content_revision 即版本暗号）。"
+            "要替换文件用 manage_files(action=\"replace\")——document_id + content_revision 即参数。"
         ),
     }
 
@@ -656,62 +666,80 @@ def _browse_top(ident: Identity, domain: str | None) -> dict:
 
 
 @mcp.tool()
-def upload_document(
-    kb_name: str, filenames: list[str],
-    replace_document_ref: str | None = None,
+def manage_files(
+    action: str,
+    kb_name: str,
+    filenames: list[str],
+    directory_path: str | None = None,
+    document_id: str | None = None,
     expected_revision: int | None = None,
 ) -> dict:
-    """上传一个或多个文件到开放的知识库——两步直传（原始字节），自动排队挖掘；
-    也可替换既有文件的内容（57号：报 doc_ 引用 + 版本暗号）。
+    """管理知识库文件：上传新文件到指定目录，或替换任意已有文件。当前不提供删除、移动或重命名。
 
-    用法（两步）：
-    1. 调本工具，传入目标库名与文件名列表 → 返回每个文件的 upload_url
-       （一次性凭证，10 分钟内有效、单次使用，**不需要任何认证头**）；
-    2. 对每个文件用 PUT 把**原始字节**传到它自己的 upload_url
-       （不要 base64——大文件 base64 会超出工具参数上限）：
+    两种模式（两步直传：本工具发一次性 upload_url，Agent PUT 原始字节——不要 base64）：
 
-           curl -X PUT --data-binary @手册.pdf "<该文件的 upload_url>"
+    action="upload"（上传一个或多个新文件）：
+    - filenames 1~100 个纯文件名（不含路径分隔符）；
+    - directory_path 可选：不传/空 = 库根目录；传了 = 必须是该库**已存在**的目录
+      （不自动创建——先用 get_knowledge(browse_directory=…) 确认目录写法）；
+      ZIP 上传到指定目录时解压落位为 {directory_path}/{压缩包名}/…；
+    - 返回每个文件的一次性 PUT URL（10 分钟内单次有效，无需任何认证头）；
+    - 上传成功自动排队挖掘，挖完才可被 search_knowledge 检索到。
 
-    每个 PUT 的响应即该文件的上传与挖掘入队结果（document_id /
-    auto_mined / run_id）。
+    action="replace"（替换任意已有本地文件——未挖掘/挖掘失败/已入库都可以）：
+    - document_id = get_knowledge 文件清单/目录浏览 或 search_knowledge 证据
+      source.document_id 返回的同一个值（不要求文件已挖掘，不需要 doc_）；
+    - expected_revision = 你看到的 content_revision（必填，版本暗号）；
+    - filenames 恰好一个，扩展名必须与当前文件相同（PDF 换 PDF）；
+    - 替换保留原文件名、目录与身份；新版本挖完前旧知识继续可检索；
+    - 版本对不上返回 409：有人先改了——重新 get_knowledge 取最新
+      content_revision 再试。
 
-    上传成功后自动入队该库的整库增量挖掘 Run：库空闲则立即排队执行；库
-    正在挖掘/审核中则排在后面串行执行——多个文件各自 PUT 即可，无需等待
-    或合并。挖掘完成后内容才可被检索到——刚上传的文件用 search_knowledge
-    查不到是正常的，需等挖掘完成。上传需要对该库有编辑权限。
+    明确声明：本工具不删除文件、不移动文件、不重命名文件；directory_path
+    只用于 upload；document_id/expected_revision 只用于 replace；referenced=true
+    的外部引用文档不可替换；PUT 用原始字节不是 base64。
 
-    替换模式（更新既有文件的内容，名称/目录/身份不变）：
-    - replace_document_ref = 该文档的 doc_ 引用（search 证据的
-      source.document_ref，或 get_knowledge ref=doc_… 读取时的那个 ref）；
-    - expected_revision = 你看到的 content_revision（get_knowledge 文件
-      清单/文档读取都返回它）。省略时按当前版本尝试；
-    - 此时 filenames 恰好一个，且扩展名必须与当前文件相同（PDF 换 PDF）；
-    - 版本对不上会 409——说明有人先改了，重新读取 content_revision 再试；
-      替换成功同样自动排队挖掘，挖完前旧知识继续可检索。
+    示例一（浏览根目录找目标位置）：
+        get_knowledge(kb_name="设备库", browse_directory="")
+    示例二（上传到指定目录）：
+        manage_files(action="upload", kb_name="设备库",
+                     filenames=["交换机手册.pdf"],
+                     directory_path="产品文档/交换机")
+        → 对返回的 upload_url：curl -X PUT --data-binary @交换机手册.pdf "<url>"
+    示例三（替换任意文件——document_id/content_revision 来自①或②）：
+        ① get_knowledge(kb_name="设备库", browse_directory="产品文档/交换机")
+           → documents[].document_id="abc123", content_revision=4
+        ② search_knowledge("端口配置") → evidence[].source.document_id/content_revision
+        然后：
+        manage_files(action="replace", kb_name="设备库",
+                     filenames=["交换机手册.pdf"],
+                     document_id="abc123", expected_revision=4)
 
-    多文件也可以打包：把若干文件压成一个 zip 只传一个 URL，服务端会
-    **自动解压成多个文档**（与网页端上传 zip 完全一致，解压后的文档在
-    "压缩包名/" 目录下）。两种方式任选：少量大文件逐个传；大量小文件
-    打包传更高效。（替换模式不支持 zip。）
-
-    票据超时或 PUT 失败：重调本工具取新 URL 重传即可。普通文件上限
-    50MB；zip/hdx/chm 归档上限与网页端一致（500MB）。可被挖掘的格式：
-    md/txt/html/pdf/doc(x)/xls(x)/ppt(x)/json 及归档 zip/hdx/chm；其他
-    格式可上传但挖掘会标记不支持。
+    大小限制与格式：普通文件 50MB；zip/hdx/chm 归档 500MB（自动解压成多个
+    文档，与网页端一致）；可挖掘格式 md/txt/html/pdf/doc(x)/xls(x)/ppt(x)/
+    json 及归档，其他格式可上传但挖掘会标记不支持（替换模式不支持 zip）。
+    票据超时或 PUT 失败：重调本工具取新 URL 重传即可。操作需要对该库有编辑权限。
 
     Args:
+        action: "upload"（新增文件）或 "replace"（替换已有文件）。
         kb_name: 目标知识库名称（get_knowledge 顶层浏览返回的 name）。
-        filenames: 文件名列表（含扩展名，如 ["手册.pdf", "notes.md"]；
-            单文件传一个元素的列表）。每个文件名不含路径分隔符。
-        replace_document_ref: 可选，替换模式——要替换的文档 doc_ 引用。
-        expected_revision: 可选，替换模式——你看到的该文档 content_revision
-            （版本暗号，防并发互相覆盖）。
+        filenames: 文件名列表（含扩展名，如 ["手册.pdf"]）。upload 1~100 个；
+            replace 恰好 1 个。每个文件名不含路径分隔符。
+        directory_path: 仅 upload：目标目录（如 "产品文档/交换机"）。不传/空 =
+            根目录；必须已存在（不自动创建）。
+        document_id: 仅 replace：目标文件的 document_id（get_knowledge/
+            search_knowledge 返回的同一个值）。
+        expected_revision: 仅 replace：你看到的 content_revision（必填版本暗号）。
     """
     ident = _identity()
     kb_id = _resolve_open_kb(ident, kb_name)
-    if expected_revision is not None and not (replace_document_ref or "").strip():
+
+    # ── action 分流与参数矩阵（58号D2：两模式参数互斥，显式报错不静默） ──
+    action = str(action or "").strip()
+    if action not in ("upload", "replace"):
         raise ToolError(
-            "expected_revision 只在替换模式有意义：请同时传 replace_document_ref。"
+            f"action 只支持 upload（上传新文件）或 replace（替换已有文件），"
+            f"收到 {action!r}。本工具不提供删除/移动/重命名。"
         )
     if not filenames:
         raise ToolError("filenames 不能为空：至少给出一个文件名。")
@@ -725,42 +753,38 @@ def upload_document(
                 f"filename 过长：最多 {MAX_UPLOAD_FILENAME_LENGTH} 个字符。"
             )
 
-    # 57号D5 替换模式：先经 serving 解析 doc_ 引用（形状翻译——Agent 不见内部 id）
-    document_id = ""
-    if replace_document_ref and str(replace_document_ref).strip():
-        ref = str(replace_document_ref).strip()
-        if not ref.startswith("doc_"):
+    directory = str(directory_path or "").strip()
+    doc_id = str(document_id or "").strip()
+
+    if action == "upload":
+        if doc_id or expected_revision is not None:
             raise ToolError(
-                "replace_document_ref 必须是 doc_ 前缀的文档引用（来自 search 证据的"
-                " source.document_ref 或 get_knowledge 的文档读取）。"
+                "document_id/expected_revision 只用于 replace（替换已有文件）；"
+                "上传新文件请不要传它们。"
+            )
+        _check_directory_shape(directory)
+    else:  # replace
+        if directory:
+            raise ToolError(
+                "directory_path 只用于 upload：替换保留原文档目录不变，请不要传。"
+            )
+        if not doc_id:
+            raise ToolError(
+                "replace 必须传 document_id（get_knowledge 文件清单/目录浏览或 "
+                "search_knowledge 证据 source.document_id 返回的值）。"
             )
         if len(filenames) != 1:
             raise ToolError("替换模式一次只能替换一个文件：filenames 恰好一个元素。")
-        out = _serving_call(
-            backend.get_document, ident.username, _scope_kbs(ident, None),
-            _domain(ident, None), ref)
-        src = out.get("source") or {}
-        document_id = str(src.get("document_id") or "")
-        live_revision = src.get("content_revision")
-        if not document_id:
-            raise ToolError(
-                "无法解析该文档引用（可能已删除或不可访问）：请重新 search_knowledge "
-                "获取新的 document_ref。"
-            )
         if expected_revision is None:
-            if isinstance(live_revision, bool) or not isinstance(live_revision, int):
-                raise ToolError(
-                    "无法获取该文档的当前 content_revision（服务端未返回）：请显式传 "
-                    "expected_revision（get_knowledge 文件清单/文档读取里的 "
-                    "content_revision 值）。"
-                )
-            expected_revision = live_revision
-    if expected_revision is not None and (
-        isinstance(expected_revision, bool)
-        or not isinstance(expected_revision, int)
-        or expected_revision < 0
-    ):
-        raise ToolError("expected_revision 必须是非负整数（该文档的 content_revision）。")
+            raise ToolError(
+                "replace 必须传 expected_revision（你看到的该文档 content_revision，"
+                "版本暗号防并发互相覆盖）。"
+            )
+        if (isinstance(expected_revision, bool)
+                or not isinstance(expected_revision, int) or expected_revision < 0):
+            raise ToolError(
+                "expected_revision 必须是非负整数（该文档的 content_revision）。"
+            )
 
     headers = get_http_headers(include={"host", "x-forwarded-proto"}) or {}
 
@@ -773,15 +797,20 @@ def upload_document(
     host = _header("host")
     proto = _header("x-forwarded-proto") or "http"
 
+    # 按模式携带模式专属参数（upload→directory；replace→document_id+暗号），
+    # 不传空值——下游与测试都以"键在=语义在"读 kwargs
+    mode_kwargs: dict = (
+        {"document_id": doc_id, "expected_revision": expected_revision}
+        if action == "replace" else ({"directory": directory} if directory else {})
+    )
     uploads = []
     for filename in filenames:
         try:
             issued = backend.begin_upload(
                 ident.username, ident.key_id, kb_id, str(filename),
-                document_id=document_id,
-                expected_revision=expected_revision,
                 access_record_id=str((current_access_call.get() or {}).get("id") or ""),
                 access_record_total=len(filenames),
+                **mode_kwargs,
             )
         except backend.ToolBackendError as exc:
             raise _upstream_tool_error(exc) from None
@@ -797,21 +826,43 @@ def upload_document(
             "content_type": "application/octet-stream",
             "max_bytes": issued.get("max_bytes"),
             "expires_in": issued.get("expires_in"),
-            **({"mode": "replace", "document_ref": str(replace_document_ref).strip()}
-               if document_id else {}),
+            **({"mode": "replace", "document_id": doc_id} if action == "replace" else {}),
+            **({"directory": directory} if action == "upload" and directory else {}),
         })
+    usage = (
+        "对每个文件执行：curl -X PUT --data-binary @<本地文件路径> <该文件的 upload_url>"
+        "（原始字节，不要 base64；无需任何认证头，URL 即一次性凭证，10 分钟内单次有效）；"
+        "每个 PUT 的响应就是该文件的上传与挖掘入队结果。"
+        + ("版本对不上返回 409：重新 get_knowledge 取最新 content_revision 再试。"
+           if action == "replace" else "")
+    )
     return {
         "uploads": uploads,
-        "usage": (
-            "对每个文件执行：curl -X PUT --data-binary @<本地文件路径> <该文件的 upload_url>"
-            "（原始字节，不要 base64；无需任何认证头，URL 即一次性凭证，10 分钟内单次有效）；"
-            "每个 PUT 的响应就是该文件的上传与挖掘入队结果。"
-        ),
-        "batch_tip": (
+        "usage": usage,
+        **({"batch_tip": (
             "多个小文件也可打包成一个 zip 上传单个 URL，服务端自动解压成多个文档"
             "（与网页端上传 zip 一致）。"
-        ),
+        )} if action == "upload" else {}),
     }
+
+
+def _check_directory_shape(directory: str) -> None:
+    """58号D2：upload 的 directory 形状前置检查（存在性由 begin-upload 查库校验）。"""
+    if not directory:
+        return
+    if "\\" in directory or directory.startswith("/"):
+        raise ToolError(
+            "directory_path 非法：路径分隔符只认 /，且不能以 / 开头（绝对路径）。"
+        )
+    if len(directory) > MAX_DIRECTORY_PATH_LENGTH:
+        raise ToolError(
+            f"directory_path 过长：最多 {MAX_DIRECTORY_PATH_LENGTH} 个字符。"
+        )
+    for segment in directory.split("/"):
+        if segment in ("", ".", ".."):
+            raise ToolError(
+                "directory_path 非法：含空段或点段（./..）；根目录请不传或传空字符串。"
+            )
 
 
 @mcp.custom_route("/upload/{ticket}", methods=["PUT"])

@@ -26,7 +26,7 @@ def meta() -> dict:
 def test_meta_shape_three_tools_with_param_docs(meta: dict) -> None:
     assert meta["instructions"], "默认提示词不能为空"
     names = [t["name"] for t in meta["tools"]]
-    assert set(names) == {"search_knowledge", "get_knowledge", "upload_document"}
+    assert set(names) == {"search_knowledge", "get_knowledge", "manage_files"}
 
     by_name = {t["name"]: t for t in meta["tools"]}
     # 默认描述与参数说明都在（fastmcp：描述=docstring 正文；参数说明在 schema properties）
@@ -37,8 +37,8 @@ def test_meta_shape_three_tools_with_param_docs(meta: dict) -> None:
         assert all("description" in p for p in props.values()), \
             f"{name} 参数缺 description（docstring Args 段没被 fastmcp 解析？）"
 
-    upload = by_name["upload_document"]
-    assert set(upload["parameters"].get("required") or []) == {"kb_name", "filenames"}
+    upload = by_name["manage_files"]
+    assert set(upload["parameters"].get("required") or []) == {"action", "kb_name", "filenames"}
 
 
 def test_meta_cached_within_process(meta: dict) -> None:

@@ -109,7 +109,7 @@ def test_server_passes_key_id_to_backend(monkeypatch) -> None:
 
     server.get_knowledge()
     server.get_knowledge(kb_name="网络手册库")
-    server.upload_document(kb_name="网络手册库", filenames=["a.md"])
+    server.manage_files(action="upload", kb_name="网络手册库", filenames=["a.md"])
 
     assert [c[:3] for c in calls] == [
         ("list-kbs", "alice", "key-1"),

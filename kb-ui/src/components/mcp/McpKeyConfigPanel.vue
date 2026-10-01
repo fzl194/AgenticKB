@@ -178,11 +178,12 @@ import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { McpKeyItem } from '@/types/kb'
 
-/** 三件套（与后端 MCP_TOOL_NAMES 一致）；label 为默认文案摘要。 */
+/** 三件套（与后端 MCP_TOOL_NAMES 一致）；label 为默认文案摘要。
+ * 58号：upload_document → manage_files（上传/替换双 action，不提供删除/移动/重命名）。 */
 const ALL_TOOLS = [
   { name: 'search_knowledge', label: '检索知识证据（domain 单域免传）' },
-  { name: 'get_knowledge', label: '深入读取：浏览层级 / 取原文 / 看能力 / 导航 / 查表格' },
-  { name: 'upload_document', label: '上传一个或多个文件（zip 自动解压）入库并自动排队挖掘（跑完才可检索）' },
+  { name: 'get_knowledge', label: '深入读取：浏览层级 / 逐层看目录 / 取原文 / 看能力 / 导航 / 查表格' },
+  { name: 'manage_files', label: '管理文件：上传到指定目录 / 替换任意本地文件（zip 自动解压，自动排队挖掘；不提供删除/移动/重命名）' },
 ] as const
 
 const props = defineProps<{

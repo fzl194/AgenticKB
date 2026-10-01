@@ -112,6 +112,19 @@ async def test_begin_upload_replace_bad_revision_type_422(_clean_tickets):
     assert ei.value.status_code == 422
 
 
+@pytest.mark.parametrize("doc_status", ["uploaded", "mining", "mined", "failed", "update_failed"])
+async def test_begin_upload_replace_allows_all_five_statuses(doc_status, _clean_tickets):
+    """58号§2.4：替换不依赖挖掘状态——五种状态（uploaded/mining/mined/failed/
+    update_failed）都能按 document_id 签替换票据（不要求 doc_/活动快照/挖掘成功）。"""
+    out = await mcp_tools.begin_upload(
+        _body(document_id="doc-1", expected_revision=3),
+        _request(), kbdb=_FakeKbDB(doc={**DOC, "status": doc_status}),
+    )
+    entry = mcp_tools._TICKETS.peek(out["ticket"])
+    assert entry["document_id"] == "doc-1"
+    assert entry["expected_revision"] == 3
+
+
 async def test_begin_upload_without_document_id_ignores_revision(_clean_tickets):
     out = await mcp_tools.begin_upload(
         _body(expected_revision=99),  # 无 document_id：不进入替换校验

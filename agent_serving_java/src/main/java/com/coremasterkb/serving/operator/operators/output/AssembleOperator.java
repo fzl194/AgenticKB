@@ -224,6 +224,8 @@ public class AssembleOperator implements Operator {
                 src != null ? src.knowledgeBase() : null,
                 src != null ? src.fileName() : null,
                 src != null ? src.relativePath() : null,
+                src != null ? src.documentId() : null,
+                src != null ? src.contentRevision() : null,
                 e.documentRef() != null ? refCodec.encodeDocument(e.snapshotId(), e.documentRef()) : null,
                 src != null ? src.section() : null,
                 src != null ? src.page() : null,

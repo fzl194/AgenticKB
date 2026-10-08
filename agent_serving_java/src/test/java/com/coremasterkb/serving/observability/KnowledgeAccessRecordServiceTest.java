@@ -38,7 +38,7 @@ class KnowledgeAccessRecordServiceTest {
         EvidenceResponse.EvidenceItem item = new EvidenceResponse.EvidenceItem(
                 "ev_1", "prose", "secret evidence body",
                 new EvidenceResponse.EvidenceSource(
-                        "kb", "manual.md", null, "doc_1", null, null, null),
+                        "kb", "manual.md", null, null, null, "doc_1", null, null, null),
                 false, null);
 
         service.record(

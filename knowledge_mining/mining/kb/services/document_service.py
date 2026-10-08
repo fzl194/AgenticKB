@@ -116,7 +116,10 @@ async def _run_archive_task(
             on_progress=lambda done, total, name: registry.update(
                 task_id, done=done, total=total),
         )
-        registry.complete(task_id, document_count=len(docs), failed=0)
+        # codex P2-6（58号二审）：先跑 on_complete（自动挖掘入队+note_mining 写回）
+        # 再置 completed——前端见 completed 即停轮询，先 complete 后回调会把
+        # auto_mine 结果写在无人再看的位置。回调自身 try/except 兜底，
+        # 入队失败不阻断任务终态化。
         if on_complete is not None:
             try:
                 outcome = on_complete(registry.get(task_id) or {})
@@ -125,6 +128,7 @@ async def _run_archive_task(
             except Exception:
                 logging.getLogger(__name__).exception(
                     "archive on_complete callback failed (task=%s)", task_id)
+        registry.complete(task_id, document_count=len(docs), failed=0)
     except Exception as exc:
         registry.fail(task_id, f"{type(exc).__name__}: {exc}")
     finally:
@@ -687,6 +691,15 @@ class DocumentService:
         if kb is None:
             raise NotFound(kb_id)
         await self._svc._assert_write(kb_id, owner_id)  # IDOR 防护：写权限校验（admin/owner/editor）
+        # codex P2-2（58号二审）：base_directory 解压前复核存在——签票后目录被删时，
+        # 普通文件路径会被 assert_directory_exists 拒，而归档的 ensure_folder_path
+        # 会把已删目录**重建**（违背"不自动创建目录"契约）。统一在服务层前置拦截
+        # （网页+MCP 同修）；{包名}/… 内部子目录仍正常自动创建。
+        if base_directory and await self._db.find_folder_by_path(
+                kb_id=kb_id, path=base_directory) is None:
+            raise ValueError(
+                f"目标目录不存在：{base_directory!r}（可能在上传期间被删除；"
+                f"请刷新目录后重试）")
         # Archive extraction needs a filesystem, but it is only a transient
         # scratch space.  No extracted path is persisted in asset_documents.
         ext = archive_path.suffix.lower()

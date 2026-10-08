@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from psycopg.errors import UniqueViolation
 
 from knowledge_mining.mining.infra.control_plane import get_internal_verify_secret
 from knowledge_mining.mining.infra.upload_config import UploadConfig
@@ -34,7 +35,7 @@ from knowledge_mining.mining.kb.services.document_service import (
     ContentRevisionConflict, UploadTooLarge,
     is_upload_archive,
 )
-from knowledge_mining.mining.kb.services.kb_service import Forbidden, NotFound
+from knowledge_mining.mining.kb.services.kb_service import Duplicate, Forbidden, NotFound
 from knowledge_mining.mining.services.retrieval_records import RetrievalRecordService
 
 logger = logging.getLogger(__name__)
@@ -607,6 +608,26 @@ async def upload_direct(
         raise HTTPException(
             413, f"file too large（上限 {exc.limit_bytes} 字节）"
         ) from exc
+    except NotFound as exc:
+        # codex P2-1：票据 TTL 窗口内库被删——与库族路由同防探测口径（404）
+        await _complete_upload_access_record(
+            request, entry, success=False, error_code="kb_not_found")
+        raise HTTPException(404, f"knowledge base not found: {exc}") from None
+    except Forbidden:
+        # 签票后写权限被收回——票据有效但身份已无编辑权（403）
+        await _complete_upload_access_record(
+            request, entry, success=False, error_code="write_forbidden")
+        raise HTTPException(
+            403, "当前身份无权上传到该库（需要库的编辑权限）。") from None
+    except (UniqueViolation, Duplicate) as exc:
+        # 同目录同名：与网页上传同映射（409 幂等冲突，不裸抛 500）
+        await _complete_upload_access_record(
+            request, entry, success=False, error_code="duplicate_name")
+        raise HTTPException(
+            409,
+            f"该目录已存在同名文件 {entry['filename']!r}：更新内容请用替换"
+            f"（manage_files action=replace）。",
+        ) from None
     except ValueError as exc:
         await _complete_upload_access_record(
             request, entry, success=False, error_code="upload_invalid")

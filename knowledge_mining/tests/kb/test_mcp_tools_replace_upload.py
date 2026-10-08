@@ -241,3 +241,49 @@ def test_archive_task_is_not_enqueued_immediately():
     assert guard.orelse, "守卫必须有 else（file/archive/sync 路径仍立即入队）"
     else_only = ast.Module(body=guard.orelse, type_ignores=[])
     assert calls(else_only, "enqueue_auto_mining"), "else 分支应含共享入队"
+
+
+async def test_upload_direct_replace_full_put_flow(_clean_tickets):
+    """codex 测试缺口：五种状态用例只到签票——本用例走完整消费链：PUT 票据 →
+    replace_content（CAS 暗号+身份透传）→ 自动挖掘入队（mcp_replace）→ 响应字段。"""
+    from types import SimpleNamespace as NS
+
+    issued = await mcp_tools.begin_upload(
+        _body(document_id="doc-1", expected_revision=3),
+        _request(), kbdb=_FakeKbDB(doc={**DOC, "status": "failed"}),
+    )
+    captured: dict = {}
+
+    class _FakeSvc:
+        async def replace_content(self, **kw):
+            captured.update(kw)
+            return {"id": "doc-1", "document_name": "设备手册.pdf",
+                    "content_revision": 4}
+
+    async def _fake_auto_mine(**kw):
+        captured["triggered_by"] = kw.get("triggered_by")
+        return {"auto_mined": True, "run_id": "run-9"}
+
+    async def _stream():
+        yield b"%PDF-1.7 new bytes"
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(mcp_tools, "get_internal_verify_secret", lambda: "s")
+    monkey.setattr(mcp_tools.auto_mine, "enqueue_auto_mining", _fake_auto_mine)
+    try:
+        req = NS(app=NS(state=NS()), headers={"X-Internal-Auth": "s"},
+                 stream=lambda: _stream())
+        result = await mcp_tools.upload_direct(
+            issued["ticket"], req, kbdb=_FakeKbDB(doc=DOC), doc_svc=_FakeSvc())
+    finally:
+        monkey.undo()
+
+    assert result["kind"] == "replace"
+    assert result["document_id"] == "doc-1"
+    assert result["content_revision"] == 4
+    assert result["auto_mined"] is True and result["run_id"] == "run-9"
+    # CAS 暗号与目标身份原样进 replace_content（票据绑定值，PUT 无法篡改）
+    assert captured["document_id"] == "doc-1"
+    assert captured["expected_revision"] == 3
+    assert captured["filename"] == "新版.pdf"
+    assert captured["triggered_by"] == "mcp_replace"

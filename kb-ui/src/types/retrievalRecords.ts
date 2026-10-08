@@ -1,5 +1,5 @@
 export type RetrievalSource = 'web' | 'mcp' | 'api'
-export type RetrievalOperation = 'search' | 'read' | 'upload'
+export type RetrievalOperation = 'search' | 'read' | 'upload' | 'replace'
 export type RetrievalStatus =
   | 'pending' | 'success' | 'no_result' | 'denied' | 'invalid' | 'timeout' | 'failed'
 

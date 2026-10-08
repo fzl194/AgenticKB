@@ -225,7 +225,7 @@ class RetrievalRecordRepository:
                               COALESCE(NULLIF(details_json->>'failed_count', '')::integer, 0) AS failed_count
                          FROM knowledge_access_records
                         WHERE id = %(record_id)s
-                          AND operation = 'upload'
+                          AND operation IN ('upload', 'replace')
                         FOR UPDATE
                    ), updated AS (
                        UPDATE knowledge_access_records AS target
@@ -315,7 +315,7 @@ class RetrievalRecordRepository:
                        SELECT id
                          FROM knowledge_access_records
                         WHERE status = 'pending'
-                          AND operation = 'upload'
+                          AND operation IN ('upload', 'replace')
                           AND occurred_at <= now() - make_interval(secs => %(older_than_seconds)s)
                         ORDER BY occurred_at, id
                         FOR UPDATE SKIP LOCKED

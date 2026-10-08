@@ -24,7 +24,7 @@
         <option v-for="item in STATUS_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
       </select>
       <select v-model="draft.operation" class="records-panel__select" aria-label="操作">
-        <option value="">全部操作</option><option value="search">检索</option><option value="read">读取</option><option value="upload">上传</option>
+        <option value="">全部操作</option><option value="search">检索</option><option value="read">读取</option><option value="upload">上传</option><option value="replace">替换</option>
       </select>
       <input v-model.trim="draft.tool" class="records-panel__input records-panel__input--tool" placeholder="Tool 名称" aria-label="Tool 名称" />
       <select v-if="!kbId" v-model="draft.kbId" class="records-panel__select" aria-label="知识库">
@@ -303,7 +303,7 @@ function formatTime(value: string): string { return value.replace('T', ' ').slic
 function formatDuration(value?: number | null): string { return value == null ? '—' : `${Math.round(value)} ms` }
 function formatRate(value?: number | null): string { return value == null ? '—' : `${(value * 100).toFixed(1)}%` }
 function sourceLabel(value: RetrievalSource): string { return ({ web: '网页', mcp: 'MCP', api: 'API' })[value] }
-function operationLabel(value: string): string { return ({ search: '检索', read: '读取', upload: '上传' } as Record<string, string>)[value] ?? value }
+function operationLabel(value: string): string { return ({ search: '检索', read: '读取', upload: '上传', replace: '替换' } as Record<string, string>)[value] ?? value }
 function statusLabel(value: RetrievalStatus): string { return STATUS_OPTIONS.find(item => item.value === value)?.label ?? value }
 function paradigmText(item: RetrievalRecord): string { return item.paradigm_id ? `${paradigmName(item.paradigm_id)}${item.paradigm_version == null ? '' : ` v${item.paradigm_version}`}` : '—' }
 function detailText(item: RetrievalRecord, key: string): string | null {

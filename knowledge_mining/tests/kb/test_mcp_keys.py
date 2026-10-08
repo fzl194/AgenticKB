@@ -421,10 +421,11 @@ async def test_update_config_validation_family() -> None:
         await svc.update_config(user_id="u1", key_id="k1", open_tools=None,
                                 instructions=None,
                                 tool_descriptions={"get_knowledge": "x" * 2001})
-    # 空串 instructions 归 None（恢复默认）
+    # 空串 instructions 落 ''（恢复默认：db 层 COALESCE None=不改 / ''=清空——
+    # codex P2-4 修正，此前归 None 让恢复默认从未生效）
     await svc.update_config(user_id="u1", key_id="k1", open_tools=None,
                             instructions="   ", tool_descriptions=None)
-    assert db.config_updates[-1][2] is None
+    assert db.config_updates[-1][2] == ""
     # 归一化回读：get_key_status 把旧工具名归一成新名
     db.keys["k1"] = _key_row(open_tools=["get_content", "search_knowledge"])
     status = await svc.update_config(user_id="u1", key_id="k1",
@@ -500,3 +501,17 @@ async def test_key_service_domain_scoped_lifecycle(kbdb):
     assert await svc.verify_key(k2["key"]) is None
     with pytest.raises(KeyRevoked):
         await svc.rotate_key(user_id=uid, key_id=k2["id"])
+
+
+@pytest.mark.asyncio
+async def test_update_config_empty_instructions_clears_not_keeps() -> None:
+    """codex P2-4（58号二审）：'' = 恢复默认——必须把 '' 原样传给 db 层
+    （COALESCE 语义 None=不改 / ''=清空）。此前 ''→None 导致旧自定义
+    提示词永远清不掉，"恢复默认"按钮从未生效。"""
+    db = _KeyFakeDb(keys={"k1": _key_row(id="k1", instructions="旧自定义")})
+    await _svc(db).update_config(
+        user_id="u1", key_id="k1",
+        open_tools=None, instructions="   ", tool_descriptions=None,
+    )
+    key_id, tools, ins, _descs = db.config_updates[-1]
+    assert ins == ""  # 空白 strip 成 ''，但绝不能变成 None（None=不改）

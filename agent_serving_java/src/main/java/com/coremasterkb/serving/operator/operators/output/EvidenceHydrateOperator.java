@@ -178,7 +178,16 @@ public class EvidenceHydrateOperator implements Operator {
             nodes.putIfAbsent(nodeKey(n.getSnapshotId(), n.getRef()), n);
         }
         Map<String, EvidenceDocumentRow> docSources = new LinkedHashMap<>();
+        // 58号（codex P1-3）：共享快照可挂多库文档（内容寻址去重）——来源归属按
+        // 请求库范围消歧，避免把未授权库的 document_id/文件名/路径投给调用方。
+        // requestKbIds 非空即消歧依据（MCP 恒传开放库集合；网页传所选库）；为空
+        // （域级宽检索）时按 mapper 的 ORDER BY d.kb_id 取确定性首行——残留边界
+        // 见 58号文档：写操作最终仍被 KB 归属校验拦截（404），此处收敛信息越界面。
+        List<String> scopeKbIds = ctx.requestKbIds() == null ? List.of() : ctx.requestKbIds();
         for (EvidenceDocumentRow d : mapper.selectDocumentSources(snapshots)) {
+            if (!scopeKbIds.isEmpty() && !scopeKbIds.contains(d.getKbId())) {
+                continue;
+            }
             docSources.putIfAbsent(d.getSnapshotId(), d);
         }
         // A1 来源记录（37/38 号）：canonical 单元的 representation_id == canonical_evidence_id，
@@ -632,6 +641,8 @@ public class EvidenceHydrateOperator implements Operator {
                 doc != null ? doc.getKbName() : null,
                 doc != null ? doc.getDocumentName() : null,
                 doc != null ? doc.getRelativePath() : null,
+                doc != null ? doc.getDocumentId() : null,
+                doc != null ? doc.getContentRevision() : null,
                 w.parsed().documentRef(),
                 section, null, null);
         String content = joinFragments(fragments);

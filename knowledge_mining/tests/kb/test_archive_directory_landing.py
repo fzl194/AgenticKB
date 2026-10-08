@@ -188,3 +188,59 @@ async def test_run_archive_task_forwards_base_directory(tmp_path, monkeypatch):
         max_member_bytes=None, base_directory="产品文档",
     )
     assert captured.get("base_directory") == "产品文档"
+
+
+@pytest.mark.asyncio
+async def test_archive_base_directory_deleted_between_ticket_and_put(tmp_path):
+    """codex P2-2：签票后目录被删——归档路径不得经 ensure_folder_path 把它重建
+    （服务层解压前复核存在性；普通文件路径本就会被 assert_directory_exists 拒）。"""
+    svc, db = _svc(tmp_path)  # folders 为空 = base_directory 不存在
+    zp = _zip(tmp_path, "pack.zip", {"a.txt": "aaa"})
+    with pytest.raises(ValueError, match="目标目录不存在"):
+        await svc.upload_archive_path(
+            kb_id="kb-1", owner_id="alice", archive_path=zp,
+            archive_name="pack.zip", base_directory="已删除的目录",
+        )
+    assert db.documents == [] and db.folders == {}
+
+
+@pytest.mark.asyncio
+async def test_run_archive_task_runs_callback_before_complete(tmp_path, monkeypatch):
+    """codex P2-6：先 on_complete（入队+note_mining）再置 completed——前端见
+    completed 即停轮询，先 complete 会让 auto_mine 结果无人可见。"""
+    from knowledge_mining.mining.kb.services import archive_tasks
+
+    order: list[str] = []
+    docs_holder: dict = {}
+
+    class _FakeRegistry:
+        def update(self, *a, **k):
+            order.append("update")
+        def get(self, task_id):
+            order.append("get")
+            return {"task_id": task_id, "status": "processing"}
+        def complete(self, task_id, *, document_count, failed):
+            order.append(f"complete:{document_count}")
+        def fail(self, task_id, error):
+            order.append("fail")
+        def note_mining(self, task_id, auto):
+            order.append("note_mining")
+
+    monkeypatch.setattr(archive_tasks, "registry", _FakeRegistry())
+
+    async def fake_upload(**kw):
+        docs_holder["docs"] = [{"id": "d1"}, {"id": "d2"}]
+        return docs_holder["docs"]
+
+    svc, _db = _svc(tmp_path)
+    monkeypatch.setattr(svc, "upload_archive_path", fake_upload)
+
+    async def on_complete(task):
+        order.append("callback")
+
+    await ds._run_archive_task(
+        "arch_t", svc, kb_id="kb-1", owner_id="alice",
+        archive_path=tmp_path / "x.zip", archive_name="x.zip",
+        max_member_bytes=None, on_complete=on_complete,
+    )
+    assert order == ["get", "callback", "complete:2"]

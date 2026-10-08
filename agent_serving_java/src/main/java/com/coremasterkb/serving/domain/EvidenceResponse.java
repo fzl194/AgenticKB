@@ -48,12 +48,19 @@ public record EvidenceResponse(
      * <p>A1（37/38 号）：{@code locator} 为证据精确定位（页码/行范围/Sheet+Cell 或
      * native 位置说明）——网页与 Agent 同源；null = 该证据仅有 L1 章节（位置不可得
      * 不伪造）。</p>
+     *
+     * <p>58号：{@code document_id}（=asset_documents.id）是文件管理身份——
+     * manage_files(action="replace") 的替换目标；{@code content_revision} 是版本
+     * 暗号（expected_revision）。与 {@code document_ref}（内容引用，重挖会变）并存
+     * 不互斥；检索命中后可直接替换，不需要再做文件名搜索。</p>
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record EvidenceSource(
             @JsonProperty("knowledge_base") String knowledgeBase,
             @JsonProperty("file_name") String fileName,
             @JsonProperty("relative_path") String relativePath,
+            @JsonProperty("document_id") String documentId,
+            @JsonProperty("content_revision") Integer contentRevision,
             @JsonProperty("document_ref") String documentRef,
             String section,
             Integer page,

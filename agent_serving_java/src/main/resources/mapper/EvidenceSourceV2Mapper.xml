@@ -225,7 +225,9 @@
         <result column="content_revision" property="contentRevision"/>
     </resultMap>
 
-    <!-- snapshot 主键回查文档/库投影：document_key 非全局唯一，跨库同名路径只能靠 snapshot 消歧 -->
+    <!-- snapshot 主键回查文档/库投影：document_key 非全局唯一，跨库同名路径只能靠 snapshot 消歧。
+         58号（codex P1-3）：共享快照可挂多库——ORDER BY d.kb_id 保证"取首行"类调用方
+         （hydrate 归属/getDocument 兜底）结果确定，不再依赖未定义的返回顺序。 -->
     <select id="selectDocumentSources" resultMap="evidenceDocumentMap">
         SELECT l.document_snapshot_id AS snapshot_id,
                d.id AS document_id,
@@ -242,6 +244,7 @@
         <foreach collection="snapshotIds" item="sid" open="(" separator="," close=")">
             #{sid}
         </foreach>
+        ORDER BY d.kb_id
     </select>
 
     <!-- A1 来源记录（37/38 号）：hydrate/assemble 阶段批量点查；召回热路径禁止读 -->

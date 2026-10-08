@@ -199,6 +199,8 @@ public class EvidenceToolService {
                 src != null ? src.knowledgeBase() : null,
                 src != null ? src.fileName() : null,
                 src != null ? src.relativePath() : null,
+                src != null ? src.documentId() : null,
+                src != null ? src.contentRevision() : null,
                 e.documentRef() != null ? codec.encodeDocument(snapshotId, e.documentRef()) : null,
                 src != null ? src.section() : null,
                 src != null ? src.page() : null,
@@ -262,8 +264,14 @@ public class EvidenceToolService {
                         .toList()
                 : List.of();
 
-        List<EvidenceDocumentRow> docs = sourceMapper.selectDocumentSources(List.of(snapshotId));
-        EvidenceDocumentRow doc = docs.isEmpty() ? null : docs.get(0);
+        // 58号（codex P1-3）：共享快照可挂多库文档——按请求 kb 范围消歧（与
+        // getEvidenceSource 同语义），未指定 kb 时取确定性首行（mapper ORDER BY d.kb_id）。
+        List<String> normalizedKbs = ActiveScope.normalizeKbIds(kbIds);
+        EvidenceDocumentRow doc = sourceMapper.selectDocumentSources(List.of(snapshotId))
+                .stream()
+                .filter(d -> normalizedKbs.isEmpty()
+                        || (d.getKbId() != null && normalizedKbs.contains(d.getKbId())))
+                .findFirst().orElse(null);
         Map<String, Object> source = new LinkedHashMap<>();
         if (doc != null) {
             source.put("knowledge_base", doc.getKbName());

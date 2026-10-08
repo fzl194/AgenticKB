@@ -299,9 +299,11 @@ class McpKeyService:
                     raise McpKeyError(
                         f"工具 {name} 描述过长（上限 {MCP_TOOL_DESC_MAX} 字符）")
         await self._require_owned_active(user_id=user_id, key_id=key_id)
-        # '' → None：空提示词即恢复默认文案
+        # codex P2-4（58号二审）：'' 必须原样落库——db 层 COALESCE 语义是
+        # None=不改 / ''=清空恢复默认；此前 ''→None 让"恢复默认"从未生效。
+        # 读侧（验钥/UI）对 '' 按 falsy 处理=无自定义文案，与 NULL 同效。
         normalized_instructions = (
-            instructions.strip() or None if instructions is not None else None
+            instructions if instructions is None else instructions.strip()
         )
         await self._db.update_mcp_key_config(
             key_id=key_id,

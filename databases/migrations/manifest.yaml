@@ -31,4 +31,4 @@ migrations:
   - id: core/20260930_manage_files_rename
     path: core/20260930_006_manage_files_rename.sql
     mode: online_expand
-    checksum: 436a75349289408c96934dcb890649df69bab7e7e2fffbc403f5edbe043d4a86
+    checksum: bacebcdaa556cc59324243a40f9b56645310e82477f75e11dbfa02e0654d90ea

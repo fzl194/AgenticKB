@@ -34,6 +34,15 @@ class EvidenceSourceV2MapperXmlTest {
     }
 
     @Test
+    @DisplayName("58号（codex P1-3）：selectDocumentSources 必须带确定性排序——共享快照挂多库时"
+            + "\"取首行\"类调用方结果稳定，不依赖未定义返回顺序")
+    void documentSourcesOrderedDeterministically() throws Exception {
+        String xml = mapperXml();
+        var select = xml.substring(xml.indexOf("selectDocumentSources"));
+        assertThat(select).contains("ORDER BY d.kb_id");
+    }
+
+    @Test
     @DisplayName("canonical lookup filters returnable=TRUE — alias rows never come back")
     void aliasExcludedByReturnable() throws Exception {
         String xml = mapperXml();

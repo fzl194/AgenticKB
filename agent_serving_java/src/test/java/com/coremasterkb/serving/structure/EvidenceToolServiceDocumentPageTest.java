@@ -55,6 +55,7 @@ class EvidenceToolServiceDocumentPageTest {
         EvidenceDocumentRow doc = new EvidenceDocumentRow();
         doc.setSnapshotId(SNAP);
         doc.setDocumentName("spec.md");
+        doc.setKbId("kb-1");
         doc.setKbName("规范库");
         when(sourceMapper.selectDocumentSources(anyList())).thenReturn(List.of(doc));
         when(toolMapper.selectSectionOutline(eq(SNAP), anyInt())).thenReturn(List.of());
@@ -94,6 +95,7 @@ class EvidenceToolServiceDocumentPageTest {
         full.setSnapshotId(SNAP);
         full.setDocumentId("doc-9");
         full.setDocumentName("spec.pdf");
+        full.setKbId("kb-1");
         full.setKbName("规范库");
         full.setRelativePath("规范/spec.pdf");
         full.setContentRevision(4);
@@ -107,6 +109,38 @@ class EvidenceToolServiceDocumentPageTest {
                 .containsEntry("document_id", "doc-9")
                 .containsEntry("file_name", "spec.pdf")
                 .containsEntry("relative_path", "规范/spec.pdf");
+    }
+
+    @Test
+    @DisplayName("58号（codex P1-3）：共享快照挂多库——source 按请求 kb 范围消歧，"
+            + "不得返回范围外库的 document_id/文件名/路径")
+    void sharedSnapshotDisambiguatedByKbScope() {
+        stubSegments(0);
+        EvidenceDocumentRow mine = new EvidenceDocumentRow();
+        mine.setSnapshotId(SNAP);
+        mine.setDocumentId("doc-mine");
+        mine.setDocumentName("spec.pdf");
+        mine.setKbId("kb-1");
+        mine.setKbName("我的库");
+        mine.setContentRevision(2);
+        EvidenceDocumentRow other = new EvidenceDocumentRow();
+        other.setSnapshotId(SNAP);
+        other.setDocumentId("doc-other-kb");
+        other.setDocumentName("别的库文件.pdf");
+        other.setKbId("kb-2");
+        other.setKbName("别的库");
+        // 恶意/任意顺序：范围外行在前也必须被过滤掉
+        when(sourceMapper.selectDocumentSources(anyList()))
+                .thenReturn(List.of(other, mine));
+
+        var out = service.getDocument("doc_x", null, null, "odn", List.of("kb-1"), "alice");
+
+        assertThat(out.source())
+                .containsEntry("document_id", "doc-mine")
+                .containsEntry("file_name", "spec.pdf")
+                .doesNotContainKey("knowledge_base_of_other")
+                .containsEntry("knowledge_base", "我的库");
+        assertThat(out.source()).doesNotContainEntry("document_id", "doc-other-kb");
     }
 
     @Test

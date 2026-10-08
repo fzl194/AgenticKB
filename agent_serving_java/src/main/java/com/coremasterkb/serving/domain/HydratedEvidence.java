@@ -81,7 +81,8 @@ public record HydratedEvidence(
                 orderedFragments, expansionMode, structureRefs, navigable, derived,
                 tokenEstimate,
                 new SourceProjection(s.knowledgeBase(), s.fileName(), s.relativePath(),
-                        s.documentRef(), s.section(), page, locator),
+                        s.documentId(), s.contentRevision(), s.documentRef(),
+                        s.section(), page, locator),
                 provenance);
     }
 
@@ -97,11 +98,15 @@ public record HydratedEvidence(
             String structureRef
     ) {}
 
-    /** source projection：kb/file/path/document/section/page/locator（可得则填）。 */
+    /** source projection：kb/file/path/document/section/page/locator（可得则填）。
+     * 58号：documentId（=asset_documents.id，manage_files 替换的文件管理身份）与
+     * contentRevision（版本暗号）随投影携带——与 documentRef（内容引用）并存不互斥。 */
     public record SourceProjection(
             String knowledgeBase,
             String fileName,
             String relativePath,
+            String documentId,
+            Integer contentRevision,
             String documentRef,
             String section,
             Integer page,

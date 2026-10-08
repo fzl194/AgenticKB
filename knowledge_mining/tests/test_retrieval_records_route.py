@@ -451,3 +451,45 @@ def test_internal_expire_scans_every_enabled_domain_pool(
     assert response.status_code == 200
     assert response.json() == {"expired_count": 2}
     assert seen_pools == ["pool:domain-a", "pool:domain-b"]
+
+
+def test_internal_write_accepts_replace_operation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """58号（codex P1-2）：manage_files(replace) 的账本走真实 Pydantic/API 边界——
+    operation=replace 不得被 422（此前 mcp_server 上报被拒又降级成日志=审计缺口；
+    用 mock-内存-append 的旧测法绕过了这层边界，本用例直打 HTTP 面）。"""
+    service = FakeService()
+    client = _client(monkeypatch, service)
+    payload = {
+        "id": "call-replace-1",
+        "domain": "cloud_core_network",
+        "source": "mcp",
+        "operation": "replace",
+        "tool_name": "manage_files",
+        "status": "pending",
+        "details_json": {"file_count": 1, "action": "replace"},
+    }
+    response = client.post("/api/internal/retrieval-records", json=payload)
+    assert response.status_code == 200
+    assert response.json()["operation"] == "replace"
+    # upload 语义不受影响；未知 operation 仍被拒（白名单纪律）
+    ok_upload = client.post("/api/internal/retrieval-records", json={
+        **payload, "id": "call-upload-1", "operation": "upload",
+        "details_json": {"file_count": 1, "action": "upload"},
+    })
+    assert ok_upload.status_code == 200
+    bad = client.post("/api/internal/retrieval-records", json={
+        **payload, "id": "call-bad-1", "operation": "delete",
+    })
+    assert bad.status_code == 422
+
+
+def test_upload_completion_repository_filter_covers_replace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """58号（codex P1-2 连带）：complete_upload_file/expire_pending_uploads 的
+    SQL 过滤必须含 replace——否则 replace 记录永远无法终态化/过期清理（源码契约，
+    行为级验证归真 PG 门禁）。"""
+    import inspect
+    from knowledge_mining.mining.infra import retrieval_records_db
+
+    src = inspect.getsource(retrieval_records_db)
+    assert src.count("operation IN ('upload', 'replace')") >= 2
+    assert "operation = 'upload'" not in src

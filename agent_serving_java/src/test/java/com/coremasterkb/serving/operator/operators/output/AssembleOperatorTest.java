@@ -46,7 +46,8 @@ class AssembleOperatorTest {
         return c;
     }
 
-    /** 构造水合证据的测试工厂（默认无 provenance 截断标记）。 */
+    /** 构造水合证据的测试工厂（默认无 provenance 截断标记）。
+     * 58号：source 带 documentId/contentRevision（manage_files 替换契约）。 */
     private static HydratedEvidence evidence(String snapshot, String canonical, String targetType,
                                              String targetRef, String evidenceType, String parentRef,
                                              Integer ordinal, Integer windowFrom, Integer windowTo,
@@ -58,7 +59,7 @@ class AssembleOperatorTest {
                 "exact", structureRefs, navigable, false,
                 (text == null ? 0 : (text.length() + 3) / 4),
                 new HydratedEvidence.SourceProjection("kb1", "file.md", "docs/file.md",
-                        documentOf(targetRef), null, null, null),
+                        "doc-id-1", 4, documentOf(targetRef), null, null, null),
                 provenance == null ? Map.of() : provenance);
     }
 
@@ -73,6 +74,30 @@ class AssembleOperatorTest {
         SlotValues out = op.execute(in, Params.empty(), ctx);
         assertThat(out.get("evidenceResponse")).isInstanceOf(EvidenceResponse.class);
         return (EvidenceResponse) out.get("evidenceResponse");
+    }
+
+    @Nested
+    @DisplayName("58号 document_id/content_revision projection (codex P1-1)")
+    class FileIdentityProjection {
+
+        @Test
+        @DisplayName("source 携带 document_id 与 content_revision——检索命中即可替换")
+        void projectsDocumentIdentityIntoProtocol() throws Exception {
+            HydratedEvidence e = evidence("snap-1", "doc:/a#seg:1", "segment",
+                    "doc:/a#seg:1", "prose", "doc:/a#section:总则", 1, null, null,
+                    "命中段落", null, List.of("doc:/a#section:总则"), true);
+
+            EvidenceResponse out = run(List.of(e), ctx);
+
+            var source = out.evidence().get(0).source();
+            assertThat(source.documentId()).isEqualTo("doc-id-1");
+            assertThat(source.contentRevision()).isEqualTo(4);
+            // JSON 协议层同样可见（snake_case），且与 document_ref 并存
+            String json = M.writeValueAsString(out);
+            assertThat(json).contains("\"document_id\":\"doc-id-1\"");
+            assertThat(json).contains("\"content_revision\":4");
+            assertThat(json).contains("\"document_ref\"");
+        }
     }
 
     @Nested
@@ -138,8 +163,11 @@ class AssembleOperatorTest {
                     "ref", "type", "content", "source", "truncated");
 
             JsonNode source = item.get("source");
+            // 58号：document_id/content_revision 进协议（文件管理身份+版本暗号，
+            // manage_files 替换入口）——与 document_ref 并存
             assertThat(iterateNames(source)).containsExactlyInAnyOrder(
-                    "knowledge_base", "file_name", "relative_path", "document_ref");
+                    "knowledge_base", "file_name", "relative_path",
+                    "document_id", "content_revision", "document_ref");
             // 可选字段（section/page/structure_ref）为 null 时省略
             assertThat(source.has("section")).isFalse();
             assertThat(source.has("page")).isFalse();

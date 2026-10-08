@@ -19,7 +19,9 @@ from knowledge_mining.mining.services.retrieval_records import RetrievalRecordSe
 router = APIRouter(tags=["retrieval-records"])
 
 Source = Literal["web", "mcp", "api"]
-Operation = Literal["search", "read", "upload"]
+# 58号（codex P1-2）：manage_files 的 replace 动作独立分类——与 DB CHECK
+# （006 迁移）同步；漏改此处会把 replace 记录 422 拒掉且被降级成日志，审计缺口。
+Operation = Literal["search", "read", "upload", "replace"]
 RecordStatus = Literal[
     "pending", "success", "no_result", "denied", "invalid", "timeout", "failed"
 ]

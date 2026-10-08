@@ -359,3 +359,35 @@ content_revision 三分法说明；manage_files 两种 action；目录浏览与 
 5. browse_directory（mining 端点 + MCP 参数 + 测试）
 6. 提示词重写 + instructions 清空迁移 + kb-ui 标签 + 文档
 7. 全量门禁 + 提交
+
+## 附：codex 四审（58号二审）裁定与修复记录（2026-10-08）
+
+### P1 三项——核实全部属实，已修（eb1029e）
+
+| 项 | 核实结论 | 修复 |
+|---|---|---|
+| P1-1 search 证据 source 无 document_id/content_revision | **属实且为 57号 我的漏埋**：字段只进了 mapper 行与 get_document 内部链，EvidenceResponse 协议记录从未暴露——"路径 B 已就位"的判断错误，mcp 侧测试 mock 了形状所以全绿 | EvidenceSource/SourceProjection 记录加字段；hydrate→assemble / get_evidence 三投影点接线；协议白名单用例+JSON snake_case 契约钉死 |
+| P1-2 内部记录 API 拒 replace | 属实：`Operation` Literal 无 replace，mcp_server 上报 422 又被降级成日志=审计缺口；旧测试 mock 内存 append 绕过了 Pydantic 边界 | Literal 加 replace；**连带发现**：仓储 complete/expire 的 `operation='upload'` 过滤会让 replace 记录永远无法终态化——扩成 `IN ('upload','replace')`；补真实 HTTP 边界用例 |
+| P1-3 共享快照跨库 document_id | 属实（getDocument 无 kb 过滤无排序取首行；getEvidenceSource 有过滤无排序） | mapper 加 `ORDER BY d.kb_id` 全调用方确定性；getDocument 按请求 kbIds 过滤；hydrate 归属按 requestKbIds 消歧。**残留边界记录**：域级宽检索（requestKbIds 空）+共享快照时归属可能指向他人库的行——写操作仍被 KB 归属校验 404 拦截，信息越界面已收敛，如需彻底需 scope_resolve 下传授权库集（记遗留） |
+
+### P2 七项——六修一裁定
+
+- P2-1 upload 异常映射 ✅（NotFound 404 / Forbidden 403 / 同名 Duplicate 409，账本同步终态化）
+- P2-2 归档消费前复核 base_directory ✅（不再经 ensure_folder_path 重建已删目录）
+- **P2-3 根目录 NULL 文档：裁定不成立**——`insert_document_from_storage` 恒写规范化空串（唯一写入方），NULL 行不可产生；网页文件管理器同语义（`directory_path=''` 精确匹配）线上运行多年无根目录缺文件问题。不加 COALESCE（避免为不存在的状态改共享过滤语义）。
+- P2-4 instructions 恢复默认失效 ✅（'' 原样落库；db COALESCE None=不改 / ''=清空——存量 bug 系 1.1.13 MCP 配置批次引入，docstring 承诺从未生效）
+- P2-5 006 迁移改 NOT VALID ✅（新 CHECK 是旧约束严格超集，逐行 VALIDATE 逻辑必过——跳过审计表全表扫描；manifest checksum 已重算）
+- P2-6 归档先回调后 complete ✅（auto_mine 结果对前端轮询可见；回调自带 try/except 不阻断终态化）
+- P2-7 检索记录 UI 接入 replace ✅（类型/筛选项/标签"替换"）
+
+### 主线合并
+
+master=492ee5f（使用分析整改）已并入（c0d0614）——retrieval_records.py 自动合并且语义核验通过（manage_files 改名与 no_result_queries 删除共存）；过期清除断言随 replace 扩容更新（41c05a1）。
+
+### 测试缺口处置
+
+完整 PUT 替换链用例已补（CAS 透传+mcp_replace 入队+响应字段）；真实 HTTP 边界账本用例已补；**真 PG 集成（含 006 迁移预演、目录票据贯穿、共享快照消歧行为级）仍归合并前强制门禁**——本机无 PG，251 个 PG 门禁用例照旧 error。
+
+### 验证（合并后全量）
+
+python 本地 495 通过（10 FAILED=既有环境性基线一致）；mvn 450/450；npm 80 文件/498 用例+build 零错误；git diff --check 干净。

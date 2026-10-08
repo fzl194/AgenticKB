@@ -4,7 +4,10 @@ from __future__ import annotations
 
 
 CURRENT_SCHEMA_VERSION = "2026.09.user-lifecycle-retrieval-v1"
-CURRENT_SCHEMA_CHECKSUM = "0552fa01f5ba579b26854ad64f7ac3d2d6ac3929847cc65a4540784bd27c6319"
+# 1.1.14 勘误：加 006 迁移时必须同步刷新本镜像常量（= manifest_checksum）——
+# 漏刷导致 llm_service 启动 fail-closed 校验仍等旧值而拒绝启动
+# （guard: tests/maintenance/test_migration_manifest.py 断言两者相等）。
+CURRENT_SCHEMA_CHECKSUM = "992bf967ede7b18d8f65c7362b7eeb5be62c8f5b5ad6dbfb56cee523b5be4703"
 SCHEMA_MARKER_ID = f"schema/{CURRENT_SCHEMA_VERSION}"
 MIGRATION_LEDGER_TABLE = "cmkb_schema_migrations"
 LEGACY_COMPAT_TABLES: tuple[str, ...] = ("mcp_open_kbs", "mcp_access")

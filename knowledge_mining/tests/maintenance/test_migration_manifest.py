@@ -271,3 +271,30 @@ def test_online_expand_allows_scoped_delete_from_unrelated_table(tmp_path: Path)
     )
 
     assert load_manifest(manifest).migrations[0].mode is MigrationMode.ONLINE_EXPAND
+
+
+def test_java_serving_checksum_mirror_matches_manifest() -> None:
+    """1.1.14 勘误守卫：serving 的 EXPECTED_SCHEMA_CHECKSUM 是 manifest 校验和的
+    跨语言镜像（fail-closed 启动校验）——改迁移清单必须三处同刷（manifest/
+    contract.py/Java），漏刷即服务拒绝启动。本用例钉 Java 镜像；
+    llm_service 走 contract.CURRENT_SCHEMA_CHECKSUM，由既有用例覆盖。"""
+    import re as _re
+
+    repo_root = Path(__file__).resolve().parents[3]
+    manifest = load_manifest(repo_root / "databases" / "migrations" / "manifest.yaml")
+    java_path = (
+        repo_root / "agent_serving_java" / "src" / "main" / "java"
+        / "com" / "coremasterkb" / "serving" / "observability"
+        / "ServingRuntimeSchemaInitializer.java"
+    )
+    java_text = java_path.read_text(encoding="utf-8")
+    match = _re.search(r'EXPECTED_SCHEMA_CHECKSUM =\s*"\s*\n?\s*"([0-9a-f]{64})"', java_text)
+    if match is None:
+        # 常量单行书写形态
+        match = _re.search(r'EXPECTED_SCHEMA_CHECKSUM =\s*"([0-9a-f]{64})"', java_text)
+    assert match is not None, "Java 侧 EXPECTED_SCHEMA_CHECKSUM 未找到"
+    assert match.group(1) == manifest_checksum(manifest), (
+        "Java 镜像与 manifest 校验和不一致——改迁移清单必须同步刷新 "
+        "contract.CURRENT_SCHEMA_CHECKSUM 与 ServingRuntimeSchemaInitializer"
+        ".EXPECTED_SCHEMA_CHECKSUM（否则服务启动 fail-closed 校验拒绝就绪）"
+    )

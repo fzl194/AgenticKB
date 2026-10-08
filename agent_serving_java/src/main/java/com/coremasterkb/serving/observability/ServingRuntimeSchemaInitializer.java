@@ -30,8 +30,11 @@ public class ServingRuntimeSchemaInitializer implements DomainSchemaEnsurer {
 
     private static final String LEDGER_TABLE = "cmkb_schema_migrations";
     private static final String EXPECTED_SCHEMA_VERSION = "2026.09.user-lifecycle-retrieval-v1";
+    // 1.1.14 勘误：迁移清单变更时必须同步本镜像（= manifest_checksum，与
+    // mining contract.CURRENT_SCHEMA_CHECKSUM 同源）——漏刷会让 serving 启动
+    // fail-closed 校验拒绝就绪。
     private static final String EXPECTED_SCHEMA_CHECKSUM =
-            "0552fa01f5ba579b26854ad64f7ac3d2d6ac3929847cc65a4540784bd27c6319";
+            "992bf967ede7b18d8f65c7362b7eeb5be62c8f5b5ad6dbfb56cee523b5be4703";
     private static final String EXPECTED_SCHEMA_MARKER =
             "schema/" + EXPECTED_SCHEMA_VERSION;
 

@@ -12,8 +12,11 @@
 -- 存量正确性由旧约束的历史强制保证。
 ALTER TABLE knowledge_access_records
     DROP CONSTRAINT IF EXISTS ck_knowledge_access_operation;
+-- 语法勘误（1.1.14 内网首跑失败）：PG 的 NOT VALID 是 ADD table_constraint 的
+-- 尾缀，必须在 CHECK 表达式之后——此前误写在约束名后导致 syntax error；
+-- 迁移文件单事务执行已整体回滚，库仍是旧约束原样，本文件可原样重跑。
 ALTER TABLE knowledge_access_records
-    ADD CONSTRAINT ck_knowledge_access_operation NOT VALID
-    CHECK (operation IN ('search', 'read', 'upload', 'replace'));
+    ADD CONSTRAINT ck_knowledge_access_operation
+    CHECK (operation IN ('search', 'read', 'upload', 'replace')) NOT VALID;
 
 UPDATE mcp_keys SET instructions = NULL WHERE instructions IS NOT NULL;

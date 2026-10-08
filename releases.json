@@ -16,7 +16,8 @@
         "检索使用分析整改：MCP 工具口径修复（get_knowledge 各视图正确归类）、查询分词词云（Intl.Segmenter 中文分词，零新依赖）、「答不上来」榜下线、趋势图配色优化",
         "检索记录账本补全（codex 审查修复）：manage_files 的 replace 操作独立记账并在界面可筛选（新增「替换」）；修复替换记录可能无法终态化/过期清理的审计缺口；检索证据来源补齐 document_id/content_revision（此前协议层缺失导致「搜索→替换」断链）；共享内容快照跨库消歧（不再可能返回范围外库的文件身份）；钥匙「恢复默认提示词」真正生效（1.1.13 引入的缺陷：空串被当成不修改）",
         "数据库迁移 006（在线扩展）：检索账本 operation 约束扩容（新增 replace，NOT VALID 方式免审计表全表锁）；清空老钥匙的自定义提示词（工具面已换名，旧文案指向不存在的工具，统一回落官方默认）",
-        "升级注意：MCP 工具 upload_document 更名 manage_files——走 tools/list 动态发现的 Agent 无感适配；如有硬编码旧工具名 upload_document 的脚本/集成需同步修改；内网 apply 前须真 PostgreSQL 预演（含 006 迁移 plan/apply 与共享快照消歧验证）"
+        "升级注意：MCP 工具 upload_document 更名 manage_files——走 tools/list 动态发现的 Agent 无感适配；如有硬编码旧工具名 upload_document 的脚本/集成需同步修改；内网 apply 前须真 PostgreSQL 预演（含 006 迁移 plan/apply 与共享快照消歧验证）",
+        "1.1.14 内网实测修复（随资产替换包更新）：MCP 目录浏览 browse_directory 全组合 401（新内部端点漏登记网关豁免清单——已加反向守卫测试，此后 mcp-tools 新端点漏登记会在门禁直接红）；表格查询游标翻页失效（MCP 转发层未把 cursor 合并进 query，永远返回第一页）；目录范围检索 directory_prefix 对一张网文档整库零命中（一张网文档身份键不含目录，检索下推改按文档目录真值过滤，与文件搜索同源）"
       ]
     },
     {

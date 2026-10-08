@@ -108,7 +108,7 @@ describe('RetrievalRecordsPanel', () => {
       days: 7,
       available: true,
       summary: { total_calls: 1, calls: 1, no_result: 0, no_result_rate: 0, failed: 0, failure_rate: 0, p95_duration_ms: 120, avg_duration_ms: 100, active_paradigms: 1 },
-      trend: [], paradigms: [], tools: [], sources: {}, no_result_queries: [], top_queries: [],
+      trend: [], paradigms: [], tools: [], sources: {}, top_queries: [],
     })
     api.list.mockResolvedValue({ items: [record], next_cursor: null, has_more: false, page_size: 25 })
     api.getOne.mockResolvedValue(record)

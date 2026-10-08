@@ -36,9 +36,10 @@
         <div class="records-analysis__card"><h3>来源分布</h3><BarChart v-if="sourceBars.length" :data="sourceBars" horizontal height="220px" /><p v-else>暂无来源数据</p></div>
       </div>
 
-      <div class="records-analysis__grid records-analysis__grid--queries">
-        <div class="records-analysis__card"><h3>答不上来的问题</h3><QueryList v-if="noResultItems.length" :items="noResultItems" /><p v-else>窗口内没有零结果查询</p></div>
-        <div class="records-analysis__card"><h3>热门查询</h3><QueryList v-if="topQueryItems.length" :items="topQueryItems" /><p v-else>窗口内没有查询</p></div>
+      <div class="records-analysis__card records-analysis__card--wide">
+        <h3>查询热词</h3>
+        <WordCloud v-if="cloudItems.length" :items="cloudItems" height="260px" />
+        <p v-else>窗口内没有查询</p>
       </div>
     </template>
   </section>
@@ -51,10 +52,10 @@ import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
 import StatsCard from '@/components/common/StatsCard.vue'
 import { useRetrievalNames } from '@/components/retrieval/useRetrievalNames'
+import { aggregateTerms } from '@/components/retrieval/segmentTerms'
 import LineChart from '@/components/charts/LineChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
-import QueryList from '@/components/dashboard/QueryList.vue'
-import type { QueryListItem } from '@/components/dashboard/QueryList.vue'
+import WordCloud from '@/components/charts/WordCloud.vue'
 import type { RetrievalRecordsSummary } from '@/types/retrievalRecords'
 
 const props = withDefaults(defineProps<{ kbId?: string; mcpKeyId?: string }>(), { kbId: '', mcpKeyId: '' })
@@ -72,10 +73,13 @@ const trendCalls = computed(() => summary.value?.trend.map(item => item.total_ca
 const trendNoResult = computed(() => summary.value?.trend.map(item => item.no_result) ?? [])
 const trendFailed = computed(() => summary.value?.trend.map(item => item.failed) ?? [])
 const paradigmBars = computed(() => summary.value?.paradigms.map(item => ({ name: paradigmName(item.paradigm_id), value: item.calls })) ?? [])
-const toolBars = computed(() => summary.value?.tools.map(item => ({ name: item.tool_name || '非 MCP', value: item.calls })) ?? [])
+// tools 后端已只回带 tool_name 的 MCP 调用，这里不再兜底"非 MCP"桶
+const toolBars = computed(() => summary.value?.tools.map(item => ({ name: item.tool_name, value: item.calls })) ?? [])
 const sourceBars = computed(() => Object.entries(summary.value?.sources ?? {}).map(([name, value]) => ({ name: sourceLabel(name), value })))
-const noResultItems = computed<QueryListItem[]>(() => (summary.value?.no_result_queries ?? []).map(item => ({ text: item.query_text, count: item.count, note: item.last_at?.slice(0, 10) })))
-const topQueryItems = computed<QueryListItem[]>(() => (summary.value?.top_queries ?? []).map(item => ({ text: item.query_text, count: item.count, note: item.no_result ? `${item.no_result} 次无结果` : undefined, noteTone: 'warn' })))
+// 热词 = 去重问句分词后的词频（原句统计几乎全是 count=1 的噪音）；超量由词云内部截断
+const cloudItems = computed(() => aggregateTerms(
+  (summary.value?.top_queries ?? []).map(q => ({ text: q.query_text, count: q.count, noResult: q.no_result ?? 0 })),
+).map(t => ({ name: t.term, value: t.count })))
 
 async function load(): Promise<void> {
   const domain = domainStore.currentDomain
@@ -107,5 +111,5 @@ watch(() => [props.kbId, props.mcpKeyId], load)
 </script>
 
 <style scoped>
-.records-analysis { display: flex; flex-direction: column; gap: 14px; }.records-analysis__stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }.records-analysis__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }.records-analysis__grid--queries { grid-template-columns: repeat(2, minmax(0, 1fr)); }.records-analysis__card { min-width: 0; padding: 16px; border: 1px solid var(--kb-border-light); border-radius: var(--kb-radius); background: var(--kb-bg-card); }.records-analysis__card h3 { margin: 0 0 12px; color: var(--kb-text-secondary); font-size: 13px; }.records-analysis__card p { color: var(--kb-text-tertiary); font-size: 12px; text-align: center; }.records-analysis__notice { padding: 24px; color: var(--kb-text-tertiary); text-align: center; border: 1px dashed var(--kb-border); border-radius: var(--kb-radius); }.records-analysis__notice--error { color: var(--kb-danger); } @media (max-width: 1100px) { .records-analysis__grid { grid-template-columns: 1fr; } }
+.records-analysis { display: flex; flex-direction: column; gap: 14px; }.records-analysis__stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }.records-analysis__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }.records-analysis__card { min-width: 0; padding: 16px; border: 1px solid var(--kb-border-light); border-radius: var(--kb-radius); background: var(--kb-bg-card); }.records-analysis__card h3 { margin: 0 0 12px; color: var(--kb-text-secondary); font-size: 13px; }.records-analysis__card p { color: var(--kb-text-tertiary); font-size: 12px; text-align: center; }.records-analysis__notice { padding: 24px; color: var(--kb-text-tertiary); text-align: center; border: 1px dashed var(--kb-border); border-radius: var(--kb-radius); }.records-analysis__notice--error { color: var(--kb-danger); } @media (max-width: 1100px) { .records-analysis__grid { grid-template-columns: 1fr; } }
 </style>

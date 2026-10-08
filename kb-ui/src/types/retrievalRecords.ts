@@ -84,7 +84,6 @@ export interface RetrievalRecordsSummary {
   paradigms: Array<{ paradigm_id: string; calls: number; no_result: number }>
   tools: Array<{ tool_name: string; calls: number; no_result: number }>
   sources: Record<string, number>
-  no_result_queries?: RetrievalQuerySummary[]
   top_queries?: RetrievalQuerySummary[]
 }
 

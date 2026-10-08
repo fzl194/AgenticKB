@@ -40,7 +40,6 @@ class FakeService:
             "sources": {"web": 1},
             "tools": [],
             "paradigms": [],
-            "no_result_queries": [],
             "top_queries": [],
         }
 
@@ -83,7 +82,7 @@ def test_summary_static_route_is_registered_before_dynamic_detail(monkeypatch: p
     body = response.json()
     assert set(body) == {
         "available", "days", "summary", "trend", "sources", "tools",
-        "paradigms", "no_result_queries", "top_queries",
+        "paradigms", "top_queries",
     }
     assert set(body["summary"]) == {
         "total_calls", "calls", "no_result", "failed", "no_result_rate",

@@ -19,9 +19,13 @@ _SERVICE_ONLY_ROUTES = frozenset({
     ("POST", "/api/kb/auth/identify"),
     ("POST", "/api/kb/auth/verify"),
     ("POST", "/api/kb/auth/mcp-key-verify"),
-    # 批次7：MCP 工具族数据端点（internal-only，路由内自验 X-Internal-Auth）
+    # 批次7：MCP 工具族数据端点（internal-only，路由内自验 X-Internal-Auth）。
+    # 58号勘误（内网 1.1.14 实发）：新增 mcp-tools 子端点必须同步登记本清单——
+    # browse-directory 漏登导致中间件抢先 401（路由内自验根本没机会跑）；
+    # test_api_auth_guard 有反向守卫钉死"该前缀下 POST 路由必在豁免集"。
     ("POST", "/api/kb/mcp-tools/list-kbs"),
     ("POST", "/api/kb/mcp-tools/list-documents"),
+    ("POST", "/api/kb/mcp-tools/browse-directory"),
     ("POST", "/api/kb/mcp-tools/begin-upload"),
     ("POST", "/api/kb/admin/reload-auth-config"),
     ("POST", "/api/internal/retrieval-records"),

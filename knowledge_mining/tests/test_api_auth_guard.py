@@ -301,3 +301,29 @@ def test_every_non_exempt_api_route_rejects_anonymous_requests() -> None:
             assert client.request(method, path).status_code == 401, f"{method} {route.path}"
     finally:
         client.close()
+
+
+def test_mcp_tools_post_routes_are_service_exempt() -> None:
+    """/api/kb/mcp-tools/ 下的 POST 路由必须全部在服务豁免集（1.1.14 内网实发教训）。
+
+    这些端点自带 X-Internal-Auth 路由级自验；若新增端点漏登 _SERVICE_ONLY_ROUTES，
+    中间件会先按网关 JWT 拦截（401 unauthenticated），路由自验根本没机会执行——
+    单测直调路由函数发现不了（不走中间件）。本守卫从真实 app 路由表反向钉死。
+    （upload-direct 是 PUT 动态票据前缀豁免，不在此列。）
+    """
+    from knowledge_mining.mining.api.app import create_app
+    from knowledge_mining.mining.api.auth_guard import _is_exempt
+
+    app = create_app()
+    misses = [
+        route.path
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and "POST" in (route.methods or ())
+        and route.path.startswith("/api/kb/mcp-tools/")
+        and not _is_exempt("POST", route.path)
+    ]
+    assert not misses, (
+        "mcp-tools POST 端点漏登 auth_guard._SERVICE_ONLY_ROUTES（中间件会抢先 401）: "
+        f"{sorted(misses)}"
+    )

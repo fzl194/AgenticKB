@@ -497,6 +497,8 @@ def get_knowledge(
             "order_by": [{"field":"列名","direction":"asc"}], "limit": 20}；
             聚合 {"aggregate": {"op":"avg","field":"列名"}, "where":[…]}。
             字段名以能力报告 assets[].columns[].name 为准——不是模糊搜索。
+            行数超 limit 时响应带 cursor/has_more——翻页把工具顶层 cursor 参数
+            原样传回（不要自己往 query 里塞 cursor，工具会代劳合并）。
         browse_directory: 目录逐层浏览（须配 kb_name）：" "=库根目录，
             "产品文档/手册"=该目录直属内容（child_directories+documents，
             空目录可见，不递归）。与 ref/file_query/directory_prefix/status 互斥。
@@ -512,7 +514,8 @@ def get_knowledge(
         limit: 条数上限：doc_ 每页切片（≤200 默认100）/ navigation 条数（≤200
             默认50）/ documents·file_results·directory 的 documents 每页
             （≤200 默认50）。
-        cursor: 分页游标：上一页返回的 cursor 原样传回（doc_ 与 navigation）。
+        cursor: 分页游标：上一页返回的 cursor 原样传回（doc_ 与 navigation 与
+            st_+query 表格行分页——三处通用，不要自行改写）。
         offset: 仅 documents/file_results/directory 视图：分页偏移。
         kb_names: 仅 ref 分支：限定库范围（与 search_knowledge 的 kb_names 同义，
             默认全部开放库）。注意与 kb_name（浏览目标库）是两回事。
@@ -612,6 +615,21 @@ def _get_by_ref(ident: Identity, ref: str, domain: str | None,
             raise ToolError(
                 "query 与 relation 不能同时传：query=查这个表格，relation=沿结构导航。"
             )
+        # 内网 1.1.14 实测修复：serving 契约是 cursor 放在 query 字典内
+        # （StructureQueryDsl 白名单键），此前顶层 cursor 参数没有合并进转发
+        # payload——表格翻页永远停第一页、响应反复发同一个新游标。
+        if isinstance(query, dict) and cursor and str(cursor).strip():
+            if query.get("cursor"):
+                raise ToolError(
+                    "cursor 请用工具顶层 cursor 参数传（上一页响应原样回传），"
+                    "不要同时在 query 里塞 cursor。"
+                )
+            if query.get("aggregate"):
+                raise ToolError(
+                    "cursor 与 aggregate 不能同时传：聚合一次性返回全量结果，"
+                    "没有分页；要翻页请用行查询（select/where）。"
+                )
+            query = {**query, "cursor": str(cursor)}
         out = _serving_call(
             backend.query_structured_asset, username, kb_ids, resolved, ref, query)
         return {**out, "view": (

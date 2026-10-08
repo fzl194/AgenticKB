@@ -224,6 +224,29 @@ def test_st_ref_with_query_runs_structured_query(monkeypatch) -> None:
     assert calls[0] == ("query", "alice", ["kb-1"], "cloud_core_network", "st_T", {"select": ["列A"]})
 
 
+def test_st_ref_with_query_merges_top_level_cursor(monkeypatch) -> None:
+    """内网 1.1.14 实测修复：serving 契约=cursor 在 query 字典内，顶层 cursor
+    参数必须合并进转发 payload——否则表格翻页永远停第一页、游标反复重发。"""
+    calls = _patch_backend(monkeypatch)
+    server.get_knowledge(ref="st_T", query={"select": ["列A"], "limit": 3},
+                         cursor="bzoz")
+    assert calls[0][-1] == {"select": ["列A"], "limit": 3, "cursor": "bzoz"}
+    # 原始 dict 不被原地污染（不可变合并）
+    q = {"select": ["列A"], "limit": 3}
+    server.get_knowledge(ref="st_T", query=q, cursor="bzoz")
+    assert q == {"select": ["列A"], "limit": 3}
+
+
+def test_st_ref_query_cursor_conflicts_are_explicit(monkeypatch) -> None:
+    _patch_backend(monkeypatch)
+    with pytest.raises(ToolError, match="不要同时在 query 里塞 cursor"):
+        server.get_knowledge(ref="st_T", query={"select": [], "cursor": "x"},
+                             cursor="bzoz")
+    with pytest.raises(ToolError, match="cursor 与 aggregate 不能同时传"):
+        server.get_knowledge(
+            ref="st_T", query={"aggregate": {"op": "count"}}, cursor="bzoz")
+
+
 def test_st_ref_with_relation_navigates(monkeypatch) -> None:
     calls = _patch_backend(monkeypatch)
     out = server.get_knowledge(ref="st_N", relation="children", depth=1, limit=20)

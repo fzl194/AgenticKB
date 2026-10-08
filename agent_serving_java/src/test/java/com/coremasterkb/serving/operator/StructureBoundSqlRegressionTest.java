@@ -45,19 +45,23 @@ class StructureBoundSqlRegressionTest {
     }
 
     @Test
-    void directoryPrefixUsesTextArrowNotJsonb() throws Exception {
-        // codex P1 回归钉：LIKE 左侧必须是 text（->>）——单箭头返回 jsonb，
-        // PG 无 jsonb~~text 运算符（42883），且 SKIP_WITH_EMPTY 会把异常静默成空结果。
-        // 免 PG 的门禁只能靠展开语句的文本形态守住箭头位数。
+    void directoryPrefixFiltersOnDocumentDirectoryPath() throws Exception {
+        // 1.1.14 内网勘误回归钉：directory_prefix 必须按 asset_documents.directory_path
+        // 过滤（快照经 asset_document_snapshot_links 归属）。原 LIKE facets.document
+        // 'doc:/…' 对一张网文档（document_key=onenet:{source}:{sha}，不含目录）整库
+        // 零命中——免 PG 门禁只能靠展开语句的文本形态守住归属链与字面匹配（strpos）。
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("snapshotIds", List.of("snapshot"));
         parameters.put("directoryPrefix", "产品文档");
         for (String statement : List.of("searchFtsV2", "searchDenseV2")) {
             String generated = sql("AssetRetrievalUnitV2Mapper", statement, parameters);
             assertThat(generated)
-                    .as("%s 的 directory_prefix 断言必须用 ->>'document'", statement)
-                    .contains("facets_json->>'document' LIKE")
-                    .doesNotContain("->'document'");  // 单箭头（jsonb）形式
+                    .as("%s 的 directory_prefix 必须走 directory_path 归属链", statement)
+                    .contains("asset_document_snapshot_links")
+                    .contains("d.directory_path = ?")
+                    .contains("strpos(d.directory_path, ? || '/') = 1")
+                    .doesNotContain("facets_json->>")  // 旧 facets 过滤路径必须绝迹（SELECT 列除外）
+                    .doesNotContain(" LIKE ");        // 字面前缀不走通配符
         }
     }
 

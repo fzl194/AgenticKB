@@ -113,14 +113,16 @@ class ScopeFilterPushdownTest {
     }
 
     @Test
-    @DisplayName("57号: directory_prefix → 原样映射并做 LIKE 转义（%/_/反斜杠按字面匹配）")
-    void directoryPrefixMappedAndEscaped() {
+    @DisplayName("57号: directory_prefix → 字面映射不转义（SQL 侧 strpos 锚定，%/_ 无通配符语义）")
+    void directoryPrefixMappedVerbatim() {
         var p = ScopeFilterPushdown.fromFilters(Map.of("directory_prefix", "产品文档/手册"));
         assertThat(p.directoryPrefix()).isEqualTo("产品文档/手册");
         assertThat(p.isEmpty()).isFalse();
 
-        var esc = ScopeFilterPushdown.fromFilters(Map.of("directory_prefix", "a%b_c\\d"));
-        assertThat(esc.directoryPrefix()).isEqualTo("a\\%b\\_c\\\\d");
+        // 1.1.14 内网勘误：SQL 改 strpos 字面匹配（asset_documents.directory_path），
+        // 不再走 LIKE——%/_/反斜杠原样透传（目录名含它们也不会被当通配符或需转义）。
+        var literal = ScopeFilterPushdown.fromFilters(Map.of("directory_prefix", "a%b_c\\d"));
+        assertThat(literal.directoryPrefix()).isEqualTo("a%b_c\\d");
 
         // 无该键 → 空串（宽检索）
         assertThat(ScopeFilterPushdown.fromFilters(Map.of()).directoryPrefix()).isEmpty();

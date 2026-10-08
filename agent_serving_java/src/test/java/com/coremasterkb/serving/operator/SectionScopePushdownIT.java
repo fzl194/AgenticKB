@@ -78,6 +78,11 @@ class SectionScopePushdownIT {
     @AfterEach
     void cleanUp() {
         if (jdbc == null) return;
+        // 目录用例的旁路快照（'-dir-*'）及其 units；文档先删（links 级联），
+        // 快照后删（links 对快照是 ON DELETE RESTRICT）。
+        jdbc.update("DELETE FROM asset_retrieval_units_v2 WHERE snapshot_id LIKE ?", SNAP + "-%");
+        jdbc.update("DELETE FROM asset_documents WHERE id LIKE ?", "docdir-" + SNAP + "-%");
+        jdbc.update("DELETE FROM asset_document_snapshots WHERE id LIKE ?", SNAP + "-%");
         jdbc.update("DELETE FROM asset_retrieval_units_v2 WHERE snapshot_id = ?", SNAP);
         jdbc.update("DELETE FROM asset_structure_nodes WHERE snapshot_id = ?", SNAP);
     }
@@ -154,71 +159,92 @@ class SectionScopePushdownIT {
     @Test
     @DisplayName("57号 directory_prefix：目录子树递归命中，兄弟前缀目录零误中")
     void directoryPrefixScope() {
-        insertUnitWithFacets("u-dir-a", "prose", S1, "foxtrot dir a content",
-                "{\"document\": \"doc:/产品文档/手册/设备A.pdf\"}");
-        insertUnitWithFacets("u-dir-b", "prose", S1, "golf dir b content",
-                "{\"document\": \"doc:/产品文档/设备B.pdf\"}");
-        insertUnitWithFacets("u-dir-c", "prose", S1, "hotel dir c content",
-                "{\"document\": \"doc:/产品文档2/设备C.pdf\"}");
+        // 1.1.14 内网勘误：目录过滤改按 asset_documents.directory_path（快照经
+        // asset_document_snapshot_links 归属）。播种刻意用不含目录的 document_key
+        // （= 一张网形态 onenet:{source}:{sha}）——旧 facets LIKE 'doc:/…' 对此整库
+        // 零命中，正是内网实测 Bug 的复现形态。
+        String snapA = insertDirectoryDoc("a", "产品文档/手册");           // 目录自身
+        String snapDeep = insertDirectoryDoc("deep", "产品文档/手册/交换机"); // 递归子目录
+        String snapB = insertDirectoryDoc("b", "产品文档");               // 父目录
+        String snapC = insertDirectoryDoc("c", "产品文档2");            // 兄弟前缀（不命中）
+        // 无目录归属的存量行（SNAP 无 links 行=目录 NULL）不进入目录过滤结果
+        insertUnit("u-dir-nodefault", "prose", S1, "kilo nodefault content", SNAP);
 
+        List<String> scope = List.of(SNAP, snapA, snapDeep, snapB, snapC);
         List<UnitV2Row> subtree = mapper.searchFtsV2(
-                "content", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(), false, "产品文档/手册", 50);
+                "content", scope, List.of(), List.of(),
+                List.of(), List.of(), false, "产品文档/手册", 50);
         assertThat(subtree).extracting(UnitV2Row::getRepresentationId)
-                .containsExactly("u-dir-a");
+                .containsExactlyInAnyOrder("u-dir-a", "u-dir-deep");
 
-        // '产品文档' 命中自身+子树，不误中兄弟前缀 '产品文档2'
+        // '产品文档' 命中自身+全部子树，不误中兄弟前缀 '产品文档2'，也不吞无目录行
         List<UnitV2Row> whole = mapper.searchFtsV2(
-                "content", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(), false, "产品文档", 50);
+                "content", scope, List.of(), List.of(),
+                List.of(), List.of(), false, "产品文档", 50);
         assertThat(whole).extracting(UnitV2Row::getRepresentationId)
-                .containsExactlyInAnyOrder("u-dir-a", "u-dir-b");
+                .containsExactlyInAnyOrder("u-dir-a", "u-dir-deep", "u-dir-b");
 
-        // 目录名本身含 LIKE 通配符：% 与 _ 按字面匹配——生产链路是
-        // ScopeFilterPushdown.directoryPrefixValue 先转义再绑定（codex P2：
-        // 直传裸串会让 %/_ 当通配符，绕过转义层）。IT 走同一转义入口。
-        insertUnitWithFacets("u-dir-wild", "prose", S1, "india wildcard content",
-                "{\"document\": \"doc:/100%_覆盖/手册.pdf\"}");
-        insertUnitWithFacets("u-dir-sib", "prose", S1, "juliet sibling content",
-                "{\"document\": \"doc:/100X Y覆盖/手册.pdf\"}");
-        String escapedWild = com.coremasterkb.serving.operator.operators.retrieve.ScopeFilterPushdown
+        // 目录名含 %/_：strpos 字面匹配（1.1.14 勘误后无 LIKE 通配符语义）——
+        // 兄弟目录 100X Y覆盖 不命中；%/_ 无需转义原样绑定（IT 走生产映射入口）。
+        String snapWild = insertDirectoryDoc("wild", "100%_覆盖");
+        String snapSib = insertDirectoryDoc("sib", "100X Y覆盖");
+        String literalWild = com.coremasterkb.serving.operator.operators.retrieve.ScopeFilterPushdown
                 .fromFilters(java.util.Map.of("directory_prefix", "100%_覆盖"))
                 .directoryPrefix();
         List<UnitV2Row> wild = mapper.searchFtsV2(
-                "content", List.of(SNAP), List.of(), List.of(), List.of(),
-                List.of(), false, escapedWild, 50);
+                "content", List.of(snapWild, snapSib), List.of(), List.of(), List.of(),
+                List.of(), false, literalWild, 50);
         assertThat(wild).extracting(UnitV2Row::getRepresentationId)
-                .containsExactly("u-dir-wild");  // 兄弟目录 100X Y覆盖 不命中（%/_ 已字面化）
+                .containsExactly("u-dir-wild");
 
-        // facets.document 为空的存量行（facets '{}'）不进入目录过滤结果
+        // 不过滤时无目录行照常可检索（目录过滤是收窄不是屏蔽）
         List<UnitV2Row> unscoped = mapper.searchFtsV2(
                 "content", List.of(SNAP), List.of(), List.of(), List.of(),
                 List.of(), false, "", 50);
         assertThat(unscoped).extracting(UnitV2Row::getRepresentationId)
-                .contains("u-s1");
+                .contains("u-dir-nodefault");
     }
 
-    /** 57号：带 facets.document（doc:/{目录}/{文件名}）的检索单元。 */
-    private void insertUnitWithFacets(String repId, String type, String sectionRef,
-                                      String text, String facetsJson) {
+    /**
+     * 1.1.14 勘误：在指定目录下造一个"文档+快照+归属链+检索单元"。document_key
+     * 刻意不含目录（一张网形态）；目录只存 directory_path——新过滤路径的唯一真相。
+     */
+    private String insertDirectoryDoc(String tag, String directoryPath) {
+        String snap = SNAP + "-dir-" + tag;
         jdbc.update(
-                "INSERT INTO asset_retrieval_units_v2 (representation_id, snapshot_id, "
-                        + "representation_type, content_type, content_text, lexical_text, "
-                        + "target_type, target_ref, canonical_evidence_id, section_ref, "
-                        + "lexical_eligible, dense_eligible, returnable, facets_json) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,TRUE,FALSE,TRUE,?::jsonb)",
-                repId, SNAP, type, type, text, text, type,
-                sectionRef, repId, sectionRef, facetsJson);
+                "INSERT INTO asset_document_snapshots (id, domain, normalized_content_hash, "
+                        + "raw_content_hash, mime_type, created_at) VALUES (?,?,?,?,?,?)",
+                snap, "generic", "nh-dir-" + tag, "rh-dir-" + tag,
+                "text/markdown", "2026-10-08T00:00:00Z");
+        String docId = "docdir-" + SNAP + "-" + tag;
+        jdbc.update(
+                "INSERT INTO asset_documents (id, domain, document_key, document_name, "
+                        + "created_at, directory_path) VALUES (?,?,?,?,?,?)",
+                docId, "generic", "dk-dir-" + tag, tag + ".pdf",
+                "2026-10-08T00:00:00Z", directoryPath);
+        jdbc.update(
+                "INSERT INTO asset_document_snapshot_links (id, document_id, "
+                        + "document_snapshot_id, relative_path, source_uri, linked_at) "
+                        + "VALUES (?,?,?,?,?,?)",
+                "lnkdir-" + SNAP + "-" + tag, docId, snap, tag + ".pdf",
+                "uri://" + tag, "2026-10-08T00:00:00Z");
+        insertUnit("u-dir-" + tag, "prose", S1, "dir " + tag + " content", snap);
+        return snap;
     }
 
     private void insertUnit(String repId, String type, String sectionRef, String text) {
+        insertUnit(repId, type, sectionRef, text, SNAP);
+    }
+
+    private void insertUnit(String repId, String type, String sectionRef, String text,
+                            String snapshotId) {
         jdbc.update(
                 "INSERT INTO asset_retrieval_units_v2 (representation_id, snapshot_id, "
                         + "representation_type, content_type, content_text, lexical_text, "
                         + "target_type, target_ref, canonical_evidence_id, section_ref, "
                         + "lexical_eligible, dense_eligible, returnable) "
                         + "VALUES (?,?,?,?,?,?,?,?,?,?,TRUE,FALSE,TRUE)",
-                repId, SNAP, type, type, text, text, type,
+                repId, snapshotId, type, type, text, text, type,
                 sectionRef, repId, sectionRef);
     }
 

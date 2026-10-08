@@ -16,10 +16,12 @@ import java.util.Map;
  *       {@code {"document":"<ref>"}}，facets.document 是标量，多值用 OR 语义由 SQL foreach 承担）；</li>
  *   <li>{@code evidence_types} → {@code representation_type IN (...)}（§5.3 类型枚举）；</li>
  *   <li>{@code asset_types} → {@code content_type IN (...)}（源内容类型，facets.content_type 同源）；</li>
- *   <li>{@code directory_prefix} → {@code facets_json->>'document' LIKE 'doc:/{prefix}/%'}
- *       （57号：目录及全部子目录的递归前缀匹配——投影写入的 facets.document 本身就是
- *       doc:/{目录}/{文件名}，'/' 边界保证 '产品' 不误中 '产品文档'；值在 Java 侧做
- *       LIKE 转义后参数化绑定，仍不拼接用户输入）；</li>
+ *   <li>{@code directory_prefix} → {@code asset_documents.directory_path} 字面前缀过滤
+ *       （57号，1.1.14 内网勘误重写：快照经 asset_document_snapshot_links 归属到文档，
+ *       等值收目录自身 + strpos 锚定起始的子目录递归）。原实现 LIKE facets.document
+ *       'doc:/…' 只对普通上传成立——一张网 document_key=onenet:{source}:{sha} 不含
+ *       目录，公共库整库零命中；且 document_key 冻结后文件挪目录 facets 会陈旧；
+ *       strpos 是字面匹配，无 LIKE 通配符语义，无需转义；</li>
  *   <li>{@code section_refs} → {@code section_ref IN (...)}（A2：单元章节归属物理列，
  *       覆盖章节内全部正文/表格/列表表示；{@code section_ref IS NULL} 的存量行回落
  *       {@code target_ref IN}（37 号 D4 的旧语义，回填后自然消失）；
@@ -89,7 +91,7 @@ public final class ScopeFilterPushdown {
     /** A2：section_scope=descendants（闭包展开；false = exact 或未传）。 */
     public boolean sectionScopeDescendants() { return sectionScopeDescendants; }
 
-    /** 57号：directory_prefix 的 LIKE 转义值（空串 = 无该约束）。 */
+    /** 57号：directory_prefix 的字面值（已 trim；空串 = 无该约束）。 */
     public String directoryPrefix() { return directoryPrefix; }
 
     public boolean isEmpty() {
@@ -99,8 +101,8 @@ public final class ScopeFilterPushdown {
     }
 
     /**
-     * 57号：directory_prefix → LIKE 转义串（%/_/\ 按字面匹配；PG LIKE 默认转义符
-     * 即反斜杠）。非字符串/空白 → 空串（请求边界已 typed 400，这里防御性忽略）。
+     * 57号：directory_prefix → 字面前缀值（SQL 侧 strpos 锚定匹配，无 LIKE 通配符
+     * 语义，无需转义）。非字符串/空白 → 空串（请求边界已 typed 400，这里防御性忽略）。
      *
      * <p>单一入口假设：本方法收到的值已经过 ParadigmRequests.normalizeDirectoryPrefix
      * （trim+去首尾斜杠）——hardFilters 的唯一生产入口是请求边界。这里不复用
@@ -110,10 +112,7 @@ public final class ScopeFilterPushdown {
     private static String directoryPrefixValue(Object value) {
         if (!(value instanceof String raw)) return "";
         String trimmed = raw.trim();
-        if (trimmed.isEmpty()) return "";
-        return trimmed.replace("\\", "\\\\")
-                .replace("%", "\\%")
-                .replace("_", "\\_");
+        return trimmed.isEmpty() ? "" : trimmed;
     }
 
     private static List<String> documentJsonParams(Object refs) {

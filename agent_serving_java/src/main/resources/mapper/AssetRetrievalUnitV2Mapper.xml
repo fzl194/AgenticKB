@@ -49,13 +49,22 @@
             </foreach>
         </if>
         <if test="directoryPrefix != null and directoryPrefix != ''">
-            <!-- 57号目录范围：投影写入的 facets.document 即 doc:/{目录}/{文件名}——
-                 前缀匹配即"该目录及全部子目录"（'/' 边界保证 产品 不误中 产品文档）。
-                 必须用 -&gt;&gt;（text）：单箭头返回 jsonb，LIKE 无 jsonb 运算符会 42883，
-                 且召回算子 SKIP_WITH_EMPTY 会把异常降级成静默空结果（codex P1）。
-                 值已在 Java 侧做 LIKE 转义（%/_/\ 按字面），参数化绑定不拼接输入。
+            <!-- 57号目录范围（1.1.14 内网勘误重写）：按 DB 真相 asset_documents.directory_path
+                 过滤（与 file_query 文件搜索同源）。原实现 LIKE facets->>'document' 'doc:/…'
+                 只对普通上传成立——一张网文档 document_key=onenet:{source}:{sha} 不含目录，
+                 公共库整库零命中；且 document_key 冻结语义下文件挪目录后 facets 也会陈旧。
+                 归属经 asset_document_snapshot_links（快照→文档；共享快照任一文档命中即入）。
+                 字面前缀（等值收目录自身 + strpos 锚定起始的子目录递归），无 LIKE 通配符
+                 语义——'/' 边界保证 产品 不误中 产品文档；参数化绑定不拼接输入。
                  FTS 与 dense 共用本片段（unitPushdownFilters）。 -->
-            AND un.facets_json-&gt;&gt;'document' LIKE 'doc:/' || #{directoryPrefix} || '/%'
+            AND EXISTS (
+                SELECT 1
+                FROM asset_document_snapshot_links l
+                JOIN asset_documents d ON d.id = l.document_id AND d.deleted_at IS NULL
+                WHERE l.document_snapshot_id = un.snapshot_id
+                  AND (d.directory_path = #{directoryPrefix}
+                       OR strpos(d.directory_path, #{directoryPrefix} || '/') = 1)
+            )
         </if>
         <if test="targetRefs != null and targetRefs.size() > 0">
             <!-- A2 章节范围（39 号 §2.2）：section_ref 物理列为主键匹配（覆盖章节内

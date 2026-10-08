@@ -468,7 +468,9 @@ async def test_expire_pending_uploads_is_bounded_and_idempotent() -> None:
 
     sql, params = connection.statements[0]
     assert "status = 'pending'" in sql
-    assert "operation = 'upload'" in sql
+    # 58号（codex P1-2 连带）：replace 记录同样要被过期清理——过滤扩成
+    # IN ('upload','replace')，否则 pending 的替换记录永远无法终态化
+    assert "operation IN ('upload', 'replace')" in sql
     assert "error_code = 'upload_expired'" in sql
     assert "SKIP LOCKED" in sql
     assert params["older_than_seconds"] == 600

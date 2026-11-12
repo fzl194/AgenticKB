@@ -614,8 +614,8 @@ defineExpose({ reload: loadPages, selectPage, currentPageKey: computed(() => sel
 }
 .wiki-reader__toc-item:hover { background: var(--el-fill-color-light, #f5f7fa); }
 .wiki-reader__toc-item.is-active {
-  background: var(--el-color-primary-light-9, #ecf5ff);
-  border-color: var(--el-color-primary-light-7, #d9ecff);
+  background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
+  border-color: var(--kb-accent-medium, rgba(8, 145, 178, 0.15));
 }
 .wiki-reader__toc-title {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

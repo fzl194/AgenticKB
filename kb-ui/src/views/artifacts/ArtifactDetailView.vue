@@ -837,3 +837,41 @@ defineExpose({ reloadAll })
 .artifact-detail__search-status-text { font-size: 12.5px; color: var(--kb-text-secondary, #606266); }
 .artifact-detail__pager { margin-top: 12px; justify-content: flex-end; }
 </style>
+
+<style>
+/**
+ * 知识制品详情页 EP 组件观感统一层（非 scoped——作用于本页子树的所有
+ * Element Plus 组件：行/字段/成员/版本/说明卡/导入向导/发布弹窗）。
+ * 设计语言=docs/高保真 artifacts-1115：软表头、发丝线、soft 徽章、
+ * 圆角弹窗。只调观感，不动组件行为（分页/展开/校验全保留）。
+ */
+.artifact-detail .el-table th.el-table__cell {
+  background: var(--kb-bg-card-hover, #f8fafc);
+  color: var(--kb-text-secondary, #64748b);
+  font-weight: 500;
+  font-size: 12px;
+}
+.artifact-detail .el-table td.el-table__cell { font-size: 12.5px; }
+.artifact-detail .el-tag {
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.artifact-detail .el-tag--plain { background: transparent; }
+.artifact-detail .el-dialog {
+  border-radius: 12px;
+}
+.artifact-detail .el-dialog__title { font-weight: 600; font-size: 15px; }
+.artifact-detail .el-descriptions__label {
+  color: var(--kb-text-tertiary, #94a3b8);
+  font-size: 12px;
+  width: 92px;
+}
+.artifact-detail .el-descriptions__body { font-size: 12.5px; }
+.artifact-detail .el-divider__text {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--kb-text-tertiary, #94a3b8);
+}
+</style>

@@ -58,18 +58,29 @@ function statValue(key: string): string | number | null {
 </script>
 
 <style scoped>
-.wiki-report { display: flex; flex-direction: column; gap: 8px; }
+.wiki-report { display: flex; flex-direction: column; gap: 10px; }
 .wiki-report__error {
-  font-size: 12.5px; color: var(--el-color-danger, #f56c6c);
-  background: var(--el-color-danger-light-9, #fef0f0); border-radius: 4px; padding: 6px 10px;
+  font-size: 12.5px; color: var(--kb-danger, #ef4444);
+  background: var(--kb-danger-soft, rgba(239, 68, 68, 0.1));
+  border-radius: 6px; padding: 8px 11px;
 }
 .wiki-report__stats {
-  margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 16px;
+  margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px;
+  padding: 12px; border: 1px solid var(--kb-border-light, #f1f5f9); border-radius: 8px;
+  background: var(--kb-bg-card-hover, #f8fafc);
 }
-.wiki-report__stat { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; }
-.wiki-report__stat dt { color: var(--kb-text-tertiary); }
-.wiki-report__stat dd { margin: 0; font-weight: 600; }
-.wiki-report__conflicts { font-size: 12.5px; }
-.wiki-report__conflicts-title { color: var(--el-color-warning); margin-bottom: 4px; }
+.wiki-report__stat {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 7px 9px; border-radius: 6px;
+  background: var(--kb-bg-card, #fff);
+  border: 1px solid var(--kb-border-light, #f1f5f9);
+}
+.wiki-report__stat dt { font-size: 10.5px; color: var(--kb-text-tertiary); }
+.wiki-report__stat dd { margin: 0; font-weight: 600; font-size: 14px; color: var(--kb-text-primary, inherit); }
+.wiki-report__conflicts {
+  font-size: 12.5px; padding: 9px 11px; border-radius: 6px;
+  background: var(--kb-warning-soft, rgba(245, 158, 11, 0.1));
+}
+.wiki-report__conflicts-title { color: var(--kb-warning, #f59e0b); font-weight: 600; margin-bottom: 5px; }
 .wiki-report__conflict-row { padding-left: 12px; color: var(--kb-text-secondary, inherit); }
 </style>

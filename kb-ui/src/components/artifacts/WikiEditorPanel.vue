@@ -496,8 +496,8 @@ defineExpose({ loadPages, selectPage, currentPageKey: computed(() => selectedKey
 }
 .wiki-editor__item:hover { background: var(--el-fill-color-light, #f5f7fa); }
 .wiki-editor__item.is-active {
-  background: var(--el-color-primary-light-9, #ecf5ff);
-  border-color: var(--el-color-primary-light-7, #d9ecff);
+  background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
+  border-color: var(--kb-accent-medium, rgba(8, 145, 178, 0.15));
 }
 .wiki-editor__item-title {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

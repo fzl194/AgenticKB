@@ -312,14 +312,14 @@ class ArtifactDB:
     async def readable_artifact_domain(
         self, artifact_id: str, user_id: str,
     ) -> str | None:
-        """钥匙开放集候选校验（008）：用户对制品的**读可见面**——成员/owner/
-        public、域管理员且绑定域，或有效站点管理员。可读 → 返回 domain_id（供
-        key.domain 一致性校验）；不可读/不存在 → None（调用方静默丢弃）。"""
+        """钥匙开放集候选校验：仅已发布且用户可读的制品返回 domain_id；
+        草稿、已停用、不可读或不存在的制品返回 None。"""
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """SELECT a.domain_id
                    FROM kb_artifacts a
                    WHERE a.artifact_id = %(a)s
+                     AND a.status = 'published'
                      AND (EXISTS (SELECT 1 FROM kb_users u
                                   WHERE u.id = %(u)s AND u.status = 'active'
                                     AND u.deleted_at IS NULL AND u.site_role = 'admin')

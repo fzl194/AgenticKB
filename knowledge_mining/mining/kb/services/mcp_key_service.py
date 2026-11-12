@@ -277,8 +277,8 @@ class McpKeyService:
         self, *, user_id: str, key_id: str, artifact_ids: list[str],
         artifact_db: Any,
     ) -> list[str]:
-        """全量覆盖钥匙开放制品（008）：**静默剔除**主人当前不可见（被移出
-        成员且非 public / 撤域）或不在钥匙域内的制品——权限收缩是合法演化，
+        """全量覆盖钥匙开放制品（008）：**静默剔除**未发布、主人当前不可见
+        （被移出成员且非 public / 撤域）或不在钥匙域内的制品——权限收缩是合法演化，
         不阻塞保存。子集不放大：开放行 ⊆ 主人读可见面；serving 读时再校验
         一次（防保存后权限继续收缩的窗口）。"""
         key = await self._require_owned_active(user_id=user_id, key_id=key_id)

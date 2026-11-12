@@ -206,7 +206,7 @@ class WikiLifecycle:
         revision = int(result["revision"])
         try:
             await self._wdb.project_units(artifact_id, revision)
-            self._spawn_embed(artifact_id, revision)
+            self._spawn_embed(artifact_id, revision, str(art_row["domain_id"]))
         except Exception:
             logger.exception(
                 "wiki 发布后置投影/embedding 拉起失败（不回滚发布）"
@@ -259,7 +259,7 @@ class WikiLifecycle:
     # -------------------------------------------------- embedding 后置
 
     def _spawn_embed(
-        self, artifact_id: str, revision: int,
+        self, artifact_id: str, revision: int, knowledge_domain: str,
     ) -> "asyncio.Task[None] | None":
         """后台拉起 embedding（fire-and-forget）：同 (artifact_id, revision)
         在飞时 no-op（幂等键另保证 llm_service 侧不重复计费）。返回 Task 便于
@@ -268,7 +268,7 @@ class WikiLifecycle:
         if key in _EMBED_INFLIGHT:
             return None
         _EMBED_INFLIGHT.add(key)
-        task = asyncio.create_task(self._embed_units(key[0], key[1]))
+        task = asyncio.create_task(self._embed_units(key[0], key[1], knowledge_domain))
         # 强引用集防 GC：事件循环对 Task 只持弱引用，不持引用的任务可能中途
         # 被回收（届时 done 回调不会触发、协程 finally 也不执行——引用集是
         # 这条路径的唯一防线）。done 回调（完成/取消时触发）释放引用。
@@ -277,7 +277,9 @@ class WikiLifecycle:
         task.add_done_callback(_EMBED_TASKS.discard)
         return task
 
-    async def _embed_units(self, artifact_id: str, revision: int) -> None:
+    async def _embed_units(
+        self, artifact_id: str, revision: int, knowledge_domain: str,
+    ) -> None:
         """pending units → done：循环 32 条/批提交 llm_service 异步任务通道。
         DB 调用留在主 loop；仅 LlmTaskClient 同步阻塞调用下线程。永不向上抛。"""
         key = (artifact_id, revision)
@@ -300,6 +302,7 @@ class WikiLifecycle:
                         self._task_client.submit_embedding, texts,
                         max_attempts=_EMBED_MAX_ATTEMPTS,
                         idempotency_key=idem,
+                        knowledge_domain=knowledge_domain,
                     )
                 except LlmTaskError as exc:
                     # 提交瞬时失败：保持 pending，下次发布/status 自愈重试。
@@ -707,7 +710,8 @@ class WikiService:
                     "units": {"total": 0, "done": 0, "failed": 0, "pending": 0}}
         units = await self._wdb.units_status(artifact_id, rev)
         if units.get("pending", 0) > 0 and (artifact_id, rev) not in _EMBED_INFLIGHT:
-            self._lifecycle._spawn_embed(artifact_id, rev)
+            self._lifecycle._spawn_embed(
+                artifact_id, rev, str(artifact["domain_id"]))
         return {"revision": rev, "units": units}
 
     # ------------------------------------------- Q01 投影修复（66号批次5 Task 5.3）
@@ -743,7 +747,8 @@ class WikiService:
             artifact_id, rev, user.get("username") or _uid(user),
             units.get("total", 0), units.get("failed", 0))
         await self._wdb.project_units(artifact_id, rev)
-        self._lifecycle._spawn_embed(artifact_id, rev)
+        self._lifecycle._spawn_embed(
+            artifact_id, rev, str(artifact["domain_id"]))
         return {"artifact_id": artifact_id, "revision": rev,
                 "reprojected": True}
 

@@ -168,7 +168,7 @@ const freshVisible = ref(false)
 const configVisible = ref(false)
 const configKey = ref<McpKeyItem | null>(null)
 const configDomainKbs = ref<{ id: string; name: string; document_count: number }[]>([])
-/** 008：钥匙域内当前用户可见的制品（配置抽屉「开放的知识制品」候选）。 */
+/** 钥匙域内当前用户可见、已发布的制品（配置抽屉候选）。 */
 const configDomainArtifacts = ref<
   { artifact_id: string; title: string; status: string; visibility?: string }[]
 >([])
@@ -270,9 +270,9 @@ async function openConfig(row: McpKeyItem) {
     // id，不是发起时那把则丢弃，避免旧域库清单覆盖新面板（所见非所得）
     if (configKey.value?.id !== row.id) return
     configDomainKbs.value = kbs.map(k => ({ id: k.id, name: k.name, document_count: k.document_count }))
-    // 008：候选=本域我能看到的制品（public+成员）；Agent 通道只暴露勾选子集
+    // 候选=本域我能看到且已发布的制品；草稿和已停用制品不能开放给 Agent。
     configDomainArtifacts.value = domainArtifacts
-      .filter(a => a.domain_id === row.domain)
+      .filter(a => a.domain_id === row.domain && a.status === 'published')
       .map(a => ({
         artifact_id: a.artifact_id, title: a.title,
         status: a.status, visibility: a.visibility,

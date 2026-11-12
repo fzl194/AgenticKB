@@ -211,7 +211,7 @@ async def put_my_key_open_kbs(
 
 
 # PUT body：全量覆盖该钥匙开放的知识制品（008）；空数组=清空（Agent 侧
-# 制品通道对这把钥匙关闭）。候选=主人可见面（public+成员），子集不放大。
+# 制品通道对这把钥匙关闭）。候选=主人可见的已发布制品，子集不放大。
 class OpenArtifactsBody(BaseModel):
     artifact_ids: list[str]
 

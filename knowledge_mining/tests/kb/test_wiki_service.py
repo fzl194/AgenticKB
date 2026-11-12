@@ -432,7 +432,7 @@ class FakeTaskClient:
         self._counts[task_id] = len(texts)
         self.submits.append({
             "texts": list(texts), "idempotency_key": idempotency_key,
-            "max_attempts": max_attempts,
+            "max_attempts": max_attempts, "knowledge_domain": knowledge_domain,
         })
         return task_id
 
@@ -802,6 +802,7 @@ async def test_status_units_and_self_heal():
     assert status["units"]["pending"] == 1
     await _drain_background()
     assert len(env.tc.submits) == submits_before + 1
+    assert env.tc.submits[-1]["knowledge_domain"] == DOMAIN
     assert (await env.wdb.units_status(WID, 1))["done"] == 1   # 自愈回填
 
     # 未发布 → revision 0 / units 全 0
@@ -827,6 +828,7 @@ async def test_embed_idempotency_key_and_attempts():
     assert len(env.tc.submits) == 1
     submit = env.tc.submits[0]
     assert submit["max_attempts"] == 3
+    assert submit["knowledge_domain"] == DOMAIN
     units = env.wdb.units[(WID, 1)]
     expected_digest = hashlib.sha256(
         "\x1f".join(u["content_text"] for u in units).encode("utf-8"),
@@ -893,12 +895,12 @@ async def test_spawn_embed_inflight_guard():
     ]
     env.adb.artifacts[WID]["current_revision"] = 1
 
-    task = env.lifecycle._spawn_embed(WID, 1)
+    task = env.lifecycle._spawn_embed(WID, 1, DOMAIN)
     assert task is not None
     assert (WID, 1) in _EMBED_INFLIGHT
     # 强引用集在飞期间持有任务（事件循环只持弱引用，防 GC）；完成后释放
     assert task in _EMBED_TASKS
-    assert env.lifecycle._spawn_embed(WID, 1) is None   # 防重入
+    assert env.lifecycle._spawn_embed(WID, 1, DOMAIN) is None   # 防重入
     await task
     assert (WID, 1) not in _EMBED_INFLIGHT
     assert task not in _EMBED_TASKS

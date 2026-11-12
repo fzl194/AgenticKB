@@ -79,7 +79,7 @@
           <h4 class="mkey-panel__title">开放的知识制品（{{ key.domain }} 域）</h4>
           <p class="mkey-panel__desc">
             Agent 通过这把钥匙只能查到勾选的知识制品（表格：说明卡与行查询；Wiki：说明卡、搜页、整页读取与链接导航）。
-            候选=你在本域能看到的制品（公开+你是成员）；不勾=制品通道对这把钥匙关闭。
+            候选=你在本域能看到的已发布制品（公开+你是成员）；不勾=制品通道对这把钥匙关闭。
           </p>
         </div>
         <el-button size="small" :loading="savingArtifacts" :disabled="readonly || !artifactsDirty" data-test="save-open-artifacts" @click="saveOpenArtifacts">保存</el-button>
@@ -92,7 +92,7 @@
           </span>
         </el-checkbox>
       </el-checkbox-group>
-      <el-empty v-if="!domainArtifacts.length" description="该域没有你能看到的知识制品" :image-size="60" />
+      <el-empty v-if="!domainArtifacts.length" description="该域没有你能开放的已发布知识制品" :image-size="60" />
     </section>
 
     <!-- 提示词 -->

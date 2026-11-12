@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { nextTick } from 'vue'
+import { nextTick, reactive } from 'vue'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 
@@ -27,6 +27,8 @@ vi.mock('element-plus', () => ({
 }))
 
 import ArtifactsListView from '../ArtifactsListView.vue'
+
+state.domain = reactive(state.domain)
 
 interface ListVm {
   artifacts: unknown[]
@@ -124,6 +126,7 @@ describe('artifacts list view', () => {
     await flushPromises()
 
     expect(state.api.list).toHaveBeenCalledTimes(1)
+    expect(state.api.list).toHaveBeenCalledWith({ domain_id: 'plant-a' })
     // el-table 在 shallowMount 下被 stub，行数据断言走 vm（渲染链路由状态驱动）
     expect(wrapper.text()).toContain('我参与的')
     const vm = wrapper.vm as unknown as ListVm
@@ -133,6 +136,26 @@ describe('artifacts list view', () => {
     ])
     // 默认筛选=全部：过滤视图与原始数据同集
     expect(vm.filteredArtifacts).toHaveLength(4)
+  })
+
+  it('reloads only the selected domain and ignores an older response after switching', async () => {
+    let resolveOld!: (value: typeof artifacts) => void
+    state.api.list.mockImplementation(({ domain_id }: { domain_id: string }) =>
+      domain_id === 'plant-a'
+        ? new Promise(resolve => { resolveOld = resolve })
+        : Promise.resolve([{ ...artifacts[0], artifact_id: 'art-b', domain_id: 'plant-b', title: 'B 域制品' }]))
+    const wrapper = mountList()
+    await nextTick()
+
+    state.domain.currentDomain = 'plant-b'
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ListVm
+    expect(state.api.list).toHaveBeenCalledWith({ domain_id: 'plant-b' })
+    expect(vm.filteredArtifacts.map(a => (a as { title: string }).title)).toEqual(['B 域制品'])
+
+    resolveOld(artifacts)
+    await flushPromises()
+    expect(vm.filteredArtifacts.map(a => (a as { title: string }).title)).toEqual(['B 域制品'])
   })
 
   it('maps artifact status to grey/green/red tags with labels', async () => {

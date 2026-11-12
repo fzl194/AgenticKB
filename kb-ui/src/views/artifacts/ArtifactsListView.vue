@@ -2,7 +2,7 @@
   <div class="artifact-list">
     <header class="artifact-list__header">
       <div>
-        <p>上传 Excel 建表发布，供 Agent 结构化查询；列表=我参与的 + 本域公开制品（管理员见全部）。</p>
+        <p>上传 Excel 建表发布，供 Agent 结构化查询；列表=我参与的 + 本域公开制品（管理员见本域全部）。</p>
       </div>
       <el-button type="primary" data-test="create-artifact" @click="openCreate">新建制品</el-button>
     </header>
@@ -35,6 +35,7 @@
           <button class="artifact-list__link" type="button" @click="open(row.artifact_id)">{{ row.title }}</button>
         </template>
       </el-table-column>
+      <el-table-column prop="domain_id" label="归属域" min-width="170" show-overflow-tooltip />
       <el-table-column label="类型" width="90">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ row.kind === 'wiki' ? 'Wiki' : '表格' }}</el-tag>
@@ -107,7 +108,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useArtifactsApi } from '@/api/artifacts'
@@ -122,6 +123,7 @@ const domainStore = useDomainStore()
 
 const artifacts = ref<Artifact[]>([])
 const loading = ref(false)
+let loadGeneration = 0
 const createVisible = ref(false)
 const creating = ref(false)
 const form = ref({
@@ -162,13 +164,25 @@ const KIND_CREATE_HINTS: Record<ArtifactKind, string> = {
 }
 
 async function load() {
+  const generation = ++loadGeneration
+  const domainId = domainStore.currentDomain
+  artifacts.value = []
+  if (!domainId) {
+    loading.value = false
+    return
+  }
   loading.value = true
   try {
-    artifacts.value = await api.list()
+    const result = await api.list({ domain_id: domainId })
+    if (generation === loadGeneration && domainId === domainStore.currentDomain) {
+      artifacts.value = result
+    }
   } catch (error) {
-    ElMessage.error(`加载知识制品失败：${await apiErrorDetail(error)}`)
+    if (generation === loadGeneration) {
+      ElMessage.error(`加载知识制品失败：${await apiErrorDetail(error)}`)
+    }
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
@@ -232,7 +246,7 @@ function formatTime(value: string | null): string {
   return value ? value.replace('T', ' ').slice(0, 19) : '—'
 }
 
-onMounted(load)
+watch(() => domainStore.currentDomain, load, { immediate: true })
 </script>
 
 <style scoped>

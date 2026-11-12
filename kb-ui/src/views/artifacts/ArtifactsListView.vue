@@ -2,7 +2,9 @@
   <div class="artifact-list">
     <header class="artifact-list__header">
       <div>
-        <p>上传 Excel 建表发布，供 Agent 结构化查询；列表=我参与的 + 本域公开制品（管理员见本域全部）。</p>
+        <p class="artifact-list__eyebrow">KNOWLEDGE ARTIFACTS</p>
+        <h1 class="artifact-list__title">知识制品</h1>
+        <p class="artifact-list__subtitle">上传 Excel 建表发布，供 Agent 结构化查询；列表=我参与的 + 本域公开制品（管理员见本域全部）。</p>
       </div>
       <el-button type="primary" data-test="create-artifact" @click="openCreate">新建制品</el-button>
     </header>
@@ -27,39 +29,48 @@
         placeholder="标题关键字"
         clearable
       />
+      <span class="artifact-list__count">共 {{ filteredArtifacts.length }} 份</span>
     </div>
 
-    <el-table v-loading="loading" :data="filteredArtifacts">
-      <el-table-column prop="title" label="标题" min-width="220" show-overflow-tooltip>
+    <el-table v-loading="loading" :data="filteredArtifacts" class="artifact-list__table">
+      <el-table-column prop="title" label="知识制品" min-width="260">
         <template #default="{ row }">
-          <button class="artifact-list__link" type="button" @click="open(row.artifact_id)">{{ row.title }}</button>
+          <button class="artifact-list__name" type="button" @click="open(row.artifact_id)">
+            <span class="artifact-list__kindicon" :class="`is-${row.kind}`" aria-hidden="true">
+              {{ row.kind === 'wiki' ? 'W' : 'T' }}
+            </span>
+            <span class="artifact-list__name-text">
+              <span class="artifact-list__link">{{ row.title }}</span>
+              <span v-if="row.description" class="artifact-list__desc">{{ row.description }}</span>
+            </span>
+          </button>
         </template>
       </el-table-column>
-      <el-table-column prop="domain_id" label="归属域" min-width="170" show-overflow-tooltip />
-      <el-table-column label="类型" width="90">
+      <el-table-column prop="domain_id" label="归属域" min-width="150" show-overflow-tooltip />
+      <el-table-column label="类型" width="80">
         <template #default="{ row }">
           <el-tag size="small" effect="plain">{{ row.kind === 'wiki' ? 'Wiki' : '表格' }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="可见性" width="90">
+      <el-table-column label="可见性" width="80">
         <template #default="{ row }">
           <el-tag size="small" :type="row.visibility === 'public' ? 'success' : 'info'" effect="plain">
             {{ row.visibility === 'public' ? '公开' : '私有' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="100">
+      <el-table-column label="状态" width="90">
         <template #default="{ row }">
-          <el-tag size="small" :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+          <el-tag size="small" :type="statusTagType(row.status)" :effect="row.status === 'published' ? 'light' : 'plain'">{{ statusLabel(row.status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="当前版本" width="100" align="center">
+      <el-table-column label="当前版本" width="90" align="center">
         <template #default="{ row }">{{ row.current_revision ? `r${row.current_revision}` : '未发布' }}</template>
       </el-table-column>
-      <el-table-column label="我的角色" width="100" align="center">
+      <el-table-column label="我的角色" width="90" align="center">
         <template #default="{ row }">{{ row.my_role ? roleLabel(row.my_role) : '—' }}</template>
       </el-table-column>
-      <el-table-column label="更新时间" width="160">
+      <el-table-column label="更新时间" width="150">
         <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
       </el-table-column>
       <template #empty>
@@ -250,13 +261,56 @@ watch(() => domainStore.currentDomain, load, { immediate: true })
 </script>
 
 <style scoped>
-.artifact-list { padding: 4px; }
-.artifact-list__header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
-.artifact-list__header p { margin: 5px 0 0; color: var(--kb-text-tertiary); font-size: 13px; }
-.artifact-list__link { border: 0; background: none; padding: 0; color: var(--kb-accent, #2563eb); font-weight: 650; cursor: pointer; }
-.artifact-list__hint { margin: -5px 0 0 70px; color: var(--kb-text-tertiary); font-size: 12px; }
-.artifact-list__domain-hint { width: 100%; color: var(--kb-text-tertiary); font-size: 12px; }
+.artifact-list { padding: 4px 2px; }
+
+/* ── 页头：eyebrow + 大标题 + 副题（高保真 ar-eyebrow/h1 排版） ── */
+.artifact-list__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
+.artifact-list__eyebrow {
+  margin: 0 0 6px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 1.6px;
+  color: var(--kb-accent, #0891b2);
+}
+.artifact-list__title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.4px; color: var(--kb-text-primary, inherit); }
+.artifact-list__subtitle { margin: 7px 0 0; color: var(--kb-text-tertiary); font-size: 12.5px; }
+
+/* ── 筛选行 ── */
 .artifact-list__filters { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .artifact-list__filter { width: 140px; }
 .artifact-list__filter-title { width: 220px; }
+.artifact-list__count { margin-left: auto; font-size: 12px; color: var(--kb-text-tertiary); }
+
+/* ── 表格：发丝线 + 软表头 + 名称双行（高保真 ar-list-table 质感） ── */
+.artifact-list__table :deep(th.el-table__cell) {
+  background: var(--kb-bg-card-hover, #f8fafc);
+  color: var(--kb-text-secondary, #64748b);
+  font-weight: 500; font-size: 11.5px;
+}
+.artifact-list__table :deep(td.el-table__cell) { padding: 10px 0; }
+.artifact-list__table :deep(.el-table__row:hover td.el-table__cell) { background: var(--kb-bg-card-hover, #f8fafc); }
+.artifact-list__name {
+  display: flex; align-items: center; gap: 10px;
+  border: 0; background: none; padding: 2px 4px;
+  cursor: pointer; text-align: left; min-width: 0;
+}
+.artifact-list__kindicon {
+  display: inline-grid; place-items: center; flex-shrink: 0;
+  width: 32px; height: 32px; border-radius: 8px;
+  border: 1px solid var(--kb-border, #e2e8f0);
+  background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
+  color: var(--kb-accent, #0891b2);
+  font-size: 12px; font-weight: 700;
+}
+.artifact-list__name-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.artifact-list__link {
+  border: 0; background: none; padding: 0; text-align: left;
+  color: var(--kb-text-primary, inherit); font-weight: 600; font-size: 13.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.artifact-list__name:hover .artifact-list__link { color: var(--kb-accent, #0891b2); }
+.artifact-list__desc {
+  color: var(--kb-text-tertiary); font-size: 11.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.artifact-list__hint { margin: -5px 0 0 70px; color: var(--kb-text-tertiary); font-size: 12px; }
+.artifact-list__domain-hint { width: 100%; color: var(--kb-text-tertiary); font-size: 12px; }
 </style>

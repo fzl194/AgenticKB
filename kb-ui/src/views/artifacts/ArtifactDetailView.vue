@@ -1,33 +1,40 @@
 <template>
   <div class="artifact-detail">
-    <!-- Header：标题 + 状态/类型 + 生命周期操作 -->
+    <!-- Header：图标+标题、徽章成组（高保真 ar-title/ar-badges 排版）+ 生命周期操作 -->
     <div class="artifact-detail__header">
       <div class="artifact-detail__head-left">
         <router-link to="/artifacts" class="artifact-back">
           <el-icon><ArrowLeft /></el-icon>
           <span>知识制品</span>
         </router-link>
-        <h2 class="artifact-detail__title">{{ artifact?.title || '加载中…' }}</h2>
-        <el-tag v-if="artifact" size="small" :type="statusTagType(artifact.status)">
-          {{ statusLabel(artifact.status) }}
-        </el-tag>
-        <el-tag v-if="artifact" size="small" effect="plain">
-          {{ artifact.kind === 'wiki' ? 'Wiki' : '表格' }}
-        </el-tag>
-        <!-- D01（66号 §5）：服务版本 tag——rev>0 且非停用时点明「rN 正在服务」，
-             与下方草稿 tag 并列，让「正式版在服务 + 另有待发布草稿」的并存一眼可读。 -->
-        <el-tag v-if="servingRevisionLabel" size="small" type="success" effect="plain">
-          {{ servingRevisionLabel }}
-        </el-tag>
-        <!-- 草稿 tag 与 servingRevisionLabel 同源（Task 3.3 审查 Minor）：有
-             服务版（非停用且 rev>0）才说「另有待发布内容」；停用/rev0 语境一律
-             「draft 开放中」——deprecated+draft 边角不再出现「另有待发布」悬空。 -->
-        <el-tag v-if="artifact && artifact.draft_open" size="small" type="warning" effect="plain">
-          {{ servingRevisionLabel ? '另有待发布内容' : 'draft 开放中' }}
-        </el-tag>
-        <el-tag v-if="artifact" size="small" :type="artifact.visibility === 'public' ? 'success' : 'info'">
-          {{ artifact.visibility === 'public' ? '公开' : '私有' }}
-        </el-tag>
+        <div class="artifact-detail__title-row">
+          <span v-if="artifact" class="artifact-detail__kindicon" :class="`is-${artifact.kind}`" aria-hidden="true">
+            {{ artifact.kind === 'wiki' ? 'W' : 'T' }}
+          </span>
+          <h2 class="artifact-detail__title">{{ artifact?.title || '加载中…' }}</h2>
+        </div>
+        <div v-if="artifact" class="artifact-detail__badges">
+          <el-tag size="small" :type="statusTagType(artifact.status)">
+            {{ statusLabel(artifact.status) }}
+          </el-tag>
+          <el-tag size="small" effect="plain">
+            {{ artifact.kind === 'wiki' ? 'Wiki' : '表格' }}
+          </el-tag>
+          <!-- D01（66号 §5）：服务版本 tag——rev>0 且非停用时点明「rN 正在服务」，
+               与下方草稿 tag 并列，让「正式版在服务 + 另有待发布草稿」的并存一眼可读。 -->
+          <el-tag v-if="servingRevisionLabel" size="small" type="success" effect="plain">
+            {{ servingRevisionLabel }}
+          </el-tag>
+          <!-- 草稿 tag 与 servingRevisionLabel 同源（Task 3.3 审查 Minor）：有
+               服务版（非停用且 rev>0）才说「另有待发布内容」；停用/rev0 语境一律
+               「draft 开放中」——deprecated+draft 边角不再出现「另有待发布」悬空。 -->
+          <el-tag v-if="artifact.draft_open" size="small" type="warning" effect="plain">
+            {{ servingRevisionLabel ? '另有待发布内容' : 'draft 开放中' }}
+          </el-tag>
+          <el-tag size="small" :type="artifact.visibility === 'public' ? 'success' : 'info'">
+            {{ artifact.visibility === 'public' ? '公开' : '私有' }}
+          </el-tag>
+        </div>
       </div>
       <div v-if="artifact && canWrite" class="artifact-detail__actions">
         <el-tooltip
@@ -771,10 +778,21 @@ defineExpose({ reloadAll })
 
 <style scoped>
 .artifact-detail__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.artifact-detail__head-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.artifact-detail__title { margin: 0; font-size: 20px; }
-.artifact-back { display: inline-flex; align-items: center; gap: 4px; color: var(--kb-text-tertiary); text-decoration: none; font-size: 13px; }
-.artifact-back:hover { color: var(--kb-accent, #2563eb); }
+.artifact-detail__head-left { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.artifact-back { display: inline-flex; align-items: center; gap: 4px; color: var(--kb-text-tertiary); text-decoration: none; font-size: 12px; }
+.artifact-back:hover { color: var(--kb-accent, #0891b2); }
+/* ── 标题行：kindicon + 大标题（高保真 ar-title 排版） ── */
+.artifact-detail__title-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.artifact-detail__kindicon {
+  display: inline-grid; place-items: center; flex-shrink: 0;
+  width: 40px; height: 40px; border-radius: 10px;
+  border: 1px solid var(--kb-border, #e2e8f0);
+  background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
+  color: var(--kb-accent, #0891b2);
+  font-size: 15px; font-weight: 700;
+}
+.artifact-detail__title { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-detail__badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-left: 52px; }
 .artifact-detail__desc { margin: 8px 0 12px; color: var(--kb-text-tertiary); font-size: 13px; }
 .artifact-detail__missing { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .artifact-detail__meta-bar { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }

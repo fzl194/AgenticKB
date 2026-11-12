@@ -2,7 +2,7 @@
   <div class="wiki-toc-design" data-test="wiki-toc-design">
     <div class="wiki-toc-design__bar">
       <span class="wiki-toc-design__status">
-        {{ loading ? '目录加载中…' : sections.length === 0 ? '目录未分节' : `共 ${sections.length} 节` }}
+        {{ loading ? '目录加载中…' : sections.length === 0 ? '目录未分节' : `共 ${sections.length} 节 · 决定运行态阅读目录的分组` }}
       </span>
       <el-button
         type="primary"
@@ -21,7 +21,9 @@
     <div v-loading="loading" class="wiki-toc-design__body">
       <section v-for="(sec, si) in sections" :key="si" class="wiki-toc-design__section" data-test="toc-section">
         <header class="wiki-toc-design__section-head">
-          <el-input v-model="sec.sectionTitle" size="small" data-test="toc-section-title" />
+          <span class="wiki-toc-design__section-no">{{ si + 1 }}</span>
+          <el-input v-model="sec.sectionTitle" size="small" class="wiki-toc-design__section-title" data-test="toc-section-title" />
+          <span class="wiki-toc-design__section-count">{{ sec.pageKeys.length }} 页</span>
           <span class="wiki-toc-design__section-ops">
             <el-tooltip content="上移" placement="top" :show-after="400">
               <el-button size="small" text :disabled="si === 0" data-test="toc-section-up" @click="moveSection(si, -1)">
@@ -229,34 +231,82 @@ defineExpose({ reload: load })
 </script>
 
 <style scoped>
-.wiki-toc-design { display: flex; flex-direction: column; gap: 10px; }
+.wiki-toc-design { display: flex; flex-direction: column; gap: 12px; }
 .wiki-toc-design__bar { display: flex; align-items: center; justify-content: space-between; }
 .wiki-toc-design__status { font-size: 12.5px; color: var(--kb-text-tertiary); }
 .wiki-toc-design__flat {
-  padding: 7px 10px; border-radius: 6px; font-size: 12.5px;
-  background: var(--el-color-primary-light-9, #ecf5ff);
-  border: 1px solid var(--el-color-primary-light-7, #d9ecff);
+  padding: 8px 11px; border-radius: 6px; font-size: 12.5px;
+  background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
+  border: 1px solid var(--kb-accent-medium, rgba(8, 145, 178, 0.15));
   color: var(--kb-text-primary, inherit);
 }
-.wiki-toc-design__body { display: flex; flex-direction: column; gap: 10px; }
-.wiki-toc-design__section, .wiki-toc-design__unassigned {
-  border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: 6px; padding: 8px 10px;
+.wiki-toc-design__body { display: flex; flex-direction: column; gap: 12px; }
+
+.wiki-toc-design__section {
+  border: 1px solid var(--kb-border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--kb-bg-card, #fff);
+  overflow: hidden;
 }
-.wiki-toc-design__section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.wiki-toc-design__section-ops { display: flex; flex-shrink: 0; margin-left: auto; }
+.wiki-toc-design__section-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px;
+  background: var(--kb-bg-card-hover, #f8fafc);
+  border-bottom: 1px solid var(--kb-border-light, #f1f5f9);
+}
+.wiki-toc-design__section-no {
+  display: inline-grid; place-items: center;
+  min-width: 20px; height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--kb-border, #e2e8f0);
+  background: var(--kb-bg-card, #fff);
+  color: var(--kb-text-tertiary, #94a3b8);
+  font-size: 10.5px; font-weight: 600;
+}
+.wiki-toc-design__section-title { flex: 1; max-width: 360px; }
+.wiki-toc-design__section-title :deep(.el-input__wrapper) {
+  background: transparent; box-shadow: none;
+  font-weight: 600; font-size: 13px;
+}
+.wiki-toc-design__section-title :deep(.el-input__wrapper:focus-within) {
+  box-shadow: 0 0 0 1px var(--kb-accent, #0891b2) inset;
+  background: var(--kb-bg-card, #fff);
+}
+.wiki-toc-design__section-count {
+  margin-left: auto; font-size: 11px; color: var(--kb-text-tertiary, #94a3b8);
+  white-space: nowrap;
+}
+.wiki-toc-design__section-ops { display: flex; flex-shrink: 0; }
 .wiki-toc-design__section-ops .el-button + .el-button { margin-left: 0; }
 .wiki-toc-design__section-ops .el-button { padding: 5px 7px; }
+
 .wiki-toc-design__add { align-self: flex-start; }
 .wiki-toc-design__add-icon { margin-right: 4px; }
+
 .wiki-toc-design__page {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 3px 0; font-size: 13px;
+  padding: 6px 12px 6px 20px; font-size: 13px;
+  border-bottom: 1px solid var(--kb-border-light, #f1f5f9);
+  transition: background .14s var(--kb-ease, ease);
 }
+.wiki-toc-design__section .wiki-toc-design__page:last-of-type,
+.wiki-toc-design__unassigned .wiki-toc-design__page:last-of-type { border-bottom: 0; }
+.wiki-toc-design__page:hover { background: var(--kb-bg-card-hover, #f8fafc); }
 .wiki-toc-design__page-title {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--kb-text-primary, inherit);
 }
-.wiki-toc-design__page-select { width: 150px; flex-shrink: 0; }
-.wiki-toc-design__empty-sec { margin: 4px 0 0; font-size: 12px; color: var(--kb-text-tertiary); }
-.wiki-toc-design__unassigned-title { margin: 0 0 6px; font-size: 13px; }
+.wiki-toc-design__page-select { width: 160px; flex-shrink: 0; }
+.wiki-toc-design__empty-sec { margin: 0; padding: 8px 12px; font-size: 12px; color: var(--kb-text-tertiary); }
+
+.wiki-toc-design__unassigned {
+  border: 1px dashed var(--kb-border, #cbd5e1);
+  border-radius: 8px;
+  padding: 10px 0 4px;
+  background: var(--kb-bg-card-hover, #f8fafc);
+}
+.wiki-toc-design__unassigned-title {
+  margin: 0 12px 6px; font-size: 11px; font-weight: 600;
+  letter-spacing: .5px; color: var(--kb-text-tertiary, #94a3b8);
+}
 </style>

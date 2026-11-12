@@ -59,15 +59,17 @@
     <section class="wiki-compile__sec">
       <div class="wiki-compile__sec-head">编译</div>
       <div v-if="status" class="wiki-compile__flow" data-test="wiki-compile-flow" aria-label="编译流程进度">
-        <div
-          v-for="(step, index) in compileSteps"
-          :key="step"
-          class="wiki-compile__step"
-          :class="stepClass(index)"
-          :aria-current="index === activeStep && !isTerminal ? 'step' : undefined"
-        >
-          <span class="wiki-compile__step-dot">{{ index < activeStep || state === 'completed' ? '✓' : index + 1 }}</span>
-          <span>{{ step }}</span>
+        <div class="wiki-compile__steps">
+          <div
+            v-for="(step, index) in compileSteps"
+            :key="step"
+            class="wiki-compile__step"
+            :class="stepClass(index)"
+            :aria-current="index === activeStep && !isTerminal ? 'step' : undefined"
+          >
+            <span class="wiki-compile__step-dot">{{ index < activeStep || state === 'completed' ? '✓' : index + 1 }}</span>
+            <span class="wiki-compile__step-label">{{ step }}</span>
+          </div>
         </div>
         <p class="wiki-compile__flow-detail" data-test="wiki-compile-flow-detail">{{ flowDetail }}</p>
       </div>
@@ -422,42 +424,87 @@ function errorCode(error: unknown): string | undefined {
 </script>
 
 <style scoped>
-.wiki-compile { display: flex; flex-direction: column; gap: 14px; }
-.wiki-compile__sec { display: flex; flex-direction: column; gap: 8px; }
+.wiki-compile { display: flex; flex-direction: column; gap: 16px; }
+.wiki-compile__sec { display: flex; flex-direction: column; gap: 10px; }
 .wiki-compile__sec-head {
-  font-weight: 600; font-size: 13.5px; color: var(--kb-text-primary, inherit);
-  border-left: 3px solid var(--el-color-primary, #2563eb); padding-left: 8px;
+  font-size: 11px; font-weight: 600; letter-spacing: 1px;
+  color: var(--kb-text-tertiary, #94a3b8);
+  display: flex; align-items: center; gap: 7px;
 }
+.wiki-compile__sec-head::before {
+  content: ''; width: 4px; height: 4px; border-radius: 50%;
+  background: var(--kb-accent, #0891b2); flex-shrink: 0;
+}
+
+/* ── 六步流程条：连接线 + 状态点 ── */
 .wiki-compile__flow {
-  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px;
-  padding: 12px; border: 1px solid var(--kb-border-light); border-radius: 8px;
-  background: var(--kb-bg-card);
+  padding: 14px 16px 12px; border: 1px solid var(--kb-border, #e2e8f0); border-radius: 8px;
+  background: var(--kb-bg-card, #fff);
 }
-.wiki-compile__step { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--kb-text-tertiary); font-size: 12.5px; }
+.wiki-compile__steps { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+.wiki-compile__step {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0;
+  color: var(--kb-text-tertiary, #94a3b8); font-size: 12.5px;
+}
+.wiki-compile__step + .wiki-compile__step { margin-left: 26px; position: relative; }
+.wiki-compile__step + .wiki-compile__step::before {
+  content: ''; position: absolute; left: -19px; top: 50%;
+  width: 12px; height: 1px; background: var(--kb-border, #e2e8f0);
+}
 .wiki-compile__step-dot {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px;
-  height: 22px; border: 1px solid var(--kb-border-light); border-radius: 50%;
+  height: 22px; border: 1px solid var(--kb-border, #e2e8f0); border-radius: 50%;
   font-size: 11px; font-weight: 600;
+  transition: all .18s var(--kb-ease, ease);
 }
-.wiki-compile__step.is-done { color: var(--kb-accent); }
-.wiki-compile__step.is-done .wiki-compile__step-dot { border-color: var(--kb-accent); }
-.wiki-compile__step.is-current { color: var(--kb-accent); font-weight: 600; }
-.wiki-compile__step.is-current .wiki-compile__step-dot { color: white; background: var(--kb-accent); border-color: var(--kb-accent); }
-.wiki-compile__step.is-stopped { color: var(--kb-text-secondary); font-weight: 600; }
-.wiki-compile__flow-detail { grid-column: 1 / -1; margin: 2px 0 0; color: var(--kb-text-secondary); font-size: 12.5px; }
-@media (max-width: 1100px) { .wiki-compile__flow { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 650px) { .wiki-compile__flow { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.wiki-compile__sources { display: flex; flex-direction: column; gap: 4px; }
-.wiki-compile__src { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: 6px; }
+.wiki-compile__step.is-done { color: var(--kb-accent, #0891b2); }
+.wiki-compile__step.is-done .wiki-compile__step-dot {
+  border-color: var(--kb-accent, #0891b2); background: var(--kb-accent, #0891b2); color: #fff;
+}
+.wiki-compile__step.is-current { color: var(--kb-accent, #0891b2); font-weight: 600; }
+.wiki-compile__step.is-current .wiki-compile__step-dot {
+  color: var(--kb-accent, #0891b2); background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
+  border-color: var(--kb-accent, #0891b2);
+  box-shadow: 0 0 0 4px var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
+}
+.wiki-compile__step.is-stopped { color: var(--kb-warning, #f59e0b); font-weight: 600; }
+.wiki-compile__step.is-stopped .wiki-compile__step-dot {
+  border-color: var(--kb-warning, #f59e0b); color: var(--kb-warning, #f59e0b);
+}
+.wiki-compile__flow-detail {
+  margin: 10px 0 0; padding-top: 9px; border-top: 1px solid var(--kb-border-light, #f1f5f9);
+  color: var(--kb-text-secondary, #64748b); font-size: 12.5px;
+}
+@media (max-width: 1100px) { .wiki-compile__steps { gap: 8px; } .wiki-compile__step + .wiki-compile__step { margin-left: 0; } .wiki-compile__step + .wiki-compile__step::before { display: none; } }
+
+/* ── 来源绑定 ── */
+.wiki-compile__sources { display: flex; flex-direction: column; gap: 6px; }
+.wiki-compile__src {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border: 1px solid var(--kb-border, #e2e8f0); border-radius: 8px;
+  background: var(--kb-bg-card, #fff);
+  transition: border-color .14s var(--kb-ease, ease), box-shadow .14s var(--kb-ease, ease);
+}
+.wiki-compile__src:hover {
+  border-color: var(--kb-accent-medium, rgba(8, 145, 178, 0.15));
+  box-shadow: var(--kb-shadow-xs, 0 1px 2px rgba(0, 0, 0, 0.04));
+}
 .wiki-compile__src-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.wiki-compile__src-title { font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
+.wiki-compile__src-title { font-size: 13px; font-weight: 600; color: var(--kb-text-primary, inherit); display: inline-flex; align-items: center; gap: 4px; }
 .wiki-compile__dirs { display: inline-flex; gap: 4px; flex-wrap: wrap; }
-.wiki-compile__empty { margin: 0; font-size: 12.5px; color: var(--kb-text-tertiary); }
+.wiki-compile__empty { margin: 0; padding: 10px 2px; font-size: 12.5px; color: var(--kb-text-tertiary); }
 .wiki-compile__add { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .wiki-compile__add-domain { width: 180px; }
 .wiki-compile__add-kb { width: 260px; }
 .wiki-compile__add-dirs { flex: 1; min-width: 240px; }
-.wiki-compile__phase { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
-.wiki-compile__idle { display: flex; align-items: center; gap: 12px; }
+
+.wiki-compile__phase {
+  display: flex; align-items: center; gap: 10px; font-size: 13.5px;
+  padding: 10px 14px; border-radius: 8px;
+  background: var(--kb-bg-card-hover, #f8fafc);
+  border: 1px solid var(--kb-border-light, #f1f5f9);
+}
+.wiki-compile__phase .el-icon { color: var(--kb-accent, #0891b2); }
+.wiki-compile__idle { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .wiki-compile__hint { font-size: 12.5px; color: var(--kb-text-tertiary); }
 </style>

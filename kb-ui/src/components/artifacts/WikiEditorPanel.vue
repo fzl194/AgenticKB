@@ -457,7 +457,7 @@ function splitCsv(value: string): string[] {
 }
 
 /** selectPage 暴露给父级（D03.1：图谱「打开页面」回页面视图定位该页）。 */
-defineExpose({ loadPages, selectPage })
+defineExpose({ loadPages, selectPage, currentPageKey: computed(() => selectedKey.value) })
 </script>
 
 <style scoped>

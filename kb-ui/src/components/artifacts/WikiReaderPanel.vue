@@ -566,7 +566,7 @@ function formatTime(value: string | null | undefined): string {
 
 /** 命令式刷新（发布后父级 reloadAll 可不接线——面板自管理）；selectPage
  * 暴露给父级（D03.1：图谱「打开页面」回页面视图定位该页）。 */
-defineExpose({ reload: loadPages, selectPage })
+defineExpose({ reload: loadPages, selectPage, currentPageKey: computed(() => selectedKey.value) })
 </script>
 
 <style scoped>

@@ -20,62 +20,20 @@
           size="small"
           clearable
           class="wiki-graph__search"
-          placeholder="搜索页面标题"
+          placeholder="定位页面（输入标题，回车居中）"
           data-test="wiki-graph-search"
-        />
-        <el-switch
-          v-model="oneHopOnly"
-          size="small"
-          active-text="仅所选页及一跳"
-          data-test="wiki-graph-one-hop"
+          @keyup.enter="locateSearch"
         />
         <span class="wiki-graph__stats" data-test="wiki-graph-stats">
-          {{ visible.nodes.length }} 页 · {{ visible.edges.length }} 引用
-          <template v-if="brokenCount > 0"> · 断链 {{ brokenCount }}</template>
+          一阶输入 {{ model.totals.input1 }} · 一阶输出 {{ model.totals.output1 }}
+          <template v-if="model.totals.broken > 0"> · 断链 {{ model.totals.broken }}</template>
           · r{{ revision }}
         </span>
       </div>
 
       <div class="wiki-graph__body">
-        <div class="wiki-graph__canvas">
-          <VueFlow
-            :key="flowKey"
-            :nodes="flowNodes"
-            :edges="flowEdges"
-            :nodes-draggable="false"
-            :nodes-connectable="false"
-            :edges-updatable="false"
-            :elements-selectable="true"
-            :delete-key-code="null"
-            :min-zoom="0.3"
-            :max-zoom="1.6"
-            fit-view-on-init
-            @node-click="onNodeClick"
-          >
-            <template #node-wiki="nodeProps">
-              <Handle type="target" :position="Position.Left" :connectable="false" />
-              <article
-                class="wiki-graph-node"
-                :class="[
-                  `is-${nodeProps.data.pageType || 'broken'}`,
-                  { 'is-broken': nodeProps.data.isBroken,
-                    'is-selected': selectedKey === nodeProps.id },
-                ]"
-              >
-                <span class="wiki-graph-node__type">{{ nodeProps.data.typeLabel }}</span>
-                <strong :title="nodeProps.data.label">{{ nodeProps.data.label }}</strong>
-                <small v-if="!nodeProps.data.isBroken">
-                  出链 {{ nodeProps.data.outCount }} · 被引用 {{ nodeProps.data.inCount }}
-                </small>
-              </article>
-              <Handle type="source" :position="Position.Right" :connectable="false" />
-            </template>
-            <Background pattern-color="var(--kb-border)" :gap="22" />
-            <Controls :show-interactive="false" />
-          </VueFlow>
-          <p v-if="searchActive && visible.nodes.length === 0" class="wiki-graph__no-hit">
-            没有匹配的页面
-          </p>
+        <div class="wiki-graph__canvas-shell">
+          <WikiGraphCanvas :option="chartOption" @node-click="onNodeClick" @node-dblclick="key => recenter(key)" />
         </div>
 
         <aside class="wiki-graph__detail" data-test="wiki-graph-detail" aria-live="polite">
@@ -90,37 +48,90 @@
               <div><dt>出链</dt><dd>{{ selectedNode.outCount }}</dd></div>
               <div><dt>被引用</dt><dd>{{ selectedNode.inCount }}</dd></div>
             </dl>
-            <el-button
-              type="primary"
-              class="wiki-graph__open"
-              data-test="wiki-graph-open"
-              @click="emit('open-page', selectedNode.id)"
-            >打开页面</el-button>
+
+            <p v-if="selectedNode.isBroken" class="wiki-graph__detail-note">
+              该引用目标不存在或别名不唯一，请在设计态检查并修正。
+            </p>
+            <template v-else>
+              <div v-if="expandInfo" class="wiki-graph__detail-actions">
+                <el-button
+                  v-if="!isExpanded(selectedNode.id)"
+                  size="small"
+                  plain
+                  data-test="wiki-graph-expand"
+                  @click="toggleExpand(selectedNode.id)"
+                >展开二阶 +{{ expandInfo.count }}</el-button>
+                <el-button
+                  v-else
+                  size="small"
+                  plain
+                  data-test="wiki-graph-collapse"
+                  @click="toggleExpand(selectedNode.id)"
+                >收起二阶</el-button>
+              </div>
+              <div class="wiki-graph__detail-actions">
+                <el-button
+                  v-if="selectedNode.id !== model.centerKey"
+                  size="small"
+                  data-test="wiki-graph-recenter"
+                  @click="recenter(selectedNode.id)"
+                >设为中心</el-button>
+                <el-button
+                  type="primary"
+                  class="wiki-graph__open"
+                  data-test="wiki-graph-open"
+                  @click="emit('open-page', selectedNode.id)"
+                >打开页面</el-button>
+              </div>
+
+              <section v-if="selectedOutgoing.length" class="wiki-graph__detail-links">
+                <h5>引用了 {{ selectedOutgoing.length }} 页</h5>
+                <button
+                  v-for="item in selectedOutgoing"
+                  :key="`o-${item.key}`"
+                  type="button"
+                  class="wiki-graph__detail-link"
+                  :title="item.label"
+                  @click="recenter(item.key)"
+                >→ {{ item.label }}<span v-if="item.broken"> · 断链</span></button>
+              </section>
+              <section v-if="selectedIncoming.length" class="wiki-graph__detail-links">
+                <h5>被 {{ selectedIncoming.length }} 页引用</h5>
+                <button
+                  v-for="item in selectedIncoming"
+                  :key="`i-${item.key}`"
+                  type="button"
+                  class="wiki-graph__detail-link"
+                  :title="item.label"
+                  @click="recenter(item.key)"
+                >← {{ item.label }}</button>
+              </section>
+            </template>
           </template>
-          <p v-else class="wiki-graph__detail-hint">点击节点查看页面详情</p>
+          <p v-else class="wiki-graph__detail-hint">点击节点查看页面详情；双击节点切换中心</p>
         </aside>
       </div>
+
+      <p class="wiki-graph__legend">
+        <span>节点＝Wiki 页面</span><span>箭头＝引用方向</span><span>虚线＝断链</span>
+        <span>拖拽＝整理布局（松手回落）</span><span class="wiki-graph__legend-tail">仅本制品内知识关系</span>
+      </p>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { Handle, Position, VueFlow, useVueFlow, type Edge, type Node } from '@vue-flow/core'
-import { Background } from '@vue-flow/background'
-import { Controls } from '@vue-flow/controls'
-import '@vue-flow/core/dist/style.css'
-import '@vue-flow/core/dist/theme-default.css'
-import '@vue-flow/controls/dist/style.css'
+import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import type { EChartsOption } from 'echarts'
 
 import { useArtifactsApi } from '@/api/artifacts'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
+import WikiGraphCanvas from './WikiGraphCanvas.vue'
 import {
-  buildWikiGraph,
-  filterWikiGraph,
-  restrictToOneHop,
-  type WikiGraphNode,
+  buildWikiNeighborhood,
+  type WikiNeighborhoodNode,
 } from '@/utils/wikiGraph'
 import type {
   WikiLink,
@@ -130,15 +141,19 @@ import type {
 } from '@/types/artifacts'
 
 /**
- * Wiki 图谱视图（66号 §7 D03.1）——只读 vue-flow 节点图：节点=本制品页面、
- * 箭头=正文引用方向。设计态读 draft（editor+ 由入口守卫保证，组件不重复
- * 鉴权）；运行态读正式 revision。不提供任何写操作——唯一出口是「打开页面」
- * 导航事件（回页面视图定位该页）。引用解析以服务端 links 为准。
+ * Wiki 图谱视图——邻域自我中心图（2026-11-12 拍板重做）：中心=当前阅读/
+ * 编辑页（centerPageKey 由父级从阅读器/编辑器带入），左侧一阶输入、右侧
+ * 一阶输出，二阶默认折叠（一阶节点计数徽章 + 详情面板展开），echarts
+ * 力导向布局（可拖拽、松手回落）。设计态读 draft（editor+ 由入口守卫保
+ * 证）；运行态读正式 revision。只读——出口仅「打开页面」导航事件与视图
+ * 内定位。引用解析以服务端 links 为准；断链伪节点只出现在输出侧。
  */
 const props = defineProps<{
   artifactId: string
-  /** true=设计态草稿视图（rev0/干净态投影）；false=运行态正式版。 */
+  /** true=设计态草稿视图；false=运行态正式版。 */
   draft: boolean
+  /** 锚定页（阅读器/编辑器当前页）——变化即重定中心；无效则回落首页。 */
+  centerPageKey?: string
 }>()
 
 const emit = defineEmits<{ 'open-page': [pageKey: string] }>()
@@ -153,21 +168,16 @@ const links = ref<WikiLink[]>([])
 const revision = ref(0)
 
 const searchQuery = ref('')
-const oneHopOnly = ref(false)
+const centerKey = ref('')
 const selectedKey = ref('')
+/** 已展开二阶的一阶节点键。 */
+const expandedKeys = ref<string[]>([])
 
-const model = computed(() => buildWikiGraph(pages.value, links.value))
-const visible = computed(() => {
-  let current = model.value
-  if (searchQuery.value.trim()) current = filterWikiGraph(current, searchQuery.value)
-  if (oneHopOnly.value) current = restrictToOneHop(current, selectedKey.value || null)
-  return current
-})
-const searchActive = computed(() => searchQuery.value.trim() !== '')
-const brokenCount = computed(() => model.value.nodes.filter(node => node.isBroken).length)
-const selectedNode = computed<WikiGraphNode | null>(() => (
-  visible.value.nodes.find(node => node.id === selectedKey.value && !node.isBroken) ?? null
-))
+const model = computed(() => (
+  buildWikiNeighborhood(pages.value, links.value, centerKey.value || undefined, new Set(expandedKeys.value))))
+
+const selectedNode = computed<WikiNeighborhoodNode | null>(() => (
+  model.value.nodes.find(node => node.id === selectedKey.value) ?? null))
 
 const errorText = computed(() => {
   if (revisionMismatch.value) return '版本切换中，请重试（页面与引用数据版本不一致，可能刚发生发布）'
@@ -175,62 +185,239 @@ const errorText = computed(() => {
   return ''
 })
 
-/** 结构性变化（版本/选中/一跳开关）才重建画布（fitViewOnInit 重适配）；
- * 搜索只收窄节点集、不重挂——保留用户缩放/平移（审查 #3），视图适配由
- * watch(searchQuery) 的 fitView 补位。 */
-const flowKey = computed(() => (
-  `${revision.value}:${selectedKey.value}:${oneHopOnly.value}`))
+/** 选中一阶节点的折叠信息（二阶计数>0 才有展开入口；中心/二阶/断链节点无）。 */
+const expandInfo = computed(() => {
+  const node = selectedNode.value
+  if (!node || node.isBroken) return null
+  if (node.role !== 'input1' && node.role !== 'output1') return null
+  return node.folded && node.folded.count > 0 ? node.folded : null
+})
 
-const flowNodes = computed<Node[]>(() => visible.value.nodes.map(node => ({
-  id: node.id,
-  type: 'wiki',
-  position: { ...node.position },
-  class: node.isBroken ? 'wiki-graph-node--broken' : undefined,
-  data: { ...node },
-  draggable: false,
-  connectable: false,
-  selectable: !node.isBroken,
-})))
+/** 全图口径的选中页出入清单（详情面板导航，不限于当前邻域）。 */
+const labelOf = (key: string): { key: string; label: string; broken: boolean } => {
+  const page = pages.value.find(p => p.page_key === key)
+  return { key, label: page?.title || key, broken: !page }
+}
+const selectedOutgoing = computed(() => {
+  const node = selectedNode.value
+  if (!node || node.isBroken) return []
+  return [...new Set(links.value
+    .filter(link => link.from_page === node.id)
+    .map(link => link.to_page))].slice(0, 8).map(labelOf)
+})
+const selectedIncoming = computed(() => {
+  const node = selectedNode.value
+  if (!node || node.isBroken) return []
+  return [...new Set(links.value
+    .filter(link => link.to_page === node.id)
+    .map(link => link.from_page))].slice(0, 8).map(labelOf)
+})
 
-const flowEdges = computed<Edge[]>(() => visible.value.edges.map(edge => ({
-  id: edge.id,
-  source: edge.source,
-  target: edge.target,
-  type: 'smoothstep',
-  class: edge.isBroken ? 'wiki-graph-edge--broken' : undefined,
-  animated: false,
-  style: {
-    stroke: 'var(--kb-text-tertiary)',
-    strokeWidth: 1.5,
-    ...(edge.isBroken ? { strokeDasharray: '7 4' } : {}),
+function isExpanded(key: string): boolean {
+  return expandedKeys.value.includes(key)
+}
+
+// ── echarts option（颜色取 variables.css 同值字面量——canvas 内不可读 CSS 变量）──
+
+const TYPE_COLORS: Record<string, string> = {
+  topic: '#0891b2',
+  glossary: '#10b981',
+  contradiction: '#ef4444',
+  open_question: '#f59e0b',
+}
+const BROKEN_COLOR = '#b45309'
+const EDGE_COLOR = '#94a3b8'
+const TEXT_PRIMARY = '#0f172a'
+const TEXT_SECONDARY = '#64748b'
+const TEXT_TERTIARY = '#94a3b8'
+const ACCENT = '#0891b2'
+const ACCENT_WASH = 'rgba(8, 145, 178, 0.10)'
+
+const chartOption = computed<EChartsOption>(() => ({
+  tooltip: {
+    trigger: 'item',
+    backgroundColor: '#ffffff',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    padding: [8, 10],
+    textStyle: { color: TEXT_PRIMARY, fontSize: 12 },
+    formatter: (params: unknown) => {
+      const p = params as { dataType?: string; data?: Record<string, unknown> }
+      if (p.dataType === 'edge') {
+        const edge = p.data as { refCount?: number; isBroken?: boolean }
+        return `引用${(edge.refCount ?? 1) > 1 ? ` ×${edge.refCount}` : ''}${edge.isBroken ? ' · 断链' : ''}`
+      }
+      const node = p.data as { pageTitle?: string; typeLabel?: string; origin?: string; outCount?: number; inCount?: number; isBroken?: boolean }
+      if (!node?.pageTitle) return ''
+      const origin = node.origin === 'manual' ? '手工' : node.origin === 'machine' ? '编译' : '—'
+      return [
+        `<b>${node.pageTitle}</b>`,
+        `${node.typeLabel} · ${origin}`,
+        node.isBroken ? '目标页不存在' : `出链 ${node.outCount} · 被引用 ${node.inCount}`,
+      ].join('<br/>')
+    },
   },
-})))
+  series: [{
+    type: 'graph',
+    layout: 'force',
+    roam: true,
+    draggable: true,
+    force: {
+      repulsion: 340,
+      gravity: 0.1,
+      edgeLength: [70, 150],
+      friction: 0.06,
+    },
+    label: {
+      // 角色级默认在 data 项上覆盖（输入侧标签向左、输出侧向右，背向中心）
+      position: 'right',
+      fontSize: 12,
+      color: TEXT_PRIMARY,
+      backgroundColor: '#ffffff',
+      borderWidth: 1,
+      borderRadius: 6,
+      padding: [6, 9],
+      rich: {
+        tag: { fontSize: 10, color: TEXT_TERTIARY, fontWeight: 700 as const, lineHeight: 16, align: 'left' },
+        title: { fontSize: 12.5, color: TEXT_PRIMARY, fontWeight: 600 as const, lineHeight: 18, align: 'left' },
+        meta: { fontSize: 10.5, color: TEXT_SECONDARY, lineHeight: 15, align: 'left' },
+        badge: {
+          fontSize: 10, color: ACCENT, backgroundColor: ACCENT_WASH,
+          padding: [1, 4], borderRadius: 3, lineHeight: 16, align: 'left',
+        },
+        badgeOn: {
+          fontSize: 10, color: ACCENT, backgroundColor: 'rgba(8, 145, 178, 0.22)',
+          padding: [1, 4], borderRadius: 3, lineHeight: 16, align: 'left',
+        },
+      },
+    },
+    emphasis: {
+      focus: 'adjacency',
+      itemStyle: { shadowBlur: 12, shadowColor: 'rgba(15, 23, 42, 0.18)' },
+      label: { borderColor: ACCENT, borderWidth: 2 },
+    },
+    edgeSymbol: ['none', 'arrow'],
+    edgeSymbolSize: 7,
+    data: model.value.nodes.map(node => {
+      const color = node.isBroken ? BROKEN_COLOR : TYPE_COLORS[node.pageType] ?? ACCENT
+      const isCenter = node.role === 'center'
+      const badge = node.folded && node.folded.count > 0
+        ? (isExpanded(node.id)
+          ? `{badgeOn|二阶已展}`
+          : `{badge|二阶 +${node.folded.count}}`)
+        : ''
+      return {
+        id: node.id,
+        key: node.id,
+        name: node.label,
+        x: node.position.x,
+        y: node.position.y,
+        fixed: isCenter,
+        symbolSize: isCenter ? 18 : 11,
+        itemStyle: {
+          color: isCenter ? ACCENT : '#ffffff',
+          borderColor: node.id === selectedKey.value ? ACCENT : color,
+          borderWidth: isCenter ? 5 : 2,
+          borderOpacity: isCenter ? 0.28 : 1,
+          shadowBlur: isCenter ? 10 : 0,
+          shadowColor: 'rgba(8, 145, 178, 0.25)',
+        },
+        label: {
+          position: isCenter ? 'bottom' : node.role.startsWith('input') ? 'left' : 'right',
+          borderColor: node.id === selectedKey.value ? ACCENT : color,
+          borderType: node.isBroken ? 'dashed' : 'solid',
+          formatter: node.isBroken
+            ? `{tag|断链}\n{title|${node.label}}\n{meta|目标页不存在}`
+            : `{tag|${node.typeLabel}}${badge}\n{title|${node.label}}\n{meta|出链 ${node.outCount} · 被引用 ${node.inCount}}`,
+        },
+        // 业务载荷（tooltip 取用；label 名被 echarts 标签配置占用）
+        pageTitle: node.label,
+        typeLabel: node.typeLabel,
+        origin: node.origin,
+        outCount: node.outCount,
+        inCount: node.inCount,
+        isBroken: node.isBroken,
+      }
+    }),
+    links: model.value.edges.map(edge => ({
+      source: edge.source,
+      target: edge.target,
+      lineStyle: {
+        color: edge.isBroken ? '#d97706' : EDGE_COLOR,
+        width: 1.4,
+        opacity: 0.75,
+        curveness: 0.18,
+        type: edge.isBroken ? 'dashed' : 'solid',
+      },
+      refCount: edge.refCount,
+      isBroken: edge.isBroken,
+    })),
+  }],
+}))
 
-/** 与模板 <VueFlow> 共享同一 flow store（useVueFlow 先建后 provide，子组件
- * inject 复用）——父层驱动视图适配，搜索收窄不整幅重挂。 */
-const { fitView } = useVueFlow()
+// ── 交互 ──
 
-onMounted(reload)
+/** 画布节点点击：选中（断链伪节点不选中——不可打开，虚线已区分）。 */
+function onNodeClick(key: string): void {
+  const node = model.value.nodes.find(item => item.id === key)
+  if (!node || node.isBroken) return
+  selectedKey.value = key
+}
 
-/** 搜索过滤后节点集变化 → 重适配视图一次（nextTick 等节点 props 落画布）。
- * fitView 对未测量节点（含桩环境无画布）安全早退，不抛错。 */
-watch(searchQuery, () => {
-  void nextTick(() => { void fitView({ padding: 0.12, duration: 200 }) })
+/** 重定中心：切换自我中心图 + 收起全部二阶（新中心的新邻域）；选中保留。 */
+function recenter(key: string): void {
+  if (!pages.value.some(page => page.page_key === key)) return
+  if (key === centerKey.value) return
+  centerKey.value = key
+  expandedKeys.value = []
+}
+
+/** 展开/收起某一阶节点的二阶邻居（输入节点展上游、输出节点展下游）。 */
+function toggleExpand(key: string): void {
+  expandedKeys.value = isExpanded(key)
+    ? expandedKeys.value.filter(item => item !== key)
+    : [...expandedKeys.value, key]
+}
+
+/** 定位搜索：标题/键首个匹配页 → 设为中心并选中。 */
+function locateSearch(): void {
+  const query = searchQuery.value.trim().toLocaleLowerCase()
+  if (!query) return
+  const hit = pages.value.find(page => (
+    page.title.toLocaleLowerCase().includes(query)
+      || page.page_key.toLocaleLowerCase().includes(query)))
+  if (!hit) {
+    ElMessage.info('没有标题或页键匹配的页面')
+    return
+  }
+  recenter(hit.page_key)
+  selectedKey.value = hit.page_key
+}
+
+/** 来源中文化（原值落 title 提示；与 Editor/Reader 面板同口径）。 */
+function originLabel(origin: string): string {
+  if (origin === 'manual') return '手工'
+  if (origin === 'machine') return '编译'
+  return origin || '—'
+}
+
+// ── 数据加载（守卫逻辑与旧版逐字对齐：混版防护/请求序号守卫） ──
+
+/** 锚定页变化（父级阅读器/编辑器切页）→ 重定中心（无效键不动）。 */
+watch(() => props.centerPageKey, key => {
+  if (key && key !== centerKey.value && pages.value.some(page => page.page_key === key)) {
+    centerKey.value = key
+    expandedKeys.value = []
+  }
 })
 
 /** 制品切换（路由复用组件不重挂）→ 整体重置。 */
 watch(() => props.artifactId, () => {
   searchQuery.value = ''
-  oneHopOnly.value = false
+  centerKey.value = ''
   selectedKey.value = ''
+  expandedKeys.value = []
   void reload()
-})
-
-/** 选中页被过滤收窄剔除 → 清选中（详情区不残留不可见节点）。 */
-watch(() => visible.value.nodes, nodes => {
-  if (selectedKey.value && !nodes.some(node => node.id === selectedKey.value)) {
-    selectedKey.value = ''
-  }
 })
 
 /**
@@ -263,6 +450,15 @@ async function reload(): Promise<void> {
     pages.value = pagesEnv.pages
     links.value = linksEnv.links
     revision.value = pagesEnv.revision
+    if (centerKey.value && !pagesEnv.pages.some(page => page.page_key === centerKey.value)) {
+      centerKey.value = ''
+    }
+    if (!centerKey.value) {
+      // 默认中心：优先父级锚定页（阅读器/编辑器当前页），回落首页
+      centerKey.value = pagesEnv.pages.some(page => page.page_key === props.centerPageKey)
+        ? props.centerPageKey as string
+        : pagesEnv.pages[0]?.page_key ?? ''
+    }
     if (selectedKey.value && !pagesEnv.pages.some(page => page.page_key === selectedKey.value)) {
       selectedKey.value = ''
     }
@@ -285,21 +481,9 @@ async function fetchPair(): Promise<[WikiPagesEnvelope, WikiLinksEnvelope]> {
   ])
 }
 
-/** 画布节点点击：断链伪节点不选中（不可打开，虚线已区分）。 */
-function onNodeClick(event: { node: { id: string } }): void {
-  const node = model.value.nodes.find(item => item.id === event.node.id)
-  if (!node || node.isBroken) return
-  selectedKey.value = node.id
-}
+onMounted(reload)
 
-/** 来源中文化（原值落 title 提示；与 Editor/Reader 面板同口径）。 */
-function originLabel(origin: string): string {
-  if (origin === 'manual') return '手工'
-  if (origin === 'machine') return '编译'
-  return origin || '—'
-}
-
-defineExpose({ reload })
+defineExpose({ reload, locateSearch })
 </script>
 
 <style scoped>
@@ -309,74 +493,27 @@ defineExpose({ reload })
 .wiki-graph__search { width: min(260px, 60vw); }
 .wiki-graph__stats { margin-left: auto; color: var(--kb-text-tertiary, #909399); font-size: 12px; }
 .wiki-graph__body { display: flex; gap: 12px; min-height: 460px; }
-.wiki-graph__canvas {
+.wiki-graph__canvas-shell {
   position: relative;
   flex: 1;
   min-width: 0;
   border: 1px solid var(--kb-border, #ebeef5);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--kb-bg-card, #fff);
-}
-.wiki-graph__canvas :deep(.vue-flow) { height: 460px; }
-.wiki-graph__no-hit {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  color: var(--kb-text-tertiary, #909399);
-  font-size: 13px;
-  pointer-events: none;
-}
-.wiki-graph-node {
-  display: grid;
-  width: 172px;
-  min-height: 58px;
-  align-content: center;
-  gap: 3px;
-  box-sizing: border-box;
-  border: 1px solid var(--kb-border, #dcdfe6);
-  border-left: 4px solid var(--kb-accent, #2563eb);
-  border-radius: 6px;
-  background: var(--kb-bg-card, #fff);
-  box-shadow: var(--kb-shadow-xs, 0 1px 2px rgba(0, 0, 0, .04));
-  padding: 8px 10px;
-  color: var(--kb-text-primary, #303133);
-  cursor: pointer;
-  transition: box-shadow .15s var(--kb-ease, ease), border-color .15s var(--kb-ease, ease);
-}
-.wiki-graph-node:hover {
-  border-color: var(--kb-accent, #2563eb);
-  box-shadow: var(--kb-shadow-hover, 0 4px 16px rgba(0, 0, 0, .08));
-}
-.wiki-graph-node.is-glossary { border-left-color: var(--el-color-success, #67c23a); }
-.wiki-graph-node.is-contradiction { border-left-color: var(--el-color-danger, #f56c6c); }
-.wiki-graph-node.is-open_question { border-left-color: var(--el-color-warning, #e6a23c); }
-.wiki-graph-node.is-selected {
-  border-color: var(--kb-accent, #2563eb);
-  box-shadow: 0 0 0 3px var(--kb-accent-medium, #d9ecff);
-}
-/* 断链伪节点：虚线边框 + 弱化（不伪装成有效页面） */
-.wiki-graph-node--broken .wiki-graph-node,
-.wiki-graph-node.is-broken {
-  border-style: dashed;
-  border-left-style: dashed;
-  opacity: .72;
-}
-.wiki-graph-node span { color: var(--kb-text-tertiary, #909399); font-size: 10px; font-weight: 700; }
-.wiki-graph-node strong {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.5px;
 }
-.wiki-graph-node small { color: var(--kb-text-tertiary, #909399); font-size: 10.5px; }
+.wiki-graph__canvas-shell :deep(.wiki-graph-canvas) { height: 460px; }
+.wiki-graph__legend {
+  display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  margin: 0; padding: 0 2px;
+  color: var(--kb-text-tertiary, #909399); font-size: 11.5px;
+}
+.wiki-graph__legend-tail { margin-left: auto; }
 .wiki-graph__detail {
   width: 250px;
   flex-shrink: 0;
   border: 1px solid var(--kb-border, #ebeef5);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 14px;
   background: var(--kb-bg-card, #fff);
 }
@@ -387,7 +524,7 @@ defineExpose({ reload })
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.wiki-graph__detail-type { color: var(--kb-accent, #2563eb); font-size: 11px; font-weight: 700; }
+.wiki-graph__detail-type { color: var(--kb-accent, #0891b2); font-size: 11px; font-weight: 700; }
 .wiki-graph__detail-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; }
 .wiki-graph__detail-meta > div { border: 1px solid var(--kb-border-light, #f2f6fc); border-radius: 4px; padding: 7px 8px; min-width: 0; }
 .wiki-graph__detail-meta dt { color: var(--kb-text-tertiary, #909399); font-size: 10.5px; }
@@ -399,10 +536,29 @@ defineExpose({ reload })
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.wiki-graph__open { width: 100%; margin-top: 12px; }
+.wiki-graph__detail-note {
+  margin: 10px 0 0; padding: 8px 10px; border-radius: 6px;
+  background: var(--kb-warning-soft, #fdf6ec);
+  color: var(--kb-text-secondary, #64748b);
+  font-size: 12px;
+}
+.wiki-graph__detail-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.wiki-graph__detail-actions .el-button { margin: 0; }
+.wiki-graph__open { flex: 1; }
+.wiki-graph__detail-links { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--kb-border-light, #f1f5f9); }
+.wiki-graph__detail-links h5 {
+  margin: 0 0 6px; font-size: 11px; font-weight: 600;
+  color: var(--kb-text-tertiary, #909399);
+}
+.wiki-graph__detail-link {
+  display: block; width: 100%; text-align: left;
+  padding: 4px 2px; border: 0; background: none; cursor: pointer;
+  font-size: 12px; color: var(--kb-accent, #0891b2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wiki-graph__detail-link:hover { text-decoration: underline; }
+.wiki-graph__detail-link span { color: var(--kb-warning, #f59e0b); }
 .wiki-graph__detail-hint { margin: 20px 0; color: var(--kb-text-tertiary, #909399); font-size: 12.5px; text-align: center; }
-:deep(.vue-flow__handle) { width: 7px; height: 7px; border: 2px solid var(--kb-bg-card, #fff); background: var(--kb-text-tertiary, #909399); }
-:deep(.vue-flow__controls) { border: 1px solid var(--kb-border, #dcdfe6); box-shadow: 0 1px 3px rgba(0, 0, 0, .1); }
 @media (max-width: 1100px) {
   .wiki-graph__body { flex-direction: column; }
   .wiki-graph__detail { width: auto; }

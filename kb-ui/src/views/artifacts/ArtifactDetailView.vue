@@ -139,6 +139,7 @@
             v-show="designWikiView === 'graph'"
             :artifact-id="artifactId"
             :draft="canWrite"
+            :center-page-key="designGraphCenter"
             @open-page="openWikiPageFromDesign"
           />
         </template>
@@ -235,6 +236,7 @@
             v-show="runtimeWikiView === 'graph'"
             :artifact-id="artifactId"
             :draft="false"
+            :center-page-key="runtimeGraphCenter"
             @open-page="openWikiPageFromRuntime"
           />
         </template>
@@ -413,16 +415,25 @@ const runtimeWikiView = ref<'pages' | 'graph'>('pages')
 /** 图谱懒挂载：首次切图谱才 mount（不拉数据），此后 v-show 常驻（切回不重载）。 */
 const designGraphActivated = ref(false)
 const runtimeGraphActivated = ref(false)
+/** 图谱锚定页（邻域自我中心图的中心）：切图谱时从编辑器/阅读器带入当前页。 */
+const designGraphCenter = ref('')
+const runtimeGraphCenter = ref('')
 /** 面板引用：图谱「打开页面」→ 切回页面视图并定位该页（selectPage 已 expose）。 */
 const wikiEditorRef = ref<InstanceType<typeof WikiEditorPanel> | null>(null)
 const wikiReaderRef = ref<InstanceType<typeof WikiReaderPanel> | null>(null)
 
 function setWikiView(area: 'design' | 'runtime', view: 'pages' | 'graph'): void {
   if (area === 'design') {
-    if (view === 'graph') designGraphActivated.value = true
+    if (view === 'graph') {
+      designGraphActivated.value = true
+      designGraphCenter.value = wikiEditorRef.value?.currentPageKey ?? ''
+    }
     designWikiView.value = view
   } else {
-    if (view === 'graph') runtimeGraphActivated.value = true
+    if (view === 'graph') {
+      runtimeGraphActivated.value = true
+      runtimeGraphCenter.value = wikiReaderRef.value?.currentPageKey ?? ''
+    }
     runtimeWikiView.value = view
   }
 }

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
-import { VueFlow } from '@vue-flow/core'
 
 const state = vi.hoisted(() => ({
   api: {
@@ -12,15 +11,12 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@/api/artifacts', () => ({ useArtifactsApi: () => state.api }))
 vi.mock('@/api/proxyClient', () => ({ apiErrorDetail: async () => 'mock-error' }))
+vi.mock('element-plus', () => ({ ElMessage: { info: vi.fn() } }))
 
 import WikiGraphPanel from '../WikiGraphPanel.vue'
+import WikiGraphCanvas from '../WikiGraphCanvas.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import {
-  buildWikiGraph,
-  filterWikiGraph,
-  restrictToOneHop,
-} from '@/utils/wikiGraph'
-import type { Node, Edge } from '@vue-flow/core'
+import { buildWikiNeighborhood } from '@/utils/wikiGraph'
 import type {
   WikiLink,
   WikiLinksEnvelope,
@@ -30,11 +26,11 @@ import type {
 
 interface GraphVm {
   searchQuery: string
-  oneHopOnly: boolean
   reload: () => Promise<void>
+  locateSearch: () => void
 }
 
-/** 三页分层样例：home/solo（ordinal 1/2 → 层0）+ res-pool（ordinal 1001 → 层1）。 */
+/** 三页样例：home/solo/res-pool。 */
 const pagesFixture: WikiPageMeta[] = [
   {
     page_key: 'home', title: '首页', page_type: 'topic', origin: 'manual',
@@ -53,7 +49,7 @@ const pagesFixture: WikiPageMeta[] = [
   },
 ]
 
-/** 六条全 valid 边（home↔res-pool 两条平行边=不同锚文本；solo 无引用也成节点）。 */
+/** 六条全 valid 边（home→res-pool 两条平行边=不同锚文本）。 */
 const linksFixture: WikiLink[] = [
   { from_page: 'home', to_page: 'res-pool', anchor_text: '资源池', status: 'valid' },
   { from_page: 'home', to_page: 'solo', anchor_text: '术语', status: 'valid' },
@@ -63,25 +59,45 @@ const linksFixture: WikiLink[] = [
   { from_page: 'res-pool', to_page: 'solo', anchor_text: '术语表', status: 'valid' },
 ]
 
-function mountGraph(draft = false): VueWrapper {
-  return shallowMount(WikiGraphPanel, { props: { artifactId: 'art-1', draft } })
-}
-
-/** 画布桩上的节点/边（浅渲染：vue-flow 画布本身不打 DOM，断言传入 props）。 */
-function flowProps(wrapper: VueWrapper): { nodes: Node[]; edges: Edge[] } {
-  const flow = wrapper.getComponent(VueFlow)
+function page(key: string, title = `页${key}`): WikiPageMeta {
   return {
-    nodes: flow.props('nodes') as Node[],
-    edges: flow.props('edges') as Edge[],
+    page_key: key, title, page_type: 'topic', origin: 'manual',
+    ordinal: 1, flags: null, aliases: [],
+    updated_at: '2026-11-01T08:00:00+00:00', updated_by: 'u1',
   }
 }
 
-function nodeById(nodes: Node[], id: string): Node | undefined {
-  return nodes.find(node => node.id === id)
+function link(from: string, to: string, status: 'valid' | 'broken' = 'valid'): WikiLink {
+  return { from_page: from, to_page: to, anchor_text: '', status }
 }
 
-function clickNode(wrapper: VueWrapper, id: string): void {
-  wrapper.getComponent(VueFlow).vm.$emit('nodeClick', { node: { id } })
+function mountGraph(draft = false, centerPageKey?: string): VueWrapper {
+  return shallowMount(WikiGraphPanel, {
+    props: { artifactId: 'art-1', draft, ...(centerPageKey ? { centerPageKey } : {}) },
+  })
+}
+
+interface CanvasNode {
+  key: string
+  pageTitle?: string
+  fixed?: boolean
+  isBroken?: boolean
+}
+interface CanvasEdge { source: string; target: string; isBroken?: boolean; refCount?: number }
+
+/** 画布桩上的节点/边（浅渲染：echarts 画布不打 DOM，断言传入 option）。 */
+function graphData(wrapper: VueWrapper): { nodes: CanvasNode[]; edges: CanvasEdge[] } {
+  const option = wrapper.getComponent(WikiGraphCanvas).props('option') as {
+    series: { data: CanvasNode[]; links: CanvasEdge[] }[]
+  }
+  return { nodes: option.series[0].data, edges: option.series[0].links }
+}
+
+const nodeByKey = (nodes: CanvasNode[], key: string) => nodes.find(node => node.key === key)
+
+/** 画布节点点击/双击（桩组件 emit 转译层）。 */
+function canvasEmit(wrapper: VueWrapper, event: 'node-click' | 'node-dblclick', key: string): void {
+  wrapper.getComponent(WikiGraphCanvas).vm.$emit(event, key)
 }
 
 beforeEach(() => {
@@ -91,96 +107,106 @@ beforeEach(() => {
     { revision: 3, links: linksFixture })
 })
 
-// ── 纯函数：图数据计算（分层坐标/断链伪节点/过滤）──
+// ── 纯函数：邻域模型（角色/折叠计数/断链/方向纯净）──
 
-describe('buildWikiGraph 纯函数', () => {
-  it('节点=页面、边=引用；独立页（无引用）也有节点；出链/被引用计数', () => {
-    const model = buildWikiGraph(pagesFixture, linksFixture)
-    expect(model.nodes.map(n => n.id).sort()).toEqual(['home', 'res-pool', 'solo'])
-    expect(model.edges).toHaveLength(6)
-    const home = model.nodes.find(n => n.id === 'home')
-    expect(home?.outCount).toBe(3)   // 出链 3（含平行边）
-    expect(home?.inCount).toBe(1)    // 被引用 1
-    const solo = model.nodes.find(n => n.id === 'solo')
-    expect(solo?.outCount).toBe(1)
-    expect(solo?.inCount).toBe(2)
+describe('buildWikiNeighborhood 纯函数', () => {
+  it('中心=首页缺省；一阶输入/输出角色正确；平行边去重但 refCount 保留', () => {
+    const model = buildWikiNeighborhood(pagesFixture, linksFixture)
+    expect(model.centerKey).toBe('home')
+    const roles = new Map(model.nodes.map(n => [n.id, n.role]))
+    expect(roles.get('home')).toBe('center')
+    expect(roles.get('res-pool')).toBe('input1')          // res-pool→home（既是输入又含出链回中心）
+    expect(roles.get('solo')).toBe('output1')             // home→solo
+    // 边去重：home->res-pool 平行两条合并 refCount=2；只保留触中心或已展开的边
+    const parallel = model.edges.find(e => e.source === 'home' && e.target === 'res-pool')
+    expect(parallel?.refCount).toBe(2)
+    expect(model.totals).toEqual({ input1: 1, output1: 2, broken: 0 })
+    // 全图计数（上下文面板口径，平行引用计入）
+    const center = model.nodes.find(n => n.id === 'home')
+    expect(center?.outCount).toBe(3)
+    expect(center?.inCount).toBe(1)
   })
 
-  it('写死 ordinal 分层坐标：ordinal//1000 为层、层内 ordinal 序（层1在层0右侧）', () => {
-    const model = buildWikiGraph(pagesFixture, linksFixture)
-    const home = model.nodes.find(n => n.id === 'home')
-    const solo = model.nodes.find(n => n.id === 'solo')
-    const resPool = model.nodes.find(n => n.id === 'res-pool')
-    expect(home?.layer).toBe(0)
-    expect(solo?.layer).toBe(0)
-    expect(resPool?.layer).toBe(1)
-    // 层内按 ordinal：home(1) 在 solo(2) 上方
-    expect(home!.position.y).toBeLessThan(solo!.position.y)
-    expect(resPool!.position.x).toBeGreaterThan(home!.position.x)
+  it('中心键无效 → 回落首页；空 wiki → 空模型', () => {
+    const fallback = buildWikiNeighborhood(pagesFixture, linksFixture, '不存在')
+    expect(fallback.centerKey).toBe('home')
+    const empty = buildWikiNeighborhood([], [])
+    expect(empty.nodes).toEqual([])
+    expect(empty.centerKey).toBe('')
   })
 
-  it('断链：目标页不存在 → 伪节点 isBroken（层=页面层之后）+ 边带断链标记', () => {
-    const links: WikiLink[] = [
-      { from_page: 'home', to_page: 'res-pool', anchor_text: 'a', status: 'valid' },
-      { from_page: 'res-pool', to_page: '幽灵页', anchor_text: '断链', status: 'broken' },
+  it('二阶折叠计数与展开（链 a→b→c→d，中心 b）', () => {
+    const chainPages = ['a', 'b', 'c', 'd'].map(key => page(key))
+    const chainLinks = [link('a', 'b'), link('b', 'c'), link('c', 'd')]
+
+    const collapsed = buildWikiNeighborhood(chainPages, chainLinks, 'b')
+    expect(collapsed.nodes.map(n => n.id).sort()).toEqual(['a', 'b', 'c'])
+    expect(collapsed.edges.map(e => `${e.source}->${e.target}`).sort()).toEqual(['a->b', 'b->c'])
+    // a 无上游（count 0 无徽章）；c 下游 1 个（d）→ 折叠计数 1
+    expect(collapsed.nodes.find(n => n.id === 'a')?.folded).toEqual({ dir: 'in', count: 0 })
+    expect(collapsed.nodes.find(n => n.id === 'c')?.folded).toEqual({ dir: 'out', count: 1 })
+
+    const expanded = buildWikiNeighborhood(chainPages, chainLinks, 'b', new Set(['c']))
+    expect(expanded.nodes.map(n => n.id).sort()).toEqual(['a', 'b', 'c', 'd'])
+    const d = expanded.nodes.find(n => n.id === 'd')
+    expect(d?.role).toBe('output2')
+    expect(expanded.edges.map(e => `${e.source}->${e.target}`)).toContain('c->d')
+  })
+
+  it('方向纯净：输入节点展开只加上游，不加旁枝下游', () => {
+    // x→a→c（输入链）+ a→y（a 的旁枝出链）+ c→b
+    const pages = [page('x'), page('a'), page('y'), page('c'), page('b')]
+    const links = [link('x', 'a'), link('a', 'c'), link('a', 'y'), link('c', 'b')]
+
+    const collapsed = buildWikiNeighborhood(pages, links, 'c')
+    expect(collapsed.nodes.map(n => n.id).sort()).toEqual(['a', 'b', 'c'])
+    const a = collapsed.nodes.find(n => n.id === 'a')
+    expect(a?.role).toBe('input1')
+    expect(a?.folded).toEqual({ dir: 'in', count: 1 })   // 只数上游 x，不数旁枝 y
+
+    const expanded = buildWikiNeighborhood(pages, links, 'c', new Set(['a']))
+    expect(expanded.nodes.map(n => n.id).sort()).toEqual(['a', 'b', 'c', 'x'])
+    expect(expanded.edges.map(e => `${e.source}->${e.target}`)).not.toContain('a->y')
+  })
+
+  it('断链：输出侧伪节点（不可打开）；中心直连断链与二阶断链都成节点', () => {
+    const pages = [page('home'), page('res-pool')]
+    const links = [
+      link('home', 'res-pool'),
+      link('home', '幽灵页', 'broken'),        // 中心直连断链 → output1 伪节点
+      link('res-pool', '二级幽灵', 'broken'),  // 输出节点下游断链 → 展开后 output2 伪节点
     ]
-    const model = buildWikiGraph(pagesFixture, links)
-    expect(model.nodes.map(n => n.id)).toContain('幽灵页')
-    const ghost = model.nodes.find(n => n.id === '幽灵页')
+    const collapsed = buildWikiNeighborhood(pages, links, 'home')
+    expect(collapsed.totals.broken).toBe(1)
+    const ghost = collapsed.nodes.find(n => n.id === '幽灵页')
     expect(ghost?.isBroken).toBe(true)
-    expect(ghost?.inCount).toBe(1)   // 被一条断链引用
-    expect(ghost?.layer).toBe(2)     // 页面层 0/1 之后的断链层
-    const brokenEdge = model.edges.find(e => e.target === '幽灵页')
-    expect(brokenEdge?.isBroken).toBe(true)
+    expect(ghost?.role).toBe('output1')
+    expect(ghost?.inCount).toBe(1)
+    // res-pool 折叠计数含下游断链目标
+    expect(collapsed.nodes.find(n => n.id === 'res-pool')?.folded).toEqual({ dir: 'out', count: 1 })
+
+    const expanded = buildWikiNeighborhood(pages, links, 'home', new Set(['res-pool']))
+    const ghost2 = expanded.nodes.find(n => n.id === '二级幽灵')
+    expect(ghost2?.isBroken).toBe(true)
+    expect(ghost2?.role).toBe('output2')
+    expect(expanded.totals.broken).toBe(2)
   })
 })
 
-describe('filterWikiGraph / restrictToOneHop 纯函数', () => {
-  it('搜索按标题过滤节点，边只保留两端都在的', () => {
-    const model = buildWikiGraph(pagesFixture, linksFixture)
-    const filtered = filterWikiGraph(model, '资源池')
-    expect(filtered.nodes.map(n => n.id)).toEqual(['res-pool'])
-    expect(filtered.edges).toHaveLength(0)   // 邻居被滤掉 → 边不悬挂
-  })
-
-  it('空查询=全量；一跳收窄：中心+直接邻居，二跳外节点剔除', () => {
-    const chainPages: WikiPageMeta[] = ['a', 'b', 'c', 'd'].map((key, i) => ({
-      page_key: key, title: `页${key}`, page_type: 'topic' as const,
-      origin: 'manual' as const, ordinal: i + 1, flags: null, aliases: [],
-      updated_at: '2026-11-01T08:00:00+00:00', updated_by: 'u1',
-    }))
-    const chainLinks: WikiLink[] = [
-      { from_page: 'a', to_page: 'b', anchor_text: '', status: 'valid' },
-      { from_page: 'b', to_page: 'c', anchor_text: '', status: 'valid' },
-      { from_page: 'c', to_page: 'd', anchor_text: '', status: 'valid' },
-    ]
-    const model = buildWikiGraph(chainPages, chainLinks)
-    expect(filterWikiGraph(model, '').nodes).toHaveLength(4)
-
-    const oneHop = restrictToOneHop(model, 'b')
-    expect(oneHop.nodes.map(n => n.id).sort()).toEqual(['a', 'b', 'c'])
-    expect(oneHop.edges.map(e => `${e.source}->${e.target}`).sort())
-      .toEqual(['a->b', 'b->c'])
-    // 无选中中心 → 全量（开关空转不收窄）
-    expect(restrictToOneHop(model, null).nodes).toHaveLength(4)
-  })
-})
-
-// ── 组件：加载/渲染/交互（vue-flow 画布以桩断言 props）──
+// ── 组件：加载/渲染/交互（echarts 画布以桩断言 option）──
 
 describe('WikiGraphPanel', () => {
-  it('渲染：pages(3)+links(6) → 节点 3 边 6；运行态缺省不带 draft 读正式版', async () => {
+  it('渲染：邻域模型进画布 option；运行态缺省不带 draft 读正式版', async () => {
     const wrapper = mountGraph()
     await flushPromises()
 
     expect(state.api.listWikiPages).toHaveBeenCalledWith('art-1', { draft: false })
     expect(state.api.listWikiLinks).toHaveBeenCalledWith('art-1', { draft: false })
 
-    const { nodes, edges } = flowProps(wrapper)
-    expect(nodes).toHaveLength(3)
-    expect(edges).toHaveLength(6)
-    // 独立页也有节点
-    expect(nodeById(nodes, 'solo')).toBeDefined()
+    const { nodes } = graphData(wrapper)
+    expect(nodes.map(n => n.key).sort()).toEqual(['home', 'res-pool', 'solo'])
+    // 中心节点固定（fixed）供力导向围绕
+    expect(nodeByKey(nodes, 'home')?.fixed).toBe(true)
   })
 
   it('设计态模式：两请求都带 draft=true（页面守卫在入口，组件不重复鉴权）', async () => {
@@ -189,28 +215,37 @@ describe('WikiGraphPanel', () => {
 
     expect(state.api.listWikiPages).toHaveBeenCalledWith('art-1', { draft: true })
     expect(state.api.listWikiLinks).toHaveBeenCalledWith('art-1', { draft: true })
-    const { nodes } = flowProps(wrapper)
-    expect(nodes).toHaveLength(3)
+    expect(graphData(wrapper).nodes).toHaveLength(3)
   })
 
-  it('断链：broken 目标渲染断链 class 节点 + 点击不选中不可打开', async () => {
+  it('锚定页 prop：centerPageKey 有效 → 初始即以该页为中心（统计随新邻域）', async () => {
+    const wrapper = mountGraph(false, 'res-pool')
+    await flushPromises()
+
+    expect(graphData(wrapper).nodes.map(n => n.key).sort()).toEqual(['home', 'res-pool', 'solo'])
+    // res-pool 为中心：上游来源 {home, solo} → 输入 2；下游去向 {home, solo} → 输出 2
+    const stats = wrapper.find('[data-test="wiki-graph-stats"]').text()
+    expect(stats).toContain('一阶输入 2')
+    expect(stats).toContain('一阶输出 2')
+  })
+
+  it('断链：中心直连 broken 目标渲染伪节点 + 点击不选中不可打开', async () => {
     state.api.listWikiLinks.mockResolvedValue({
       revision: 3,
       links: [
         { from_page: 'home', to_page: 'res-pool', anchor_text: 'a', status: 'valid' },
-        { from_page: 'res-pool', to_page: '幽灵页', anchor_text: '断链', status: 'broken' },
+        { from_page: 'home', to_page: '幽灵页', anchor_text: '断链', status: 'broken' },
       ],
     })
     const wrapper = mountGraph()
     await flushPromises()
 
-    const { nodes } = flowProps(wrapper)
-    const ghost = nodeById(nodes, '幽灵页')
+    const { nodes } = graphData(wrapper)
+    const ghost = nodeByKey(nodes, '幽灵页')
     expect(ghost).toBeDefined()
-    expect(String(ghost?.class)).toContain('wiki-graph-node--broken')
+    expect(ghost?.isBroken).toBe(true)
 
-    // 点击断链节点：不选中（详情区停留提示文案）、无打开页面出口
-    clickNode(wrapper, '幽灵页')
+    canvasEmit(wrapper, 'node-click', '幽灵页')
     await flushPromises()
     const detailAfterBrokenClick = wrapper.find('[data-test="wiki-graph-detail"]')
     expect(detailAfterBrokenClick.text()).toContain('点击节点查看')
@@ -222,7 +257,7 @@ describe('WikiGraphPanel', () => {
     const wrapper = mountGraph()
     await flushPromises()
 
-    clickNode(wrapper, 'home')
+    canvasEmit(wrapper, 'node-click', 'home')
     await flushPromises()
 
     const detail = wrapper.find('[data-test="wiki-graph-detail"]')
@@ -238,22 +273,51 @@ describe('WikiGraphPanel', () => {
     expect(wrapper.emitted('open-page')).toEqual([['home']])
   })
 
-  it('搜索过滤节点标题；「仅所选页及一跳」开关收窄子图', async () => {
+  it('二阶展开/收起：面板按钮加节点加边，收起还原；双击节点重定中心', async () => {
+    state.api.listWikiPages.mockResolvedValue({
+      revision: 3, pages: ['a', 'b', 'c', 'd'].map(key => page(key)),
+    })
+    state.api.listWikiLinks.mockResolvedValue({
+      revision: 3, links: [link('a', 'b'), link('b', 'c'), link('c', 'd')],
+    })
+    const wrapper = mountGraph(false, 'b')
+    await flushPromises()
+    expect(graphData(wrapper).nodes).toHaveLength(3)   // b 中心 + a + c
+
+    // 选中一阶输出 c → 展开二阶
+    canvasEmit(wrapper, 'node-click', 'c')
+    await flushPromises()
+    await wrapper.find('[data-test="wiki-graph-expand"]').trigger('click')
+    await flushPromises()
+    expect(graphData(wrapper).nodes.map(n => n.key).sort()).toEqual(['a', 'b', 'c', 'd'])
+    expect(graphData(wrapper).edges.map(e => `${e.source}->${e.target}`)).toContain('c->d')
+
+    await wrapper.find('[data-test="wiki-graph-collapse"]').trigger('click')
+    await flushPromises()
+    expect(graphData(wrapper).nodes).toHaveLength(3)
+
+    // 双击 a → 重定中心（新邻域 a+b，二阶全收起）
+    canvasEmit(wrapper, 'node-dblclick', 'a')
+    await flushPromises()
+    expect(graphData(wrapper).nodes.map(n => n.key).sort()).toEqual(['a', 'b'])
+  })
+
+  it('定位搜索：标题匹配 → 重定中心并选中；无匹配不动视图', async () => {
     const wrapper = mountGraph()
     await flushPromises()
     const vm = wrapper.vm as unknown as GraphVm
 
     vm.searchQuery = '资源池'
+    vm.locateSearch()
     await flushPromises()
-    expect(flowProps(wrapper).nodes.map(n => n.id)).toEqual(['res-pool'])
+    expect(wrapper.find('[data-test="wiki-graph-stats"]').text()).toContain('一阶输入 2')
+    expect(wrapper.find('[data-test="wiki-graph-detail"]').text()).toContain('资源池管理特性')
 
-    vm.searchQuery = ''
-    vm.oneHopOnly = true
-    clickNode(wrapper, 'home')
+    vm.searchQuery = '不存在页面'
+    vm.locateSearch()
     await flushPromises()
-    // home 的一跳邻域：home + res-pool + solo（链 a→b→c→d 样例外无二跳页，全收）
-    expect(flowProps(wrapper).nodes.map(n => n.id).sort())
-      .toEqual(['home', 'res-pool', 'solo'])
+    // 无匹配 → 不动当前视图
+    expect(wrapper.find('[data-test="wiki-graph-detail"]').text()).toContain('资源池管理特性')
   })
 
   it('混版防护：两响应 revision 不一致 → 自动重拉一次对齐（不报错）', async () => {
@@ -268,7 +332,7 @@ describe('WikiGraphPanel', () => {
 
     expect(state.api.listWikiPages).toHaveBeenCalledTimes(2)
     expect(state.api.listWikiLinks).toHaveBeenCalledTimes(2)
-    expect(flowProps(wrapper).nodes).toHaveLength(3)
+    expect(graphData(wrapper).nodes).toHaveLength(3)
     expect(wrapper.text()).not.toContain('版本切换中')
   })
 
@@ -282,15 +346,11 @@ describe('WikiGraphPanel', () => {
     // 错误态非空白：EmptyState 文案 + 无画布
     expect(wrapper.findComponent(EmptyState).props('text'))
       .toContain('版本切换中，请重试')
-    expect(wrapper.findComponent(VueFlow).exists()).toBe(false)
+    expect(wrapper.findComponent(WikiGraphCanvas).exists()).toBe(false)
   })
 
   it('并发守卫（审查 #2）：artifactId 快切时旧响应晚到被丢，不串台', async () => {
-    const newPages: WikiPageMeta[] = [{
-      page_key: 'new-page', title: '新制品页', page_type: 'topic',
-      origin: 'manual', ordinal: 1, flags: null, aliases: [],
-      updated_at: '2026-11-02T08:00:00+00:00', updated_by: 'u9',
-    }]
+    const newPages: WikiPageMeta[] = [page('new-page', '新制品页')]
     let resolveOldPages!: (value: WikiPagesEnvelope) => void
     let resolveOldLinks!: (value: WikiLinksEnvelope) => void
     state.api.listWikiPages.mockReset()
@@ -309,13 +369,13 @@ describe('WikiGraphPanel', () => {
 
     await wrapper.setProps({ artifactId: 'art-2' })   // 快切 → watch 触发第二次 reload
     await flushPromises()
-    expect(flowProps(wrapper).nodes.map(n => n.id)).toEqual(['new-page'])
+    expect(graphData(wrapper).nodes.map(n => n.key)).toEqual(['new-page'])
 
     resolveOldPages({ revision: 1, pages: pagesFixture })   // 旧制品慢响应迟到
     resolveOldLinks({ revision: 1, links: linksFixture })
     await flushPromises()
 
-    expect(flowProps(wrapper).nodes.map(n => n.id)).toEqual(['new-page'])   // 旧数据不落地
+    expect(graphData(wrapper).nodes.map(n => n.key)).toEqual(['new-page'])   // 旧数据不落地
     expect(state.api.listWikiPages).toHaveBeenCalledTimes(2)
   })
 
@@ -328,7 +388,7 @@ describe('WikiGraphPanel', () => {
     const empty = wrapper.findComponent(EmptyState)
     expect(empty.exists()).toBe(true)
     expect(empty.props('text')).toContain('暂无页面')
-    expect(wrapper.findComponent(VueFlow).exists()).toBe(false)
+    expect(wrapper.findComponent(WikiGraphCanvas).exists()).toBe(false)
   })
 
   it('边界：无权/加载失败 → 错误态非空白 + 重试入口重拉', async () => {
@@ -339,17 +399,17 @@ describe('WikiGraphPanel', () => {
     await flushPromises()
 
     expect(wrapper.findComponent(EmptyState).props('text')).toContain('加载失败')
-    expect(wrapper.findComponent(VueFlow).exists()).toBe(false)
+    expect(wrapper.findComponent(WikiGraphCanvas).exists()).toBe(false)
     const retry = wrapper.find('[data-test="wiki-graph-retry"]')
     expect(retry.exists()).toBe(true)
 
     await retry.trigger('click')
     await flushPromises()
     expect(state.api.listWikiPages).toHaveBeenCalledTimes(2)
-    expect(flowProps(wrapper).nodes).toHaveLength(3)
+    expect(graphData(wrapper).nodes).toHaveLength(3)
   })
 
-  it('只读：无任何写操作入口（无新建/保存/删除按钮）', async () => {
+  it('只读：无任何写操作入口（无新建/保存/删除/发布按钮）', async () => {
     const wrapper = mountGraph(true)
     await flushPromises()
 

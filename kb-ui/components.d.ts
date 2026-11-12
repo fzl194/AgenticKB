@@ -120,6 +120,7 @@ declare module 'vue' {
     WikiCompilePanel: typeof import('./src/components/artifacts/WikiCompilePanel.vue')['default']
     WikiCompileReport: typeof import('./src/components/artifacts/WikiCompileReport.vue')['default']
     WikiEditorPanel: typeof import('./src/components/artifacts/WikiEditorPanel.vue')['default']
+    WikiGraphCanvas: typeof import('./src/components/artifacts/WikiGraphCanvas.vue')['default']
     WikiGraphPanel: typeof import('./src/components/artifacts/WikiGraphPanel.vue')['default']
     WikiReaderPanel: typeof import('./src/components/artifacts/WikiReaderPanel.vue')['default']
     WikiTocDesignPanel: typeof import('./src/components/artifacts/WikiTocDesignPanel.vue')['default']

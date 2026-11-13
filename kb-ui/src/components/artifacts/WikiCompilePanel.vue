@@ -424,15 +424,23 @@ function errorCode(error: unknown): string | undefined {
 </script>
 
 <style scoped>
-.wiki-compile { display: flex; flex-direction: column; gap: 16px; }
-.wiki-compile__sec { display: flex; flex-direction: column; gap: 10px; }
+.wiki-compile { display: flex; flex-direction: column; gap: 14px; }
+/* 区块=hairline 卡（与 Wiki 阅读壳卡同一节奏）；标题走详情页 sec-head 语言
+   （2026-11-13 用户两轮反馈「字又小」——11px 眉标弃用，13.5px 可读标题）。 */
+.wiki-compile__sec {
+  display: flex; flex-direction: column; gap: 10px;
+  border: 1px solid var(--kb-border-light, #f1f5f9);
+  border-radius: 10px;
+  padding: 13px 16px 14px;
+  background: var(--kb-bg-card, #fff);
+}
 .wiki-compile__sec-head {
-  font-size: 11px; font-weight: 600; letter-spacing: 1px;
-  color: var(--kb-text-tertiary, #94a3b8);
-  display: flex; align-items: center; gap: 7px;
+  font-size: 13.5px; font-weight: 600;
+  color: var(--kb-text-primary, inherit);
+  display: flex; align-items: center; gap: 8px;
 }
 .wiki-compile__sec-head::before {
-  content: ''; width: 4px; height: 4px; border-radius: 50%;
+  content: ''; width: 3px; height: 13px; border-radius: 2px;
   background: var(--kb-accent, #0891b2); flex-shrink: 0;
 }
 

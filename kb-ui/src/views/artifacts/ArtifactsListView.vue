@@ -1,11 +1,9 @@
 <template>
   <div class="artifact-list">
+    <!-- 页头零重复（2026-11-13 用户拍板）：页名「知识制品」只在全局页头出现一次，
+         页内不再有任何同字样标题——只留一句范围说明 + 新建入口。 -->
     <header class="artifact-list__header">
-      <div>
-        <p class="artifact-list__eyebrow">KNOWLEDGE ARTIFACTS</p>
-        <h1 class="artifact-list__title">知识制品</h1>
-        <p class="artifact-list__subtitle">上传 Excel 建表发布，供 Agent 结构化查询；列表=我参与的 + 本域公开制品（管理员见本域全部）。</p>
-      </div>
+      <p class="artifact-list__subtitle">我参与的 + 本域公开（管理员见本域全部）· 上传 Excel 建表发布，供 Agent 结构化查询</p>
       <el-button type="primary" data-test="create-artifact" @click="openCreate">新建制品</el-button>
     </header>
 
@@ -266,15 +264,9 @@ watch(() => domainStore.currentDomain, load, { immediate: true })
 <style scoped>
 .artifact-list { padding: 4px 2px; }
 
-/* ── 页头：eyebrow + 大标题 + 副题（高保真 ar-eyebrow/h1 排版） ── */
-.artifact-list__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
-.artifact-list__eyebrow {
-  margin: 0 0 6px;
-  font-size: 10.5px; font-weight: 600; letter-spacing: 1.6px;
-  color: var(--kb-accent, #0891b2);
-}
-.artifact-list__title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.4px; color: var(--kb-text-primary, inherit); }
-.artifact-list__subtitle { margin: 7px 0 0; color: var(--kb-text-tertiary); font-size: 12.5px; }
+/* ── 页头零重复：只留说明行 + 新建按钮（页名由全局页头唯一承载） ── */
+.artifact-list__header { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 14px; }
+.artifact-list__subtitle { margin: 0; color: var(--kb-text-tertiary); font-size: 12px; }
 
 /* ── 筛选行 ── */
 .artifact-list__filters { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }

@@ -9,18 +9,19 @@
 .markdown-body {
   color: var(--kb-text-primary);
   font-size: 13px;
-  line-height: 1.85;
+  line-height: 1.9;
   word-break: break-word;
 }
 
 .markdown-body h1 {
   margin: 22px 0 10px;
-  font-size: 21px;
+  font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.4px;
   line-height: 1.4;
 }
-.markdown-body h1:first-child { margin-top: 2px; }
+/* 阅读面正文 h1 即页题（Reader 中栏不再重复渲染标题行）——首行贴齐 */
+.markdown-body h1:first-child { margin-top: 0; }
 
 .markdown-body h2 {
   margin: 20px 0 8px;

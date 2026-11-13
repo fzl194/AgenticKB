@@ -3,37 +3,42 @@
     <!-- Header：图标+标题、徽章成组（高保真 ar-title/ar-badges 排版）+ 生命周期操作 -->
     <div class="artifact-detail__header">
       <div class="artifact-detail__head-left">
-        <router-link to="/artifacts" class="artifact-back">
-          <el-icon><ArrowLeft /></el-icon>
-          <span>知识制品</span>
-        </router-link>
+        <!-- 标题一行式（2026-11-13 用户拍板）：返回箭头+图标+标题+状态章全同行；
+             全局页头已有「知识制品」，返回入口只留箭头不重复字样。 -->
         <div class="artifact-detail__title-row">
+          <router-link
+            to="/artifacts"
+            class="artifact-back"
+            aria-label="返回知识制品列表"
+            title="返回知识制品列表"
+          >
+            <el-icon><ArrowLeft /></el-icon>
+          </router-link>
           <span v-if="artifact" class="artifact-detail__kindicon" :class="`is-${artifact.kind}`" aria-hidden="true">
             {{ artifact.kind === 'wiki' ? 'W' : 'T' }}
           </span>
           <h2 class="artifact-detail__title">{{ artifact?.title || '加载中…' }}</h2>
-        </div>
-        <div v-if="artifact" class="artifact-detail__badges">
-          <el-tag size="small" :type="statusTagType(artifact.status)">
-            {{ statusLabel(artifact.status) }}
-          </el-tag>
-          <el-tag size="small" effect="plain">
-            {{ artifact.kind === 'wiki' ? 'Wiki' : '表格' }}
-          </el-tag>
-          <!-- D01（66号 §5）：服务版本 tag——rev>0 且非停用时点明「rN 正在服务」，
-               与下方草稿 tag 并列，让「正式版在服务 + 另有待发布草稿」的并存一眼可读。 -->
-          <el-tag v-if="servingRevisionLabel" size="small" type="success" effect="plain">
-            {{ servingRevisionLabel }}
-          </el-tag>
-          <!-- 草稿 tag 与 servingRevisionLabel 同源（Task 3.3 审查 Minor）：有
-               服务版（非停用且 rev>0）才说「另有待发布内容」；停用/rev0 语境一律
-               「draft 开放中」——deprecated+draft 边角不再出现「另有待发布」悬空。 -->
-          <el-tag v-if="artifact.draft_open" size="small" type="warning" effect="plain">
-            {{ servingRevisionLabel ? '另有待发布内容' : 'draft 开放中' }}
-          </el-tag>
-          <el-tag size="small" :type="artifact.visibility === 'public' ? 'success' : 'info'">
-            {{ artifact.visibility === 'public' ? '公开' : '私有' }}
-          </el-tag>
+          <div v-if="artifact" class="artifact-detail__badges">
+            <el-tag size="small" :type="statusTagType(artifact.status)">
+              {{ statusLabel(artifact.status) }}
+            </el-tag>
+            <el-tag size="small" effect="plain">
+              {{ artifact.kind === 'wiki' ? 'Wiki' : '表格' }}
+            </el-tag>
+            <!-- D01（66号 §5）：服务版本 tag——rev>0 且非停用时点明「rN 正在服务」。 -->
+            <el-tag v-if="servingRevisionLabel" size="small" type="success" effect="plain">
+              {{ servingRevisionLabel }}
+            </el-tag>
+            <!-- 草稿 tag 与 servingRevisionLabel 同源（Task 3.3 审查 Minor）：有
+                 服务版（非停用且 rev>0）才说「另有待发布内容」；停用/rev0 语境一律
+                 「draft 开放中」。 -->
+            <el-tag v-if="artifact.draft_open" size="small" type="warning" effect="plain">
+              {{ servingRevisionLabel ? '另有待发布内容' : 'draft 开放中' }}
+            </el-tag>
+            <el-tag size="small" :type="artifact.visibility === 'public' ? 'success' : 'info'">
+              {{ artifact.visibility === 'public' ? '公开' : '私有' }}
+            </el-tag>
+          </div>
         </div>
       </div>
       <div v-if="artifact && canWrite" class="artifact-detail__actions">
@@ -216,13 +221,15 @@
             </ArtifactTableView>
           </div>
           <el-pagination
-            v-if="rowsTotal > rowsPageSize"
             class="artifact-detail__pager"
-            layout="total, prev, pager, next"
+            layout="total, sizes, prev, pager, next"
             :total="rowsTotal"
             :page-size="rowsPageSize"
+            :page-sizes="[20, 50, 100]"
+            :pager-count="7"
             :current-page="rowsPage"
             @current-change="onRowsPageChange"
+            @size-change="onRowsSizeChange"
           />
         </template>
       </el-tab-pane>
@@ -350,7 +357,7 @@ const runtimeRows = ref<ArtifactRow[]>([])
 const runtimeColumns = ref<ArtifactColumn[]>([])
 const rowsTotal = ref(0)
 const rowsPage = ref(1)
-const rowsPageSize = 20
+const rowsPageSize = ref(20)
 const rowsLoading = ref(false)
 const runtimeLoaded = ref(false)
 
@@ -514,7 +521,7 @@ async function loadRuntimeRows() {
   rowsLoading.value = true
   try {
     const page = await api.listRows(props.artifactId, {
-      page: rowsPage.value, size: rowsPageSize,
+      page: rowsPage.value, size: rowsPageSize.value,
     })
     runtimeRows.value = page.rows
     rowsTotal.value = page.total
@@ -540,6 +547,13 @@ watch(activeTab, (tab) => {
 
 function onRowsPageChange(page: number) {
   rowsPage.value = page
+  loadRuntimeRows()
+}
+
+/** 每页条数变更：回第一页重拉（与设计态行面板同口径）。 */
+function onRowsSizeChange(size: number) {
+  rowsPageSize.value = size
+  rowsPage.value = 1
   loadRuntimeRows()
 }
 
@@ -676,22 +690,28 @@ defineExpose({ reloadAll })
 <style scoped>
 .artifact-detail__tabs :deep(.el-tabs__item) { display: inline-flex; align-items: center; gap: 5px; }
 .artifact-detail__tab-icon { font-size: 14px; }
-.artifact-detail__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.artifact-detail__header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .artifact-detail__head-left { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.artifact-back { display: inline-flex; align-items: center; gap: 4px; color: var(--kb-text-tertiary); text-decoration: none; font-size: 12px; }
+.artifact-back { display: inline-flex; align-items: center; gap: 4px; color: var(--kb-text-tertiary); text-decoration: none; font-size: 12px; flex-shrink: 0; }
 .artifact-back:hover { color: var(--kb-accent, #0891b2); }
-/* ── 标题行：kindicon + 大标题（高保真 ar-title 排版） ── */
-.artifact-detail__title-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* ── 标题行：返回箭头 + kindicon + 大标题 + 状态章 一行式（用户拍板：章不掉行） ── */
+.artifact-detail__title-row {
+  display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap;
+}
 .artifact-detail__kindicon {
   display: inline-grid; place-items: center; flex-shrink: 0;
-  width: 40px; height: 40px; border-radius: 10px;
+  width: 34px; height: 34px; border-radius: 9px;
   border: 1px solid var(--kb-border, #e2e8f0);
   background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
   color: var(--kb-accent, #0891b2);
-  font-size: 15px; font-weight: 700;
+  font-size: 14px; font-weight: 700;
 }
-.artifact-detail__title { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.artifact-detail__badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-left: 52px; }
+.artifact-detail__title {
+  margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex-shrink: 1;
+}
+.artifact-detail__badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
 .artifact-detail__desc { margin: 8px 0 12px; color: var(--kb-text-tertiary); font-size: 13px; }
 .artifact-detail__missing { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .artifact-detail__meta-bar { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
@@ -699,30 +719,6 @@ defineExpose({ reloadAll })
 .artifact-detail__desc-card { flex: 1; max-width: 720px; }
 .artifact-detail__visibility-hint { width: 100%; color: var(--kb-text-tertiary); font-size: 12px; line-height: 1.5; }
 .artifact-detail__empty-guide { margin-bottom: 14px; }
-/* 内容区切换与检索记录页保持一致。 */
-.artifact-detail__wiki-views {
-  display: flex;
-  gap: 4px;
-  margin: 14px 0 10px;
-  border-bottom: 1px solid var(--kb-border-light);
-}
-.artifact-detail__wiki-views button {
-  padding: 9px 16px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  color: var(--kb-text-secondary);
-  background: transparent;
-  cursor: pointer;
-}
-.artifact-detail__wiki-views button.active {
-  color: var(--kb-accent);
-  border-bottom-color: var(--kb-accent);
-  font-weight: 600;
-}
-.artifact-detail__wiki-views button:focus-visible {
-  outline: 2px solid var(--kb-accent);
-  outline-offset: -2px;
-}
 /* Q01 检索状态条（66号批次5）：运行态 wiki 顶部一行；警示=黄边淡底 */
 .artifact-detail__search-status {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -761,6 +757,15 @@ defineExpose({ reloadAll })
   border-radius: 12px;
 }
 .artifact-detail .el-dialog__title { font-weight: 600; font-size: 15px; }
+/* 页签规格（高保真 ar-tabs 观感）：可读字号 + 高命中区 + 2px 圆头活动条 */
+.artifact-detail .el-tabs__item {
+  font-size: 13.5px;
+  height: 44px;
+  line-height: 44px;
+  font-weight: 500;
+}
+.artifact-detail .el-tabs__item.is-active { font-weight: 600; color: var(--kb-text-primary, #0f172a); }
+.artifact-detail .el-tabs__active-bar { height: 2px; border-radius: 2px; }
 .artifact-detail .el-descriptions__label {
   color: var(--kb-text-tertiary, #94a3b8);
   font-size: 12px;

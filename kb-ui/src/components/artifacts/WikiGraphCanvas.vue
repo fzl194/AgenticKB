@@ -16,7 +16,7 @@ echarts.use([GraphChart, TooltipComponent, CanvasRenderer])
 /**
  * Wiki 图谱画布——echarts 力导向薄封装（范 式=charts/PieChart：tree-shaken
  * echarts.use + 实例生命周期收口）。只负责渲染 option 与转译节点事件，
- * 不含任何业务语义（图模型/交互决策全在 WikiGraphPanel）。
+ * 不含任何业务语义（图模型在 utils/wikiGraph，交互决策在 WikiReaderPanel 右栏）。
  *
  * 节点事件载荷=key（echarts data 项上挂的原字段），双击走原生 dblclick。
  */

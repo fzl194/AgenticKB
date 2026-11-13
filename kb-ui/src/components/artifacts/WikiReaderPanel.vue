@@ -7,12 +7,19 @@
       data-test="wiki-reader-empty"
     />
 
-    <!-- 统一三栏（2026-11-13 拍板）：左目录（可拖拽调整）｜中页面渲染（默认阅读，
-         编辑正文/页面属性按钮化）｜右近邻力导向图+溯源。设计态=canWrite 开写入口，
-         运行态=同款只读。 -->
+    <!-- 统一三栏（2026-11-13 拍板，高保真 ar-wiki 语言）：一张壳卡发丝线分栏——
+         左=软底目录轨（检索/分节/拖拽）｜中=阅读面（正文即排版，无内框）｜
+         右=近邻力导向图+溯源。设计态=canWrite 开写入口，运行态=同款只读。 -->
     <template v-else>
+      <!-- 未选页时收成两轨（右栏 v-if 不渲染——固定三轨会留 282px 空白洞） -->
+      <div class="wiki-reader__shell" :class="{ 'is-two-col': !page }">
       <aside class="wiki-reader__toc">
-        <!-- 检索区（批次4）：目录侧栏顶部——回车/按钮触发，结果渲染在侧栏 -->
+        <div class="wiki-reader__rail-head">
+          <span class="wiki-reader__rail-label">页面目录</span>
+          <span class="wiki-reader__rail-count">{{ sortedPages.length }} 页</span>
+        </div>
+
+        <!-- 检索区（批次4）：回车/图标触发，结果渲染在侧栏 -->
         <div class="wiki-reader__search">
           <el-input
             v-model="searchQuery"
@@ -22,12 +29,18 @@
             data-test="wiki-reader-search-input"
             @keyup.enter="runSearch"
           >
-            <template #append>
-              <el-button
-                :loading="searchLoading"
+            <template #suffix>
+              <button
+                type="button"
+                class="wiki-reader__search-go"
                 data-test="wiki-reader-search-btn"
+                aria-label="搜索"
+                :disabled="searchLoading"
                 @click="runSearch"
-              >搜索</el-button>
+              >
+                <el-icon v-if="searchLoading" class="is-loading"><Loading /></el-icon>
+                <el-icon v-else><Search /></el-icon>
+              </button>
             </template>
           </el-input>
           <div
@@ -52,25 +65,6 @@
             class="wiki-reader__search-none"
             data-test="wiki-reader-search-none"
           >无匹配结果</p>
-        </div>
-
-        <div class="wiki-reader__toc-head">
-          <span>目录 · 共 {{ sortedPages.length }} 页</span>
-          <button
-            v-if="canWrite"
-            type="button"
-            class="wiki-reader__toc-new"
-            data-test="wiki-new-page"
-            @click="startNewPage"
-          >＋ 新建页</button>
-          <button
-            v-if="canWrite && tocDirty"
-            type="button"
-            class="wiki-reader__toc-save"
-            data-test="wiki-toc-save"
-            :disabled="tocSaving"
-            @click="saveToc"
-          >保存目录</button>
         </div>
 
         <div class="wiki-reader__toc-body">
@@ -114,10 +108,10 @@
               @dragleave="editable && (dragOverKey = '')"
               @drop.stop.prevent="editable && onDropItem(groupIndex(gi), ii)"
             >
-              <el-tag size="small" effect="plain" :type="pageTypeMeta(item.page_type)?.tag ?? 'info'">
-                {{ pageTypeMeta(item.page_type)?.label ?? item.page_type }}
-              </el-tag>
               <span class="wiki-reader__toc-title">{{ item.title }}</span>
+              <span class="wiki-reader__toc-sub">
+                {{ pageTypeMeta(item.page_type)?.label ?? item.page_type }}{{ item.origin === 'manual' ? ' · 人工修订' : '' }}
+              </span>
               <span
                 v-if="canWrite"
                 class="wiki-reader__toc-del"
@@ -141,39 +135,52 @@
             @click="addSection"
           >＋ 新增节</button>
         </div>
+
+        <div v-if="canWrite" class="wiki-reader__rail-foot">
+          <button
+            type="button"
+            class="wiki-reader__rail-new"
+            data-test="wiki-new-page"
+            @click="startNewPage"
+          >＋ 新建页</button>
+          <button
+            v-if="tocDirty"
+            type="button"
+            class="wiki-reader__rail-save"
+            data-test="wiki-toc-save"
+            :disabled="tocSaving"
+            @click="saveToc"
+          >保存目录</button>
+        </div>
       </aside>
 
       <section v-loading="pageLoading" class="wiki-reader__main">
         <template v-if="page">
-          <header class="wiki-reader__page-head">
-            <h3 class="wiki-reader__page-title">{{ page.title }}</h3>
-            <el-tag size="small" effect="plain" :type="pageTypeMeta(page.page_type)?.tag ?? 'info'">
+          <!-- 页头只保留一枚来源章+页型章+时间（高保真 ar-page-main：标题即正文 h1，
+               不再重复渲染大标题行）；写入口按钮化靠右 -->
+          <div class="wiki-reader__page-meta">
+            <span class="wiki-reader__chip" :class="page.origin === 'manual' ? 'is-manual' : 'is-machine'">
+              {{ page.origin === 'manual' ? '人工修订 · 受保护' : '编译生成' }}
+            </span>
+            <span class="wiki-reader__chip" :class="`is-${page.page_type}`">
               {{ pageTypeMeta(page.page_type)?.label ?? page.page_type }}
-            </el-tag>
-            <el-tag
-              size="small"
-              effect="plain"
-              :type="page.origin === 'manual' ? 'primary' : 'info'"
-              :title="`来源：${page.origin}`"
-            >
-              {{ originLabel(page.origin) }}
-            </el-tag>
+            </span>
             <span class="wiki-reader__page-time">更新于 {{ formatTime(page.updated_at) }}</span>
-            <span v-if="canWrite" class="wiki-reader__page-actions">
+            <span v-if="canWrite && !editing" class="wiki-reader__page-actions">
               <el-button
-                v-if="!editing"
                 size="small"
+                plain
                 data-test="wiki-edit-body"
                 @click="startEditBody"
               >编辑正文</el-button>
               <el-button
-                v-if="!editing"
                 size="small"
+                plain
                 data-test="wiki-page-props"
                 @click="openProps"
               >页面属性</el-button>
             </span>
-          </header>
+          </div>
 
           <!-- 编辑模式：markdown 源文 textarea；保存后整页标记人工修订 -->
           <template v-if="editing">
@@ -196,10 +203,10 @@
               data-test="wiki-body-editor"
             />
           </template>
-          <!-- 阅读模式（默认）：点击委托切页/复制切片 ID -->
-          <div
+          <!-- 阅读模式（默认）：正文即排版（无内框），点击委托切页/复制切片 ID -->
+          <article
             v-else
-            class="wiki-reader__body markdown-body"
+            class="wiki-reader__doc markdown-body"
             data-test="wiki-reader-body"
             v-html="pageHtml"
             @click="onContentClick"
@@ -209,9 +216,13 @@
       </section>
 
       <aside v-if="page" class="wiki-reader__ctx">
-        <!-- 近邻：以当前页为中心的力导向图（一阶出入；点击节点切页） -->
+        <!-- 近邻：以当前页为中心的力导向图（一阶出入；点击节点切页）。
+             栏即画框（去内框），下缀一行读图说明压噪音。 -->
         <section class="wiki-reader__ctx-block">
-          <h4 class="wiki-reader__ctx-title">近邻（一阶出入 {{ neighborhood.totals.input1 + neighborhood.totals.output1 }}）</h4>
+          <div class="wiki-reader__ctx-head">
+            <span class="wiki-reader__ctx-label">近邻图谱</span>
+            <span class="wiki-reader__ctx-stat">一阶出入 {{ neighborhood.totals.input1 + neighborhood.totals.output1 }}</span>
+          </div>
           <div class="wiki-reader__graph" data-test="wiki-reader-graph">
             <WikiGraphCanvas
               v-if="neighborhood.nodes.length > 1"
@@ -220,19 +231,25 @@
             />
             <p v-else class="wiki-reader__none">本页暂无引用关联</p>
           </div>
+          <p class="wiki-reader__ctx-legend">点击节点跳转 · 虚线＝断链 · +N＝折叠的二阶关联</p>
         </section>
 
         <section class="wiki-reader__ctx-block">
-          <h4 class="wiki-reader__ctx-title">溯源（{{ provenanceViews.length }}）</h4>
+          <div class="wiki-reader__ctx-head">
+            <span class="wiki-reader__ctx-label">溯源</span>
+            <span class="wiki-reader__ctx-stat">{{ provenanceViews.length }} 组</span>
+          </div>
           <div
             v-for="(item, index) in provenanceViews"
             :key="`prov-${index}`"
             class="wiki-reader__prov"
             data-test="wiki-reader-provenance"
           >
-            <p class="wiki-reader__prov-line">kb：{{ item.kbId }}</p>
-            <p class="wiki-reader__prov-line">快照：{{ item.snapshotId }}</p>
-            <p class="wiki-reader__prov-line">切片 {{ item.unitIds.length }} 条</p>
+            <div class="wiki-reader__prov-main">
+              <span class="wiki-reader__prov-kb" :title="item.kbId">{{ item.kbId }}</span>
+              <span class="wiki-reader__prov-count">{{ item.unitIds.length }} 切片</span>
+            </div>
+            <p class="wiki-reader__prov-snap" :title="item.snapshotId">快照 {{ shortId(item.snapshotId) }}</p>
             <ul v-if="item.unitIds.length" class="wiki-reader__prov-units">
               <li v-for="unitId in item.unitIds" :key="unitId">
                 <button
@@ -241,14 +258,15 @@
                   data-test="wiki-reader-prov-unit"
                   :title="`查看切片 ${unitId} 原文`"
                   @click="openUnitSource(unitId)"
-                >{{ unitId }}</button>
+                >{{ shortId(unitId) }}</button>
               </li>
             </ul>
-            <p v-for="extra in item.extra" :key="extra" class="wiki-reader__prov-line">{{ extra }}</p>
+            <p v-for="extra in item.extra" :key="extra" class="wiki-reader__prov-extra">{{ extra }}</p>
           </div>
           <p v-if="provenanceViews.length === 0" class="wiki-reader__none">无溯源记录</p>
         </section>
       </aside>
+      </div>
     </template>
 
     <!-- 页面属性（结构化字段归口：标题/页型/序号/别名/标签/frontmatter JSON） -->
@@ -345,6 +363,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Loading, Search } from '@element-plus/icons-vue'
 import type { EChartsOption } from 'echarts'
 
 import { useArtifactsApi } from '@/api/artifacts'
@@ -892,6 +911,13 @@ function buildFrontmatter(): Record<string, unknown> | null {
   return { ...base, aliases: splitCsv(propsForm.value.aliases), tags: splitCsv(propsForm.value.tags) }
 }
 
+/** 改名回写（对抗审查 HIGH 2026-11-13）：阅读面「标题即正文 h1」——改名时若
+ *  旧正文首行 h1 恰为旧标题，同步替换，避免目录新标题/正文旧标题的不一致。 */
+function retitleBody(bodyMd: string, oldTitle: string, newTitle: string): string {
+  const escaped = oldTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return bodyMd.replace(new RegExp(`^#\\s*${escaped}\\s*(\\n|$)`), `# ${newTitle}$1`)
+}
+
 async function saveProps(): Promise<void> {
   const title = propsForm.value.title.trim()
   if (!title) {
@@ -903,7 +929,12 @@ async function saveProps(): Promise<void> {
     ElMessage.warning('frontmatter JSON 解析失败，请修正后再保存')
     return
   }
-  const bodyMd = propsIsNew.value ? `# ${title}\n\n请填写知识正文。` : page.value?.body_md ?? ''
+  const prev = propsIsNew.value ? null : page.value
+  const bodyMd = !prev
+    ? `# ${title}\n\n请填写知识正文。`
+    : title === prev.title
+      ? (prev.body_md ?? '')
+      : retitleBody(prev.body_md ?? '', prev.title, title)
   const addressKey = propsIsNew.value ? (propsForm.value.pageKey.trim() || title) : selectedKey.value
   const explicitKey = propsForm.value.pageKey.trim()
   saving.value = true
@@ -1111,10 +1142,9 @@ function pageTypeMeta(pageType: WikiPageType | string) {
   return PAGE_TYPES.find(t => t.value === pageType)
 }
 
-function originLabel(origin: string): string {
-  if (origin === 'manual') return '手工'
-  if (origin === 'machine') return '编译'
-  return origin
+/** 切片 ID 短显（长 UUID 截断；title 悬浮全文，点击仍传全 ID）。 */
+function shortId(id: string): string {
+  return id.length > 14 ? `${id.slice(0, 12)}…` : id
 }
 
 function formatTime(value: string | null | undefined): string {
@@ -1133,146 +1163,238 @@ defineExpose({ reload: loadPages, selectPage, currentPageKey: computed(() => sel
 </script>
 
 <style scoped>
-.wiki-reader { display: flex; gap: 14px; min-height: 420px; }
-.wiki-reader__toc { width: 250px; flex-shrink: 0; }
+/* ── 一张壳卡三栏（高保真 ar-wiki）：发丝线分栏、左轨软底、正文即排版 ──
+   设计方向：安静的阅读面——壳即容器，栏内不再各自包卡片；青色只作强调。 */
+.wiki-reader__shell {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr) 282px;
+  min-height: 560px;
+  border: 1px solid var(--kb-border, #e2e8f0);
+  border-radius: 10px;
+  background: var(--kb-bg-card, #fff);
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
 
-.wiki-reader__search { margin-bottom: 10px; }
+/* 左轨：目录（软底，可独立滚动） */
+.wiki-reader__toc {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  background: var(--kb-bg-card-hover, #f8fafc);
+  border-right: 1px solid var(--kb-border-light, #f1f5f9);
+}
+.wiki-reader__rail-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 14px 12px 7px;
+}
+.wiki-reader__rail-label {
+  font-size: 12px; font-weight: 600; letter-spacing: .5px;
+  color: var(--kb-text-secondary, #64748b);
+}
+.wiki-reader__rail-count { font-size: 11px; color: var(--kb-text-tertiary, #94a3b8); }
+
+.wiki-reader__search { padding: 0 10px 9px; }
+.wiki-reader__search-go {
+  border: 0; background: none; padding: 2px; cursor: pointer;
+  display: inline-flex; color: var(--kb-text-tertiary, #94a3b8);
+}
+.wiki-reader__search-go:hover { color: var(--kb-accent, #0891b2); }
+.wiki-reader__search-go:focus-visible {
+  outline: 2px solid var(--kb-accent, #0891b2); outline-offset: 1px; border-radius: 4px;
+}
+.wiki-reader__search-go:disabled { cursor: default; opacity: .6; }
 .wiki-reader__search-list {
-  display: flex; flex-direction: column; gap: 4px; margin-top: 8px;
-  max-height: 280px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px; margin-top: 6px;
+  max-height: 260px; overflow-y: auto;
 }
 .wiki-reader__search-hit {
   display: flex; flex-direction: column; gap: 2px; width: 100%;
-  padding: 5px 8px; border: 1px solid transparent; border-radius: 6px;
+  padding: 5px 8px; border-radius: 6px;
   background: none; cursor: pointer; text-align: left;
 }
-.wiki-reader__search-hit:hover { background: var(--el-fill-color-light, #f5f7fa); }
+.wiki-reader__search-hit:hover { background: rgba(15, 23, 42, 0.05); }
 .wiki-reader__search-hit-title {
-  font-size: 12.5px; color: var(--kb-text-primary, inherit);
+  font-size: 12px; color: var(--kb-text-primary, inherit);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .wiki-reader__search-hit-snippet {
-  font-size: 12px; color: var(--kb-text-tertiary);
+  font-size: 11px; color: var(--kb-text-tertiary);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   overflow: hidden;
 }
-.wiki-reader__search-none { margin: 6px 0 0; font-size: 12px; color: var(--kb-text-tertiary); }
+.wiki-reader__search-none { margin: 6px 0 0; font-size: 11.5px; color: var(--kb-text-tertiary); }
 
-.wiki-reader__toc-head {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 12.5px; color: var(--kb-text-tertiary); margin-bottom: 8px;
+.wiki-reader__toc-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 2px 8px 10px;
 }
-.wiki-reader__toc-new {
-  border: 0; background: none; padding: 0; cursor: pointer;
-  color: var(--kb-accent, #0891b2); font-size: 12px; font-weight: 600;
-}
-.wiki-reader__toc-new:hover { text-decoration: underline; }
-.wiki-reader__toc-save {
-  border: 1px solid var(--kb-accent-medium, rgba(8, 145, 178, 0.15)); background: none;
-  border-radius: 4px; padding: 1px 8px; cursor: pointer;
-  color: var(--kb-accent, #0891b2); font-size: 12px; font-weight: 600;
-}
-.wiki-reader__toc-body { display: flex; flex-direction: column; gap: 4px; }
 
-.wiki-reader__toc-group { display: flex; flex-direction: column; gap: 4px; min-height: 24px; }
-.wiki-reader__toc-group + .wiki-reader__toc-group { margin-top: 8px; }
+.wiki-reader__toc-group { display: flex; flex-direction: column; gap: 1px; min-height: 20px; padding-top: 5px; }
 .wiki-reader__toc-group-title {
   display: flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600; color: var(--kb-text-tertiary);
-  padding: 2px 8px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5);
+  padding: 4px 6px 3px;
+  font-size: 12px; font-weight: 600; letter-spacing: .5px;
+  color: var(--kb-text-secondary, #64748b);
 }
+.wiki-reader__toc-group-edit { flex: 1; }
 .wiki-reader__toc-group-edit :deep(.el-input__wrapper) {
-  background: transparent; box-shadow: none; font-weight: 600; font-size: 12px;
-  padding: 0 4px;
+  background: transparent; box-shadow: none; font-weight: 600; font-size: 11px;
+  padding: 0 4px; border-radius: 4px;
 }
 .wiki-reader__toc-group-edit :deep(.el-input__wrapper:focus-within) {
   box-shadow: 0 0 0 1px var(--kb-accent, #0891b2) inset;
 }
 .wiki-reader__toc-group-del {
-  margin-left: auto; cursor: pointer; font-size: 11px;
+  cursor: pointer; font-size: 11px; flex-shrink: 0;
   color: var(--kb-text-tertiary, #94a3b8);
 }
 .wiki-reader__toc-group-del:hover { color: var(--el-color-danger, #f56c6c); }
 
 .wiki-reader__toc-item {
-  display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 8px;
-  border: 1px solid transparent; border-radius: 6px; background: none;
-  cursor: pointer; text-align: left; font-size: 13px;
+  position: relative;
+  display: flex; flex-direction: column; gap: 1px; width: 100%;
+  padding: 6px 10px; border: 1px solid transparent; border-radius: 6px;
+  background: none; cursor: pointer; text-align: left;
 }
-.wiki-reader__toc-item:hover { background: var(--el-fill-color-light, #f5f7fa); }
+.wiki-reader__toc-item:hover { background: rgba(15, 23, 42, 0.045); }
 .wiki-reader__toc-item.is-active {
   background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
-  border-color: var(--kb-accent-medium, rgba(8, 145, 178, 0.15));
+  box-shadow: inset 2px 0 0 var(--kb-accent, #0891b2);
 }
 .wiki-reader__toc-item.is-dragover { border-color: var(--kb-accent, #0891b2); border-style: dashed; }
 .wiki-reader__toc-item[draggable='true'] { cursor: grab; }
+.wiki-reader__toc-item.is-active .wiki-reader__toc-title {
+  color: var(--kb-accent, #0891b2); font-weight: 600;
+}
 .wiki-reader__toc-title {
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--kb-text-primary, inherit);
+  font-size: 12.5px; color: var(--kb-text-primary, inherit);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding-right: 14px;
 }
+.wiki-reader__toc-sub { font-size: 10.5px; color: var(--kb-text-tertiary, #94a3b8); }
 .wiki-reader__toc-del {
-  display: none; font-size: 11px; color: var(--kb-text-tertiary, #94a3b8); flex-shrink: 0;
+  position: absolute; top: 6px; right: 7px; display: none;
+  font-size: 11px; color: var(--kb-text-tertiary, #94a3b8); cursor: pointer;
 }
-.wiki-reader__toc-item:hover .wiki-reader__toc-del { display: inline; }
+.wiki-reader__toc-item:hover .wiki-reader__toc-del { display: inline-block; }
 .wiki-reader__toc-del:hover { color: var(--el-color-danger, #f56c6c); }
 .wiki-reader__toc-empty-hint {
-  margin: 0; padding: 4px 8px; font-size: 11.5px;
+  margin: 0; padding: 4px 8px; font-size: 11px;
   color: var(--kb-text-tertiary, #94a3b8); border: 1px dashed var(--kb-border, #cbd5e1);
   border-radius: 6px; text-align: center;
 }
 .wiki-reader__toc-add-section {
-  align-self: flex-start; border: 0; background: none; padding: 2px 8px;
-  color: var(--kb-text-tertiary, #94a3b8); font-size: 12px; cursor: pointer;
+  border: 1px dashed var(--kb-border, #cbd5e1); border-radius: 6px;
+  background: none; padding: 4px 8px; margin-top: 5px;
+  color: var(--kb-text-tertiary, #94a3b8); font-size: 11.5px; cursor: pointer; text-align: center;
 }
-.wiki-reader__toc-add-section:hover { color: var(--kb-accent, #0891b2); }
+.wiki-reader__toc-add-section:hover { color: var(--kb-accent, #0891b2); border-color: var(--kb-accent, #0891b2); }
 
-.wiki-reader__main { flex: 1; min-width: 0; }
-.wiki-reader__page-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-.wiki-reader__page-title { margin: 0; font-size: 17px; }
-.wiki-reader__page-time { font-size: 12px; color: var(--kb-text-tertiary); }
+.wiki-reader__rail-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--kb-border-light, #f1f5f9);
+}
+.wiki-reader__rail-new {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--kb-accent, #0891b2); font-size: 12px; font-weight: 600;
+}
+.wiki-reader__rail-new:hover { text-decoration: underline; }
+.wiki-reader__rail-save {
+  border: 1px solid var(--kb-accent-medium, rgba(8, 145, 178, 0.35)); background: none;
+  border-radius: 5px; padding: 2px 10px; cursor: pointer;
+  color: var(--kb-accent, #0891b2); font-size: 12px; font-weight: 600;
+}
+.wiki-reader__rail-save:disabled { opacity: 0.6; cursor: default; }
+
+/* 中栏：阅读面（meta 一行 + 正文即排版，无内框） */
+.wiki-reader__main { display: flex; flex-direction: column; min-width: 0; }
+.wiki-reader__page-meta {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--kb-border-light, #f1f5f9);
+}
+.wiki-reader__chip {
+  display: inline-flex; align-items: center;
+  padding: 1px 9px; border-radius: 999px;
+  font-size: 11px; line-height: 1.7;
+}
+.wiki-reader__chip.is-machine { background: var(--kb-bg-card-hover, #f1f5f9); color: var(--kb-text-secondary, #64748b); }
+.wiki-reader__chip.is-manual { background: var(--kb-success-soft, rgba(16, 185, 129, 0.1)); color: var(--kb-success, #10b981); }
+.wiki-reader__chip.is-topic { color: var(--kb-accent, #0891b2); background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08)); }
+.wiki-reader__chip.is-glossary { color: #10b981; background: rgba(16, 185, 129, 0.08); }
+.wiki-reader__chip.is-contradiction { color: #ef4444; background: rgba(239, 68, 68, 0.08); }
+.wiki-reader__chip.is-open_question { color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
+.wiki-reader__page-time { font-size: 11.5px; color: var(--kb-text-tertiary); }
 .wiki-reader__page-actions { margin-left: auto; display: inline-flex; gap: 8px; }
 .wiki-reader__page-actions .el-button + .el-button { margin-left: 0; }
 
 .wiki-reader__edit-bar {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
-  padding: 8px 12px; border-radius: 8px;
+  display: flex; align-items: center; gap: 8px;
+  margin: 12px 24px 8px; padding: 8px 12px;
+  border-radius: 8px; border: 1px solid var(--kb-border-light, #f1f5f9);
   background: var(--kb-bg-card-hover, #f8fafc);
-  border: 1px solid var(--kb-border-light, #f1f5f9);
 }
 .wiki-reader__edit-addr { flex: 1; font-size: 12px; color: var(--kb-text-tertiary); }
 .wiki-reader__edit-bar .el-button + .el-button { margin-left: 0; }
+.wiki-reader__editor { margin: 0 24px 16px; }
 .wiki-reader__editor :deep(textarea) { font-family: Consolas, 'Microsoft YaHei', monospace; font-size: 12.5px; line-height: 1.8; }
 
-.wiki-reader__body {
-  border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: 6px;
-  padding: 12px 16px; line-height: 1.7; overflow-wrap: anywhere; min-height: 200px;
-}
-.wiki-reader__body :deep(a[data-wiki-page]) { color: var(--kb-accent, #0891b2); cursor: pointer; }
-.wiki-reader__body :deep(sup.wiki-src) {
+.wiki-reader__doc { flex: 1; padding: 8px 24px 26px; overflow-wrap: anywhere; }
+.wiki-reader__doc :deep(a[data-wiki-page]) { color: var(--kb-accent, #0891b2); cursor: pointer; }
+.wiki-reader__doc :deep(sup.wiki-src) {
   color: var(--kb-text-tertiary); cursor: copy; font-size: 11px; margin: 0 1px;
 }
 
-.wiki-reader__ctx { width: 262px; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px; }
-.wiki-reader__ctx-title { margin: 0 0 6px; font-size: 13px; }
-.wiki-reader__graph {
-  border: 1px solid var(--kb-border, #e2e8f0); border-radius: 8px;
-  height: 300px; overflow: hidden; background: var(--kb-bg-card, #fff);
+/* 右轨：近邻图谱 + 溯源（栏即画框，发丝线分块） */
+.wiki-reader__ctx {
+  display: flex; flex-direction: column; min-width: 0;
+  border-left: 1px solid var(--kb-border-light, #f1f5f9);
 }
-.wiki-reader__graph :deep(.wiki-graph-canvas) { height: 300px; }
-.wiki-reader__none { margin: 0; font-size: 12.5px; color: var(--kb-text-tertiary); }
-.wiki-reader__prov {
-  border: 1px solid var(--el-border-color-lighter, #ebeef5); border-radius: 6px;
-  padding: 8px 10px; margin-bottom: 8px; font-size: 12.5px;
+.wiki-reader__ctx-block { padding: 13px 14px 12px; }
+.wiki-reader__ctx-block + .wiki-reader__ctx-block { border-top: 1px solid var(--kb-border-light, #f1f5f9); }
+.wiki-reader__ctx-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 8px;
 }
-.wiki-reader__prov-line { margin: 0 0 2px; overflow-wrap: anywhere; }
-.wiki-reader__prov-units { margin: 4px 0 0; padding-left: 18px; color: var(--kb-text-tertiary); }
+.wiki-reader__ctx-label {
+  font-size: 12px; font-weight: 600; letter-spacing: .5px;
+  color: var(--kb-text-secondary, #64748b);
+}
+.wiki-reader__ctx-stat { font-size: 11px; color: var(--kb-text-tertiary, #94a3b8); }
+.wiki-reader__graph { height: 316px; }
+.wiki-reader__graph :deep(.wiki-graph-canvas) { height: 316px; }
+.wiki-reader__ctx-legend { margin: 4px 0 0; font-size: 11px; color: var(--kb-text-tertiary); }
+.wiki-reader__none { margin: 24px 0; font-size: 12px; color: var(--kb-text-tertiary); text-align: center; }
+
+.wiki-reader__prov + .wiki-reader__prov {
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--kb-border-light, #f1f5f9);
+}
+.wiki-reader__prov-main { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.wiki-reader__prov-kb {
+  font-size: 12px; font-weight: 600; color: var(--kb-text-primary, inherit);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wiki-reader__prov-count { font-size: 11px; color: var(--kb-accent, #0891b2); flex-shrink: 0; }
+.wiki-reader__prov-snap {
+  margin: 2px 0 0; font-size: 10.5px; color: var(--kb-text-tertiary);
+  font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.wiki-reader__prov-units {
+  margin: 6px 0 0; padding: 0; list-style: none;
+  display: flex; flex-wrap: wrap; gap: 3px 9px;
+}
 .wiki-reader__prov-unit {
   border: none; padding: 0; background: none; cursor: pointer;
-  color: var(--kb-accent, #0891b2); font-size: 12px;
-  overflow-wrap: anywhere; text-align: left;
+  color: var(--kb-accent, #0891b2); font-size: 11px;
+  font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
   text-decoration: underline dotted;
 }
 .wiki-reader__prov-unit:hover { opacity: 0.8; }
+.wiki-reader__prov-extra { margin: 3px 0 0; font-size: 10.5px; color: var(--kb-text-tertiary); overflow-wrap: anywhere; }
+
 .wiki-reader__json :deep(textarea) { font-family: monospace; }
 .wiki-reader__json-error { margin: 6px 0 0; font-size: 12px; color: var(--el-color-danger, #f56c6c); }
 .wiki-reader__src-body { min-height: 80px; }
@@ -1287,8 +1409,22 @@ defineExpose({ reload: loadPages, selectPage, currentPageKey: computed(() => sel
 .wiki-reader__src-hint { margin: 8px 0 0; font-size: 12px; color: var(--kb-text-tertiary); }
 .wiki-reader__src-error { margin: 0; font-size: 13px; color: var(--el-color-danger, #f56c6c); }
 
+.wiki-reader__shell.is-two-col { grid-template-columns: 236px minmax(0, 1fr); }
+@media (max-width: 1280px) {
+  .wiki-reader__shell { grid-template-columns: 212px minmax(0, 1fr) 252px; }
+}
 @media (max-width: 1100px) {
-  .wiki-reader { flex-direction: column; }
-  .wiki-reader__toc, .wiki-reader__ctx { width: auto; }
+  .wiki-reader__shell { grid-template-columns: 200px minmax(0, 1fr); }
+  .wiki-reader__ctx {
+    grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--kb-border-light, #f1f5f9);
+    display: grid; grid-template-columns: 1fr 1fr;
+  }
+  .wiki-reader__ctx-block + .wiki-reader__ctx-block { border-top: 0; border-left: 1px solid var(--kb-border-light, #f1f5f9); }
+}
+@media (max-width: 720px) {
+  .wiki-reader__shell { display: flex; flex-direction: column; }
+  .wiki-reader__toc { border-right: 0; border-bottom: 1px solid var(--kb-border-light, #f1f5f9); }
+  .wiki-reader__ctx { display: flex; flex-direction: column; }
+  .wiki-reader__ctx-block + .wiki-reader__ctx-block { border-left: 0; border-top: 1px solid var(--kb-border-light, #f1f5f9); }
 }
 </style>

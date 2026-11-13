@@ -639,6 +639,34 @@ describe('WikiReaderPanel 设计态（统一视图写入口）', () => {
     expect(state.api.getWikiPage).toHaveBeenLastCalledWith('art-1', 'new-page', { draft: true })
   })
 
+  it('页面属性改名：正文首行 h1 同步回写（阅读面「标题即正文 h1」契约，对抗审查 HIGH）', async () => {
+    // 旧正文首行 h1 = 旧标题 → 改名后 upsert 的 body_md 首行必须换成新标题
+    state.api.getWikiPage.mockResolvedValueOnce({
+      ...glossaryPage, body_md: '# MOP 术语\n\n术语正文。参见 [[home]]',
+    })
+    state.api.upsertWikiPage.mockResolvedValueOnce({
+      ...glossaryPage, title: '新术语', body_md: '# 新术语\n\n术语正文。参见 [[home]]',
+    })
+    const wrapper = mountReader(true)
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      propsForm: { title: string }
+      openProps: () => void
+      saveProps: () => Promise<void>
+    }
+
+    vm.openProps()
+    await flushPromises()
+    vm.propsForm.title = '新术语'
+    await vm.saveProps()
+    await flushPromises()
+
+    expect(state.api.upsertWikiPage).toHaveBeenCalledWith('art-1', 'glossary-mop', expect.objectContaining({
+      title: '新术语',
+      body_md: expect.stringMatching(/^# 新术语\n/),
+    }))
+  })
+
   it('删除页：确认后删除并刷新清单', async () => {
     const wrapper = mountReader(true)
     await flushPromises()

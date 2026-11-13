@@ -250,27 +250,21 @@
           />
         </template>
         <template v-else>
-          <el-table v-loading="rowsLoading" :data="runtimeRows" size="small">
-            <el-table-column label="行键" min-width="150">
-              <template #default="{ row }">
-                <el-tooltip :content="row.row_key" placement="top" :disabled="row.row_key === displayRowKey(row)">
-                  <span>{{ displayRowKey(row) }}</span>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-            <el-table-column
-              v-for="col in runtimeColumns"
-              :key="col.column_id"
-              :label="col.column_name"
-              min-width="130"
-              show-overflow-tooltip
+          <!-- 统一表格视图（与设计态同形态，只读）：行键并入主键列展示口径 -->
+          <div v-loading="rowsLoading" class="artifact-detail__runtime-table">
+            <ArtifactTableView
+              :columns="runtimeColumns"
+              :rows="runtimeRows"
+              :editable="false"
+              :show-sources="false"
+              :index-offset="(rowsPage - 1) * rowsPageSize"
+              :footer-text="`${rowsTotal} 行 · ${runtimeColumns.length} 列 · 正式版只读`"
             >
-              <template #default="{ row }">{{ displayValue(row.data[col.column_name]) }}</template>
-            </el-table-column>
-            <template #empty>
-              <EmptyState text="暂无已发布数据（发布后在运行态可见）" />
-            </template>
-          </el-table>
+              <template #empty>
+                <EmptyState text="暂无已发布数据（发布后在运行态可见）" />
+              </template>
+            </ArtifactTableView>
+          </div>
           <el-pagination
             v-if="rowsTotal > rowsPageSize"
             class="artifact-detail__pager"
@@ -370,6 +364,7 @@ import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ArtifactImportWizard from '@/components/artifacts/ArtifactImportWizard.vue'
 import ArtifactUsagePanel from '@/components/artifacts/ArtifactUsagePanel.vue'
+import ArtifactTableView from '@/components/artifacts/ArtifactTableView.vue'
 import ArtifactSchemaPanel from '@/components/artifacts/ArtifactSchemaPanel.vue'
 import ArtifactRowsPanel from '@/components/artifacts/ArtifactRowsPanel.vue'
 import ArtifactMembersPanel from '@/components/artifacts/ArtifactMembersPanel.vue'
@@ -379,7 +374,6 @@ import WikiCompilePanel from '@/components/artifacts/WikiCompilePanel.vue'
 import WikiEditorPanel from '@/components/artifacts/WikiEditorPanel.vue'
 import WikiGraphPanel from '@/components/artifacts/WikiGraphPanel.vue'
 import WikiReaderPanel from '@/components/artifacts/WikiReaderPanel.vue'
-import { decodeRowKey } from '@/utils/rowKey'
 import type {
   ArtifactColumn,
   ArtifactDetail,
@@ -767,18 +761,6 @@ function statusLabel(status: string): string {
   return '草稿'
 }
 
-function displayValue(value: unknown): string {
-  if (value === null || value === undefined) return '—'
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
-}
-
-/** 运行态行键展示：有主键 → hex 解码回原文；无主键（uuid）原样。 */
-const runtimeHasPk = computed(() => runtimeColumns.value.some(c => c.is_primary_key))
-
-function displayRowKey(row: ArtifactRow): string {
-  return decodeRowKey(row.row_key, runtimeHasPk.value)
-}
 
 onMounted(reload)
 

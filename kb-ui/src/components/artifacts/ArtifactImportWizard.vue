@@ -153,17 +153,18 @@
         <span class="import-wizard__hint">（按映射投影的前 {{ projectedRows.length }} 行样例）</span>
       </template>
       <template v-if="!report">
-        <el-table :data="projectedRows" size="small" max-height="320" class="import-wizard__preview">
-          <el-table-column
-            v-for="col in projectedColumns"
-            :key="col"
-            :prop="col"
-            :label="col"
-            min-width="120"
-            show-overflow-tooltip
-          />
-          <template #empty>文件无数据行</template>
-        </el-table>
+        <!-- 统一表格视图（与设计态/运行态同形态）：投影样例只读预览 -->
+        <div class="import-wizard__preview">
+          <ArtifactTableView
+            :columns="previewColumns"
+            :rows="previewRows"
+            :editable="false"
+            :show-sources="false"
+            :footer-text="`样例 ${previewRows.length} 行 · ${previewColumns.length} 列（按映射投影）`"
+          >
+            <template #empty>文件无数据行</template>
+          </ArtifactTableView>
+        </div>
         <div class="import-wizard__policy">
           <span>类型错误：</span>
           <el-select v-model="conflictPolicy.type_error" size="small" style="width: 140px">
@@ -224,9 +225,10 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadRequestOptions } from 'element-plus'
 import { useArtifactsApi } from '@/api/artifacts'
+import ArtifactTableView from '@/components/artifacts/ArtifactTableView.vue'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type {
-  ArtifactColumn, ImportConflictPolicy, ImportReport, PreviewColumn,
+  ArtifactColumn, ArtifactRow, ImportConflictPolicy, ImportReport, PreviewColumn,
   PreviewEnvelope, SheetPreview,
 } from '@/types/artifacts'
 
@@ -331,6 +333,31 @@ const projectedRows = computed(() => {
     return out
   })
 })
+
+/** 统一表格视图适配：投影列名 → 最小 ArtifactColumn 形态（纯文本预览）。 */
+const previewColumns = computed<ArtifactColumn[]>(() =>
+  projectedColumns.value.map((name, index) => ({
+    artifact_id: props.artifactId,
+    column_id: `preview-${index}`,
+    column_name: name,
+    column_type: 'text',
+    enum_values: null,
+    is_primary_key: false,
+    is_indexed: false,
+    alias: null,
+    status: 'active',
+    ordinal: index + 1,
+  })))
+
+/** 统一表格视图适配：投影行 → ArtifactRow 形态（预览占位字段）。 */
+const previewRows = computed<ArtifactRow[]>(() =>
+  projectedRows.value.map((data, index) => ({
+    row_key: `preview-${index}`,
+    data,
+    provenance: null,
+    conflicts: null,
+    ordinal: index + 1,
+  })))
 
 watch(() => props.active, (active) => {
   if (active && !columnsLoaded.value) void loadColumns()
@@ -614,7 +641,7 @@ defineExpose({
 .import-wizard__check { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; color: var(--kb-text-tertiary); }
 .import-wizard__missing { margin-top: 10px; }
 .import-wizard__actions { margin-top: 12px; display: flex; justify-content: flex-end; gap: 8px; }
-.import-wizard__preview { margin-bottom: 10px; }
+.import-wizard__preview { margin-bottom: 10px; max-height: 340px; overflow-y: auto; border: 1px solid var(--kb-border, #e2e8f0); border-radius: 8px; padding: 4px 0; }
 .import-wizard__policy { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; flex-wrap: wrap; }
 .import-wizard__report { display: flex; gap: 8px; flex-wrap: wrap; }
 .import-wizard__conflicts { margin-top: 10px; }

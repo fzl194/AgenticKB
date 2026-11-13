@@ -17,67 +17,24 @@
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="rows" size="small" row-key="row_key">
-      <el-table-column type="expand">
-        <template #default="{ row }">
-          <div class="rows-panel__expanded">
-            <el-descriptions v-if="provenanceOf(row).length" :column="2" size="small" border>
-              <el-descriptions-item
-                v-for="(p, i) in provenanceOf(row)"
-                :key="i"
-                :label="`来源 ${i + 1}`"
-              >
-                <el-tooltip :content="provenanceTitle(p)" placement="top">
-                  <span>{{ describeProvenance(p) }}</span>
-                </el-tooltip>
-              </el-descriptions-item>
-            </el-descriptions>
-            <p v-else class="rows-panel__hint">无来源记录（手工编辑或来源未记账）</p>
-            <el-tag v-if="hasConflicts(row)" type="danger" size="small">
-              冲突标记：{{ conflictKeys(row).join('、') }}
-            </el-tag>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="行键" min-width="150" fixed="left">
-        <template #default="{ row }">
-          <el-tooltip :content="row.row_key" placement="top" :disabled="row.row_key === displayRowKey(row)">
-            <span class="rows-panel__rowkey">{{ displayRowKey(row) }}</span>
-          </el-tooltip>
-        </template>
-      </el-table-column>
-      <el-table-column
-        v-for="col in columns"
-        :key="col.column_id"
-        :label="col.column_name"
-        min-width="130"
-        show-overflow-tooltip
+    <div v-loading="loading" class="rows-panel__table">
+      <ArtifactTableView
+        :columns="editableColumns"
+        :rows="rows"
+        :editable="canWrite"
+        :index-offset="(page - 1) * pageSize"
+        :footer-text="`${total} 行 · ${editableColumns.length} 列（${draft ? '草稿' : '已发布'}口径）`"
+        @cell-dblclick="row => openEdit(row)"
+        @provenance="showProvenance"
       >
-        <template #default="{ row }">
-          <el-tag
-            v-if="isEnumColumn(col) && row.data?.[col.column_name] !== null && row.data?.[col.column_name] !== undefined"
-            size="small"
-            effect="plain"
-          >{{ String(row.data?.[col.column_name]) }}</el-tag>
-          <el-tag
-            v-else-if="isBoolColumn(col) && row.data?.[col.column_name] !== null && row.data?.[col.column_name] !== undefined"
-            size="small"
-            :type="row.data?.[col.column_name] ? 'success' : 'info'"
-            effect="plain"
-          >{{ row.data?.[col.column_name] ? '是' : '否' }}</el-tag>
-          <span v-else>{{ cellText(row.data?.[col.column_name]) }}</span>
+        <template #empty>
+          <EmptyState :text="draft ? '草稿无数据行（上传 Excel 或等待导入）' : '已发布版本无数据行'" />
         </template>
-      </el-table-column>
-      <el-table-column v-if="canWrite" label="操作" width="120" fixed="right">
-        <template #default="{ row }">
-          <el-button size="small" text type="primary" data-test="rows-edit" @click="openEdit(row)">编辑</el-button>
-          <el-button size="small" text type="danger" @click="removeRow(row)">删除</el-button>
+        <template #foot-hint>
+          {{ canWrite ? '双击单元格编辑该行；来源列查看记账' : '只读' }}
         </template>
-      </el-table-column>
-      <template #empty>
-        <EmptyState :text="draft ? '草稿无数据行（上传 Excel 或等待导入）' : '已发布版本无数据行'" />
-      </template>
-    </el-table>
+      </ArtifactTableView>
+    </div>
 
     <el-pagination
       v-if="total > pageSize"
@@ -104,8 +61,39 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <el-button
+          v-if="editingRow"
+          type="danger"
+          plain
+          data-test="rows-delete"
+          @click="removeRow(editingRow)"
+        >删除行</el-button>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" data-test="rows-edit-submit" @click="submitEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 来源记账/冲突明细（原 el-table 展开列迁移） -->
+    <el-dialog v-model="provenanceVisible" title="数据来源" width="560px">
+      <template v-if="provenanceRow">
+        <el-descriptions v-if="provenanceOf(provenanceRow).length" :column="2" size="small" border>
+          <el-descriptions-item
+            v-for="(p, i) in provenanceOf(provenanceRow)"
+            :key="i"
+            :label="`来源 ${i + 1}`"
+          >
+            <el-tooltip :content="provenanceTitle(p)" placement="top">
+              <span>{{ describeProvenance(p) }}</span>
+            </el-tooltip>
+          </el-descriptions-item>
+        </el-descriptions>
+        <p v-else class="rows-panel__hint">无来源记录（手工编辑或来源未记账）</p>
+        <el-tag v-if="hasConflicts(provenanceRow)" type="danger" size="small" class="rows-panel__conflict-tag">
+          冲突标记：{{ conflictKeys(provenanceRow).join('、') }}
+        </el-tag>
+      </template>
+      <template #footer>
+        <el-button @click="provenanceVisible = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -186,6 +174,7 @@ import { useArtifactsApi } from '@/api/artifacts'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import CellEditor from '@/components/artifacts/ArtifactCellEditor.vue'
+import ArtifactTableView from '@/components/artifacts/ArtifactTableView.vue'
 import { decodeRowKey } from '@/utils/rowKey'
 import type { ArtifactColumn, ArtifactRow } from '@/types/artifacts'
 
@@ -237,6 +226,15 @@ const assignForm = ref<{ column: string; value: string; conditions: WhereConditi
 const addVisible = ref(false)
 const addForm = ref<Record<string, unknown>>({})
 
+/** 来源记账弹窗（2026-11-13：展开列迁移为统一表格的 provenance 事件）。 */
+const provenanceVisible = ref(false)
+const provenanceRow = ref<ArtifactRow | null>(null)
+
+function showProvenance(row: ArtifactRow): void {
+  provenanceRow.value = row
+  provenanceVisible.value = true
+}
+
 /** 可编辑列 = active 列（dropped 不进表单）。 */
 const editableColumns = computed(() => props.columns.filter(c => c.status === 'active'))
 /** 主键列（行增表单提示 + 前端预检必填）。 */
@@ -271,24 +269,9 @@ function onPageChange(next: number): void {
   void loadRows()
 }
 
-function isEnumColumn(col: ArtifactColumn): boolean {
-  return col.column_type === 'enum'
-}
 
-function isBoolColumn(col: ArtifactColumn): boolean {
-  return col.column_type === 'bool'
-}
 
-/** 行键展示：有主键 → hex 解码回原文；无主键（uuid 行）原样。 */
-function displayRowKey(row: ArtifactRow): string {
-  return decodeRowKey(row.row_key, pkColumns.value.length > 0)
-}
 
-function cellText(value: unknown): string {
-  if (value === null || value === undefined) return '—'
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
-}
 
 /** provenance 后端记账为数组（[{batch_id, file_name, sheet_name, row_index}]）。 */
 function provenanceOf(row: ArtifactRow): Array<Record<string, unknown>> {
@@ -394,6 +377,7 @@ async function removeRow(row: ArtifactRow): Promise<void> {
   try {
     await api.deleteRow(props.artifactId, row.row_key, props.expectedUpdatedAt)
     ElMessage.success('已删除')
+    if (editingRow.value?.row_key === row.row_key) editVisible.value = false
     emit('changed')
     await loadRows()
   } catch (error) {
@@ -525,7 +509,8 @@ defineExpose({
 .rows-panel__bar-actions { display: flex; gap: 8px; }
 .rows-panel__bar-actions .el-button + .el-button { margin-left: 0; }
 .rows-panel__add-icon { margin-right: 4px; }
-.rows-panel__expanded { padding: 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+.rows-panel__table { min-width: 0; }
+.rows-panel__conflict-tag { margin-top: 10px; }
 .rows-panel__rowkey { font-family: var(--el-font-family, inherit); cursor: default; }
 .rows-panel__pager { justify-content: flex-end; }
 .rows-panel__conditions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }

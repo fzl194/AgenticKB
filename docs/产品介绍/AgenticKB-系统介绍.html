@@ -5,12 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AgenticKB · 系统介绍 — 面向团队与 Agent 的知识库平台</title>
 <meta name="description" content="AgenticKB：把领域知识从可阅读状态，编译为 Agent 可导航、可组合、可生成、可核查的运行时知识。">
+<!--
+  ═══════════════════════════════════════════════════════════
+  AgenticKB 系统介绍页 · 维护说明（本文件是持续维护的产物）
+  · 页面结构：顶部导航 + Hero + 六节（概览/知识架构/功能全景/
+    核心流程/Agent接入/演进路线）+ 页脚
+  · 功能模块卡片：在「功能全景」对应 .group 内复制一张 .fcard，
+    设置 data-modal="m-xxx" 即可点击打开弹窗
+  · 模块弹窗：文件底部 dialogs 区复制一份 <dialog id="m-xxx">，
+    卡片与弹窗靠 data-modal / id 配对
+  · 状态徽章三档：badge--live 已上线 · badge--wip 建设中 ·
+    badge--plan 规划中
+  · 知识形态卡（RAG/GraphRAG/表格/Wiki）在「知识架构」节，
+    流水线步骤用 .pstep，构建中的步骤加 .pstep--wip
+  · 每次更新同步：导航版本 chip、Hero 版本 chip、页脚最后更新日期
+  ═══════════════════════════════════════════════════════════
+-->
 <style>
-/* ═══════════════ 设计令牌（取自产品 kb-ui variables.css） ═══════════════ */
+/* ═══ 设计令牌（取自产品 kb-ui variables.css） ═══ */
 :root{
   --ink:#0f172a; --ink-2:#64748b; --ink-3:#94a3b8;
   --accent:#0891b2; --accent-deep:#0e7490; --accent-light:#22d3ee;
   --accent-soft:rgba(8,145,178,.08); --accent-med:rgba(8,145,178,.15);
+  --wip-deep:#92400e; --wip-bright:#d97706; --wip-soft:rgba(217,119,6,.1);
   --bg:#f1f5f9; --card:#ffffff; --card-hover:#f8fafc;
   --line:#e2e8f0; --line-light:#f1f5f9;
   --navy:#0f172a; --navy-2:#16233f; --navy-line:rgba(148,163,184,.16);
@@ -27,7 +44,7 @@ a{color:inherit;text-decoration:none}
 section{scroll-margin-top:64px}
 .wrap{max-width:1180px;margin:0 auto;padding:0 28px}
 
-/* ═══════════════ 顶部导航 ═══════════════ */
+/* ═══ 顶部导航 ═══ */
 .topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--navy-line)}
 .topnav__in{max-width:1180px;margin:0 auto;padding:0 28px;height:56px;display:flex;align-items:center;gap:28px}
 .topnav__brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:15px;letter-spacing:-.3px;color:#f1f5f9;white-space:nowrap}
@@ -42,7 +59,7 @@ section{scroll-margin-top:64px}
 .topnav__links a.is-active{color:var(--accent-light)}
 .topnav__links a.is-active::after{content:'';position:absolute;left:11px;right:11px;bottom:1px;height:2px;border-radius:2px;background:var(--accent-light)}
 
-/* ═══════════════ Hero ═══════════════ */
+/* ═══ Hero ═══ */
 .hero{position:relative;background:var(--navy);color:#e2e8f0;overflow:hidden}
 .hero::before{content:'';position:absolute;inset:0;
   background-image:radial-gradient(rgba(148,163,184,.14) 1px,transparent 1px);
@@ -50,7 +67,6 @@ section{scroll-margin-top:64px}
   -webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,.9),rgba(0,0,0,.25) 70%,transparent);
   mask-image:linear-gradient(180deg,rgba(0,0,0,.9),rgba(0,0,0,.25) 70%,transparent)}
 .hero__graph{position:absolute;right:-40px;top:30px;width:600px;height:420px;opacity:.5;pointer-events:none}
-.hero__graph .fade{animation:none}
 .hero__in{position:relative;max-width:1180px;margin:0 auto;padding:104px 28px 84px}
 .hero__eyebrow{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:2.2px;color:var(--accent-light);margin-bottom:18px;display:flex;align-items:center;gap:10px}
 .hero__eyebrow::before{content:'';width:26px;height:1.5px;background:var(--accent-light);opacity:.7}
@@ -72,10 +88,10 @@ section{scroll-margin-top:64px}
 .stage__lv{font-family:var(--mono);font-size:10.5px;font-weight:700;letter-spacing:1.5px;color:var(--accent-light)}
 .stage__nm{font-size:14.5px;font-weight:600;color:#f1f5f9;margin-top:5px}
 .stage__ds{font-size:11.5px;color:#8fa0bd;margin-top:3px;line-height:1.55}
-.stage--plan{border-style:dashed;background:transparent}
-.stage--plan .stage__lv{color:#7d8db0}
-.stage--plan .stage__nm{color:#b6c2d9}
-.stage__tag{position:absolute;top:-9px;right:12px;font-size:10px;color:#8fa0bd;border:1px dashed #475a7c;background:var(--navy);border-radius:99px;padding:1.5px 9px;letter-spacing:.5px}
+.stage--wip{border-style:dashed;background:transparent}
+.stage--wip .stage__lv{color:#e8b478}
+.stage--wip .stage__nm{color:#b6c2d9}
+.stage__tag{position:absolute;top:-9px;right:12px;font-size:10px;color:#e8b478;border:1px dashed #7c6244;background:var(--navy);border-radius:99px;padding:1.5px 9px;letter-spacing:.5px}
 .compile__arrow{display:grid;place-items:center;color:#3d527a}
 .compile__arrow svg{width:15px;height:15px}
 
@@ -85,9 +101,8 @@ section{scroll-margin-top:64px}
 .hero__eyebrow{animation-delay:.05s}.hero h1{animation-delay:.13s}.hero__lede{animation-delay:.24s}
 .hero__sub{animation-delay:.3s}.hero__chips{animation-delay:.38s}.compile{animation-delay:.5s}
 
-/* ═══════════════ 章节骨架 ═══════════════ */
+/* ═══ 章节骨架 ═══ */
 .sec{padding:86px 0 30px}
-.sec--tight{padding-top:70px}
 .sec__head{margin-bottom:38px;position:relative}
 .sec__eyebrow{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:2px;color:var(--accent);display:flex;align-items:center;gap:9px;margin-bottom:10px}
 .sec__eyebrow::before{content:'';width:18px;height:1.5px;background:var(--accent);opacity:.8}
@@ -99,9 +114,10 @@ section{scroll-margin-top:64px}
 .legend{display:flex;gap:16px;font-size:11.5px;color:var(--ink-2);padding-bottom:6px}
 .legend span{display:flex;align-items:center;gap:6px}
 .lg-live{width:7px;height:7px;border-radius:99px;background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.lg-wip{width:7px;height:7px;border-radius:99px;background:var(--wip-bright);box-shadow:0 0 0 3px var(--wip-soft)}
 .lg-plan{width:7px;height:7px;border-radius:99px;border:1.5px dashed #94a3b8}
 
-/* ═══════════════ 概览三卡 ═══════════════ */
+/* ═══ 概览三卡 ═══ */
 .ov-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 .ov-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-xl);padding:26px 26px 22px;transition:transform .25s var(--ease),box-shadow .25s,border-color .25s;position:relative;overflow:hidden}
 .ov-card::after{content:'';position:absolute;top:0;left:26px;right:26px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--accent),transparent 70%);opacity:0;transition:opacity .3s}
@@ -113,7 +129,7 @@ section{scroll-margin-top:64px}
 .ov-card p{margin-top:8px;font-size:12.8px;color:var(--ink-2);line-height:1.8}
 .ov-card p b{color:var(--ink);font-weight:600}
 
-/* ═══════════════ 功能全景 ═══════════════ */
+/* ═══ 功能全景 ═══ */
 .group+.group{margin-top:34px}
 .group__label{display:flex;align-items:center;gap:10px;font-size:12.5px;font-weight:650;color:var(--ink);margin-bottom:13px;letter-spacing:.3px}
 .group__label::before{content:'';width:3.5px;height:15px;border-radius:2px;background:var(--accent)}
@@ -121,7 +137,7 @@ section{scroll-margin-top:64px}
 .grid{display:grid;gap:14px}
 .grid--3{grid-template-columns:repeat(3,1fr)}
 .grid--2{grid-template-columns:repeat(2,1fr)}
-.fcard{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:19px 20px 16px;transition:transform .25s var(--ease),box-shadow .25s,border-color .25s,background .25s}
+.fcard{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:19px 20px 16px;transition:transform .25s var(--ease),box-shadow .25s,border-color .25s,background .25s;position:relative}
 .fcard:hover{transform:translateY(-2.5px);border-color:rgba(8,145,178,.35);box-shadow:0 12px 30px -16px rgba(8,145,178,.22);background:var(--card)}
 .fcard__top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .fcard__ic{width:33px;height:33px;border-radius:9.5px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent-deep);flex-shrink:0}
@@ -132,18 +148,27 @@ section{scroll-margin-top:64px}
 .fcard ul{list-style:none;margin-top:10px;display:flex;flex-direction:column;gap:4.5px}
 .fcard li{font-size:12px;color:var(--ink-2);padding-left:14px;position:relative;line-height:1.6}
 .fcard li::before{content:'';position:absolute;left:1px;top:9px;width:6px;height:1.5px;border-radius:2px;background:var(--accent);opacity:.65}
-/* 幽灵卡 */
 .fcard--ghost{background:transparent;border:1.6px dashed #c3cedd}
 .fcard--ghost:hover{transform:none;box-shadow:none;border-color:#94a3b8;background:rgba(148,163,184,.04)}
 .fcard--ghost .fcard__ic{background:rgba(148,163,184,.12);color:var(--ink-3)}
 .fcard--ghost li::before{background:var(--ink-3)}
+/* 卡片可点击 + 详情提示 */
+.fcard[data-modal]{cursor:pointer}
+.fcard[data-modal]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.fcard__hint{position:absolute;right:16px;bottom:12px;font-size:11px;font-weight:550;color:var(--accent-deep);opacity:0;transform:translateX(-5px);transition:opacity .25s,transform .25s;display:flex;align-items:center;gap:3px;pointer-events:none}
+.fcard[data-modal]:hover .fcard__hint,.fcard[data-modal]:focus-visible .fcard__hint{opacity:1;transform:none}
+.fcard--ghost .fcard__hint{color:var(--ink-3)}
+
 /* 徽章 */
 .badge{flex-shrink:0;font-size:10.5px;font-weight:600;border-radius:99px;padding:3px 10px;display:inline-flex;align-items:center;gap:5px;letter-spacing:.3px;margin-top:2px}
 .badge--live{background:var(--accent-soft);color:var(--accent-deep)}
 .badge--live::before{content:'';width:5.5px;height:5.5px;border-radius:99px;background:var(--accent)}
+.badge--wip{background:var(--wip-soft);color:var(--wip-deep)}
+.badge--wip::before{content:'';width:5.5px;height:5.5px;border-radius:99px;background:var(--wip-bright)}
 .badge--plan{border:1.2px dashed #a8b5c8;color:var(--ink-3)}
-
-/* ═══════════════ 核心流程 ═══════════════ */
+</style>
+<style>
+/* ═══ 核心流程 ═══ */
 .flow-band{background:var(--card);border:1px solid var(--line);border-radius:var(--r-xl);padding:38px 38px 34px}
 .flow-brackets{display:grid;grid-template-columns:repeat(6,1fr);gap:0 14px;margin-bottom:18px}
 .bracket{border:1.5px solid var(--line);border-bottom:none;border-radius:12px 12px 0 0;height:14px;position:relative;margin-bottom:6px}
@@ -159,11 +184,51 @@ section{scroll-margin-top:64px}
 .flow-node p{margin-top:4px;font-size:11.3px;color:var(--ink-3);line-height:1.6}
 .flow-line{position:absolute;top:15px;left:calc(100%/12);right:calc(100%/12);height:1.5px;background:linear-gradient(90deg,var(--line) 0%,#d5dde8 50%,var(--line) 100%);z-index:0}
 
-/* ═══════════════ 特色能力 ═══════════════ */
-.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r-xl);padding:34px 36px 30px;margin-bottom:18px}
+/* ═══ 知识架构 · 四层知识栈 ═══ */
+.stack__cap{display:flex;justify-content:space-between;gap:12px;font-family:var(--mono);font-size:10px;letter-spacing:1.4px;color:var(--ink-3);padding:0 8px 10px}
+.stack{display:flex;flex-direction:column;gap:10px}
+.stack__layer{display:grid;grid-template-columns:56px 148px 1fr auto;gap:18px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:16px 22px;transition:all .25s var(--ease)}
+.stack__layer:hover{transform:translateX(5px);border-color:rgba(8,145,178,.35);box-shadow:0 8px 22px -14px rgba(15,23,42,.16)}
+.stack__lv{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--accent-deep);opacity:.9}
+.stack__nm{font-size:15px;font-weight:700;letter-spacing:-.2px}
+.stack__nm small{display:block;font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:1.4px;color:var(--ink-3);margin-top:3px}
+.stack__ds{font-size:12.5px;color:var(--ink-2);line-height:1.7}
+.stack__chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.schip{font-size:11px;color:var(--ink-2);background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:2px 10px;white-space:nowrap}
+.stack__layer--wip{border-style:dashed;border-color:rgba(217,119,6,.55)}
+.stack__layer--wip .stack__lv{color:var(--wip-bright);opacity:1}
+.stack__layer--wip:hover{border-color:var(--wip-bright);box-shadow:0 8px 22px -14px rgba(217,119,6,.25)}
+
+/* ═══ 知识架构 · 四类知识形态 ═══ */
+.quote{margin:6px 0 20px;padding:13px 20px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 var(--r) var(--r) 0;font-size:14px;font-weight:550;color:var(--ink);line-height:1.9}
+.quote em{font-style:normal;color:var(--accent-deep)}
+.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.formcard{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:22px 24px 18px;transition:all .25s var(--ease);display:flex;flex-direction:column}
+.formcard:hover{border-color:rgba(8,145,178,.35);box-shadow:0 12px 30px -18px rgba(8,145,178,.22);transform:translateY(-2px)}
+.formcard__head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.formcard h3{font-size:16px;font-weight:700;letter-spacing:-.2px}
+.formcard h3 small{display:block;font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:1.6px;color:var(--ink-3);margin-top:4px}
+.formcard>p{margin-top:9px;font-size:12.8px;color:var(--ink-2);line-height:1.75}
+.formcard__pl{margin-top:15px;display:flex;flex-direction:column;gap:12px}
+.plrow{display:grid;grid-template-columns:76px 1fr;gap:10px;align-items:start}
+.plrow__lb{font-size:10.5px;font-weight:650;letter-spacing:1px;color:var(--ink-3);padding-top:5.5px}
+.plrow__steps{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+.pstep{font-size:11.8px;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:4px 10px;color:var(--ink);white-space:nowrap}
+.pstep i{font-style:normal;font-size:9.5px;color:var(--wip-deep);border:1px dashed rgba(217,119,6,.5);border-radius:99px;padding:0 6px;margin-left:5px;display:inline-block;transform:translateY(-.5px)}
+.pstep--wip{border-style:dashed;color:var(--ink-2);background:transparent}
+.parr{color:#b6c2d4;font-size:11px;flex-shrink:0}
+.plrow--chans .pstep{background:var(--accent-soft);border-color:transparent;color:var(--accent-deep);font-weight:550}
+.plrow--chans .parr{display:none}
+.formcard__go{margin-top:auto;padding-top:16px;display:flex;justify-content:flex-end}
+.mlink{font-size:12px;font-weight:550;color:var(--accent-deep);background:var(--accent-soft);border:0;border-radius:99px;padding:5px 15px;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:5px}
+.mlink:hover{background:var(--accent-med)}
+
+/* ═══ 深挖面板（检索底座/本体） ═══ */
+.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r-xl);padding:34px 36px 30px;margin-top:18px}
 .panel__tag{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:1.6px;color:var(--accent-deep);background:var(--accent-soft);border-radius:99px;padding:4px 13px;margin-bottom:15px}
+.panel__tag+.panel__ttl{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .panel h3{font-size:19px;font-weight:700;letter-spacing:-.4px}
-.panel>p{margin-top:7px;font-size:13px;color:var(--ink-2);max-width:720px}
+.panel>p{margin-top:7px;font-size:13px;color:var(--ink-2);max-width:760px;line-height:1.8}
 .pipe{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:24px}
 .pipe .node{font-size:12.3px;font-weight:550;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:7px 14px;white-space:nowrap;transition:all .2s}
 .pipe .node:hover{border-color:rgba(8,145,178,.4);background:var(--accent-soft);color:var(--accent-deep)}
@@ -178,20 +243,30 @@ section{scroll-margin-top:64px}
 .ref code{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent-deep);background:var(--accent-soft);border-radius:6px;padding:2px 8px}
 .ref b{display:block;font-size:12.5px;font-weight:600;margin-top:8px}
 .ref p{font-size:11.5px;color:var(--ink-2);margin-top:2px;line-height:1.6}
-.quote{margin:20px 0 22px;padding:13px 20px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 var(--r) var(--r) 0;font-size:14px;font-weight:550;color:var(--ink);line-height:1.8}
-.quote em{font-style:normal;color:var(--accent-deep)}
-.duo{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.duo-card{border:1px solid var(--line);border-radius:var(--r-lg);padding:22px 24px;background:var(--card);transition:all .25s var(--ease)}
-.duo-card:hover{border-color:rgba(8,145,178,.35);box-shadow:0 10px 26px -16px rgba(15,23,42,.15);transform:translateY(-2px)}
-.duo-card__head{display:flex;align-items:center;gap:11px;margin-bottom:13px}
-.duo-card__ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent-deep);flex-shrink:0}
-.duo-card__ic svg{width:16px;height:16px}
-.duo-card h4{font-size:15px;font-weight:650}
-.duo-card ul{list-style:none;display:flex;flex-direction:column;gap:7px}
-.duo-card li{font-size:12.3px;color:var(--ink-2);padding-left:15px;position:relative;line-height:1.65}
-.duo-card li::before{content:'';position:absolute;left:1px;top:9.5px;width:6px;height:1.5px;border-radius:2px;background:var(--accent);opacity:.65}
+.refs__cap{margin-top:14px;font-size:11.5px;color:var(--ink-3)}
 
-/* ═══════════════ Agent 接入 ═══════════════ */
+/* ═══ 知识架构 · 本体与语义对象 ═══ */
+.onto{display:grid;grid-template-columns:1fr 46px 1fr 46px 1.2fr;gap:0;align-items:stretch;margin-top:24px}
+.onto__box{border:1px solid var(--line);border-radius:var(--r-lg);padding:19px 20px;background:var(--card);text-align:center;transition:all .25s}
+.onto__box:hover{border-color:rgba(8,145,178,.35);transform:translateY(-2px)}
+.onto__box .k{font-family:var(--mono);font-size:9.5px;letter-spacing:1.8px;color:var(--accent-deep);font-weight:700}
+.onto__box h4{font-size:15.5px;font-weight:700;margin-top:6px;letter-spacing:-.2px}
+.onto__box p{font-size:11.8px;color:var(--ink-2);margin-top:6px;line-height:1.65}
+.onto__box--dark{background:var(--navy);border-color:var(--navy)}
+.onto__box--dark .k{color:var(--accent-light)}
+.onto__box--dark h4{color:#f1f5f9}
+.onto__box--dark p{color:#a9b6ce}
+.onto__arr{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--ink-3)}
+.onto__arr svg{width:20px;height:20px}
+.onto__arr span{font-size:9.5px;font-family:var(--mono);letter-spacing:.8px;white-space:nowrap}
+.gov-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:22px}
+.gov-item{display:flex;flex-direction:column;gap:3px;background:var(--bg);border:1px solid var(--line-light);border-radius:var(--r);padding:13px 16px}
+.gov-item b{font-size:12.8px;font-weight:650;color:var(--ink)}
+.gov-item p{font-size:12px;color:var(--ink-2);line-height:1.65}
+.onto__note{margin-top:18px;font-size:12.5px;color:var(--ink-2);display:flex;align-items:center;gap:8px;line-height:1.7}
+.onto__note::before{content:'';width:6px;height:6px;border-radius:99px;background:var(--wip-bright);flex-shrink:0;box-shadow:0 0 0 3px var(--wip-soft)}
+
+/* ═══ Agent 接入 ═══ */
 .tool-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .tool{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:21px 22px 18px;transition:all .25s var(--ease)}
 .tool:hover{transform:translateY(-2.5px);border-color:rgba(8,145,178,.4);box-shadow:0 12px 28px -16px rgba(8,145,178,.25)}
@@ -210,13 +285,15 @@ section{scroll-margin-top:64px}
 .codeblock .s{color:#7dd3fc}
 .codeblock .r{color:#5eead4}
 
-/* ═══════════════ 演进路线 ═══════════════ */
+/* ═══ 演进路线 ═══ */
 .timeline{position:relative;margin-top:8px;padding-left:34px}
 .timeline::before{content:'';position:absolute;left:8px;top:8px;bottom:8px;width:1.5px;background:linear-gradient(180deg,var(--accent) 0%,var(--line) 55%,#dfe6ef 100%)}
 .tl-item{position:relative;padding:0 0 34px}
 .tl-item:last-child{padding-bottom:6px}
 .tl-item__dot{position:absolute;left:-34px;top:4px;width:17px;height:17px;border-radius:99px;background:var(--bg);border:1.5px solid var(--accent);display:grid;place-items:center}
 .tl-item__dot::after{content:'';width:6.5px;height:6.5px;border-radius:99px;background:var(--accent)}
+.tl-item--wip .tl-item__dot{border-color:var(--wip-bright)}
+.tl-item--wip .tl-item__dot::after{background:var(--wip-bright)}
 .tl-item--plan .tl-item__dot{border-style:dashed;border-color:#a3b1c6}
 .tl-item--plan .tl-item__dot::after{background:transparent;border:1.5px dashed #a3b1c6;width:5px;height:5px}
 .tl-item__head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -225,27 +302,59 @@ section{scroll-margin-top:64px}
 .tl-item .q{margin-top:9px;font-size:12.8px;color:var(--accent-deep);font-weight:550;display:flex;gap:8px;align-items:baseline}
 .tl-item .q::before{content:'—';color:var(--accent);opacity:.6}
 
-/* ═══════════════ 页脚 ═══════════════ */
+/* ═══ 页脚 ═══ */
 footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
 .footer__in{max-width:1180px;margin:0 auto;padding:44px 28px 40px;display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap;align-items:flex-start}
 .footer__brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:16px;color:#f1f5f9;letter-spacing:-.3px}
 .footer__brand em{font-style:normal;color:var(--accent-light)}
-.footer__tag{margin-top:9px;font-size:12px;color:#7d8db0;max-width:420px;line-height:1.8}
+.footer__tag{margin-top:9px;font-size:12px;color:#7d8db0;max-width:460px;line-height:1.8}
 .footer__meta{font-family:var(--mono);font-size:11px;color:#7d8db0;text-align:right;line-height:2.1}
 .footer__meta b{color:#a9b6ce;font-weight:600}
 
-/* ═══════════════ 滚动显现 ═══════════════ */
+/* ═══ 弹窗 ═══ */
+dialog.modal{border:0;padding:0;width:min(700px,94vw);max-height:84vh;background:var(--card);border-radius:18px;box-shadow:0 32px 90px -24px rgba(15,23,42,.45);color:var(--ink)}
+dialog.modal::backdrop{background:rgba(15,23,42,.55);backdrop-filter:blur(4px)}
+dialog.modal[open]{animation:mIn .32s var(--ease)}
+@keyframes mIn{from{opacity:0;transform:translateY(18px) scale(.985)}to{opacity:1;transform:none}}
+.modal__head{display:flex;align-items:center;gap:14px;padding:20px 24px;border-bottom:1px solid var(--line)}
+.modal__head .fcard__ic{width:38px;height:38px;border-radius:11px}
+.modal__head .fcard__ic svg{width:19px;height:19px}
+.modal__ht h3{font-size:16.5px;font-weight:700;letter-spacing:-.3px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.modal__ht h3 .adm{font-size:11px;font-weight:500;color:var(--ink-3)}
+.modal__ht p{margin-top:2px;font-size:11.5px;color:var(--ink-3)}
+.modal__x{margin-left:auto;width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink-2);cursor:pointer;display:grid;place-items:center;transition:all .2s;flex-shrink:0}
+.modal__x:hover{border-color:#cbd5e1;color:var(--ink);background:var(--bg)}
+.modal__body{padding:22px 24px 26px;overflow-y:auto;max-height:calc(84vh - 88px)}
+.modal__intro{font-size:13.5px;color:var(--ink-2);line-height:1.85;padding:12px 16px;background:var(--accent-soft);border-left:3px solid var(--accent);border-radius:0 var(--r) var(--r) 0}
+.modal__intro b{color:var(--ink);font-weight:600}
+.msec{margin-top:20px}
+.msec h4{font-size:13px;font-weight:650;display:flex;align-items:center;gap:8px;margin-bottom:9px;letter-spacing:.2px}
+.msec h4::before{content:'';width:3px;height:12px;border-radius:2px;background:var(--accent);opacity:.75}
+.msec ul{list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:6px 18px}
+.msec li{font-size:12.5px;color:var(--ink-2);padding-left:14px;position:relative;line-height:1.7}
+.msec li::before{content:'';position:absolute;left:0;top:10px;width:6px;height:1.5px;border-radius:2px;background:var(--accent);opacity:.6}
+.msec li b{color:var(--ink);font-weight:600}
+.msec--full ul{grid-template-columns:1fr}
+.mfoot{margin-top:22px;padding-top:14px;border-top:1px solid var(--line-light);display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:11.5px;color:var(--ink-3)}
+
+/* ═══ 滚动显现 ═══ */
 .rv{opacity:0;transform:translateY(16px);transition:opacity .65s var(--ease),transform .65s var(--ease)}
 .rv.in{opacity:1;transform:none}
 .d1{transition-delay:.06s}.d2{transition-delay:.12s}.d3{transition-delay:.18s}
 
-/* ═══════════════ 响应式 ═══════════════ */
+/* ═══ 响应式 ═══ */
 @media (max-width:1020px){
   .grid--3{grid-template-columns:repeat(2,1fr)}
   .ov-grid{grid-template-columns:1fr 1fr}
   .tool-grid{grid-template-columns:1fr}
   .refs{grid-template-columns:repeat(2,1fr)}
+  .formgrid{grid-template-columns:1fr}
   .hero__graph{opacity:.22}
+  .stack__layer{grid-template-columns:48px 1fr;row-gap:8px}
+  .stack__layer .badge{grid-column:2;justify-self:start}
+  .stack__ds{grid-column:2}
+  .stack__lv{grid-row:span 2}
+  .msec ul{grid-template-columns:1fr}
 }
 @media (max-width:760px){
   .hero h1{font-size:40px}
@@ -254,8 +363,8 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
   .sec{padding:60px 0 20px}
   .compile__row{grid-template-columns:1fr;gap:10px}
   .compile__arrow{display:none}
-  .ov-grid,.duo,.grid--2,.grid--3{grid-template-columns:1fr}
-  .refs{grid-template-columns:1fr}
+  .ov-grid,.grid--2,.grid--3{grid-template-columns:1fr}
+  .refs,.gov-grid{grid-template-columns:1fr}
   .flow-brackets{display:none}
   .flow-steps{grid-template-columns:1fr;gap:0}
   .flow-line{display:none}
@@ -265,6 +374,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
   .flow-band{padding:26px 20px 22px}
   .footer__in{flex-direction:column}
   .footer__meta{text-align:left}
+  .onto{grid-template-columns:1fr;gap:10px}
+  .onto__arr{flex-direction:row;gap:8px}
+  .onto__arr svg{transform:rotate(90deg)}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
@@ -275,23 +387,23 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
 </head>
 <body>
 
-<!-- ═══════ 顶部导航 ═══════ -->
+<!-- ═══ 顶部导航 ═══ -->
 <nav class="topnav">
   <div class="topnav__in">
     <a class="topnav__brand" href="#top"><span class="logo-mark"></span>Agentic<em>KB</em></a>
     <span class="topnav__ver">v1.1.36</span>
     <div class="topnav__links">
       <a href="#overview">概览</a>
+      <a href="#arch">知识架构</a>
       <a href="#panorama">功能全景</a>
       <a href="#flow">核心流程</a>
-      <a href="#depth">特色能力</a>
       <a href="#agent">Agent 接入</a>
       <a href="#roadmap">演进路线</a>
     </div>
   </div>
 </nav>
 
-<!-- ═══════ §1 Hero ═══════ -->
+<!-- ═══ Hero ═══ -->
 <header class="hero" id="top">
   <svg class="hero__graph" viewBox="0 0 600 420" fill="none" aria-hidden="true">
     <g stroke="rgba(34,211,238,.28)" stroke-width="1.2">
@@ -336,11 +448,11 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
           <div class="stage__ds">可追溯片段，检索的最小单位</div>
         </div>
         <div class="compile__arrow"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 8h11M9 4l4 4-4 4"/></svg></div>
-        <div class="stage stage--plan">
-          <span class="stage__tag">规划中</span>
+        <div class="stage stage--wip">
+          <span class="stage__tag">建设中</span>
           <span class="stage__lv">L2</span>
           <div class="stage__nm">对 象</div>
-          <div class="stage__ds">对象与关系的身份平面</div>
+          <div class="stage__ds">本体定义类，语义对象是实例</div>
         </div>
         <div class="compile__arrow"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 8h11M9 4l4 4-4 4"/></svg></div>
         <div class="stage">
@@ -354,8 +466,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
 </header>
 
 <main>
-
-<!-- ═══════ §2 系统概览 ═══════ -->
+<!-- ═══ §1 系统概览 ═══ -->
 <section class="sec" id="overview">
   <div class="wrap">
     <div class="sec__head rv">
@@ -383,17 +494,202 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
   </div>
 </section>
 
-<!-- ═══════ §3 功能全景 ═══════ -->
+<!-- ═══ §2 知识架构 ═══ -->
+<section class="sec" id="arch">
+  <div class="wrap">
+    <div class="sec__head rv">
+      <p class="sec__eyebrow">02 · ARCHITECTURE</p>
+      <h2>知识架构</h2>
+      <p class="sec__sub">从技术架构维度看系统：四层知识栈、四类知识形态、每类形态配套的加工流水线与检索通道，以及在建的统一本体与语义对象管理平面。</p>
+    </div>
+
+    <!-- 四层知识栈 -->
+    <div class="group rv">
+      <div class="group__label">四层知识栈 <small>KNOWLEDGE STACK</small></div>
+      <div class="stack__cap"><span>↑ 自下而上 · 逐层加工提炼</span><span>自上而下 · 越接近可复用的成品 ↓</span></div>
+      <div class="stack">
+        <div class="stack__layer">
+          <div class="stack__lv">L3</div>
+          <div class="stack__nm">制品层<small>ARTIFACTS</small></div>
+          <div class="stack__ds">可发布、可复用、可被 Agent 精确消费的知识资产。
+            <div class="stack__chips"><span class="schip">表格制品</span><span class="schip">Wiki 制品</span><span class="schip">发布快照 · 版本</span></div>
+          </div>
+          <span class="badge badge--live">已上线</span>
+        </div>
+        <div class="stack__layer stack__layer--wip">
+          <div class="stack__lv">L2</div>
+          <div class="stack__nm">对象层<small>SEMANTIC OBJECTS</small></div>
+          <div class="stack__ds">本体定义「类」，语义对象是实例化的结果——统一身份与关系的管理平面。
+            <div class="stack__chips"><span class="schip">本体（类型 + 边规则）</span><span class="schip">语义对象 · 稳定身份</span><span class="schip">进认联改发退</span></div>
+          </div>
+          <span class="badge badge--wip">建设中</span>
+        </div>
+        <div class="stack__layer">
+          <div class="stack__lv">L1</div>
+          <div class="stack__nm">证据层<small>EVIDENCE</small></div>
+          <div class="stack__ds">可追溯的检索单元：每条知识都能回到原文出处。
+            <div class="stack__chips"><span class="schip">切片</span><span class="schip">向量索引</span><span class="schip">关键词索引</span><span class="schip">结构树</span></div>
+          </div>
+          <span class="badge badge--live">已上线</span>
+        </div>
+        <div class="stack__layer">
+          <div class="stack__lv">L0</div>
+          <div class="stack__nm">材料层<small>MATERIALS</small></div>
+          <div class="stack__ds">原始资料与来源快照，一切知识的源头。
+            <div class="stack__chips"><span class="schip">文档</span><span class="schip">表格</span><span class="schip">归档包</span><span class="schip">一张网切片</span></div>
+          </div>
+          <span class="badge badge--live">已上线</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 四类知识形态 -->
+    <div class="group rv">
+      <div class="group__label">四类知识形态 <small>KNOWLEDGE FORMS</small></div>
+      <div class="quote">检索回答「<em>哪里说了什么</em>」；对象回答「<em>这是什么、和什么有关系</em>」；制品回答「<em>做这件事需要哪些东西</em>」。</div>
+      <div class="formgrid">
+
+        <div class="formcard">
+          <div class="formcard__head">
+            <h3>RAG 证据形态<small>EVIDENCE · EV_</small></h3>
+            <span class="badge badge--live">已上线</span>
+          </div>
+          <p>知识以「可检索的证据片段」存在——检索即得带出处的答案，最适合开放性提问与资料查证。</p>
+          <div class="formcard__pl">
+            <div class="plrow"><span class="plrow__lb">加工流水线</span>
+              <div class="plrow__steps"><span class="pstep">切片</span><span class="parr">→</span><span class="pstep">向量化</span><span class="parr">→</span><span class="pstep">双索引入库</span><span class="parr">→</span><span class="pstep">质量门禁</span></div>
+            </div>
+            <div class="plrow plrow--chans"><span class="plrow__lb">检索通道</span>
+              <div class="plrow__steps"><span class="pstep">向量召回</span><span class="pstep">关键词召回</span><span class="pstep">RRF 融合</span><span class="pstep">模型重排</span></div>
+            </div>
+          </div>
+          <div class="formcard__go"><button class="mlink" data-modal="m-search">多路检索工作台 详情 →</button></div>
+        </div>
+
+        <div class="formcard">
+          <div class="formcard__head">
+            <h3>GraphRAG 结构形态<small>STRUCTURE · ST_</small></h3>
+            <span class="badge badge--live">已上线 · 扩展中</span>
+          </div>
+          <p>知识以「结构与关系」存在——结构树已上线可用，语义对象图谱构建中，回答「这是什么、和什么有关系」。</p>
+          <div class="formcard__pl">
+            <div class="plrow"><span class="plrow__lb">加工流水线</span>
+              <div class="plrow__steps"><span class="pstep">结构解析</span><span class="parr">→</span><span class="pstep">结构树</span><span class="parr">→</span><span class="pstep pstep--wip">对象抽取<i>建设中</i></span><span class="parr">→</span><span class="pstep pstep--wip">身份归一<i>建设中</i></span></div>
+            </div>
+            <div class="plrow plrow--chans"><span class="plrow__lb">检索通道</span>
+              <div class="plrow__steps"><span class="pstep">结构树查询 st_</span><span class="pstep">图谱邻域漫游</span><span class="pstep">章节范围检索</span></div>
+            </div>
+          </div>
+          <div class="formcard__go"><button class="mlink" data-modal="m-structure">文档结构图谱 详情 →</button></div>
+        </div>
+
+        <div class="formcard">
+          <div class="formcard__head">
+            <h3>表格类知识制品<small>TABLE · ART_</small></h3>
+            <span class="badge badge--live">已上线</span>
+          </div>
+          <p>知识以「受治理的数据表」存在——类定义约束结构，业务主键定位行，Agent 可按条件精确取数。</p>
+          <div class="formcard__pl">
+            <div class="plrow"><span class="plrow__lb">加工流水线</span>
+              <div class="plrow__steps"><span class="pstep">Excel 导入</span><span class="parr">→</span><span class="pstep">列映射</span><span class="parr">→</span><span class="pstep">类定义</span><span class="parr">→</span><span class="pstep">发布快照</span></div>
+            </div>
+            <div class="plrow plrow--chans"><span class="plrow__lb">检索通道</span>
+              <div class="plrow__steps"><span class="pstep">结构化查询 DSL</span><span class="pstep">业务主键行定位</span></div>
+            </div>
+          </div>
+          <div class="formcard__go"><button class="mlink" data-modal="m-table">表格制品 详情 →</button></div>
+        </div>
+
+        <div class="formcard">
+          <div class="formcard__head">
+            <h3>Wiki 类知识制品<small>WIKI · ART_</small></h3>
+            <span class="badge badge--live">已上线</span>
+          </div>
+          <p>知识以「体系化文档」存在——从知识库取材编译成书，目录与页间引用受版本管控。</p>
+          <div class="formcard__pl">
+            <div class="plrow"><span class="plrow__lb">加工流水线</span>
+              <div class="plrow__steps"><span class="pstep">选库取材</span><span class="parr">→</span><span class="pstep">目录设计</span><span class="parr">→</span><span class="pstep">编译</span><span class="parr">→</span><span class="pstep">发布校验</span></div>
+            </div>
+            <div class="plrow plrow--chans"><span class="plrow__lb">检索通道</span>
+              <div class="plrow__steps"><span class="pstep">向量</span><span class="pstep">关键词</span><span class="pstep">引用图</span></div>
+            </div>
+          </div>
+          <div class="formcard__go"><button class="mlink" data-modal="m-wiki">Wiki 制品 详情 →</button></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 各类检索 -->
+    <div class="panel rv">
+      <span class="panel__tag">RETRIEVAL</span>
+      <div class="panel__ttl"><h3>各类检索：统一证据输出底座</h3></div>
+      <p>无论哪种知识形态，检索最终都以「带出处的证据」交付：一条多路召回管线打底，四类引用句柄各取所需——Agent 引用的每句话都有据可查。</p>
+      <div class="pipe">
+        <span class="node">授权范围</span><span class="sep">→</span>
+        <span class="node node--branch"><span class="node">关键词召回</span><span class="node">向量召回<span style="color:var(--ink-3);font-weight:400">（按语义）</span></span></span><span class="sep">→</span>
+        <span class="node">RRF 融合</span><span class="sep">→</span>
+        <span class="node">模型重排</span><span class="sep">→</span>
+        <span class="node">证据回填</span><span class="sep">→</span>
+        <span class="node">去重</span><span class="sep">→</span>
+        <span class="node node--final">统一证据输出</span>
+      </div>
+      <div class="refs">
+        <div class="ref"><code>ev_</code><b>证据片段</b><p>RAG 形态的句柄，带原文定位</p></div>
+        <div class="ref"><code>doc_</code><b>结构化章节</b><p>按文档结构逐层深读</p></div>
+        <div class="ref"><code>st_</code><b>结构树</b><p>结构化资产的精确查询</p></div>
+        <div class="ref"><code>art_</code><b>知识制品</b><p>表格 / Wiki 的受控读取</p></div>
+      </div>
+      <p class="refs__cap">四类引用 = 四类知识形态的检索句柄，Agent 拿到引用即可深读或转交下一环节。</p>
+    </div>
+
+    <!-- 本体与语义对象 -->
+    <div class="panel rv">
+      <span class="panel__tag">ONTOLOGY</span>
+      <div class="panel__ttl"><h3>统一本体与语义对象：知识的管理平面</h3><span class="badge badge--wip">建设中</span></div>
+      <p>本体定义「类」——有哪些类型的对象、对象之间允许什么关系；语义对象是本体实例化的结果——每个对象拥有稳定身份，被证据引用、被图谱连接、被制品挂载：<b>一处定义，处处引用</b>。</p>
+      <div class="onto">
+        <div class="onto__box">
+          <span class="k">ONTOLOGY</span>
+          <h4>本体 · 类的定义</h4>
+          <p>类型表 + 边规则：对象有哪些类别、关系遵循哪些规则</p>
+        </div>
+        <div class="onto__arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h16M15 7l5 5-5 5"/></svg><span>实例化</span></div>
+        <div class="onto__box">
+          <span class="k">SEMANTIC OBJECTS</span>
+          <h4>语义对象 · 类的实例</h4>
+          <p>稳定身份：同一对象跨形态共享，可被持续修正</p>
+        </div>
+        <div class="onto__arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h16M15 7l5 5-5 5"/></svg><span>挂载 · 引用</span></div>
+        <div class="onto__box onto__box--dark">
+          <span class="k">KNOWLEDGE FORMS</span>
+          <h4>四类知识形态</h4>
+          <p>证据 ev_ · 结构 st_ · 表格 art_ · Wiki——全部挂在统一的语义对象上</p>
+        </div>
+      </div>
+      <div class="gov-grid">
+        <div class="gov-item"><b>机器提议 · 人裁决</b><p>对象与关系的变更先成为候选，人工确认后生效</p></div>
+        <div class="gov-item"><b>两阶段门禁</b><p>变更先审核、再发布，全程可追溯</p></div>
+        <div class="gov-item"><b>人工修正保护</b><p>人工改过的值，不被自动流程覆盖</p></div>
+        <div class="gov-item"><b>别名并入身份</b><p>同物异名自动归并为同一对象</p></div>
+      </div>
+      <p class="onto__note">对象层正在建设中：页面配置即可建模（类型 + 边规则），无需写代码；存量对象按导入方案批量纳管。</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ═══ §3 功能全景（点击卡片查看细粒度功能） ═══ -->
 <section class="sec" id="panorama">
   <div class="wrap">
     <div class="sec__head rv">
       <div class="sec__head-row">
         <div>
-          <p class="sec__eyebrow">02 · CAPABILITIES</p>
+          <p class="sec__eyebrow">03 · CAPABILITIES</p>
           <h2>功能全景</h2>
-          <p class="sec__sub">按「知识生产 → 知识消费 → 知识制品 → Agent 接入 → 平台管理」五个域，纵览系统能力。</p>
+          <p class="sec__sub">按「知识生产 → 知识消费 → 知识制品 → Agent 接入 → 平台管理」五个域，纵览系统能力。<b>点击任意模块卡片，查看该模块的细粒度功能介绍。</b></p>
         </div>
-        <div class="legend"><span><i class="lg-live"></i>已上线</span><span><i class="lg-plan"></i>规划中</span></div>
+        <div class="legend"><span><i class="lg-live"></i>已上线</span><span><i class="lg-wip"></i>建设中</span><span><i class="lg-plan"></i>规划中</span></div>
       </div>
     </div>
 
@@ -401,7 +697,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
     <div class="group rv">
       <div class="group__label">知识生产 <small>PRODUCE</small></div>
       <div class="grid grid--3">
-        <div class="fcard">
+        <div class="fcard" data-modal="m-kb" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.6"/><path d="M5 5.5v13c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-13"/><path d="M5 12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>知识库与文档管理</h3>
           <p>团队知识的家：建库、协作、沉淀，资料一站接入。</p>
@@ -411,8 +707,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>上传后自动进入挖掘队列</li>
             <li>目录管理与快照版本留痕</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-onenet" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"/><path d="M11 5.5l1.7-1.7a4 4 0 0 1 5.7 5.7L16.7 11"/><path d="M13 18.5l-1.7 1.7a4 4 0 0 1-5.7-5.7L7.3 13"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>一张网接入<span class="adm">管理员</span></h3>
           <p>对接外部「一张网」资料源，按目录浏览、按需切片导入。</p>
@@ -421,8 +718,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>按需切片导入，不必整站搬运</li>
             <li>文档状态追踪与预览</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-mineflow" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6.5" height="6.5" rx="1.5"/><rect x="14.5" y="14.5" width="6.5" height="6.5" rx="1.5"/><path d="M9.5 6.2H14a3 3 0 0 1 3 3v5.3"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>挖掘范式编排<span class="adm">管理员</span></h3>
           <p>在可视化画布上编排「挖掘工作流」，定义知识怎么被加工。</p>
@@ -431,8 +729,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>参数表单化配置</li>
             <li>工作流版本发布与冻结</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-minerun" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M10 8.8l5.2 3.2-5.2 3.2z"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>挖掘运行与质量门禁</h3>
           <p>资料批量加工的引擎，入库前有质量关卡。</p>
@@ -441,8 +740,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>增量挖掘：改过的才重跑</li>
             <li>就绪度分档与能力验收门禁</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-llm" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/><path d="M9.5 2.5v4M14.5 2.5v4M9.5 17.5v4M14.5 17.5v4M2.5 9.5h4M2.5 14.5h4M17.5 9.5h4M17.5 14.5h4"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>LLM 服务<span class="adm">管理员</span></h3>
           <p>大模型能力统一配置、统一调度。</p>
@@ -451,11 +751,13 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>生成 / 向量化 / 摘要任务统一追踪</li>
             <li>异步批量执行，不阻塞使用</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard fcard--ghost">
+        <div class="fcard fcard--ghost" data-modal="m-workbench" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20.5h4.5V15H12V9.5h4.5V4H21"/></svg></div><span class="badge badge--plan">规划中</span></div>
           <h3>制作工作台</h3>
           <p>模板驱动的步骤流加工间：选资料、一步步加工、导出为制品草稿。</p>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
       </div>
     </div>
@@ -464,7 +766,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
     <div class="group rv">
       <div class="group__label">知识消费 <small>CONSUME</small></div>
       <div class="grid grid--3">
-        <div class="fcard">
+        <div class="fcard" data-modal="m-search" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>多路检索工作台</h3>
           <p>知识库内的统一检索入口，答案永远带出处。</p>
@@ -473,8 +775,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>融合排序后输出带出处的证据</li>
             <li>结果一键定位回原文</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-searchflow" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h9M17.5 7.5H20M4 12h3M11.5 12H20M4 16.5h12"/><circle cx="15" cy="7.5" r="2"/><circle cx="9.5" cy="12" r="2"/><circle cx="18.5" cy="16.5" r="2"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>检索范式编排<span class="adm">管理员</span></h3>
           <p>检索流程同样可编排、可发布。</p>
@@ -483,8 +786,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>流程可视化编排</li>
             <li>运行结果即时预览</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-records" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.5h4l2.5-6.5 4 13 2.5-6.5h4.5"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>检索记录与分析</h3>
           <p>全量检索账本：谁在何时检索了什么。</p>
@@ -493,8 +797,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>时间范围筛选</li>
             <li>词条切分与分析图表</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-structure" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="4.5" rx="1"/><rect x="3" y="16.5" width="6" height="4.5" rx="1"/><rect x="15" y="16.5" width="6" height="4.5" rx="1"/><path d="M12 7.5V12m0 0H6v4.5M12 12h6v4.5"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>文档结构图谱</h3>
           <p>把文档的章节骨架画成图，结构一目了然。</p>
@@ -503,6 +808,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>章节导航定位</li>
             <li>结构化表格查询面板</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
       </div>
     </div>
@@ -511,7 +817,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
     <div class="group rv">
       <div class="group__label">知识制品 <small>ARTIFACTS</small></div>
       <div class="grid grid--3">
-        <div class="fcard">
+        <div class="fcard" data-modal="m-table" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M9.5 9.5v10"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>表格制品</h3>
           <p>从 Excel 到可被 Agent 精确查询的知识表。</p>
@@ -521,8 +827,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>发布即快照，可回滚</li>
             <li>Agent 用查询语言精确取数</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-wiki" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-1.5-1.8-3.8-2.5-8-2.5v14.5c4.2 0 6.5.7 8 2.5 1.5-1.8 3.8-2.5 8-2.5V3.5c-4.2 0-6.5.7-8 2.5z"/><path d="M12 6v14.5"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>Wiki 制品</h3>
           <p>从知识库取材，编译成体系化文档站点。</p>
@@ -532,8 +839,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>页级 diff：改了什么一目了然</li>
             <li>阅读视图 + 页间引用图谱</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-gov" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 2.7v5.6c0 4.9-3.2 8.1-7.5 9.7-4.3-1.6-7.5-4.8-7.5-9.7V5.7z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>版本 · 成员 · 用量治理</h3>
           <p>制品是资产，资产要有治理。</p>
@@ -542,11 +850,13 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>设计态 / 运行态分权</li>
             <li>用量统计：被哪些知识库引用</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard fcard--ghost">
-          <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.3 7.1l7.3.9M7 8.4l2.2 7.3M16.6 10.1l-5 6.3"/></svg></div><span class="badge badge--plan">规划中</span></div>
+        <div class="fcard fcard--ghost" data-modal="m-object" tabindex="0" role="button" aria-haspopup="dialog">
+          <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.3 7.1l7.3.9M7 8.4l2.2 7.3M16.6 10.1l-5 6.3"/></svg></div><span class="badge badge--wip">建设中</span></div>
           <h3>知识对象层（L2）</h3>
-          <p>对象与关系的身份平面：配置即可建模，统一「进 · 认 · 联 · 改 · 发 · 退」管理动词。</p>
+          <p>本体定义类，语义对象是实例——统一「进 · 认 · 联 · 改 · 发 · 退」管理动词。</p>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
       </div>
     </div>
@@ -555,7 +865,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
     <div class="group rv">
       <div class="group__label">Agent 接入 <small>FOR AGENTS</small></div>
       <div class="grid grid--2">
-        <div class="fcard">
+        <div class="fcard" data-modal="m-mcp" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4"/><path d="M10.5 12.5L20 3M14.8 5.2l3 3"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>MCP 工具三件套</h3>
           <p>对 Agent 开放的三把钥匙：查、读、传。</p>
@@ -564,8 +874,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li><span style="font-family:var(--mono);color:var(--accent-deep)">get_knowledge</span> 浏览 · 深读 · 查制品</li>
             <li><span style="font-family:var(--mono);color:var(--accent-deep)">manage_files</span> 上传 · 替换文档</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-keys" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.2" r="1.4"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>密钥与开放范围</h3>
           <p>精细控制 Agent 能碰哪些知识。</p>
@@ -574,6 +885,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>工具白名单开关</li>
             <li>开放到库 / 制品粒度</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
       </div>
     </div>
@@ -582,7 +894,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
     <div class="group rv">
       <div class="group__label">平台管理 <small>PLATFORM</small></div>
       <div class="grid grid--3">
-        <div class="fcard">
+        <div class="fcard" data-modal="m-roles" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M3.5 20c.5-3.6 2.8-5.6 5.5-5.6s5 2 5.5 5.6"/><circle cx="17" cy="9.5" r="2.5"/><path d="M16.2 14.7c2.6.4 4 2.3 4.4 5.3"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>角色与域隔离</h3>
           <p>三级角色各司其职，域间资源互不可见。</p>
@@ -591,8 +903,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>用户全生命周期：创建 · 清退 · 恢复 · 转移</li>
             <li>CSV / Excel 批量导入用户</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-dash" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19a9 9 0 1 1 14 0"/><path d="M12 14l3.5-4.5"/><circle cx="12" cy="14.5" r="1.3"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>概览与运营</h3>
           <p>登录即见的驾驶舱。</p>
@@ -601,8 +914,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>检索单元类型分布</li>
             <li>待处理事项与最近动态</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-settings" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>系统设置与运维<span class="adm">管理员</span></h3>
           <p>一套后台管好整个平台。</p>
@@ -611,8 +925,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>域管理与域级配置覆盖</li>
             <li>服务状态 · 日志 · 一键重启</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
-        <div class="fcard">
+        <div class="fcard" data-modal="m-help" tabindex="0" role="button" aria-haspopup="dialog">
           <div class="fcard__top"><div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.3 2.4c-.8.3-.9 1-.9 1.8"/><circle cx="12" cy="16.6" r=".2"/></svg></div><span class="badge badge--live">已上线</span></div>
           <h3>平台指南</h3>
           <p>系统内置的分章使用指南，与系统同版本演进。</p>
@@ -620,17 +935,18 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
             <li>分章帮助文档</li>
             <li>章节链接可直接分享给同事</li>
           </ul>
+          <span class="fcard__hint">点击查看详情 →</span>
         </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ═══════ §4 核心流程 ═══════ -->
+<!-- ═══ §4 核心流程 ═══ -->
 <section class="sec" id="flow">
   <div class="wrap">
     <div class="sec__head rv">
-      <p class="sec__eyebrow">03 · PIPELINE</p>
+      <p class="sec__eyebrow">04 · PIPELINE</p>
       <h2>核心流程</h2>
       <p class="sec__sub">知识在系统中的旅程：从一份原始文档，到 Agent 手中可信赖的答案。前半程是生产链，后半程是消费链。</p>
     </div>
@@ -676,73 +992,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
   </div>
 </section>
 
-<!-- ═══════ §5 特色能力 ═══════ -->
-<section class="sec" id="depth">
-  <div class="wrap">
-    <div class="sec__head rv">
-      <p class="sec__eyebrow">04 · DEEP DIVE</p>
-      <h2>特色能力</h2>
-      <p class="sec__sub">两个最能代表系统设计理念的能力：一条检索链路，一类知识制品。</p>
-    </div>
-
-    <!-- 检索链路 -->
-    <div class="panel rv">
-      <span class="panel__tag">RETRIEVAL</span>
-      <h3>多路检索：答案永远带出处</h3>
-      <p>一次检索 = 关键词与语义两路同时召回，融合重排后只输出「带原文出处」的证据——Agent 引用的每句话都有据可查。</p>
-      <div class="pipe">
-        <span class="node">授权范围</span><span class="sep">→</span>
-        <span class="node node--branch"><span class="node">关键词召回</span><span class="node">向量召回<span style="color:var(--ink-3);font-weight:400">（按语义）</span></span></span><span class="sep">→</span>
-        <span class="node">RRF 融合</span><span class="sep">→</span>
-        <span class="node">模型重排</span><span class="sep">→</span>
-        <span class="node">证据回填</span><span class="sep">→</span>
-        <span class="node">去重</span><span class="sep">→</span>
-        <span class="node node--final">统一证据输出</span>
-      </div>
-      <div class="refs">
-        <div class="ref"><code>ev_</code><b>证据片段</b><p>带原文定位，结论可回溯</p></div>
-        <div class="ref"><code>doc_</code><b>结构化章节</b><p>按文档结构逐层深读</p></div>
-        <div class="ref"><code>st_</code><b>结构树</b><p>结构化资产的精确查询</p></div>
-        <div class="ref"><code>art_</code><b>知识制品</b><p>表格 / Wiki 的受控读取</p></div>
-      </div>
-    </div>
-
-    <!-- 知识制品 -->
-    <div class="panel rv">
-      <span class="panel__tag">ARTIFACTS</span>
-      <h3>知识制品：把「查到」变成「备好」</h3>
-      <div class="quote">检索回答「<em>哪里说了什么</em>」；制品回答「<em>做这件事需要哪些东西</em>」。</div>
-      <div class="duo">
-        <div class="duo-card">
-          <div class="duo-card__head">
-            <div class="duo-card__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M9.5 9.5v10"/></svg></div>
-            <h4>表格制品 —— 备好的数据表</h4>
-          </div>
-          <ul>
-            <li>Excel 三步入库：上传 → 列映射 → 预览确认</li>
-            <li>类定义 + 行级编辑，双击即可修改单元格</li>
-            <li>发布即快照，版本可回滚</li>
-            <li>Agent 用查询语言精确取数，不再靠翻文档</li>
-          </ul>
-        </div>
-        <div class="duo-card">
-          <div class="duo-card__head">
-            <div class="duo-card__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-1.5-1.8-3.8-2.5-8-2.5v14.5c4.2 0 6.5.7 8 2.5 1.5-1.8 3.8-2.5 8-2.5V3.5c-4.2 0-6.5.7-8 2.5z"/><path d="M12 6v14.5"/></svg></div>
-            <h4>Wiki 制品 —— 备好的知识书</h4>
-          </div>
-          <ul>
-            <li>从知识库选材生成页面，目录可视化设计</li>
-            <li>一键编译 + 编译报告，页级 diff 对照</li>
-            <li>阅读视图适合人，页间引用图谱照见结构</li>
-            <li>发布进入检索通道：向量 · 关键词 · 图</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ═══════ §6 Agent 接入 ═══════ -->
+<!-- ═══ §5 Agent 接入 ═══ -->
 <section class="sec" id="agent">
   <div class="wrap">
     <div class="sec__head rv">
@@ -790,7 +1040,7 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
   </div>
 </section>
 
-<!-- ═══════ §7 演进路线 ═══════ -->
+<!-- ═══ §6 演进路线 ═══ -->
 <section class="sec" id="roadmap">
   <div class="wrap">
     <div class="sec__head rv">
@@ -810,10 +1060,10 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
         <p>模板驱动的步骤流加工间：选资料 → 一步步加工 → 导出为制品草稿。人人都能按模板把知识「做」出来。</p>
         <div class="q">导出是送去检查，发布才是正式生效。</div>
       </div>
-      <div class="tl-item tl-item--plan rv">
+      <div class="tl-item tl-item--wip rv">
         <div class="tl-item__dot"></div>
-        <div class="tl-item__head"><h3>知识对象层（L2）</h3><span class="badge badge--plan">规划中</span></div>
-        <p>给对象与关系一个统一的身份平面：页面配置即可建模，零代码纳管存量对象；统一管理动词——进、认、联、改、发、退。</p>
+        <div class="tl-item__head"><h3>知识对象层（L2）</h3><span class="badge badge--wip">建设中</span></div>
+        <p>本体定义「类」，语义对象是实例化的结果——统一身份与关系平面。页面配置即可建模，零代码纳管存量对象；统一管理动词：进、认、联、改、发、退。</p>
       </div>
       <div class="tl-item tl-item--plan rv">
         <div class="tl-item__dot"></div>
@@ -827,42 +1077,595 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
 
 </main>
 
-<!-- ═══════ §8 页脚 ═══════ -->
+<!-- ═══ 页脚 ═══ -->
 <footer>
   <div class="footer__in">
     <div>
       <div class="footer__brand"><span class="logo-mark"></span>Agentic<em>KB</em></div>
-      <p class="footer__tag">把领域知识编译为 Agent 可导航、可组合、可生成、可核查的运行时知识。<br>本页为系统功能介绍，具体操作详见系统内置《平台指南》。</p>
+      <p class="footer__tag">把领域知识编译为 Agent 可导航、可组合、可生成、可核查的运行时知识。<br>本页为系统功能介绍（持续维护产物），具体操作详见系统内置《平台指南》。</p>
     </div>
     <div class="footer__meta">
       <div>版本 <b>v1.1.36</b> · 单容器一体化交付</div>
       <div>MCP 协议开放 · 多域隔离</div>
-      <div>页面生成于 2026-11-13</div>
+      <div>最后更新 <b>2026-11-13</b></div>
     </div>
   </div>
 </footer>
 
+<!-- ═══════════ 模块详情弹窗（与功能全景卡片按 data-modal/id 配对） ═══════════ -->
+
+<dialog class="modal" id="m-kb" aria-label="知识库与文档管理 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.6"/><path d="M5 5.5v13c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-13"/><path d="M5 12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6"/></svg></div>
+    <div class="modal__ht"><h3>知识库与文档管理 <span class="badge badge--live">已上线</span></h3><p>知识生产 · 一切资料的入口</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">团队知识的容器：资料在这里接入、组织、加工与沉淀，成员按角色协作，域与域之间相互隔离。</p>
+    <div class="msec"><h4>建库与协作</h4><ul>
+      <li>知识库<b>创建 · 复制 · 导出</b></li>
+      <li>成员管理与检索授权</li>
+      <li>私有库<b>反探测</b>：无权限视同不存在</li>
+      <li>域间资源完全隔离</li>
+    </ul></div>
+    <div class="msec"><h4>文档接入</h4><ul>
+      <li>多格式上传：md / html / pdf / docx</li>
+      <li>zip 等归档包直传（大文件两步上传）</li>
+      <li>同源多文件一次性传入</li>
+      <li>目录（文件夹）组织</li>
+      <li>来源快照 + 哈希：原文变了能被发现</li>
+    </ul></div>
+    <div class="msec"><h4>自动化</h4><ul>
+      <li>上传自动进入挖掘队列</li>
+      <li>增量挖掘：只重跑变更部分</li>
+      <li>文档替换带版本冲突检测</li>
+      <li>删除走统一硬删管线，快照可回收</li>
+    </ul></div>
+    <div class="msec"><h4>质量与可见性</h4><ul>
+      <li>文档预览与原文定位</li>
+      <li>挖掘运行详情与阶段事件</li>
+      <li>质量检查入口</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-minerun">挖掘运行</button><button class="mlink" data-modal="m-onenet">一张网接入</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-onenet" aria-label="一张网接入 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5"/><path d="M11 5.5l1.7-1.7a4 4 0 0 1 5.7 5.7L16.7 11"/><path d="M13 18.5l-1.7 1.7a4 4 0 0 1-5.7-5.7L7.3 13"/></svg></div>
+    <div class="modal__ht"><h3>一张网接入 <span class="badge badge--live">已上线</span><span class="adm">管理员</span></h3><p>知识生产 · 外部资料源引入</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">把外部「一张网」资料源按需引入平台：浏览目录、挑需要的部分切片导入，不必整站搬运。</p>
+    <div class="msec"><h4>接入能力</h4><ul>
+      <li>外部资料源<b>目录浏览</b></li>
+      <li>按需<b>切片导入</b>（按相对规则切分）</li>
+      <li>导入内容三类口径统一合并</li>
+      <li>域级配置覆盖（不同域接不同源）</li>
+    </ul></div>
+    <div class="msec"><h4>来源与状态</h4><ul>
+      <li>导入内容保留来源引用</li>
+      <li>文档状态追踪与在线预览</li>
+      <li>支持探源与文档恢复</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-kb">知识库与文档管理</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-mineflow" aria-label="挖掘范式编排 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6.5" height="6.5" rx="1.5"/><rect x="14.5" y="14.5" width="6.5" height="6.5" rx="1.5"/><path d="M9.5 6.2H14a3 3 0 0 1 3 3v5.3"/></svg></div>
+    <div class="modal__ht"><h3>挖掘范式编排 <span class="badge badge--live">已上线</span><span class="adm">管理员</span></h3><p>知识生产 · 定义知识怎么被加工</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">「范式」= 可复用、可发布、可冻结版本的加工配方。在可视化画布上拖拽算子，定义资料被加工成知识的路径。</p>
+    <div class="msec"><h4>编排能力</h4><ul>
+      <li>算子节点<b>拖拽画布</b>，连线即流程</li>
+      <li>算子目录：切片 / 抽取 / 向量化 / 生成等能力算子</li>
+      <li>参数<b>表单化配置</b>（按算子定义自动生成）</li>
+    </ul></div>
+    <div class="msec"><h4>版本管理</h4><ul>
+      <li>工作流版本<b>发布与冻结</b></li>
+      <li>范式可复用、可在库间分享</li>
+      <li>运行绑定范式版本，可追溯</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-minerun">挖掘运行</button><button class="mlink" data-modal="m-llm">LLM 服务</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-minerun" aria-label="挖掘运行与质量门禁 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M10 8.8l5.2 3.2-5.2 3.2z"/></svg></div>
+    <div class="modal__ht"><h3>挖掘运行与质量门禁 <span class="badge badge--live">已上线</span></h3><p>知识生产 · 批量加工引擎</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">按范式批量加工资料的引擎：运行全程可见、失败可重试，入库之前先过质量关卡——不达标的知识不进检索。</p>
+    <div class="msec"><h4>运行与追踪</h4><ul>
+      <li>批次运行与<b>进度追踪</b></li>
+      <li>阶段事件流水（走到哪一步一目了然）</li>
+      <li>失败显式暴露，可重试</li>
+    </ul></div>
+    <div class="msec"><h4>增量机制</h4><ul>
+      <li>增量挖掘：<b>改过的才重跑</b>（SKIP/RETRY）</li>
+      <li>上传自动入队，无需手动触发</li>
+    </ul></div>
+    <div class="msec"><h4>质量门禁</h4><ul>
+      <li>知识库<b>就绪度分档</b>（未就绪不出残缺结果）</li>
+      <li>能力验收门禁</li>
+      <li>入库栅栏：不达标的检索单元不入库</li>
+    </ul></div>
+    <div class="msec"><h4>LLM 调度</h4><ul>
+      <li>生成 / 向量化 / 摘要任务<b>异步批量</b>执行</li>
+      <li>任务状态可查询、结果可获取</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-mineflow">挖掘范式编排</button><button class="mlink" data-modal="m-llm">LLM 服务</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-llm" aria-label="LLM 服务 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/><path d="M9.5 2.5v4M14.5 2.5v4M9.5 17.5v4M14.5 17.5v4M2.5 9.5h4M2.5 14.5h4M17.5 9.5h4M17.5 14.5h4"/></svg></div>
+    <div class="modal__ht"><h3>LLM 服务 <span class="badge badge--live">已上线</span><span class="adm">管理员</span></h3><p>知识生产 · 大模型统一入口</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">平台内所有大模型能力的统一入口：一处配置，挖掘、检索、制品全线复用。</p>
+    <div class="msec"><h4>配置</h4><ul>
+      <li>模型服务统一配置</li>
+      <li><b>域级覆盖</b>：不同域可用不同模型</li>
+    </ul></div>
+    <div class="msec"><h4>任务</h4><ul>
+      <li>任务提交与结果获取</li>
+      <li>提示词模板管理</li>
+      <li>调用统计</li>
+    </ul></div>
+    <div class="msec"><h4>执行</h4><ul>
+      <li>同步 / 异步两种模式（默认异步批量）</li>
+      <li>失败透明、显式重试</li>
+      <li>过期任务清理</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-minerun">挖掘运行</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-workbench" aria-label="制作工作台 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20.5h4.5V15H12V9.5h4.5V4H21"/></svg></div>
+    <div class="modal__ht"><h3>制作工作台 <span class="badge badge--plan">规划中</span></h3><p>知识生产 · 模板驱动的加工间</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">模板驱动的步骤流加工间：按模板一步步把资料加工成制品草稿——人人都能按模板把知识「做」出来。</p>
+    <div class="msec"><h4>首版形态</h4><ul>
+      <li><b>步骤流</b>交互（首版不做自由画布）</li>
+      <li>数据模型按完整 DAG 设计，留足扩展空间</li>
+      <li>复用 Wiki 编译管线成熟执行框架</li>
+    </ul></div>
+    <div class="msec msec--full"><h4>使用故事</h4><ul>
+      <li>打开工作区 → 接入资料 → 一步步加工 → 导出为制品草稿</li>
+    </ul></div>
+    <div class="msec"><h4>边界原则</h4><ul>
+      <li>导出是送去检查，<b>发布才是正式生效</b></li>
+      <li>后续向 Agent 开放：建工作区 / 跑加工 / 交草稿</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-wiki">Wiki 制品</button><button class="mlink" data-modal="m-object">知识对象层</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-search" aria-label="多路检索工作台 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg></div>
+    <div class="modal__ht"><h3>多路检索工作台 <span class="badge badge--live">已上线</span></h3><p>知识消费 · RAG 形态的检索入口</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">知识库内的统一检索入口：双路召回、融合重排，输出的每条结果都带原文出处——答案永远可核查。</p>
+    <div class="msec"><h4>检索链路</h4><ul>
+      <li>关键词 + 向量<b>双路召回</b></li>
+      <li>RRF 融合 + <b>模型重排</b></li>
+      <li>证据回填与去重</li>
+      <li>统一证据输出</li>
+    </ul></div>
+    <div class="msec"><h4>精确检索</h4><ul>
+      <li><b>章节范围</b>搜索：限定在某章某节内找</li>
+      <li>表格<b>单元格命中</b>：按列与类型过滤</li>
+      <li>来源定位：跳回原文位置</li>
+    </ul></div>
+    <div class="msec"><h4>就绪保障</h4><ul>
+      <li>检索前<b>就绪度分档</b></li>
+      <li>未就绪的知识库不出残缺结果</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-searchflow">检索范式编排</button><button class="mlink" data-modal="m-records">检索记录</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-searchflow" aria-label="检索范式编排 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h9M17.5 7.5H20M4 12h3M11.5 12H20M4 16.5h12"/><circle cx="15" cy="7.5" r="2"/><circle cx="9.5" cy="12" r="2"/><circle cx="18.5" cy="16.5" r="2"/></svg></div>
+    <div class="modal__ht"><h3>检索范式编排 <span class="badge badge--live">已上线</span><span class="adm">管理员</span></h3><p>知识消费 · 检索流程可编排</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">检索流程同样可编排、可发布：不同场景配置不同的检索配方（召回方式、融合权重、重排策略）。</p>
+    <div class="msec"><h4>编排能力</h4><ul>
+      <li>检索<b>算子目录</b>（召回 / 融合 / 重排等）</li>
+      <li>流程可视化编排</li>
+      <li>运行结果<b>即时预览</b>，边调边看</li>
+    </ul></div>
+    <div class="msec"><h4>应用</h4><ul>
+      <li>按库绑定范式，不同库不同配方</li>
+      <li>范式版本化管理</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-search">多路检索工作台</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-records" aria-label="检索记录与分析 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12.5h4l2.5-6.5 4 13 2.5-6.5h4.5"/></svg></div>
+    <div class="modal__ht"><h3>检索记录与分析 <span class="badge badge--live">已上线</span></h3><p>知识消费 · 检索账本</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">全量检索账本：看见知识被怎么使用——谁在何时检索了什么、命中了什么。</p>
+    <div class="msec"><h4>记录</h4><ul>
+      <li>检索记录<b>全量留痕</b>（人 + Agent 两个来源）</li>
+      <li>时间范围筛选</li>
+    </ul></div>
+    <div class="msec"><h4>分析</h4><ul>
+      <li>检索词条<b>切分</b>（中文分词统计）</li>
+      <li>分析图表与趋势</li>
+    </ul></div>
+    <div class="msec"><h4>用途</h4><ul>
+      <li>发现高频问题 → 沉淀为知识制品</li>
+      <li>评估知识覆盖缺口</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-dash">概览与运营</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-structure" aria-label="文档结构图谱 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="4.5" rx="1"/><rect x="3" y="16.5" width="6" height="4.5" rx="1"/><rect x="15" y="16.5" width="6" height="4.5" rx="1"/><path d="M12 7.5V12m0 0H6v4.5M12 12h6v4.5"/></svg></div>
+    <div class="modal__ht"><h3>文档结构图谱 <span class="badge badge--live">已上线</span></h3><p>知识消费 · GraphRAG 形态的入口</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">把文档的骨架画出来：章节结构、结构化资产（表格、键值等结构数据）形成可导航、可查询的结构树。</p>
+    <div class="msec"><h4>结构能力</h4><ul>
+      <li>文档<b>结构树</b>可视化（显式归属投影）</li>
+      <li>章节导航与定位</li>
+      <li>结构化资产面板</li>
+    </ul></div>
+    <div class="msec"><h4>查询能力</h4><ul>
+      <li><b>st_ 引用</b>：结构树与结构化资产的精确查询</li>
+      <li>表格查询面板（类型化单元格过滤）</li>
+      <li>章节范围检索</li>
+    </ul></div>
+    <div class="msec"><h4>演进方向</h4><ul>
+      <li>对象抽取与身份归一（<b>建设中</b>）</li>
+      <li>挂接统一语义对象层</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-object">知识对象层</button><button class="mlink" data-modal="m-search">多路检索</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-table" aria-label="表格制品 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M9.5 9.5v10"/></svg></div>
+    <div class="modal__ht"><h3>表格制品 <span class="badge badge--live">已上线</span></h3><p>知识制品 · 表格类知识 ART_</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">从 Excel 到可被 Agent 精确查询的知识表——数据类知识的标准形态：结构受类定义约束，行有稳定业务主键。</p>
+    <div class="msec"><h4>建表</h4><ul>
+      <li>导入向导：上传 → <b>列映射</b> → 预览确认</li>
+      <li>类定义：列类型、主键约束</li>
+      <li>行级编辑：<b>双击改单元格</b>，大表分页</li>
+      <li>批量导入与修订批次</li>
+    </ul></div>
+    <div class="msec"><h4>治理</h4><ul>
+      <li>发布即<b>快照</b>，可回滚</li>
+      <li>业务主键行地址：行可被稳定引用</li>
+      <li>编辑操作原子锁，防并发冲突</li>
+    </ul></div>
+    <div class="msec"><h4>消费</h4><ul>
+      <li>Agent 结构化查询：按条件<b>精确取数</b></li>
+      <li>三层权限：设计态 / 运行态 / 成员</li>
+      <li>被知识库引用情况统计</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-gov">版本·成员·用量治理</button><button class="mlink" data-modal="m-mcp">MCP 工具</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-wiki" aria-label="Wiki 制品 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6c-1.5-1.8-3.8-2.5-8-2.5v14.5c4.2 0 6.5.7 8 2.5 1.5-1.8 3.8-2.5 8-2.5V3.5c-4.2 0-6.5.7-8 2.5z"/><path d="M12 6v14.5"/></svg></div>
+    <div class="modal__ht"><h3>Wiki 制品 <span class="badge badge--live">已上线</span></h3><p>知识制品 · 文档类知识 ART_</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">从知识库取材编译成体系化文档——文档类知识的标准形态：像一本随时可重编的书，来源变化能被发现。</p>
+    <div class="msec"><h4>制作</h4><ul>
+      <li>选库取材：从<b>检索证据</b>生成页面</li>
+      <li>目录可视化设计与拖拽编排</li>
+      <li>页面编辑与模板化生成</li>
+    </ul></div>
+    <div class="msec"><h4>编译</h4><ul>
+      <li>一键编译 + <b>编译报告</b>（成功/跳过/失败明细）</li>
+      <li><b>页级 diff</b>：新旧版本逐页对照</li>
+      <li>来源指纹脏标记：来源已变化 → 提示重编译</li>
+      <li>发布校验门（advisory lock 状态机，重跑幂等）</li>
+    </ul></div>
+    <div class="msec"><h4>阅读与消费</h4><ul>
+      <li>阅读视图（按版本保留）</li>
+      <li><b>页间引用图谱</b>：邻域力导向，结构可见</li>
+      <li>发布进入<b>向量 / 关键词 / 图</b>三条检索通道</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-table">表格制品</button><button class="mlink" data-modal="m-workbench">制作工作台（规划）</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-gov" aria-label="版本·成员·用量治理 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 2.7v5.6c0 4.9-3.2 8.1-7.5 9.7-4.3-1.6-7.5-4.8-7.5-9.7V5.7z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg></div>
+    <div class="modal__ht"><h3>版本 · 成员 · 用量治理 <span class="badge badge--live">已上线</span></h3><p>知识制品 · 资产治理</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">制品是资产，资产要有治理：版本可追溯、权限分层、用量可见。</p>
+    <div class="msec"><h4>版本</h4><ul>
+      <li>发布即<b>快照</b>，版本历史完整</li>
+      <li>一键回滚到任意版本</li>
+    </ul></div>
+    <div class="msec"><h4>权限</h4><ul>
+      <li><b>设计态</b>：编辑者改结构改内容</li>
+      <li><b>运行态</b>：读者只读已发布版本</li>
+      <li>成员管理与角色分配</li>
+    </ul></div>
+    <div class="msec"><h4>用量</h4><ul>
+      <li>被哪些知识库 / Agent 引用</li>
+      <li>用量统计面板</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-table">表格制品</button><button class="mlink" data-modal="m-wiki">Wiki 制品</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-object" aria-label="知识对象层 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.3 7.1l7.3.9M7 8.4l2.2 7.3M16.6 10.1l-5 6.3"/></svg></div>
+    <div class="modal__ht"><h3>知识对象层（L2） <span class="badge badge--wip">建设中</span></h3><p>知识架构 · 统一身份与关系平面</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">给对象与关系一个统一的身份平面：本体定义「类」，语义对象是实例化的结果——同一对象被证据引用、被图谱连接、被制品挂载，一处定义、处处引用。</p>
+    <div class="msec"><h4>核心概念</h4><ul>
+      <li><b>本体 = 类</b>：类型表 + 边规则</li>
+      <li><b>语义对象 = 实例</b>：稳定身份、可持续修正</li>
+      <li>跨形态统一：ev_ / st_ / art_ 共享对象身份</li>
+    </ul></div>
+    <div class="msec"><h4>建模方式</h4><ul>
+      <li>页面配置即可建模，<b>零代码</b></li>
+      <li>存量对象按导入方案批量纳管</li>
+      <li>域类型包：类型可按域复用</li>
+    </ul></div>
+    <div class="msec"><h4>治理原则</h4><ul>
+      <li>机器提议、<b>人裁决</b></li>
+      <li>变更候选<b>两阶段门禁</b></li>
+      <li>人工修正保护（不被自动覆盖）</li>
+      <li>别名并入身份解析</li>
+    </ul></div>
+    <div class="msec"><h4>统一管理动词</h4><ul>
+      <li>进 · 认 · 联 · 改 · 发 · 退</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-structure">文档结构图谱</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-mcp" aria-label="MCP 工具三件套 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4"/><path d="M10.5 12.5L20 3M14.8 5.2l3 3"/></svg></div>
+    <div class="modal__ht"><h3>MCP 工具三件套 <span class="badge badge--live">已上线</span></h3><p>Agent 接入 · 查 / 读 / 传</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">系统通过 MCP 协议向 Agent 开放三个工具，覆盖「查、读、传」三个动作——少而精，每个都能独当一面。</p>
+    <div class="msec"><h4><span style="font-family:var(--mono)">search_knowledge</span> · 查</h4><ul>
+      <li>语义检索，返回<b>带出处</b>的证据引用</li>
+      <li>Agent 提问的第一站</li>
+    </ul></div>
+    <div class="msec"><h4><span style="font-family:var(--mono)">get_knowledge</span> · 读</h4><ul>
+      <li>顶层浏览：域 → 库 → 目录知识树</li>
+      <li>按引用深读：<b>ev_ 证据 / doc_ 章节 / st_ 结构 / art_ 制品</b></li>
+      <li>制品查询与说明卡</li>
+      <li>能力报告：Agent 可先探明自己能读什么</li>
+    </ul></div>
+    <div class="msec"><h4><span style="font-family:var(--mono)">manage_files</span> · 传</h4><ul>
+      <li>大文件<b>两步直传</b>（不走 Base64）</li>
+      <li>替换文档带<b>版本冲突检测</b></li>
+      <li>上传即自动进入挖掘队列</li>
+    </ul></div>
+    <div class="msec"><h4>协议细节</h4><ul>
+      <li>MCP 开放标准，主流 Agent 客户端原生支持</li>
+      <li>读取范围按密钥权限收敛</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-keys">密钥与开放范围</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-keys" aria-label="密钥与开放范围 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.2" r="1.4"/></svg></div>
+    <div class="modal__ht"><h3>密钥与开放范围 <span class="badge badge--live">已上线</span></h3><p>Agent 接入 · 精确控制</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">精细控制 Agent 能碰哪些知识：一人一钥，范围精确到工具、知识库与制品。</p>
+    <div class="msec"><h4>密钥</h4><ul>
+      <li>每个用户<b>独立 MCP 密钥</b></li>
+      <li>可随时轮换</li>
+      <li>丢失即吊销，不影响他人</li>
+    </ul></div>
+    <div class="msec"><h4>开放范围</h4><ul>
+      <li>工具<b>白名单</b>：开关到单个工具</li>
+      <li><b>开放库</b>：指定哪些库可被 Agent 读</li>
+      <li><b>开放制品</b>：指定哪些制品可被查询</li>
+      <li>权限只收不放：子集不会放大越权</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-mcp">MCP 工具三件套</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-roles" aria-label="角色与域隔离 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M3.5 20c.5-3.6 2.8-5.6 5.5-5.6s5 2 5.5 5.6"/><circle cx="17" cy="9.5" r="2.5"/><path d="M16.2 14.7c2.6.4 4 2.3 4.4 5.3"/></svg></div>
+    <div class="modal__ht"><h3>角色与域隔离 <span class="badge badge--live">已上线</span></h3><p>平台管理 · 多租户体系</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">三级角色 + 域隔离的多租户体系：一套平台，多个域各自为政、互不可见。</p>
+    <div class="msec"><h4>三级角色</h4><ul>
+      <li><b>系统管理员</b>：全平台编排与配置</li>
+      <li><b>域管理员</b>：本域用户与域级配置</li>
+      <li><b>普通用户</b>：建库、检索、消费制品</li>
+    </ul></div>
+    <div class="msec"><h4>用户生命周期</h4><ul>
+      <li>创建 · 设密授权 · 清退 · <b>恢复</b></li>
+      <li>owner 转移（人走库不留死角）</li>
+      <li>CSV / Excel <b>批量导入</b>用户</li>
+      <li>安全退出（避免竞态残留会话）</li>
+    </ul></div>
+    <div class="msec"><h4>隔离</h4><ul>
+      <li>域间资源<b>互不可见</b></li>
+      <li>私有库反探测（无权视同不存在）</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-settings">系统设置与运维</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-dash" aria-label="概览与运营 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19a9 9 0 1 1 14 0"/><path d="M12 14l3.5-4.5"/><circle cx="12" cy="14.5" r="1.3"/></svg></div>
+    <div class="modal__ht"><h3>概览与运营 <span class="badge badge--live">已上线</span></h3><p>平台管理 · 登录即见的驾驶舱</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">打开系统第一眼看到的驾驶舱：知识资产的规模、动态与待办。</p>
+    <div class="msec"><h4>统计</h4><ul>
+      <li>知识库概况<b>统计卡片</b></li>
+      <li>文档状态分布</li>
+      <li>近段时间<b>入库趋势</b></li>
+    </ul></div>
+    <div class="msec"><h4>洞察</h4><ul>
+      <li>各知识库<b>文档排行</b></li>
+      <li>检索单元类型分布</li>
+      <li>我的知识库 · 最近挖掘动态</li>
+      <li>待处理事项</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-records">检索记录与分析</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-settings" aria-label="系统设置与运维 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7"/></svg></div>
+    <div class="modal__ht"><h3>系统设置与运维 <span class="badge badge--live">已上线</span><span class="adm">管理员</span></h3><p>平台管理 · 一套后台管好平台</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">从品牌到运维：一套后台管好整个平台。</p>
+    <div class="msec"><h4>定制</h4><ul>
+      <li><b>品牌外观</b>：logo / 名称 / 主题色</li>
+      <li>帮助内容与版本信息展示</li>
+    </ul></div>
+    <div class="msec"><h4>域与配置</h4><ul>
+      <li>域管理（多租户）</li>
+      <li>LLM <b>域级覆盖</b></li>
+      <li>一张网域级覆盖</li>
+    </ul></div>
+    <div class="msec"><h4>运维</h4><ul>
+      <li>服务<b>健康状态</b>一览</li>
+      <li>服务日志查看</li>
+      <li><b>一键重启</b>（按依赖顺序，前端可用）</li>
+      <li>IP 白名单等访问控制</li>
+    </ul></div>
+    <div class="mfoot">相关模块 <button class="mlink" data-modal="m-roles">角色与域隔离</button></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="m-help" aria-label="平台指南 详情">
+  <div class="modal__head">
+    <div class="fcard__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.3 2.4c-.8.3-.9 1-.9 1.8"/><circle cx="12" cy="16.6" r=".2"/></svg></div>
+    <div class="modal__ht"><h3>平台指南 <span class="badge badge--live">已上线</span></h3><p>平台管理 · 内置帮助</p></div>
+    <button class="modal__x" data-close aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="modal__body">
+    <p class="modal__intro">系统内置的分章使用指南——不依赖外部文档站点，与系统同版本演进。</p>
+    <div class="msec"><h4>内容</h4><ul>
+      <li><b>分章</b>帮助文档，章号即书号</li>
+      <li>随系统版本同步更新</li>
+    </ul></div>
+    <div class="msec"><h4>分享</h4><ul>
+      <li>章节<b>链接可直接分享</b>给同事</li>
+      <li>新成员入职自助上手</li>
+    </ul></div>
+  </div>
+</dialog>
+
 <script>
-// 滚动高亮当前章节
 (function(){
+  // 滚动高亮当前章节
   var links=[].slice.call(document.querySelectorAll('.topnav__links a'));
   var secs=[].slice.call(document.querySelectorAll('main section[id]'));
-  if(!('IntersectionObserver' in window))return;
-  var spy=new IntersectionObserver(function(es){
-    es.forEach(function(e){
-      if(e.isIntersecting){
-        links.forEach(function(l){l.classList.toggle('is-active',l.getAttribute('href')==='#'+e.target.id)});
-      }
+  if('IntersectionObserver' in window){
+    var spy=new IntersectionObserver(function(es){
+      es.forEach(function(e){
+        if(e.isIntersecting){
+          links.forEach(function(l){l.classList.toggle('is-active',l.getAttribute('href')==='#'+e.target.id)});
+        }
+      });
+    },{rootMargin:'-35% 0px -55% 0px'});
+    secs.forEach(function(s){spy.observe(s)});
+    // 滚动显现
+    var rv=new IntersectionObserver(function(es){
+      es.forEach(function(e){
+        if(e.isIntersecting){e.target.classList.add('in');rv.unobserve(e.target)}
+      });
+    },{threshold:.08});
+    document.querySelectorAll('.rv').forEach(function(el){rv.observe(el)});
+  }else{
+    document.querySelectorAll('.rv').forEach(function(el){el.classList.add('in')});
+  }
+  // 弹窗体系：data-modal 打开 / data-close 关闭 / 点击遮罩关闭 / 键盘可达
+  function open(id){
+    var d=document.getElementById(id);
+    if(d&&typeof d.showModal==='function'){
+      if(document.activeElement&&document.activeElement.getAttribute){d.__back=document.activeElement;}
+      d.showModal();
+    }
+  }
+  document.addEventListener('click',function(e){
+    var c=e.target.closest('[data-modal]');
+    if(c){e.preventDefault();open(c.getAttribute('data-modal'));return;}
+    if(e.target.closest('[data-close]')){
+      var dg=e.target.closest('dialog');if(dg)dg.close();
+    }
+  });
+  document.addEventListener('keydown',function(e){
+    var a=document.activeElement;
+    if((e.key==='Enter'||e.key===' ')&&a&&a.getAttribute&&a.getAttribute('data-modal')&&a.tagName!=='BUTTON'){
+      e.preventDefault();open(a.getAttribute('data-modal'));
+    }
+  });
+  [].forEach.call(document.querySelectorAll('dialog.modal'),function(d){
+    d.addEventListener('click',function(e){if(e.target===d)d.close();});
+    d.addEventListener('close',function(){
+      if(d.__back&&d.__back.focus){try{d.__back.focus();}catch(x){}}
     });
-  },{rootMargin:'-35% 0px -55% 0px'});
-  secs.forEach(function(s){spy.observe(s)});
-  // 滚动显现
-  var rv=new IntersectionObserver(function(es){
-    es.forEach(function(e){
-      if(e.isIntersecting){e.target.classList.add('in');rv.unobserve(e.target)}
-    });
-  },{threshold:.08});
-  document.querySelectorAll('.rv').forEach(function(el){rv.observe(el)});
+  });
 })();
 </script>
 </body>

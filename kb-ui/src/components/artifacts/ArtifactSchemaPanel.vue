@@ -15,79 +15,69 @@
       </div>
     </div>
 
-    <el-table :data="displayedColumns" size="small" row-key="column_id" :row-class-name="rowClass">
-      <el-table-column label="列名" min-width="170">
-        <template #default="{ row }">
-          <el-tooltip :content="`column_id: ${row.column_id}`" placement="top">
-            <span class="schema-panel__col-name">{{ row.column_name }}</span>
-          </el-tooltip>
-          <el-tag v-if="(row.alias ?? []).length" size="small" type="info" effect="plain" class="schema-panel__alias">
-            旧名：{{ (row.alias ?? []).join('、') }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="类型" width="90">
-        <template #default="{ row }">
-          <el-tag size="small" effect="plain" :type="typeTagType(row.column_type)">
-            {{ typeLabel(row.column_type) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="主键" width="70" align="center">
-        <template #default="{ row }">
-          <el-tag v-if="row.is_primary_key" size="small" type="danger" effect="dark">主键</el-tag>
-          <span v-else class="schema-panel__muted">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="索引" width="80" align="center">
-        <template #default="{ row }">
-          <el-switch
-            :key="`idx-${row.column_id}-${indexTick}`"
-            :model-value="row.is_indexed"
-            size="small"
-            :disabled="!canWrite || row.status === 'dropped'"
-            data-test="schema-index-toggle"
-            @change="toggleIndexed(row, $event as boolean)"
-          />
-        </template>
-      </el-table-column>
-      <el-table-column label="枚举值" min-width="220">
-        <template #default="{ row }">
-          <div v-if="row.column_type === 'enum'" class="schema-panel__enum">
+    <!-- 字段卡片行（高保真 ar-field-row）：类型章+列名+别名/枚举 chips+主键/索引/操作 -->
+    <div class="schema-panel__list">
+      <div
+        v-for="col in displayedColumns"
+        :key="col.column_id"
+        class="schema-panel__field"
+        :class="{ 'is-dropped': col.status === 'dropped' }"
+        data-test="schema-field-row"
+      >
+        <span class="schema-panel__field-type" :class="`is-${col.column_type}`">
+          {{ typeLabel(col.column_type) }}
+        </span>
+        <div class="schema-panel__field-main">
+          <span class="schema-panel__field-name" :title="`column_id: ${col.column_id}`">
+            {{ col.column_name }}
+            <el-tag v-if="col.is_primary_key" size="small" type="danger" effect="dark" class="schema-panel__pk-tag">主键</el-tag>
+          </span>
+          <span v-if="(col.alias ?? []).length" class="schema-panel__field-alias">
+            旧名：{{ (col.alias ?? []).join('、') }}
+          </span>
+          <div v-if="col.column_type === 'enum'" class="schema-panel__enum">
             <el-tag
-              v-for="v in row.enum_values ?? []"
+              v-for="v in col.enum_values ?? []"
               :key="String(v)"
               size="small"
               closable
               :disable-transitions="true"
-              @close="canWrite && removeEnumValue(row, v)"
+              @close="canWrite && removeEnumValue(col, v)"
             >{{ v }}</el-tag>
             <el-input
-              v-if="canWrite && row.status === 'active'"
-              v-model="enumInputs[row.column_id]"
+              v-if="canWrite && col.status === 'active'"
+              v-model="enumInputs[col.column_id]"
               size="small"
               class="schema-panel__enum-input"
               placeholder="+ 回车追加"
-              @keyup.enter="addEnumValue(row)"
+              @keyup.enter="addEnumValue(col)"
             />
-            <span v-if="!(row.enum_values ?? []).length" class="schema-panel__muted">（未定义）</span>
+            <span v-if="!(col.enum_values ?? []).length" class="schema-panel__muted">（未定义）</span>
           </div>
-          <span v-else class="schema-panel__muted">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column v-if="canWrite" label="操作" width="130" fixed="right">
-        <template #default="{ row }">
-          <template v-if="row.status === 'active'">
-            <el-button size="small" text type="primary" data-test="schema-edit-col" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" text type="danger" data-test="schema-drop-col" @click="dropColumn(row)">软删</el-button>
+        </div>
+        <div class="schema-panel__field-side">
+          <template v-if="col.status === 'active'">
+            <el-switch
+              :key="`idx-${col.column_id}-${indexTick}`"
+              :model-value="col.is_indexed"
+              size="small"
+              :disabled="!canWrite"
+              data-test="schema-index-toggle"
+              @change="toggleIndexed(col, $event as boolean)"
+            />
+            <el-tooltip content="索引（下次发布生效）" placement="top" :show-after="400">
+              <span class="schema-panel__idx-label">索引</span>
+            </el-tooltip>
+            <template v-if="canWrite">
+              <el-button size="small" text type="primary" data-test="schema-edit-col" @click="openEdit(col)">编辑</el-button>
+              <el-button size="small" text type="danger" data-test="schema-drop-col" @click="dropColumn(col)">软删</el-button>
+            </template>
           </template>
           <span v-else class="schema-panel__dropped-text">已删（保留数据）</span>
-        </template>
-      </el-table-column>
-      <template #empty>
-        <EmptyState text="尚无列定义（上传 Excel 或手工新建）" />
-      </template>
-    </el-table>
+        </div>
+      </div>
+      <EmptyState v-if="displayedColumns.length === 0" text="尚无列定义（上传 Excel 或手工新建）" />
+    </div>
 
     <!-- 新建列 -->
     <el-dialog v-model="addVisible" title="新建列" width="480px">
@@ -385,38 +375,58 @@ async function submitPk(): Promise<void> {
   if (ok) pkVisible.value = false
 }
 
-function typeTagType(value: string): 'primary' | 'success' | 'warning' | 'info' {
-  if (value === 'enum') return 'warning'
-  if (value === 'int' || value === 'float') return 'success'
-  if (value === 'date' || value === 'bool') return 'primary'
-  return 'info'
-}
 
 function typeLabel(value: string): string {
   return COLUMN_TYPES.find(t => t.value === value)?.label ?? value
 }
 
-/** 已删列整行弱化（el-table row-class-name）。 */
-function rowClass({ row }: { row: ArtifactColumn }): string {
-  return row.status === 'dropped' ? 'schema-panel__row-dropped' : ''
-}
 
 defineExpose({ openAdd, submitAdd, openEdit, submitEdit, submitPk, dropColumn })
 </script>
 
 <style scoped>
 .schema-panel { display: flex; flex-direction: column; gap: 10px; }
-.schema-panel__bar { display: flex; align-items: center; gap: 10px; }
-.schema-panel__count { font-size: 13px; color: var(--kb-text-tertiary); }
+.schema-panel__bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.schema-panel__count { font-size: 12.5px; color: var(--kb-text-tertiary); }
 .schema-panel__check { font-size: 12.5px; color: var(--kb-text-tertiary); }
 .schema-panel__actions { margin-left: auto; display: flex; gap: 8px; }
-.schema-panel__col-name { font-weight: 600; cursor: default; }
-.schema-panel__alias { margin-left: 6px; }
-.schema-panel__muted { color: var(--kb-text-tertiary); }
-.schema-panel__enum { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.schema-panel__enum-input { width: 120px; }
+.schema-panel__muted { color: var(--kb-text-tertiary); font-size: 12px; }
 .schema-panel__dropped-text { font-size: 12px; color: var(--el-color-danger, #f56c6c); }
 .schema-panel__pk-hint { font-size: 12.5px; color: var(--kb-text-tertiary); margin: 0 0 8px; }
-/* 已删行弱化（scoped 下 el-table 行类需要 :deep） */
-:deep(.schema-panel__row-dropped) { opacity: 0.55; }
+
+/* ── 字段卡片行（高保真 ar-field-row） ── */
+.schema-panel__list { display: flex; flex-direction: column; border: 1px solid var(--kb-border, #e2e8f0); border-radius: 8px; overflow: hidden; }
+.schema-panel__field {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--kb-border-light, #f1f5f9);
+  transition: background .12s var(--kb-ease, ease);
+}
+.schema-panel__field:last-child { border-bottom: 0; }
+.schema-panel__field:hover { background: var(--kb-bg-card-hover, #f8fafc); }
+.schema-panel__field.is-dropped { opacity: 0.55; }
+.schema-panel__field-type {
+  flex-shrink: 0;
+  display: inline-grid; place-items: center;
+  min-width: 42px; padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 11px; font-weight: 600;
+  background: var(--kb-bg-card-hover, #f1f5f9);
+  color: var(--kb-text-secondary, #64748b);
+}
+.schema-panel__field-type.is-enum { background: var(--kb-warning-soft, rgba(245, 158, 11, 0.1)); color: var(--kb-warning, #f59e0b); }
+.schema-panel__field-type.is-int, .schema-panel__field-type.is-float { background: var(--kb-success-soft, rgba(16, 185, 129, 0.1)); color: var(--kb-success, #10b981); }
+.schema-panel__field-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.schema-panel__field-name {
+  font-size: 13.5px; font-weight: 600; color: var(--kb-text-primary, inherit);
+  display: inline-flex; align-items: center; gap: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.schema-panel__pk-tag { flex-shrink: 0; }
+.schema-panel__field-alias { font-size: 11.5px; color: var(--kb-text-tertiary); }
+.schema-panel__enum { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.schema-panel__enum-input { width: 130px; }
+.schema-panel__field-side { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.schema-panel__field-side .el-button + .el-button { margin-left: 0; }
+.schema-panel__idx-label { font-size: 11.5px; color: var(--kb-text-tertiary); cursor: default; }
 </style>

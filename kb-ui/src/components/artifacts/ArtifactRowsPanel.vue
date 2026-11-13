@@ -37,13 +37,15 @@
     </div>
 
     <el-pagination
-      v-if="total > pageSize"
       class="rows-panel__pager"
-      layout="total, prev, pager, next"
+      layout="total, sizes, prev, pager, next"
       :total="total"
+      :page-sizes="[20, 50, 100]"
       :page-size="pageSize"
       :current-page="page"
+      :pager-count="7"
       @current-change="onPageChange"
+      @size-change="onSizeChange"
     />
 
     <!-- 编辑行：按列类型分派控件（008 UI：长文本多行/数字/日期/布尔三态） -->
@@ -210,7 +212,8 @@ const draft = ref(true)
 const rows = ref<ArtifactRow[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = 50
+/** 每页条数（2026-11-13：分页控件恒显+sizes 选择，默认 50 不变）。 */
+const pageSize = ref(50)
 const loading = ref(false)
 const saving = ref(false)
 
@@ -246,7 +249,7 @@ async function loadRows(): Promise<void> {
   loading.value = true
   try {
     const result = await api.listRows(props.artifactId, {
-      draft: draft.value, page: page.value, size: pageSize,
+      draft: draft.value, page: page.value, size: pageSize.value,
     })
     rows.value = result.rows
     total.value = result.total
@@ -266,6 +269,12 @@ function onDraftChange(): void {
 
 function onPageChange(next: number): void {
   page.value = next
+  void loadRows()
+}
+
+function onSizeChange(size: number): void {
+  pageSize.value = size
+  page.value = 1
   void loadRows()
 }
 

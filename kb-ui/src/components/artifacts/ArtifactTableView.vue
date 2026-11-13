@@ -5,9 +5,19 @@
         <thead>
           <tr>
             <th v-if="showIndex" class="artifact-table__idx" aria-label="序号">#</th>
-            <th v-for="col in columns" :key="col.column_id" :title="`column_id: ${col.column_id}`">
-              <el-icon v-if="col.is_primary_key" class="artifact-table__th-icon" :title="'主键'"><Key /></el-icon>
-              {{ col.column_name }}
+            <th
+              v-for="col in columns"
+              :key="col.column_id"
+              :class="{ 'is-numeric': isNumeric(col) }"
+              :title="`column_id: ${col.column_id}`"
+            >
+              <span class="artifact-table__th-inner">
+                <el-icon v-if="col.is_primary_key" class="artifact-table__th-icon is-pk" title="主键"><Key /></el-icon>
+                <el-icon v-else :class="['artifact-table__th-icon', `is-${col.column_type}`]" :title="typeLabel(col)">
+                  <component :is="typeIcon(col)" />
+                </el-icon>
+                <span class="artifact-table__th-name">{{ col.column_name }}</span>
+              </span>
             </th>
             <th v-if="showSources" class="artifact-table__th-src">来源</th>
           </tr>
@@ -18,7 +28,7 @@
             <td
               v-for="col in columns"
               :key="col.column_id"
-              :class="{ 'is-pk': col.is_primary_key }"
+              :class="{ 'is-pk': col.is_primary_key, 'is-numeric': isNumeric(col) }"
             >
               <component
                 :is="cellTag(col, row)"
@@ -74,7 +84,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Key, Link } from '@element-plus/icons-vue'
+import { Calendar, Check, Coin, Key, Link, Tickets, CollectionTag } from '@element-plus/icons-vue'
+import type { Component } from 'vue'
 import type { ArtifactColumn, ArtifactRow } from '@/types/artifacts'
 
 /**
@@ -111,6 +122,28 @@ const emit = defineEmits<{
 
 const isEnum = (col: ArtifactColumn): boolean => col.column_type === 'enum'
 const isBool = (col: ArtifactColumn): boolean => col.column_type === 'bool'
+const isNumeric = (col: ArtifactColumn): boolean =>
+  col.column_type === 'int' || col.column_type === 'float'
+
+/** 表头类型图标（文本=票据/整数小数=硬币/日期=日历/布尔=勾/枚举=标签）。 */
+const TYPE_ICONS: Record<string, Component> = {
+  text: Tickets,
+  int: Coin,
+  float: Coin,
+  date: Calendar,
+  bool: Check,
+  enum: CollectionTag,
+}
+function typeIcon(col: ArtifactColumn): Component {
+  return TYPE_ICONS[col.column_type] ?? Tickets
+}
+function typeLabel(col: ArtifactColumn): string {
+  const labels: Record<string, string> = {
+    text: '文本', int: '整数', float: '小数',
+    date: '日期', bool: '布尔', enum: '枚举',
+  }
+  return col.is_primary_key ? `主键 · ${labels[col.column_type] ?? col.column_type}` : (labels[col.column_type] ?? col.column_type)
+}
 
 const rawValue = (col: ArtifactColumn, row: ArtifactRow): unknown => row.data?.[col.column_name]
 
@@ -166,7 +199,31 @@ const footerText = computed(() =>
 
 <style scoped>
 .artifact-table { display: flex; flex-direction: column; min-width: 0; }
-.artifact-table__wrap { overflow-x: auto; width: 100%; }
+.artifact-table__wrap { overflow: auto; width: 100%; max-height: 560px; }
+
+.artifact-table__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  box-shadow: inset 0 -1px 0 var(--kb-border, #e2e8f0);
+}
+.artifact-table__th-inner {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-width: 0;
+}
+.artifact-table__th-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.artifact-table__th-icon { font-size: 12px; color: var(--kb-text-tertiary, #94a3b8); flex-shrink: 0; }
+.artifact-table__th-icon.is-pk { color: var(--kb-accent, #0891b2); }
+.artifact-table__th-icon.is-enum { color: var(--kb-warning, #f59e0b); }
+.artifact-table__th-icon.is-int, .artifact-table__th-icon.is-float { color: var(--kb-success, #10b981); }
+th.is-numeric, td.is-numeric { text-align: right; }
+td.is-numeric .artifact-table__cell {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-feature-settings: 'tnum';
+}
 
 .artifact-table__table {
   border-collapse: collapse;

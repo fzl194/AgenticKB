@@ -128,7 +128,10 @@
             :active="activeTab === 'design'"
             @imported="reloadAll"
           />
-          <el-divider content-position="left">列定义</el-divider>
+          <div class="artifact-detail__sec-head">
+            <span class="artifact-detail__sec-title">列定义</span>
+            <span class="artifact-detail__sec-sub">{{ artifact.schema.length }} 列 · 主键/类型/枚举在这里管理</span>
+          </div>
           <ArtifactSchemaPanel
             :artifact-id="artifactId"
             :can-write="canWrite"
@@ -136,7 +139,10 @@
             :expected-updated-at="artifact.updated_at"
             @changed="reloadAll"
           />
-          <el-divider content-position="left">数据编辑</el-divider>
+          <div class="artifact-detail__sec-head">
+            <span class="artifact-detail__sec-title">数据编辑</span>
+            <span class="artifact-detail__sec-sub">双击单元格编辑所在行 · 草稿口径</span>
+          </div>
           <ArtifactRowsPanel
             ref="rowsPanel"
             :artifact-id="artifactId"
@@ -761,10 +767,20 @@ defineExpose({ reloadAll })
   width: 92px;
 }
 .artifact-detail .el-descriptions__body { font-size: 12.5px; }
-.artifact-detail .el-divider__text {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  color: var(--kb-text-tertiary, #94a3b8);
+.artifact-detail__sec-head {
+  display: flex; align-items: baseline; gap: 10px;
+  margin: 22px 0 10px;
 }
+.artifact-detail__sec-head:first-child { margin-top: 4px; }
+.artifact-detail__sec-title {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 14.5px; font-weight: 600;
+  color: var(--kb-text-primary, inherit);
+}
+.artifact-detail__sec-title::before {
+  content: '';
+  width: 3px; height: 14px; border-radius: 2px;
+  background: var(--kb-accent, #0891b2);
+}
+.artifact-detail__sec-sub { font-size: 12px; color: var(--kb-text-tertiary, #94a3b8); }
 </style>

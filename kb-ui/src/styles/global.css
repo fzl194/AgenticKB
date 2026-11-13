@@ -110,6 +110,48 @@ body {
 .el-message-box__content { padding: 16px 24px; color: var(--kb-text-secondary); }
 .el-message-box__btns { padding: 12px 24px 18px; }
 
+/* ── 弹窗表单语言（高保真 st-label/st-input）：标签置顶堆叠 + 满宽控件 ──
+   仅作用于弹窗内的表单（页面内联表单不受影响）——EP 默认左侧挤压 label
+   是弹窗观感 low 的主因。 */
+.el-dialog .el-form-item,
+.el-message-box .el-form-item {
+  display: block;
+  margin-right: 0;
+  margin-left: 0;
+  margin-bottom: 14px;
+}
+.el-dialog .el-form-item__label,
+.el-message-box .el-form-item__label {
+  display: block;
+  width: auto !important;
+  height: auto;
+  line-height: 1.5;
+  padding: 0;
+  margin-bottom: 6px;
+  text-align: left;
+  justify-content: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kb-text-secondary, #64748b);
+}
+.el-dialog .el-form-item__content,
+.el-message-box .el-form-item__content {
+  margin-left: 0 !important;
+  line-height: 1.6;
+}
+.el-dialog .el-input__wrapper,
+.el-dialog .el-textarea__inner,
+.el-dialog .el-select__wrapper {
+  border-radius: 6px;
+}
+
+/* 弹窗入场动效（st-enter 语言）：轻微上浮+淡入，一次性、不扰动 */
+@keyframes kb-dialog-enter {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.el-dialog { animation: kb-dialog-enter .18s ease-out; }
+
 /* Element Plus select refinements */
 .el-select__wrapper {
   border-radius: 8px !important;

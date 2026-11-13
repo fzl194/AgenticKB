@@ -115,29 +115,20 @@ describe('ArtifactUsagePanel — artifact_ref 引用键（不前端拼装）', (
   })
 })
 
-describe('ArtifactUsagePanel — Agent 三条件区', () => {
-  it('已发布+有身份：前两条 ✓；钥匙条不判定，只指引 MCP 配置（链接 /mcp）', () => {
+describe('ArtifactUsagePanel — Agent 开放卡（三条件清单已撤，2026-11-13 用户拍板）', () => {
+  it('未停用：状态一句话 + 去 MCP 配置链接（不显示推测的开放态）', () => {
     const wrapper = mountPanel()
-    expect(wrapper.find('[data-test="cond-published"]').text()).toContain('✓')
-    expect(wrapper.find('[data-test="cond-readable"]').text()).toContain('✓')
-
-    // 钥匙条：前端不查询钥匙状态（66号 M01），恒为指引 + 链接，不出现 ✓/✗
-    const keyCond = wrapper.find('[data-test="cond-key-open"]')
-    expect(keyCond.text()).toContain('请到 MCP 配置检查')
-    expect(keyCond.text()).not.toContain('✓')
-    expect(keyCond.text()).not.toContain('✗')
-    expect(keyCond.find('a').attributes('href')).toBe('/mcp')
+    expect(wrapper.text()).toContain('需显式开放')
+    const link = wrapper.find('.usage-panel__cell-link')
+    expect(link.attributes('href')).toBe('/mcp')
+    // 钥匙条不查询钥匙状态（66号 M01）——不出现 ✓/✗ 判定符号
+    expect(wrapper.text()).not.toContain('✓')
+    expect(wrapper.text()).not.toContain('✗')
   })
 
-  it('rev0 草稿与已停用：第一条 ✗（Agent 侧不可读）', () => {
-    const draft = mountPanel({ status: 'draft', current_revision: 0 })
-    expect(draft.find('[data-test="cond-published"]').text()).toContain('✗')
-    const deprecated = mountPanel({ status: 'deprecated' })
-    expect(deprecated.find('[data-test="cond-published"]').text()).toContain('✗')
-  })
-
-  it('my_role 缺失（防御）：第二条 ✗', () => {
-    const wrapper = mountPanel({ my_role: undefined })
-    expect(wrapper.find('[data-test="cond-readable"]').text()).toContain('✗')
+  it('已停用：只报事实，不给配置链接', () => {
+    const wrapper = mountPanel({ status: 'deprecated' })
+    expect(wrapper.text()).toContain('制品已停用')
+    expect(wrapper.find('.usage-panel__cell-link').exists()).toBe(false)
   })
 })

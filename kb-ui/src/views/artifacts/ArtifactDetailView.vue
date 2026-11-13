@@ -715,8 +715,9 @@ defineExpose({ reloadAll })
 .artifact-detail__desc { margin: 8px 0 12px; color: var(--kb-text-tertiary); font-size: 13px; }
 .artifact-detail__missing { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .artifact-detail__meta-bar { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
-/* 说明卡占位（desc-card 名字保留——class 传给子组件根元素继承 flex 占位） */
-.artifact-detail__desc-card { flex: 1; max-width: 720px; }
+/* 说明卡满宽（2026-11-13 用户反馈「框宽与页面不适配」——不再 720px 截断，
+   与下方表格/阅读壳同宽对齐） */
+.artifact-detail__desc-card { flex: 1; min-width: 0; }
 .artifact-detail__visibility-hint { width: 100%; color: var(--kb-text-tertiary); font-size: 12px; line-height: 1.5; }
 .artifact-detail__empty-guide { margin-bottom: 14px; }
 /* Q01 检索状态条（66号批次5）：运行态 wiki 顶部一行；警示=黄边淡底 */
@@ -753,10 +754,7 @@ defineExpose({ reloadAll })
   font-weight: 500;
 }
 .artifact-detail .el-tag--plain { background: transparent; }
-.artifact-detail .el-dialog {
-  border-radius: 12px;
-}
-.artifact-detail .el-dialog__title { font-weight: 600; font-size: 15px; }
+/* 弹窗观感已由全局层统一（styles/global.css），页内不再重复覆盖 */
 /* 页签规格（高保真 ar-tabs 观感）：可读字号 + 高命中区 + 2px 圆头活动条 */
 .artifact-detail .el-tabs__item {
   font-size: 13.5px;

@@ -64,15 +64,51 @@ body {
   border-radius: 6px;
 }
 
-/* Element Plus dialog refinements */
+/* ── Element Plus 弹窗观感统一层（2026-11-13 用户拍板「弹框都很low」：
+   毛玻璃遮罩 + 层叠影 + 分区节奏，app 内全部弹窗/确认框一次抬升） ── */
+.el-overlay {
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
 .el-dialog {
-  border-radius: var(--kb-radius-lg) !important;
+  border-radius: 14px;
+  padding: 0 !important; /* EP 把默认 padding 放在 .el-dialog 上——归零，分区自控 */
+  box-shadow:
+    0 24px 64px -20px rgba(15, 23, 42, 0.28),
+    0 6px 20px -6px rgba(15, 23, 42, 0.12);
+}
+.el-dialog__header {
+  margin: 0;
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--kb-border-light);
+}
+.el-dialog__title {
+  font-size: 15.5px; font-weight: 650; letter-spacing: -0.2px;
+  color: var(--kb-text-primary);
+}
+.el-dialog__headerbtn { top: 15px; right: 16px; }
+.el-dialog__body { padding: 16px 24px 8px; }
+.el-dialog__footer {
+  padding: 12px 24px 18px;
+  border-top: 1px solid var(--kb-border-light);
 }
 
-.el-dialog__header {
-  border-bottom: 1px solid var(--kb-border-light);
-  padding-bottom: 16px;
+/* MessageBox（ElMessageBox 确认框）同一语言 */
+.el-message-box {
+  border-radius: 14px;
+  padding: 0;
+  box-shadow:
+    0 24px 64px -20px rgba(15, 23, 42, 0.28),
+    0 6px 20px -6px rgba(15, 23, 42, 0.12);
 }
+.el-message-box__header {
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--kb-border-light);
+}
+.el-message-box__title { font-size: 15.5px; font-weight: 650; letter-spacing: -0.2px; }
+.el-message-box__content { padding: 16px 24px; color: var(--kb-text-secondary); }
+.el-message-box__btns { padding: 12px 24px 18px; }
 
 /* Element Plus select refinements */
 .el-select__wrapper {

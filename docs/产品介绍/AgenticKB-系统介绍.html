@@ -312,7 +312,9 @@ footer{margin-top:60px;background:var(--navy);color:#8fa0bd}
 .footer__meta b{color:#a9b6ce;font-weight:600}
 
 /* ═══ 弹窗 ═══ */
-dialog.modal{border:0;padding:0;width:min(700px,94vw);max-height:84vh;background:var(--card);border-radius:18px;box-shadow:0 32px 90px -24px rgba(15,23,42,.45);color:var(--ink)}
+/* 注意：顶部 *{margin:0} 会覆盖 UA 对 dialog:modal 的 margin:auto 居中，
+   必须在此显式补回 position:fixed;inset:0;margin:auto，否则弹窗贴左上角 */
+dialog.modal{position:fixed;inset:0;margin:auto;border:0;padding:0;width:min(700px,94vw);max-height:84vh;background:var(--card);border-radius:18px;box-shadow:0 32px 90px -24px rgba(15,23,42,.45);color:var(--ink)}
 dialog.modal::backdrop{background:rgba(15,23,42,.55);backdrop-filter:blur(4px)}
 dialog.modal[open]{animation:mIn .32s var(--ease)}
 @keyframes mIn{from{opacity:0;transform:translateY(18px) scale(.985)}to{opacity:1;transform:none}}

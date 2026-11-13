@@ -3,7 +3,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 
 const state = vi.hoisted(() => ({
-  api: { listRevisions: vi.fn(), rollback: vi.fn() },
+  api: { listRevisions: vi.fn(), rollback: vi.fn(), listMembers: vi.fn() },
   ui: { confirm: vi.fn(), success: vi.fn(), error: vi.fn() },
 }))
 
@@ -67,6 +67,10 @@ function mountPanel(kind?: 'table' | 'wiki'): VueWrapper {
 beforeEach(() => {
   state.api.listRevisions.mockReset().mockResolvedValue(revisions)
   state.api.rollback.mockReset().mockResolvedValue({ revision: 1 })
+  // 发布人目录（2026-11-13）：u2→陈工 命中映射；u1 无成员行兜底原值
+  state.api.listMembers.mockReset().mockResolvedValue([
+    { user_id: 'u2', role: 'editor', username: 'chen', user_name: '陈工' },
+  ])
   state.ui.confirm.mockReset().mockResolvedValue('confirm')
   state.ui.success.mockReset()
   state.ui.error.mockReset()
@@ -83,6 +87,14 @@ describe('ArtifactVersionsPanel', () => {
     // r2=当前指针（success tag 文本）；r1 无 tag
     const tags = wrapper.findAll('.el-tag-stub').map(t => t.text())
     expect(tags).toEqual(['当前'])
+  })
+
+  it('发布人目录映射：成员命中显示 user_name（r2 行 u2 → 陈工）', async () => {
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    expect(state.api.listMembers).toHaveBeenCalledWith('art-1')
+    expect(wrapper.text()).toContain('陈工')   // 桩固定渲染 revisions[0]（published_by=u2）
   })
 
   it('V01：table 制品计数列头为「行数」（row_count=行数口径）', async () => {

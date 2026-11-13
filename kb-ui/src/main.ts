@@ -8,6 +8,7 @@ import App from './App.vue'
 import router from './router'
 import './styles/variables.css'
 import './styles/global.css'
+import './styles/markdown.css'
 import { useBrandStore } from './stores/brand'
 import { useAuthStore } from './stores/auth'
 

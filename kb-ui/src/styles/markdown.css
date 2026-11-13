@@ -1,0 +1,148 @@
+/**
+ * markdown-body —— Wiki 页正文排版（marked 输出的裸 HTML 无任何样式，
+ * 2026-11-13 用户反馈「运行态一堆文字无任何渲染」根因即此缺失）。
+ *
+ * 层级参照 docs/高保真 artifacts-1115 的 .ar-md 段落节奏；配色用系统
+ * 令牌。选择器全局（.markdown-body），正文容器挂该类即生效——Wiki
+ * Reader 正文与后续任何 markdown 渲染面共用。
+ */
+.markdown-body {
+  color: var(--kb-text-primary);
+  font-size: 13px;
+  line-height: 1.85;
+  word-break: break-word;
+}
+
+.markdown-body h1 {
+  margin: 22px 0 10px;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  line-height: 1.4;
+}
+.markdown-body h1:first-child { margin-top: 2px; }
+
+.markdown-body h2 {
+  margin: 20px 0 8px;
+  font-size: 15.5px;
+  font-weight: 600;
+}
+
+.markdown-body h3 {
+  margin: 16px 0 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--kb-text-secondary);
+}
+
+.markdown-body p { margin: 8px 0; }
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.markdown-body li { margin: 3px 0; }
+
+.markdown-body blockquote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--kb-accent-medium, rgba(8, 145, 178, 0.15));
+  background: var(--kb-bg-card-hover, #f8fafc);
+  border-radius: 0 6px 6px 0;
+  color: var(--kb-text-secondary);
+}
+
+.markdown-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--kb-bg-card-hover, #f1f5f9);
+  border: 1px solid var(--kb-border-light, #f1f5f9);
+  font-family: Consolas, 'SFMono-Regular', monospace;
+  font-size: 12px;
+}
+
+.markdown-body pre {
+  margin: 10px 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--kb-bg-card-hover, #f8fafc);
+  border: 1px solid var(--kb-border, #e2e8f0);
+  overflow-x: auto;
+}
+.markdown-body pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.markdown-body table {
+  margin: 12px 0;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.markdown-body th {
+  padding: 8px 11px;
+  background: var(--kb-bg-card-hover, #f8fafc);
+  color: var(--kb-text-secondary);
+  font-weight: 500;
+  border: 1px solid var(--kb-border, #e2e8f0);
+  text-align: left;
+}
+.markdown-body td {
+  padding: 8px 11px;
+  border: 1px solid var(--kb-border, #e2e8f0);
+}
+
+.markdown-body hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--kb-border, #e2e8f0);
+}
+
+.markdown-body a {
+  color: var(--kb-accent, #0891b2);
+  text-decoration: none;
+}
+.markdown-body a:hover { text-decoration: underline; }
+
+/* 站内双链（utils/markdown.ts 约定产物）：可点击的知识页引用 */
+.markdown-body a[data-wiki-page] {
+  color: var(--kb-accent, #0891b2);
+  text-decoration: underline;
+  text-decoration-color: var(--kb-border, #e2e8f0);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.markdown-body a[data-wiki-page]:hover {
+  text-decoration-color: var(--kb-accent, #0891b2);
+}
+
+/* 溯源角标（¶ 切片 ID）：弱化不抢正文 */
+.markdown-body sup.wiki-src {
+  margin-left: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--kb-bg-card-hover, #f1f5f9);
+  color: var(--kb-text-tertiary, #94a3b8);
+  font-size: 10px;
+  cursor: pointer;
+}
+.markdown-body sup.wiki-src:hover {
+  background: var(--kb-accent-soft, rgba(8, 145, 178, 0.08));
+  color: var(--kb-accent, #0891b2);
+}
+
+/* 强调 */
+.markdown-body strong { font-weight: 600; }
+.markdown-body em { color: var(--kb-text-secondary); }

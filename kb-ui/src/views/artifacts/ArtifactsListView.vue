@@ -125,12 +125,15 @@ import { ElMessage } from 'element-plus'
 import { useArtifactsApi } from '@/api/artifacts'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
+import { useDocumentTitle } from '@/composables/useDocumentTitle'
 import EmptyState from '@/components/common/EmptyState.vue'
 import type { Artifact, ArtifactKind, ArtifactStatus } from '@/types/artifacts'
 
 const api = useArtifactsApi()
 const router = useRouter()
 const domainStore = useDomainStore()
+
+useDocumentTitle(() => '知识制品')
 
 const artifacts = ref<Artifact[]>([])
 const loading = ref(false)

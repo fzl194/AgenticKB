@@ -91,7 +91,8 @@
 
     <el-tabs v-if="artifact" v-model="activeTab" class="artifact-detail__tabs">
       <!-- ── 设计态：导入向导 / 列定义 / 行编辑三面板（owner+editor；viewer 无设计态）── -->
-      <el-tab-pane label="设计态" name="design">
+      <el-tab-pane name="design">
+        <template #label><el-icon class="artifact-detail__tab-icon"><EditPen /></el-icon>设计态</template>
         <!-- L01 空制品引导（66号 §4）：刚创建的空制品给「下一步做什么」指路
              ——空 Wiki 提示从知识库生成；空表格提示上传 Excel 或编辑字段。 -->
         <el-alert
@@ -179,7 +180,8 @@
       </el-tab-pane>
 
       <!-- ── 运行态：说明卡子组件 + 只读行表格（本棒可用）── -->
-      <el-tab-pane label="运行态" name="runtime">
+      <el-tab-pane name="runtime">
+        <template #label><el-icon class="artifact-detail__tab-icon"><Reading /></el-icon>运行态</template>
         <div class="artifact-detail__meta-bar">
           <!-- C01：说明卡（描述/使用说明/版本/消费方式 + artifact_ref 复制 +
                Agent 三条件区）整体抽入子组件——本视图已被多任务触碰，控行数。 -->
@@ -282,7 +284,8 @@
       </el-tab-pane>
 
       <!-- ── 成员：成员管理仅 owner（后端 ROLE_OWNER_ONLY）── -->
-      <el-tab-pane label="成员" name="members" lazy>
+      <el-tab-pane name="members" lazy>
+        <template #label><el-icon class="artifact-detail__tab-icon"><User /></el-icon>成员</template>
         <ArtifactMembersPanel
           :artifact-id="artifactId"
           :can-manage="isOwner"
@@ -292,7 +295,8 @@
       </el-tab-pane>
 
       <!-- ── 版本：revisions 列表 + 回滚（面板内）── -->
-      <el-tab-pane label="版本" name="versions" lazy>
+      <el-tab-pane name="versions" lazy>
+        <template #label><el-icon class="artifact-detail__tab-icon"><Timer /></el-icon>版本</template>
         <ArtifactVersionsPanel
           ref="versionsPanel"
           :artifact-id="artifactId"
@@ -358,9 +362,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, Edit } from '@element-plus/icons-vue'
+import { ArrowLeft, Edit, EditPen, Reading, Timer, User } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useArtifactsApi } from '@/api/artifacts'
+import { useDocumentTitle } from '@/composables/useDocumentTitle'
 import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ArtifactImportWizard from '@/components/artifacts/ArtifactImportWizard.vue'
@@ -390,6 +395,10 @@ const api = useArtifactsApi()
 const router = useRouter()
 
 const artifact = ref<ArtifactDetail | null>(null)
+
+// 浏览器标签：制品标题跟随（加载前回落「知识制品」）——站名后缀取挂载时
+// document.title（brand 启动期已写入）；须在 artifact 声明后（immediate 求值）
+useDocumentTitle(() => artifact.value?.title || '知识制品')
 const loading = ref(false)
 const loadError = ref('')
 const activeTab = ref<'design' | 'runtime' | 'members' | 'versions'>('design')
@@ -777,6 +786,8 @@ defineExpose({ reloadAll })
 </script>
 
 <style scoped>
+.artifact-detail__tabs :deep(.el-tabs__item) { display: inline-flex; align-items: center; gap: 5px; }
+.artifact-detail__tab-icon { font-size: 14px; }
 .artifact-detail__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .artifact-detail__head-left { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .artifact-back { display: inline-flex; align-items: center; gap: 4px; color: var(--kb-text-tertiary); text-decoration: none; font-size: 12px; }

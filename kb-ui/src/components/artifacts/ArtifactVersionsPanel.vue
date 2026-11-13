@@ -13,7 +13,9 @@
       </el-table-column>
       <el-table-column prop="row_count" :label="countColumnLabel" width="90" align="right" />
       <el-table-column prop="change_summary" label="变更摘要" min-width="200" show-overflow-tooltip />
-      <el-table-column prop="published_by" label="发布人" width="140" />
+      <el-table-column label="发布人" width="140">
+        <template #default="{ row }">{{ displayNameOf(row.published_by) }}</template>
+      </el-table-column>
       <el-table-column label="发布时间" width="170">
         <template #default="{ row }">{{ formatTime(row.published_at) }}</template>
       </el-table-column>
@@ -64,8 +66,24 @@ const api = useArtifactsApi()
 
 const revisions = ref<RevisionInfo[]>([])
 const loading = ref(false)
+/** 发布人目录（user_id → 显示名/登录名；2026-11-13 用户反馈「发布人一堆
+ *  ID」）——成员行由后端 JOIN 回填名称；名单加载失败/查不到兜底原值。 */
+const nameDirectory = ref(new Map<string, string>())
 
-onMounted(loadRevisions)
+onMounted(() => {
+  void loadRevisions()
+  api.listMembers(props.artifactId)
+    .then(members => {
+      nameDirectory.value = new Map(members.map(m => [
+        m.user_id, m.user_name || m.username || m.user_id,
+      ]))
+    })
+    .catch(() => { /* 目录不可得（viewer 无成员读权限等）→ 兜底原值展示 */ })
+})
+
+function displayNameOf(publisher: string): string {
+  return nameDirectory.value.get(publisher) ?? publisher
+}
 
 async function loadRevisions(): Promise<void> {
   loading.value = true

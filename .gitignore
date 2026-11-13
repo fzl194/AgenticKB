@@ -42,6 +42,8 @@
 !release_tests/eval/
 !release_tests/eval/*.py
 !release_tests/eval/*.yaml
+!code_top100_submission/
+!code_top100_submission/**
 !.github/
 !.github/**
 
@@ -133,3 +135,5 @@ main_control_service/config/system/onenet.yaml
 main_control_service/config/system/llm_service.domains/
 # 一张网域覆盖文件同规则（按域真实凭据，运维侧放置）
 main_control_service/config/system/onenet.domains/
+
+code_top100_submission/

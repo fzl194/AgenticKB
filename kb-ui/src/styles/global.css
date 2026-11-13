@@ -110,34 +110,13 @@ body {
 .el-message-box__content { padding: 16px 24px; color: var(--kb-text-secondary); }
 .el-message-box__btns { padding: 12px 24px 18px; }
 
-/* ── 弹窗表单语言（高保真 st-label/st-input）：标签置顶堆叠 + 满宽控件 ──
-   仅作用于弹窗内的表单（页面内联表单不受影响）——EP 默认左侧挤压 label
-   是弹窗观感 low 的主因。 */
-.el-dialog .el-form-item,
-.el-message-box .el-form-item {
-  display: block;
-  margin-right: 0;
-  margin-left: 0;
-  margin-bottom: 14px;
-}
+/* ── 弹窗表单观感（2026-11-13 用户拍板「改风格不改字段排布」）：
+   标签保持左右原布局不动（EP 默认排布即既定设计系统），只打磨
+   标签字色/字号与控件圆角——布局结构零改动。 ── */
 .el-dialog .el-form-item__label,
 .el-message-box .el-form-item__label {
-  display: block;
-  width: auto !important;
-  height: auto;
-  line-height: 1.5;
-  padding: 0;
-  margin-bottom: 6px;
-  text-align: left;
-  justify-content: flex-start;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
   color: var(--kb-text-secondary, #64748b);
-}
-.el-dialog .el-form-item__content,
-.el-message-box .el-form-item__content {
-  margin-left: 0 !important;
-  line-height: 1.6;
 }
 .el-dialog .el-input__wrapper,
 .el-dialog .el-textarea__inner,

@@ -10,8 +10,12 @@ const state = vi.hoisted(() => ({
     searchWiki: vi.fn(),
     getWikiToc: vi.fn(),
     getWikiUnitSource: vi.fn(),
+    upsertWikiPage: vi.fn(),
+    deleteWikiPage: vi.fn(),
+    saveWikiToc: vi.fn(),
   },
   ui: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
+  uiConfirm: vi.fn(),
   clipboard: { writeText: vi.fn() },
   /** 可覆写的错误文案提取（Q01 弹层「透出后端 message」断言用）。 */
   apiErrorDetail: vi.fn(async (_error?: unknown) => 'mock-error'),
@@ -28,9 +32,11 @@ vi.mock('element-plus', () => ({
     success: state.ui.success, error: state.ui.error,
     warning: state.ui.warning, info: state.ui.info,
   },
+  ElMessageBox: { confirm: state.uiConfirm },
 }))
 
 import WikiReaderPanel from '../WikiReaderPanel.vue'
+import WikiGraphCanvas from '../WikiGraphCanvas.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import type {
   WikiLink,
@@ -44,11 +50,19 @@ import type {
 interface ReaderVm {
   sortedPages: WikiPageMeta[]
   selectedKey: string
-  outLinks: WikiLink[]
-  inLinks: WikiLink[]
   searchQuery: string
+  editing: boolean
+  editBody: string
   runSearch: () => Promise<void>
   reload: () => Promise<void>
+  startEditBody: () => void
+  saveBody: () => Promise<void>
+  startNewPage: () => void
+  removePage: (meta: WikiPageMeta) => Promise<void>
+  onDragStart: (key: string) => void
+  moveDraggedTo: (sectionIndex: number, insertAt: number) => void
+  saveToc: () => Promise<void>
+  tocDirty: boolean
 }
 
 /** ordinal 乱序给（术语=1 / 首页=2）——目录按 ordinal 排序且自动选中第一页=术语页。 */
@@ -88,14 +102,15 @@ const inLinks: WikiLink[] = [
   { from_page: 'home', to_page: 'glossary-mop', anchor_text: '术语', status: 'valid' },
 ]
 
-function mountReader(): VueWrapper {
+function mountReader(canWrite = false): VueWrapper {
   return shallowMount(WikiReaderPanel, {
-    props: { artifactId: 'art-1' },
+    props: { artifactId: 'art-1', canWrite },
     global: {
       // el-dialog 桩渲染默认+footer 插槽（Q01 溯源弹层内容可达）
       stubs: {
         ElDialog: {
-          template: '<div class="el-dialog-stub" data-test="wiki-unit-source-dialog"><slot /><slot name="footer" /></div>',
+          // 不硬编码 data-test——组件上的 data-test 经 attrs 透传到各自桩根
+          template: '<div class="el-dialog-stub"><slot /><slot name="footer" /></div>',
         },
       },
     },
@@ -108,11 +123,8 @@ beforeEach(() => {
   state.api.getWikiPage.mockReset().mockImplementation(
     (_id: string, key: string) => Promise.resolve(key === 'home' ? homePage : glossaryPage))
   // D03.1 信封形态：{revision, links}（侧栏只消费 links）
-  state.api.listWikiLinks.mockReset().mockImplementation(
-    (_id: string, params?: { direction?: 'out' | 'in' }) =>
-      Promise.resolve(params?.direction === 'out'
-        ? { revision: 3, links: outLinks }
-        : { revision: 3, links: inLinks }))
+  state.api.listWikiLinks.mockReset().mockImplementation(() =>
+    Promise.resolve({ revision: 3, links: [...outLinks, ...inLinks] }))
   state.api.searchWiki.mockReset().mockResolvedValue(
     { revision: 1, degraded_dense: false, results: [] })
   // 运行态目录缺省平铺（无 toc 行/空目录——D03 分节渲染不触发）
@@ -120,6 +132,10 @@ beforeEach(() => {
   // Q01 溯源回原文：默认拒绝态由各用例覆写
   state.api.getWikiUnitSource.mockReset()
   state.apiErrorDetail.mockReset().mockResolvedValue('mock-error')
+  state.api.upsertWikiPage.mockReset().mockResolvedValue(glossaryPage)
+  state.api.deleteWikiPage.mockReset().mockResolvedValue(undefined)
+  state.api.saveWikiToc.mockReset().mockResolvedValue({ sections: [], updated_at: 'toc-tok-2' })
+  state.uiConfirm.mockReset().mockResolvedValue('confirm')
   state.routerPush.mockReset()
   state.ui.success.mockReset()
   state.ui.error.mockReset()
@@ -188,7 +204,7 @@ describe('WikiReaderPanel', () => {
     await wrapper.find('[data-wiki-page="ghost"]').trigger('click')
     await flushPromises()
 
-    expect(state.ui.warning).toHaveBeenCalledWith('目标页面未发布')
+    expect(state.ui.warning).toHaveBeenCalledWith('目标页面不存在')
     expect(state.api.getWikiPage).toHaveBeenCalledTimes(1)   // 仍是初始那一次
   })
 
@@ -208,23 +224,34 @@ describe('WikiReaderPanel', () => {
     expect(state.ui.info).toHaveBeenCalledWith(expect.stringContaining('unit-9'))
   })
 
-  it('上下文侧栏：链接/被链渲染 + broken 标红 + 溯源 kb/快照/切片计数', async () => {
+  it('右栏近邻：当前页为中心的力导向图（一阶出入+断链伪节点）+ 溯源 kb/快照/切片计数', async () => {
     const wrapper = mountReader()
     await flushPromises()
 
-    const out = wrapper.findAll('[data-test="wiki-reader-out-link"]')
-    expect(out).toHaveLength(2)
-    expect(out[1].classes()).toContain('is-broken')
-    expect(out[1].text()).toContain('断链')
-    const ins = wrapper.findAll('[data-test="wiki-reader-in-link"]')
-    expect(ins).toHaveLength(1)
-    expect(ins[0].text()).toContain('home')
+    // 图数据：中心 glossary-mop + 输入 home（home→glossary）+ 输出 home/gone-page（glossary→…）
+    const graph = wrapper.find('[data-test="wiki-reader-graph"]')
+    expect(graph.exists()).toBe(true)
+    const canvas = wrapper.getComponent(WikiGraphCanvas)
+    const option = canvas.props('option') as { series: { data: { key: string; isBroken?: boolean; fixed?: boolean }[] }[] }
+    const nodes = option.series[0].data
+    const keys = nodes.map(n => n.key).sort()
+    expect(keys).toEqual(['glossary-mop', 'gone-page', 'home'])
+    expect(nodes.find(n => n.key === 'glossary-mop')?.fixed).toBe(true)   // 中心固定
+    expect(nodes.find(n => n.key === 'gone-page')?.isBroken).toBe(true)   // 断链伪节点
+    // 近邻计数（一阶输入 1 · 输出 2）——栏标题口径
+    expect(wrapper.find('.wiki-reader__ctx').text()).toContain('一阶出入 3')
 
+    // 溯源（先断言——下步切页后 provenance 随新页变化）
     const prov = wrapper.find('[data-test="wiki-reader-provenance"]')
     expect(prov.exists()).toBe(true)
     expect(prov.text()).toContain('kb-1')
     expect(prov.text()).toContain('snap-1')
     expect(prov.text()).toContain('2')   // unit_ids 计数
+
+    // 图节点点击 → 切页
+    canvas.vm.$emit('node-click', 'home')
+    await flushPromises()
+    expect(state.api.getWikiPage).toHaveBeenLastCalledWith('art-1', 'home', { draft: false })
   })
 
   it('未发布（listWikiPages 空）→ EmptyState 尚未发布版本', async () => {
@@ -314,7 +341,7 @@ describe('WikiReaderPanel 检索（批次4）', () => {
 
     await hits[1].trigger('click')
     await flushPromises()
-    expect(state.ui.warning).toHaveBeenCalledWith('目标页面未发布')
+    expect(state.ui.warning).toHaveBeenCalledWith('目标页面不存在')
     expect(state.api.getWikiPage).toHaveBeenLastCalledWith('art-1', 'home', { draft: false })
   })
 
@@ -409,7 +436,7 @@ describe('WikiReaderPanel 分节目录（D03）', () => {
     await flushPromises()
 
     // 运行态缺省口径（不带 draft/revision 参数）
-    expect(state.api.getWikiToc).toHaveBeenCalledWith('art-1')
+    expect(state.api.getWikiToc).toHaveBeenCalledWith('art-1', { draft: false })
 
     const titles = wrapper.findAll('[data-test="wiki-reader-toc-section"]')
     expect(titles).toHaveLength(2)
@@ -538,5 +565,121 @@ describe('WikiReaderPanel 溯源回原文（Q01）', () => {
     const dialog = wrapper.find('[data-test="wiki-unit-source-dialog"]')
     expect(dialog.text()).toContain('第二条切片的原文')
     expect(dialog.text()).not.toContain('MOP 是移动对外门户')   // 旧内容被覆盖
+  })
+})
+
+
+// ── 设计态（canWrite=true：draft 口径 + 编辑正文/页面属性/新建/删除/目录拖拽）──
+
+describe('WikiReaderPanel 设计态（统一视图写入口）', () => {
+  it('draft 口径：清单/页面/目录/引用全部带 draft=true；默认仍是阅读渲染', async () => {
+    const wrapper = mountReader(true)
+    await flushPromises()
+
+    expect(state.api.listWikiPages).toHaveBeenCalledWith('art-1', { draft: true })
+    expect(state.api.listWikiLinks).toHaveBeenCalledWith('art-1', { draft: true })
+    expect(state.api.getWikiToc).toHaveBeenCalledWith('art-1', { draft: true })
+    expect(state.api.getWikiPage).toHaveBeenLastCalledWith('art-1', 'glossary-mop', { draft: true })
+
+    // 默认阅读（非编辑态）：渲染正文 + 编辑入口按钮存在
+    expect(wrapper.find('[data-test="wiki-reader-body"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="wiki-body-editor"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="wiki-edit-body"]').exists()).toBe(true)
+    // 目录写入口：新建页/新增节/删除页；拖拽开启（draggable）
+    expect(wrapper.find('[data-test="wiki-new-page"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="wiki-toc-add-section"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-test="wiki-reader-toc-item"]')[0].attributes('draggable')).toBe('true')
+  })
+
+  it('编辑正文：进入 markdown 编辑态 → upsert 整页（属性沿用）→ 刷新回阅读', async () => {
+    state.api.upsertWikiPage.mockResolvedValueOnce(glossaryPage)
+    const wrapper = mountReader(true)
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ReaderVm
+
+    vm.startEditBody()
+    await flushPromises()
+    expect(wrapper.find('[data-test="wiki-body-editor"]').exists()).toBe(true)
+
+    vm.editBody = '# 改后的正文'
+    await vm.saveBody()
+    await flushPromises()
+
+    expect(state.api.upsertWikiPage).toHaveBeenCalledWith('art-1', 'glossary-mop', {
+      title: 'MOP 术语', page_type: 'glossary', frontmatter: {},
+      body_md: '# 改后的正文', ordinal: 1,
+      expected_updated_at: undefined,
+    })
+    expect(wrapper.vm.$emit).toBeDefined()   // emit changed 已由父级接线（此处仅烟测不崩）
+    expect(vm.editing).toBe(false)
+    expect(wrapper.find('[data-test="wiki-reader-body"]').exists()).toBe(true)
+  })
+
+  it('页面属性弹窗：新建页（缺省 page_key=标题）→ upsert 创建并跳转', async () => {
+    const created = { ...glossaryPage, page_key: 'new-page', title: '新页' }
+    state.api.upsertWikiPage.mockResolvedValueOnce(created)
+    const wrapper = mountReader(true)
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ReaderVm
+
+    vm.startNewPage()
+    await flushPromises()
+    expect(wrapper.find('[data-test="wiki-page-key"]').exists()).toBe(true)
+
+    // 表单字段经 vm 直填（el-input 桩不透传 v-model）
+    const vmAny = wrapper.vm as unknown as { propsForm: { title: string; pageType: string; ordinal: number; aliases: string; tags: string } }
+    vmAny.propsForm.title = '新页'
+    const saveBtn = wrapper.find('[data-test="wiki-props-save"]')
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(state.api.upsertWikiPage).toHaveBeenCalledWith('art-1', '新页', expect.objectContaining({
+      title: '新页', page_type: 'topic', body_md: '# 新页\n\n请填写知识正文。',
+    }))
+    expect(state.api.getWikiPage).toHaveBeenLastCalledWith('art-1', 'new-page', { draft: true })
+  })
+
+  it('删除页：确认后删除并刷新清单', async () => {
+    const wrapper = mountReader(true)
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ReaderVm
+
+    await vm.removePage(metaPages[0])   // 删首页
+    await flushPromises()
+
+    expect(state.api.deleteWikiPage).toHaveBeenCalledWith('art-1', 'home', undefined)
+    expect(state.ui.success).toHaveBeenCalledWith('已删除')
+    expect(state.api.listWikiPages).toHaveBeenCalledTimes(2)   // 删除后刷新
+  })
+
+  it('目录拖拽调整：拖到目标节目标位 → dirty → 保存 PUT 节构', async () => {
+    state.api.getWikiToc.mockResolvedValueOnce({
+      sections: [
+        { section_title: '基础', page_keys: ['glossary-mop'] },
+        { section_title: '进阶', page_keys: ['home'] },
+      ],
+      flat: false, revision: 3, updated_at: 'toc-tok-1',
+    })
+    const wrapper = mountReader(true)
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ReaderVm
+
+    // glossary-mop 从「基础」拖到「进阶」尾部（节 1，位 1）
+    vm.onDragStart('glossary-mop')
+    vm.moveDraggedTo(1, 1)
+    await flushPromises()
+    expect(vm.tocDirty).toBe(true)
+    expect(wrapper.find('[data-test="wiki-toc-save"]').exists()).toBe(true)
+
+    await vm.saveToc()
+    await flushPromises()
+    expect(state.api.saveWikiToc).toHaveBeenCalledWith('art-1', {
+      sections: [
+        { section_title: '基础', page_keys: [] },
+        { section_title: '进阶', page_keys: ['home', 'glossary-mop'] },
+      ],
+      expected_updated_at: 'toc-tok-1',
+    })
+    expect(vm.tocDirty).toBe(false)
   })
 })

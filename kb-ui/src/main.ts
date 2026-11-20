@@ -1,7 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
 
 import App from './App.vue'
@@ -11,6 +10,8 @@ import './styles/global.css'
 import './styles/markdown.css'
 import { useBrandStore } from './stores/brand'
 import { useAuthStore } from './stores/auth'
+import { useLocaleStore } from './stores/locale'
+import { epLocale } from './locales/element'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -20,10 +21,13 @@ app.use(pinia)
 // vue-router 的初始导航在 app.use(router) 时立即触发，路由守卫靠 await auth.ready 等 fetchMe 完成。
 const brand = useBrandStore(pinia)
 const auth = useAuthStore(pinia)
+const locale = useLocaleStore(pinia)
+locale.attachApp(app) // 脱挂通道重注入用（stores/locale.ts 说明）
 auth.bootstrap()
 app.use(router)
-// 中文 locale：否则确认弹窗按钮/表格空态渲染英文 OK/Cancel、No Data
-app.use(ElementPlus, { locale: zhCn })
+// EP locale 初值取 locale store（localStorage 全局键，默认 zh）；运行时切换由
+// stores/locale.ts 经 locales/element.ts applyAppLocale 重注入脱挂通道（ElMessageBox 等）。
+app.use(ElementPlus, { locale: epLocale(locale.lang) })
 
 Promise.allSettled([brand.fetchBrand(), auth.ready]).finally(() => {
   brand.applyBrand()

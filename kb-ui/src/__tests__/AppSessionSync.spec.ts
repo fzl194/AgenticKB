@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
+import { createPinia } from 'pinia'
 
 const router = vi.hoisted(() => ({ replace: vi.fn() }))
 const state = vi.hoisted(() => ({
@@ -37,7 +38,15 @@ describe('App session synchronization', () => {
   })
 
   it('replaces the current route when another tab ends the session', async () => {
-    mount(App, { global: { stubs: { RouterView: true } } })
+    mount(App, {
+      global: {
+        plugins: [createPinia()],
+        stubs: {
+          RouterView: true,
+          ElConfigProvider: { template: '<div><slot /></div>' },
+        },
+      },
+    })
 
     state.loggingOut!.value = true
     await nextTick()
@@ -46,7 +55,15 @@ describe('App session synchronization', () => {
   })
 
   it('reruns navigation after another tab replaces the authenticated identity', async () => {
-    mount(App, { global: { stubs: { RouterView: true } } })
+    mount(App, {
+      global: {
+        plugins: [createPinia()],
+        stubs: {
+          RouterView: true,
+          ElConfigProvider: { template: '<div><slot /></div>' },
+        },
+      },
+    })
     state.authenticated = true
 
     const externalGeneration = state.externalSessionGeneration!

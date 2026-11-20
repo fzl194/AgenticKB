@@ -39,11 +39,11 @@
 | `src/locales/element.ts` | Element Plus locale 桥：`epLocale(lang)` 返回 zh-cn/en 包；`applyAppLocale(app, lang)` 封装 `provideGlobalConfig({ locale }, app, true)`（element-plus 公开导出且有 d.ts 类型，但属**未文档化 API**，锁定 2.14 行为——调用点留注释，spike 测试即升级绊网） |
 | `src/stores/locale.ts` | Pinia store：`lang` 状态、`t(key)` 查询、`setLang()`、`applyUserPreference(username)`、持久化。**app 引用接线**：store 持有 `app` 引用（`main.ts` 在 `app.use(pinia)` 后注入）——`setLang` 在点击回调里跑，`getCurrentInstance()` 为 null，且从 main.ts import app 会经 App.vue 成环 |
 
-### 3.2 修改文件（5 个）
+### 3.2 修改文件（6 个）
 
 | 文件 | 改动 |
 |---|---|
-| `App.vue` | ① 外包 `<el-config-provider :locale="epLocale(lang)">`——树内 EP 组件（分页/日期选择/空态等）响应式切换；② `watch(() => auth.user?.username)` → `localeStore.applyUserPreference(username)`（登录成功/fetchMe 完成后应用该用户分键偏好）。**不改 `stores/auth.ts`**，5 文件清单保持穷尽 |
+| `App.vue` | ① 外包 `<el-config-provider :locale="epLocale(lang)">`——树内 EP 组件（分页/日期选择/空态等）响应式切换；② `watch(() => auth.user?.username)` → 有名则 `applyUserPreference(username)`、无名（登出）则 `clearUser()`（对抗审查 HIGH-1：不清则登录页切换覆写前用户分键）。**不改 `stores/auth.ts`**，文件清单穷尽 |
 | `main.ts` | `app.use(ElementPlus, { locale: epLocale(bootLang) })`——locale 参数从 locale store 启动值取（不再静态 import zhCn）。此挂载承担**脱挂通道**初值（见 3.4） |
 | `Sidebar.vue` | `ALL_NAV` 12 个 label 改为字典 key；`未选择知识域`、帮助 tooltip（`平台指南（帮助文档）`）一并接入 |
 | `Header.vue` | `pageTitles` 20 项映射（去重 11 个标题）值改 key；健康状态与健康 tooltip（正常/异常、全部正常/存在异常）；角色标签（系统管理员/域管理员/用户）；账户下拉项（修改密码/登出）；修改密码两步 ElMessageBox 弹窗文案 |
@@ -52,7 +52,7 @@
 
 ### 3.3 切换按钮
 
-- `Header.vue` 右侧（域选择器与健康灯之间）：紧凑 `中 / EN` 切换控件；
+- `Header.vue` 右侧（健康灯与账户下拉之间）：紧凑切换控件，显式显示**目标语言**（zh 态显示 `EN`，en 态显示 `中`），避歧义；
 - `LoginView` 右上角：同款（覆盖未登录场景）。
 
 ### 3.4 Element Plus 文案双通道（关键机制）
@@ -80,7 +80,8 @@ EP 有两类文案通道，须分别覆盖：
 
 1. **store 首次使用**（登录页/壳层任一组件 setup）：读全局键初始化 `lang`（无则 `'zh'`）——登录页立即正确；
 2. **登录成功 / fetchMe 完成**：`App.vue` 对 `auth.user?.username` 的 watcher 触发 `applyUserPreference(username)`——存在该用户分键则覆盖当前 lang；不存在则保持当前语言（不预写）；
-3. **用户切换**：写用户分键（若已知 username）+ 同步写全局键。
+3. **用户切换**：写用户分键（若已知 username）+ 同步写全局键；
+4. **登出**：watcher 收到 undefined → `clearUser()` 清 currentUser——此后登录页阶段的切换只写全局键，不触碰任何用户分键（对抗审查 HIGH-1 修复）。
 
 **已知且接受的边界**：登录页显示的是全局键（本浏览器上次使用的语言），即前一用户的选择会带到登录页——这是无后端存储的必然结果，刻意接受。
 
@@ -101,12 +102,19 @@ EP 有两类文案通道，须分别覆盖：
 
 ## 6. 测试
 
-### 新增 `src/stores/__tests__/locale.spec.ts`
+### 新增测试文件（3 个）
+
+- `src/locales/__tests__/element.spec.ts`——EP 脱挂通道 spike（§3.4 机制的行为级验证 + element-plus 升级绊网；npm test 默认路径内自动跑到）；
+- `src/locales/__tests__/dict.spec.ts`——zh/en key 集相等 + 无空值（en 侧类型标注的 keyof 在 zh 标注 Record<string,string> 时退化为 string，编译期不拦漏 key，运行时此测试是唯一闸门）；
+- `src/stores/__tests__/locale.spec.ts`：
+
+### `src/stores/__tests__/locale.spec.ts`
 
 - `beforeEach` 清 `kb-ui-lang*` 全部键（jsdom localStorage 跨用例持久，per-user 隔离用例否则互相污染）；
 - 默认中文；
 - 切换后写全局键 + 用户分键；
 - per-user 隔离（alice/bob 互不干扰，参照 `domain.spec.ts` 既有写法）；
+- 登出后（`clearUser`）setLang 只写全局键，不触碰任何用户分键（HIGH-1 回归）；
 - `applyUserPreference` 有分键覆盖 / 无分键保持；
 - 非法存储值回落 `'zh'`；
 - `t()` 回落链（当前字典 → zh → key）。

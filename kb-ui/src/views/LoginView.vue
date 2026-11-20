@@ -1,13 +1,21 @@
 <template>
   <div class="login">
+    <button
+      type="button"
+      class="login__lang"
+      data-test="lang-toggle"
+      :title="locale.lang === 'zh' ? 'Switch to English' : '切换为中文'"
+      @click="toggleLang"
+    >{{ locale.lang === 'zh' ? 'EN' : '中' }}</button>
+
     <form class="login__card" @submit.prevent="onSubmit">
       <h2 class="login__title">{{ brand.title }}</h2>
-      <p class="login__hint">{{ step === 'username' ? '登录到知识库' : `管理员 ${username} 验证` }}</p>
+      <p class="login__hint">{{ step === 'username' ? locale.t('login.hint') : locale.t('login.adminVerify', { user: username }) }}</p>
 
       <input
         class="login__input"
         v-model="username"
-        placeholder="用户名 / 工号"
+        :placeholder="locale.t('login.usernamePlaceholder')"
         autocomplete="username"
         :disabled="step === 'password'"
       />
@@ -17,17 +25,17 @@
         class="login__input"
         v-model="password"
         type="password"
-        placeholder="密码"
+        :placeholder="locale.t('login.passwordPlaceholder')"
         autocomplete="current-password"
       />
 
       <div v-if="errorMsg" class="login__error">
         {{ errorMsg }}
-        <span v-if="brand.adminContact" class="login__contact">联系管理员：{{ brand.adminContact }}</span>
+        <span v-if="brand.adminContact" class="login__contact">{{ locale.t('login.contact', { contact: brand.adminContact }) }}</span>
       </div>
 
       <button class="login__submit" type="submit" :disabled="loading">
-        {{ loading ? '处理中…' : (step === 'password' ? '登录' : '下一步') }}
+        {{ loading ? locale.t('login.processing') : (step === 'password' ? locale.t('login.submit') : locale.t('login.next')) }}
       </button>
     </form>
   </div>
@@ -38,6 +46,7 @@ import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useBrandStore } from '@/stores/brand'
+import { useLocaleStore } from '@/stores/locale'
 import { useAuthApi } from '@/api/auth'
 import { apiErrorDetail } from '@/api/proxyClient'
 
@@ -45,7 +54,12 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const brand = useBrandStore()
+const locale = useLocaleStore()
 const api = useAuthApi()
+
+function toggleLang(): void {
+  locale.setLang(locale.lang === 'zh' ? 'en' : 'zh')
+}
 
 const step = ref<'username' | 'password'>('username')
 const username = ref('')
@@ -67,7 +81,7 @@ function redirectAfterLogin(): void {
 async function onSubmit(): Promise<void> {
   errorMsg.value = ''
   if (!username.value.trim()) {
-    errorMsg.value = '请输入用户名 / 工号'
+    errorMsg.value = locale.t('login.emptyUsername')
     return
   }
   loading.value = true
@@ -75,7 +89,7 @@ async function onSubmit(): Promise<void> {
     if (step.value === 'username') {
       const res = await api.identify(username.value.trim())
       if (res.mode === 'not_found') {
-        errorMsg.value = '用户未在系统'
+        errorMsg.value = locale.t('login.userNotFound')
       } else if (res.mode === 'member') {
         await onMemberIdentified(username.value.trim())
       } else {
@@ -86,14 +100,15 @@ async function onSubmit(): Promise<void> {
     } else {
       // 第二步：管理员密码
       if (!password.value) {
-        errorMsg.value = '请输入密码'
+        errorMsg.value = locale.t('login.emptyPassword')
         return
       }
       await auth.login(username.value.trim(), password.value)
       redirectAfterLogin()
     }
   } catch (e) {
-    errorMsg.value = (await apiErrorDetail(e)) || (step.value === 'password' ? '用户名或密码错误' : '请求失败')
+    errorMsg.value = (await apiErrorDetail(e))
+      || (step.value === 'password' ? locale.t('login.badCredentials') : locale.t('login.requestFailed'))
   } finally {
     loading.value = false
   }
@@ -104,11 +119,32 @@ defineExpose({ onSubmit, step, username, password, errorMsg })
 
 <style scoped>
 .login {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--kb-bg-page);
+}
+
+/* 语言切换：右上角 pill（显式显示目标语言，避歧义） */
+.login__lang {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  padding: 4px 12px;
+  border: 1px solid var(--kb-border);
+  border-radius: 16px;
+  background: var(--kb-bg-card);
+  color: var(--kb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login__lang:hover {
+  color: var(--kb-accent);
+  border-color: var(--kb-accent);
 }
 .login__card {
   width: 340px;

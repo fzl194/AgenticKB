@@ -88,4 +88,15 @@ describe('LoginView two-step', () => {
     await flushPromises()
     expect(authStore.login).toHaveBeenCalledWith('root', 'adminpw12')
   })
+
+  it('toggles to English and translates shell strings', async () => {
+    const w = mountIt()
+    await w.get('[data-test="lang-toggle"]').trigger('click')
+    expect((w.get('input[autocomplete="username"]').element as HTMLInputElement).placeholder)
+      .toBe('Username / Employee ID')
+    expect(w.text()).toContain('Sign in to the knowledge base')
+
+    await w.get('[data-test="lang-toggle"]').trigger('click')
+    expect(w.text()).toContain('登录到知识库')
+  })
 })

@@ -19,7 +19,7 @@
         />
       </el-select>
 
-      <div class="header__health" :title="allHealthy ? '全部正常' : '存在异常'">
+      <div class="header__health" :title="allHealthy ? locale.t('header.healthAll') : locale.t('header.healthSome')">
         <span
           class="header__health-dot"
           :class="{
@@ -28,8 +28,16 @@
             'header__health-dot--unhealthy': !someHealthy,
           }"
         />
-        <span class="header__health-label">{{ allHealthy ? '正常' : '异常' }}</span>
+        <span class="header__health-label">{{ allHealthy ? locale.t('header.healthy') : locale.t('header.unhealthy') }}</span>
       </div>
+
+      <button
+        type="button"
+        class="header__lang"
+        :title="locale.lang === 'zh' ? 'Switch to English' : '切换为中文'"
+        data-test="lang-toggle"
+        @click="toggleLang"
+      >{{ locale.lang === 'zh' ? 'EN' : '中' }}</button>
 
       <el-dropdown trigger="click" @command="onAccountCommand">
         <span class="header__account">
@@ -44,8 +52,8 @@
         </span>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item v-if="canChangePassword" command="password">修改密码</el-dropdown-item>
-            <el-dropdown-item command="logout" :divided="canChangePassword">登出</el-dropdown-item>
+            <el-dropdown-item v-if="canChangePassword" command="password">{{ locale.t('header.changePassword') }}</el-dropdown-item>
+            <el-dropdown-item command="logout" :divided="canChangePassword">{{ locale.t('header.logout') }}</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -60,6 +68,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useBrandStore } from '@/stores/brand'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
 import { useAuthApi } from '@/api/auth'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { canManageDomainUsers } from '@/utils/domainPermissions'
@@ -69,38 +78,48 @@ const router = useRouter()
 const domainStore = useDomainStore()
 const brand = useBrandStore()
 const auth = useAuthStore()
+const locale = useLocaleStore()
 
 const pageTitles: Record<string, string> = {
-  dashboard: '概览',
-  workspaces: '制作工作台',
-  'workspace-detail': '制作工作台',
-  artifacts: '知识制品',
-  'artifact-detail': '知识制品',
-  kb: '知识库',
-  'kb-detail': '知识库',
-  'kb-run-detail': '知识库',
-  'kb-run-doc-detail': '知识库',
-  'kb-doc-preview': '知识库',
-  'mining-workflows': '挖掘范式',
-  'mining-workflow-editor': '挖掘范式',
-  paradigm: '检索范式',
-  'paradigm-edit': '检索范式',
-  'mcp-access': 'MCP 接入',
-  'retrieval-records': '检索记录',
-  llm: 'LLM 服务',
-  'llm-task-detail': 'LLM 服务',
-  users: '用户管理',
-  settings: '系统设置',
+  dashboard: 'title.dashboard',
+  workspaces: 'title.workspaces',
+  'workspace-detail': 'title.workspaces',
+  artifacts: 'title.artifacts',
+  'artifact-detail': 'title.artifacts',
+  kb: 'title.kb',
+  'kb-detail': 'title.kb',
+  'kb-run-detail': 'title.kb',
+  'kb-run-doc-detail': 'title.kb',
+  'kb-doc-preview': 'title.kb',
+  'mining-workflows': 'title.miningWorkflows',
+  'mining-workflow-editor': 'title.miningWorkflows',
+  paradigm: 'title.paradigm',
+  'paradigm-edit': 'title.paradigm',
+  'mcp-access': 'title.mcp',
+  'retrieval-records': 'title.retrievalRecords',
+  llm: 'title.llm',
+  'llm-task-detail': 'title.llm',
+  users: 'title.users',
+  settings: 'title.settings',
 }
 
-const pageTitle = computed(() => pageTitles[route.name as string] || brand.title)
+const pageTitle = computed(() => {
+  const key = pageTitles[route.name as string]
+  return key ? locale.t(key) : brand.title
+})
 const displayName = computed(
   () => auth.user?.display_name || auth.user?.username || '—',
 )
 const accountRoleLabel = computed(() => {
-  if (auth.siteRole === 'admin') return '系统管理员'
-  return domainStore.currentDomainInfo?.domain_role === 'admin' ? '域管理员' : '用户'
+  if (auth.siteRole === 'admin') return locale.t('header.roleAdmin')
+  return domainStore.currentDomainInfo?.domain_role === 'admin'
+    ? locale.t('header.roleDomainAdmin')
+    : locale.t('header.roleMember')
 })
+
+function toggleLang(): void {
+  locale.setLang(locale.lang === 'zh' ? 'en' : 'zh')
+}
 /** 修改密码入口：系统管理员 + 当前域域管理员（后端要求域管理员必须有密码，
  * 无自助入口就只能每次找系统管理员重置——RBAC 审查 M3）。 */
 const canChangePassword = computed(
@@ -129,10 +148,10 @@ async function onAccountCommand(cmd: string): Promise<void> {
     router.replace('/login')
   } else if (cmd === 'password') {
     try {
-      const { value } = await ElMessageBox.prompt('输入新密码（≥8 位）', '修改密码', {
+      const { value } = await ElMessageBox.prompt(locale.t('pwd.newPrompt'), locale.t('pwd.newTitle'), {
         inputType: 'password',
-        inputPlaceholder: '新密码',
-        inputValidator: (v: string) => (v && v.length >= 8) || '至少 8 位',
+        inputPlaceholder: locale.t('pwd.newPlaceholder'),
+        inputValidator: (v: string) => (v && v.length >= 8) || locale.t('pwd.newRule'),
       })
       const api = useAuthApi()
       await api.changeMyPassword(
@@ -141,22 +160,22 @@ async function onAccountCommand(cmd: string): Promise<void> {
         await _promptOld(),
         value,
       )
-      ElMessage.success('密码已更新，请重新登录')
+      ElMessage.success(locale.t('pwd.success'))
       auth.logout()
       router.replace('/login')
     } catch (e) {
       if (e !== 'cancel' && e !== 'close') {
-        ElMessage.error((await apiErrorDetail(e)) || '修改失败')
+        ElMessage.error((await apiErrorDetail(e)) || locale.t('pwd.failed'))
       }
     }
   }
 }
 
 async function _promptOld(): Promise<string> {
-  const { value } = await ElMessageBox.prompt('输入当前密码', '验证身份', {
+  const { value } = await ElMessageBox.prompt(locale.t('pwd.oldPrompt'), locale.t('pwd.oldTitle'), {
     inputType: 'password',
-    inputPlaceholder: '当前密码',
-    inputValidator: (v: string) => !!v || '必填',
+    inputPlaceholder: locale.t('pwd.oldPlaceholder'),
+    inputValidator: (v: string) => !!v || locale.t('pwd.oldRule'),
   })
   return value
 }
@@ -246,6 +265,24 @@ async function _promptOld(): Promise<string> {
   font-size: 12px;
   font-weight: 500;
   color: var(--kb-text-secondary);
+}
+
+/* 语言切换：与 .header__health 同族 pill（显式显示目标语言，避歧义） */
+.header__lang {
+  padding: 4px 10px;
+  border: 1px solid var(--kb-border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--kb-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--kb-duration) var(--kb-ease);
+}
+
+.header__lang:hover {
+  color: var(--kb-accent);
+  border-color: var(--kb-accent);
 }
 
 .header__account {

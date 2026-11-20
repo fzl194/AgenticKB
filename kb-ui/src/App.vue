@@ -19,9 +19,12 @@ const router = useRouter()
 const localeStore = useLocaleStore()
 
 // 树内 EP 组件由 el-config-provider 响应式切换；
-// 登录成功/fetchMe 完成后应用该用户的语言分键偏好（spec §4 时序 step 2）。
+// 登录成功/fetchMe 完成后应用该用户的语言分键偏好（spec §4 时序 step 2）；
+// 登出（username→undefined）必须清 currentUser——否则下一人在登录页切换
+// 语言会改写上一个用户的分键（对抗审查 HIGH-1）。
 watch(() => auth.user?.username, (name) => {
   if (name) localeStore.applyUserPreference(name)
+  else localeStore.clearUser()
 }, { immediate: true })
 
 // A storage event can end the session in another tab without a click or route

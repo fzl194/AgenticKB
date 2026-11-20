@@ -10,7 +10,7 @@
 
     <form class="login__card" @submit.prevent="onSubmit">
       <h2 class="login__title">{{ brand.title }}</h2>
-      <p class="login__hint">{{ step === 'username' ? locale.t('login.hint') : locale.t('login.adminVerify', { user: username }) }}</p>
+      <p class="login__hint">{{ step === 'username' ? locale.t('login.hint') : locale.t('login.adminVerify', { user: username.trim() }) }}</p>
 
       <input
         class="login__input"

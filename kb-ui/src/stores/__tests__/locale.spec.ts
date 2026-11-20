@@ -78,6 +78,21 @@ describe('locale store', () => {
     expect(localStorage.getItem('kb-ui-lang:alice')).toBe('en')
   })
 
+  it('after clearUser (logout) setLang writes only the global key', () => {
+    // 对抗审查 HIGH-1 回归：登出不清 currentUser 时，下一人在登录页切换
+    // 会覆写上一个用户的分键——App.vue watcher 的 else 分支负责调 clearUser。
+    const store = useLocaleStore()
+    store.applyUserPreference('alice')
+    store.setLang('en')
+    expect(localStorage.getItem('kb-ui-lang:alice')).toBe('en')
+
+    store.clearUser()
+    store.setLang('zh')
+    expect(localStorage.getItem('kb-ui-lang')).toBe('zh')
+    // alice 的分键不被登录页阶段的切换触碰
+    expect(localStorage.getItem('kb-ui-lang:alice')).toBe('en')
+  })
+
   it('applyUserPreference overrides when the user key exists', () => {
     localStorage.setItem('kb-ui-lang:alice', 'en')
     const store = useLocaleStore()

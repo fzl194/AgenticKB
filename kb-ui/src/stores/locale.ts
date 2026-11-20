@@ -80,5 +80,11 @@ export const useLocaleStore = defineStore('locale', () => {
     }
   }
 
-  return { lang, t, setLang, applyUserPreference, attachApp }
+  /** 登出时由 App.vue watcher 调用：清掉 currentUser，否则下一人在登录页
+   * 切换语言时 setLang 会把上一个用户的分键改写掉（对抗审查 HIGH-1）。 */
+  function clearUser(): void {
+    currentUser.value = ''
+  }
+
+  return { lang, t, setLang, applyUserPreference, clearUser, attachApp }
 })

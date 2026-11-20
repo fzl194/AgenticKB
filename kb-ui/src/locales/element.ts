@@ -19,6 +19,12 @@ export function epLocale(lang: Language) {
  * 2.14 已源码验证：app.provide 覆写 app 级 provides + 更新模块级 globalConfig，
  * 此后新建的脱挂实例注入即取新语言）。升级 element-plus 后跑
  * __tests__/element.spec.ts 作绊网。
+ *
+ * ⚠ 只可传 { locale }：本函数在 setup 外调用时 provideGlobalConfig 不做
+ * oldConfig 合并，会把 namespace/zIndex/size 等 app 级配置一并覆写为
+ * undefined（对抗审查 M1）。当前安全的前提是 main.ts 安装时也只传
+ * { locale }——若日后 app.use(ElementPlus, {...}) 加了其他选项，这里必须
+ * 改成合并式注入。
  */
 export function applyAppLocale(app: App, lang: Language): void {
   provideGlobalConfig({ locale: epLocale(lang) }, app, true)

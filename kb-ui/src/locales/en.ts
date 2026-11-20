@@ -1,6 +1,7 @@
 import { zh } from './zh'
 
-/** key 集与 zh 严格对齐（Record<keyof typeof zh, string> 漏 key 即编译错）。 */
+/** key 对齐由 __tests__/dict.spec.ts 运行时断言保证——zh 侧标注 Record<string,string>
+ * 使 keyof 退化为 string，编译期不拦漏 key（对抗审查 LOW-2 核实）。 */
 export const en: Record<keyof typeof zh, string> = {
   'nav.dashboard': 'Overview',
   'nav.kb': 'Knowledge Bases',

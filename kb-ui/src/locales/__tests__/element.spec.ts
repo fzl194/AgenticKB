@@ -10,7 +10,8 @@ import { applyAppLocale, epLocale } from '../element'
  * el-config-provider 子树内，语言只随 app 级 provides 走。
  * provideGlobalConfig 是 element-plus 导出但未文档化的 API——本测试即
  * element-plus 升级的绊网：若行为变化，这里先红。
- * 注意 confirm().catch：close() 会以 'close' 拒绝 promise（messageBox.mjs:54-55），
+ * 注意 confirm().catch：close()/取消会拒绝 promise（messageBox.mjs:54-55 的
+ * reject 分支，默认 distinguishCancelAndClose=false 时 reject 'cancel'），
  * 不捕获会成为 unhandled rejection 直接红掉 vitest。
  */
 describe('element locale bridge (detached channel spike)', () => {

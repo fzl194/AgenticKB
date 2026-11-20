@@ -23,16 +23,16 @@
         :class="{ 'sidebar__link--active': isActive(item.path) }"
       >
         <el-icon :size="18"><component :is="item.icon" /></el-icon>
-        <span>{{ item.label }}</span>
+        <span>{{ locale.t(item.labelKey) }}</span>
       </router-link>
     </nav>
 
     <div class="sidebar__footer">
       <div class="sidebar__domain">
         <span class="sidebar__domain-dot" />
-        <span class="sidebar__domain-name">{{ domainStore.currentDomainInfo?.display_name || '未选择知识域' }}</span>
+        <span class="sidebar__domain-name">{{ domainStore.currentDomainInfo?.display_name || locale.t('sidebar.noDomain') }}</span>
         <!-- 平台指南入口沉底（不占导航项）：问号图标 → /help 全书 23 章 -->
-        <router-link to="/help" class="sidebar__help" title="平台指南（帮助文档）" data-test="sidebar-help">
+        <router-link to="/help" class="sidebar__help" :title="locale.t('sidebar.help')" data-test="sidebar-help">
           <el-icon :size="15"><QuestionFilled /></el-icon>
         </router-link>
       </div>
@@ -52,6 +52,7 @@ import {
 import { useDomainStore } from '@/stores/domain'
 import { useBrandStore, resolveIcon } from '@/stores/brand'
 import { useAuthStore } from '@/stores/auth'
+import { useLocaleStore } from '@/stores/locale'
 import ReleaseVersion from './ReleaseVersion.vue'
 import { canManageDomainUsers } from '@/utils/domainPermissions'
 
@@ -59,6 +60,7 @@ const route = useRoute()
 const domainStore = useDomainStore()
 const brand = useBrandStore()
 const auth = useAuthStore()
+const locale = useLocaleStore()
 
 // 有图标时显示 <img>；空则回落 logoText 渐变块。
 const logoSrc = computed(() => (brand.icon.trim() ? resolveIcon(brand.icon) : ''))
@@ -70,25 +72,25 @@ const logoSrc = computed(() => (brand.icon.trim() ? resolveIcon(brand.icon) : ''
 // 批次8 M0（24 号 §5.10-§5.16）：实体图谱/本体版本/本体图谱三菜单注释下线
 // （研究线代码保留，路由与视图不动；未来启用需重新闭环设计）。
 const ALL_NAV = [
-  { path: '/', label: '概览', icon: Monitor, access: 'all' },
-  { path: '/kb', label: '知识库', icon: Files, access: 'all' },
-  { path: '/retrieval-records', label: '检索记录', icon: Tickets, access: 'all' },
-  { path: '/mcp', label: 'MCP 接入', icon: Key, access: 'all' },
-  { path: '/mining/workflows', label: '挖掘范式', icon: Management, access: 'site-admin' },
-  { path: '/paradigm', label: '检索范式', icon: Connection, access: 'site-admin' },
+  { path: '/', labelKey: 'nav.dashboard', icon: Monitor, access: 'all' },
+  { path: '/kb', labelKey: 'nav.kb', icon: Files, access: 'all' },
+  { path: '/retrieval-records', labelKey: 'nav.retrievalRecords', icon: Tickets, access: 'all' },
+  { path: '/mcp', labelKey: 'nav.mcp', icon: Key, access: 'all' },
+  { path: '/mining/workflows', labelKey: 'nav.miningWorkflows', icon: Management, access: 'site-admin' },
+  { path: '/paradigm', labelKey: 'nav.paradigm', icon: Connection, access: 'site-admin' },
   // 47 号：一张网接入（管理员：产品文档导入/重同步；KB 侧引用在知识库详情 tab）
   // 一张网图标用 Share（原 Key 与 MCP 接入撞图标）
-  { path: '/onenet', label: '一张网接入', icon: Share, access: 'site-admin' },
+  { path: '/onenet', labelKey: 'nav.onenet', icon: Share, access: 'site-admin' },
   // 67号 Task 10：制作工作台（制品的上游制作间，导出为制品草稿）。
   // 2026-11-17 收紧（用户指令）：仅站点/域管理员可用——复用 'domain-users'
   // 可见模式（语义=站点管理员或域管理员：mining auth 把 domain_role='admin'
   // 映射为全量 capabilities，site admin 由 main_control 直给），与用户管理同门。
-  { path: '/workspaces', label: '制作工作台', icon: MagicStick, access: 'domain-users' },
+  { path: '/workspaces', labelKey: 'nav.workspaces', icon: MagicStick, access: 'domain-users' },
   // 61号批次4：知识制品（表格建表发布，viewer 也有运行态视图）
-  { path: '/artifacts', label: '知识制品', icon: Grid, access: 'all' },
-  { path: '/llm', label: 'LLM 服务', icon: Cpu, access: 'site-admin' },
-  { path: '/users', label: '用户管理', icon: UserFilled, access: 'domain-users' },
-  { path: '/settings', label: '系统设置', icon: Setting, access: 'site-admin' },
+  { path: '/artifacts', labelKey: 'nav.artifacts', icon: Grid, access: 'all' },
+  { path: '/llm', labelKey: 'nav.llm', icon: Cpu, access: 'site-admin' },
+  { path: '/users', labelKey: 'nav.users', icon: UserFilled, access: 'domain-users' },
+  { path: '/settings', labelKey: 'nav.settings', icon: Setting, access: 'site-admin' },
 ]
 
 const navItems = computed(() =>

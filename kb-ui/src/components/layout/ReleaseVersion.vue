@@ -5,25 +5,25 @@
       class="release-version__trigger"
       data-testid="release-version"
       :disabled="!release"
-      :title="release ? '查看版本说明' : loading ? '版本信息加载中' : '版本信息加载失败'"
+      :title="release ? locale.t('release.viewNotes') : loading ? locale.t('release.loadingTip') : locale.t('release.failedTip')"
       @click="dialogVisible = true"
     >
-      <span>系统版本</span>
+      <span>{{ locale.t('release.label') }}</span>
       <strong v-if="release">v{{ release.version }}</strong>
-      <span v-else-if="loading">版本加载中…</span>
-      <span v-else>版本信息不可用</span>
+      <span v-else-if="loading">{{ locale.t('release.loading') }}</span>
+      <span v-else>{{ locale.t('release.unavailable') }}</span>
     </button>
 
     <el-dialog
       v-model="dialogVisible"
-      title="版本信息"
+      :title="locale.t('release.title')"
       width="460px"
       append-to-body
     >
       <template v-if="release">
         <div class="release-version__heading">
           <strong>v{{ release.version }} · {{ release.title }}</strong>
-          <span>发布日期：{{ release.released_at }}</span>
+          <span>{{ locale.t('release.releasedAt', { date: release.released_at }) }}</span>
         </div>
         <ul class="release-version__changes">
           <li v-for="change in release.changes" :key="change">{{ change }}</li>
@@ -36,7 +36,9 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useControlPlaneApi, type ReleaseInfo } from '@/api/controlPlane'
+import { useLocaleStore } from '@/stores/locale'
 
+const locale = useLocaleStore()
 const release = ref<ReleaseInfo | null>(null)
 const loading = ref(true)
 const dialogVisible = ref(false)

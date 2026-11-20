@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
@@ -94,6 +94,26 @@ describe('Sidebar navigation', () => {
 
     expect(wrapper.text()).toContain('未选择知识域')
     expect(wrapper.text()).not.toContain('cloud_core_network')
+  })
+})
+
+describe('Sidebar language', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+  })
+
+  // jsdom localStorage 跨用例持久——防止 en 残留污染文件内后续 zh 断言
+  afterEach(() => localStorage.removeItem('kb-ui-lang'))
+
+  it('renders English nav when the global language is en', () => {
+    localStorage.setItem('kb-ui-lang', 'en')
+    auth.siteRole = 'admin'
+    const wrapper = shallowMount(Sidebar)
+    expect(wrapper.text()).toContain('Knowledge Bases')
+    expect(wrapper.text()).toContain('System Settings')
+    expect(wrapper.text()).toContain('No domain selected')
+    expect(wrapper.text()).not.toContain('知识库')
   })
 })
 

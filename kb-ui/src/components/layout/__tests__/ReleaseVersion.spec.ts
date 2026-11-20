@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 
 const api = vi.hoisted(() => ({ getReleaseInfo: vi.fn() }))
 
@@ -30,7 +31,7 @@ describe('ReleaseVersion', () => {
       new Promise(resolve => { resolveRelease = resolve }),
     )
     const wrapper = mount(ReleaseVersion, {
-      global: { stubs: { ElDialog: DialogStub } },
+      global: { plugins: [createPinia()], stubs: { ElDialog: DialogStub } },
     })
 
     expect(wrapper.get('[data-testid="release-version"]').text()).toContain('版本加载中')
@@ -43,7 +44,7 @@ describe('ReleaseVersion', () => {
 
   it('shows the deployed version at the bottom and opens its release notes', async () => {
     const wrapper = mount(ReleaseVersion, {
-      global: { stubs: { ElDialog: DialogStub } },
+      global: { plugins: [createPinia()], stubs: { ElDialog: DialogStub } },
     })
     await flushPromises()
 
@@ -60,7 +61,7 @@ describe('ReleaseVersion', () => {
   it('fails quietly without breaking sidebar navigation', async () => {
     api.getReleaseInfo.mockRejectedValueOnce(new Error('offline'))
     const wrapper = mount(ReleaseVersion, {
-      global: { stubs: { ElDialog: DialogStub } },
+      global: { plugins: [createPinia()], stubs: { ElDialog: DialogStub } },
     })
     await flushPromises()
 

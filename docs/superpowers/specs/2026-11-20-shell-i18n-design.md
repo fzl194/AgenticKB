@@ -48,6 +48,7 @@
 | `Sidebar.vue` | `ALL_NAV` 12 个 label 改为字典 key；`未选择知识域`、帮助 tooltip（`平台指南（帮助文档）`）一并接入 |
 | `Header.vue` | `pageTitles` 20 项映射（去重 11 个标题）值改 key；健康状态与健康 tooltip（正常/异常、全部正常/存在异常）；角色标签（系统管理员/域管理员/用户）；账户下拉项（修改密码/登出）；修改密码两步 ElMessageBox 弹窗文案 |
 | `LoginView.vue` | ~13 条登录文案接入（登录到知识库/管理员验证/用户名工号/密码/处理中/登录/下一步/错误提示/联系管理员等） |
+| `ReleaseVersion.vue` | 版本条常驻中文（系统版本/版本加载中…/版本信息不可用/弹窗标题/发布日期/tooltips）接 t()——侧边栏可见面，属壳层（实施期补充） |
 
 ### 3.3 切换按钮
 
@@ -119,6 +120,7 @@ EP 有两类文案通道，须分别覆盖：
 | `src/views/__tests__/LoginView.spec.ts` | `用户未在系统` 等文案断言同步 |
 | `src/components/layout/__tests__/HeaderLogout.spec.ts` | 挂载 Header 但不断言中文文案——仅需冒烟确认不红 |
 | `src/components/layout/__tests__/MiningWorkflowSidebar.spec.ts` | 挂载主 Sidebar 且正向断言中文 label（挖掘范式/检索范式等）——默认 zh 下应保持绿，冒烟确认 |
+| `src/components/layout/__tests__/ReleaseVersion.spec.ts` | 组件新增 locale store 后 3 处 mount 需补 pinia；默认 zh 断言不变（实施期补充） |
 
 ### 验证方式
 

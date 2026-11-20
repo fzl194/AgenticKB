@@ -1,7 +1,7 @@
 # 壳层中英文切换 — 设计文档
 
 - 日期：2026-11-20
-- 状态：已获用户批准（范围=壳层先行 / 存储=浏览器本地 / 机制=零依赖手写）
+- 状态：已获用户批准（范围=壳层先行 / 存储=浏览器本地 / 机制=零依赖手写）；rev2 按审查修订
 - 影响面：kb-ui 前端；零新依赖、零后端改动、零数据库迁移
 
 ## 1. 背景与目标
@@ -14,10 +14,10 @@
 
 ### 现状观察（2026-11-20）
 
-- **零 i18n 基建**：package.json 无 vue-i18n；src 下 274 个源文件无任何 `$t()`/locale 痕迹；`main.ts:26` 静态挂载 Element Plus `zhCn` locale。
+- **零 i18n 基建**：package.json 无 vue-i18n；src 下 274 个源文件（166 源码 + 108 测试）无任何 `$t()`/locale 痕迹；`main.ts:26` 静态挂载 Element Plus `zhCn` locale。
 - **硬编码中文规模巨大**：95 个 .vue 文件含硬编码中文。全量翻译为巨型工程，与"影响最小"冲突。
 - **可复用先例**：`stores/domain.ts:6` 已有按用户名分键的 localStorage 持久化模式（`kb-ui-current-domain:{username}`）——本设计的记忆机制直接照抄该模式。
-- Element Plus 自带中/英 locale 包（已在依赖内），`el-config-provider` 可动态切换。
+- Element Plus 自带中/英 locale 包（已在依赖内）。
 
 ## 2. 已拍板决策
 
@@ -30,28 +30,43 @@
 
 ## 3. 架构
 
-### 3.1 新增文件（3 个，~200 行）
+### 3.1 新增文件（4 个，~250 行）
 
 | 文件 | 职责 |
 |---|---|
 | `src/locales/zh.ts` | 扁平字典，值为现有中文文案（如 `nav.kb: '知识库'`） |
 | `src/locales/en.ts` | 同 key 英文字典 |
-| `src/stores/locale.ts` | Pinia store：`lang` 状态、`t(key)` 查询、`setLang()`、`applyUserPreference(username)`、持久化 |
+| `src/locales/element.ts` | Element Plus locale 桥：`epLocale(lang)` 返回 zh-cn/en 包；`applyAppLocale(app, lang)` 封装 `provideGlobalConfig({ locale }, app, true)`（element-plus 公开导出且有 d.ts 类型，但属**未文档化 API**，锁定 2.14 行为——调用点留注释，spike 测试即升级绊网） |
+| `src/stores/locale.ts` | Pinia store：`lang` 状态、`t(key)` 查询、`setLang()`、`applyUserPreference(username)`、持久化。**app 引用接线**：store 持有 `app` 引用（`main.ts` 在 `app.use(pinia)` 后注入）——`setLang` 在点击回调里跑，`getCurrentInstance()` 为 null，且从 main.ts import app 会经 App.vue 成环 |
 
 ### 3.2 修改文件（5 个）
 
 | 文件 | 改动 |
 |---|---|
-| `App.vue` | 外包 `<el-config-provider :locale="epLocale">`，按 lang 动态返回 element-plus zh-cn/en locale——**全站所有 EP 组件（分页/确认弹窗/日期选择/空态）随之切换** |
-| `main.ts` | 去掉静态 `app.use(ElementPlus, { locale: zhCn })` 的 locale 参数（由 provider 接管）；启动时初始化 locale store |
-| `Sidebar.vue` | `ALL_NAV` 的 12 个 label 改为字典 key；`未选择知识域` 与帮助 tooltip 一并接入 |
-| `Header.vue` | `pageTitles` 映射值改 key；健康状态（正常/异常）、角色标签（系统管理员/域管理员/用户）、修改密码两步弹窗文案接入 |
-| `LoginView.vue` | ~10 条登录文案接入（登录到知识库/用户名工号/密码/下一步/登录/错误提示等） |
+| `App.vue` | ① 外包 `<el-config-provider :locale="epLocale(lang)">`——树内 EP 组件（分页/日期选择/空态等）响应式切换；② `watch(() => auth.user?.username)` → `localeStore.applyUserPreference(username)`（登录成功/fetchMe 完成后应用该用户分键偏好）。**不改 `stores/auth.ts`**，5 文件清单保持穷尽 |
+| `main.ts` | `app.use(ElementPlus, { locale: epLocale(bootLang) })`——locale 参数从 locale store 启动值取（不再静态 import zhCn）。此挂载承担**脱挂通道**初值（见 3.4） |
+| `Sidebar.vue` | `ALL_NAV` 12 个 label 改为字典 key；`未选择知识域`、帮助 tooltip（`平台指南（帮助文档）`）一并接入 |
+| `Header.vue` | `pageTitles` 20 项映射（去重 11 个标题）值改 key；健康状态与健康 tooltip（正常/异常、全部正常/存在异常）；角色标签（系统管理员/域管理员/用户）；账户下拉项（修改密码/登出）；修改密码两步 ElMessageBox 弹窗文案 |
+| `LoginView.vue` | ~13 条登录文案接入（登录到知识库/管理员验证/用户名工号/密码/处理中/登录/下一步/错误提示/联系管理员等） |
 
 ### 3.3 切换按钮
 
 - `Header.vue` 右侧（域选择器与健康灯之间）：紧凑 `中 / EN` 切换控件；
 - `LoginView` 右上角：同款（覆盖未登录场景）。
+
+### 3.4 Element Plus 文案双通道（关键机制）
+
+EP 有两类文案通道，须分别覆盖：
+
+1. **树内组件**（分页、日期选择、表格空态…）：`App.vue` 的 `el-config-provider :locale` 响应式绑定，切换即时生效。
+2. **命令式脱挂组件**（ElMessageBox 确认弹窗、ElMessage 通知——挂到 `document.body`，不在 provider 子树内；项目内 ElMessageBox 用于 46 文件、ElMessage 用于 75 文件，Header 修改密码弹窗即属此类）：
+   - 初值：`main.ts` 的 `app.use(ElementPlus, { locale })` 提供 app 级注入；
+   - 运行时切换：locale store 的 `setLang` 经由 `src/locales/element.ts` 的 `applyAppLocale(app, lang)` 重调 `provideGlobalConfig({ locale }, app, true)`——该函数（已读安装源 `element-plus/es/components/config-provider/src/hooks/use-global-config.mjs:31-55`）用 `app.provide` 覆写 app 级 provides 并更新模块级 `globalConfig` ref；**此后新建**的 ElMessageBox/ElMessage 注入即取新语言（已挂载的瞬时实例随自身关闭消亡，无残留问题）。
+   - 实施计划第一个任务为 spike 验证：切到 EN 后调用 `ElMessageBox.confirm`，断言按钮文案为 OK/Cancel。
+
+### 3.5 store 初始化
+
+初始化**完全在 store 内部**（`defineStore` setup 中直接读 localStorage 全局键，无则 `'zh'`），不依赖 main.ts 预调用——组件测试不跑 main.ts，Sidebar/Header/LoginView 的现有 spec 无需初始化补丁即可挂载。main.ts 在 `app.use(pinia)` 后取 store 启动值仅用于 3.4 的脱挂通道初值。
 
 ## 4. 记忆机制
 
@@ -62,9 +77,11 @@
 
 ### 时序
 
-1. **启动**（main.ts，app.mount 前）：读全局键初始化 `lang`（无则 `'zh'`）——登录页立即正确；
-2. **登录成功 / fetchMe 完成**：`applyUserPreference(username)` 读该用户分键；存在则覆盖当前 lang，不存在则保持当前语言（不预写）；
+1. **store 首次使用**（登录页/壳层任一组件 setup）：读全局键初始化 `lang`（无则 `'zh'`）——登录页立即正确；
+2. **登录成功 / fetchMe 完成**：`App.vue` 对 `auth.user?.username` 的 watcher 触发 `applyUserPreference(username)`——存在该用户分键则覆盖当前 lang；不存在则保持当前语言（不预写）；
 3. **用户切换**：写用户分键（若已知 username）+ 同步写全局键。
+
+**已知且接受的边界**：登录页显示的是全局键（本浏览器上次使用的语言），即前一用户的选择会带到登录页——这是无后端存储的必然结果，刻意接受。
 
 ### 容错
 
@@ -77,21 +94,36 @@
 - 不做浏览器语言自动探测；
 - 不改 `document.title`（brand store 管辖）；
 - 不翻译业务页面文案（95 文件中除壳层 5 个外的其余 90 个）；
+- 不在 46/75 个 ElMessageBox/ElMessage 调用点逐个传 `confirmButtonText` 等文案（走 3.4 脱挂通道整体切换）；
 - 不引入 vue-i18n（将来全站双语时再评估迁移）；
 - 不动后端与数据库。
 
 ## 6. 测试
 
-- **locale store 单测**（新增 `src/stores/__tests__/locale.spec.ts`）：
-  - 默认中文；
-  - 切换后写全局键 + 用户分键；
-  - per-user 隔离（alice/bob 互不干扰，参照 `domain.spec.ts` 的既有写法）；
-  - `applyUserPreference` 有分键覆盖 / 无分键保持；
-  - 非法存储值回落 `'zh'`；
-  - `t()` 回落链（当前字典 → zh → key）。
-- **现有 spec 同步**：`LoginView.spec.ts` 等壳层文案断言更新。
-- **类型验证**：`npm run build`（vue-tsc references 根 tsconfig 下 `--noEmit` 假通过的既定规矩）。
-- **手工验收**：登录页切换 → 登录 → 壳层语言保持；另一账号切换互不影响；EP 弹窗按钮语言随切换。
+### 新增 `src/stores/__tests__/locale.spec.ts`
+
+- `beforeEach` 清 `kb-ui-lang*` 全部键（jsdom localStorage 跨用例持久，per-user 隔离用例否则互相污染）；
+- 默认中文；
+- 切换后写全局键 + 用户分键；
+- per-user 隔离（alice/bob 互不干扰，参照 `domain.spec.ts` 既有写法）；
+- `applyUserPreference` 有分键覆盖 / 无分键保持；
+- 非法存储值回落 `'zh'`；
+- `t()` 回落链（当前字典 → zh → key）。
+
+### 现有 spec 同步（完整清单）
+
+| 测试文件 | 影响 |
+|---|---|
+| `src/components/layout/__tests__/Sidebar.spec.ts` | 最重：大量导航 label 中文断言（概览/知识库/检索记录/知识制品/用户管理/制作工作台/检索范式/未选择知识域及反断言）→ 改为默认 zh 断言 + 补 EN 断言 |
+| `src/__tests__/AppSessionSync.spec.ts` | **挂 App.vue 无活动 pinia、无 store mock**（仅 mock stores/auth 模块）——App.vue 新增 `useLocaleStore()` 会抛 "no active Pinia"。修复：该测试补 `createPinia()` 或 vi.mock('stores/locale')，二者择一在计划中定 |
+| `src/views/__tests__/LoginView.spec.ts` | `用户未在系统` 等文案断言同步 |
+| `src/components/layout/__tests__/HeaderLogout.spec.ts` | 挂载 Header 但不断言中文文案——仅需冒烟确认不红 |
+| `src/components/layout/__tests__/MiningWorkflowSidebar.spec.ts` | 挂载主 Sidebar 且正向断言中文 label（挖掘范式/检索范式等）——默认 zh 下应保持绿，冒烟确认 |
+
+### 验证方式
+
+- 类型验证：`npm run build`（vue-tsc references 根 tsconfig 下 `--noEmit` 假通过的既定规矩）；
+- 手工验收：登录页切换 → 登录 → 壳层语言保持；另一账号切换互不影响；切 EN 后 EP 分页/表格空态即切；**Header 修改密码弹窗按钮变 OK/Cancel**（3.4 spike 的端到端面）。
 
 ## 7. 升级路径
 

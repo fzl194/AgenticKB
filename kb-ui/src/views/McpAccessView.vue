@@ -2,122 +2,122 @@
   <div class="mcp-view">
     <div class="mcp-view__head">
       <p class="mcp-view__desc">
-        你的 Agent（dify / 扣子 / Claude 等）连平台知识库的入口。每个 Agent 一把钥匙、一把钥匙一个知识域：
-        各钥匙的工具、开放库、提示词互不影响。
+        {{ t('mcp.view.descEntry') }}
+        {{ t('mcp.view.descIsolation') }}
       </p>
-      <el-tooltip v-if="atLimit" content="已达上限" placement="top">
+      <el-tooltip v-if="atLimit" :content="t('mcp.tip.atLimit')" placement="top">
         <span class="mcp-view__add-wrap">
-          <el-button type="primary" disabled>新建钥匙</el-button>
+          <el-button type="primary" disabled>{{ t('mcp.action.createKey') }}</el-button>
         </span>
       </el-tooltip>
-      <el-button v-else type="primary" @click="openCreate">新建钥匙</el-button>
+      <el-button v-else type="primary" @click="openCreate">{{ t('mcp.action.createKey') }}</el-button>
     </div>
 
     <!-- 加载失败：显式错误态 -->
     <el-alert v-if="loadFailed" type="error" :closable="false" show-icon style="margin-bottom: 14px">
-      <template #title>钥匙列表加载失败。你的现役钥匙不受影响，Agent 连接不会中断。</template>
-      <el-button size="small" @click="reload">重试加载</el-button>
+      <template #title>{{ t('mcp.view.loadFailedTitle') }}</template>
+      <el-button size="small" @click="reload">{{ t('mcp.action.retryLoad') }}</el-button>
     </el-alert>
 
     <!-- 空态引导 -->
     <section v-if="!loading && !loadFailed && !keys.length" class="mcp-view__card mcp-view__card--hero">
-      <el-empty :image-size="80" description="还没有 MCP 钥匙">
-        <p class="mcp-view__empty-tip">每个 Agent 一把钥匙，一把钥匙一个知识域。<br>为你的第一个 Agent 创建一把钥匙开始接入。</p>
-        <el-button type="primary" :disabled="atLimit" @click="openCreate">新建钥匙</el-button>
+      <el-empty :image-size="80" :description="t('mcp.view.emptyTitle')">
+        <p class="mcp-view__empty-tip">{{ t('mcp.view.emptyTipDomain') }}<br>{{ t('mcp.view.emptyTipStart') }}</p>
+        <el-button type="primary" :disabled="atLimit" @click="openCreate">{{ t('mcp.action.createKey') }}</el-button>
       </el-empty>
     </section>
 
     <!-- 钥匙列表 -->
     <el-table v-else v-loading="loading" :data="keys" class="mcp-view__table">
-      <el-table-column label="名称" min-width="140">
+      <el-table-column :label="t('common.name')" min-width="140">
         <template #default="{ row }">
           <span class="mcp-view__name" :class="{ 'is-revoked': row.status === 'revoked' }">{{ row.name }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="域" width="110">
+      <el-table-column :label="t('mcp.field.domain')" width="110">
         <template #default="{ row }">
           <el-tag size="small" :type="row.domain_bound ? 'info' : 'danger'" effect="plain">{{ row.domain }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="密钥" min-width="150">
+      <el-table-column :label="t('mcp.field.secret')" min-width="150">
         <template #default="{ row }">
           <code class="mcp-view__prefix">{{ row.key_prefix }}…</code>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="120">
+      <el-table-column :label="t('common.status')" width="120">
         <template #default="{ row }">
-          <el-tag v-if="row.status === 'revoked'" size="small" type="info">已吊销</el-tag>
+          <el-tag v-if="row.status === 'revoked'" size="small" type="info">{{ t('mcp.status.revoked') }}</el-tag>
           <el-tooltip
             v-else-if="!row.domain_bound"
-            content="该钥匙绑定的知识域已被解绑，请联系管理员重新分配域后重建钥匙"
+            :content="t('mcp.tip.domainUnbound')"
             placement="top"
           >
-            <el-tag size="small" type="danger">域已解绑</el-tag>
+            <el-tag size="small" type="danger">{{ t('mcp.status.domainUnbound') }}</el-tag>
           </el-tooltip>
-          <el-tag v-else size="small" type="success">正常</el-tag>
+          <el-tag v-else size="small" type="success">{{ t('mcp.status.normal') }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="最近使用" width="150">
-        <template #default="{ row }">{{ fmtTime(row.last_used_at) || '从未' }}</template>
+      <el-table-column :label="t('mcp.field.lastUsed')" width="150">
+        <template #default="{ row }">{{ fmtTime(row.last_used_at) || t('mcp.field.never') }}</template>
       </el-table-column>
-      <el-table-column label="创建时间" width="150">
+      <el-table-column :label="t('mcp.field.createdAt')" width="150">
         <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="270" fixed="right">
+      <el-table-column :label="t('common.actions')" width="270" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" size="small" @click="viewRecords(row)">调用记录</el-button>
+          <el-button link type="primary" size="small" @click="viewRecords(row)">{{ t('mcp.action.callRecords') }}</el-button>
           <template v-if="row.status === 'active'">
-            <el-button link type="primary" size="small" @click="openConfig(row)">配置</el-button>
-            <el-button link type="warning" size="small" @click="quickRotate(row)">轮换</el-button>
-            <el-button link type="danger" size="small" @click="quickRevoke(row)">吊销</el-button>
+            <el-button link type="primary" size="small" @click="openConfig(row)">{{ t('mcp.action.configure') }}</el-button>
+            <el-button link type="warning" size="small" @click="quickRotate(row)">{{ t('mcp.action.rotate') }}</el-button>
+            <el-button link type="danger" size="small" @click="quickRevoke(row)">{{ t('mcp.action.revoke') }}</el-button>
           </template>
           <el-button v-else link type="danger" size="small" @click="deleteRevoked(row)">
-            删除记录
+            {{ t('mcp.action.deleteRecord') }}
           </el-button>
         </template>
       </el-table-column>
     </el-table>
 
     <!-- 新建钥匙 dialog -->
-    <el-dialog v-model="createVisible" title="新建 MCP 钥匙" width="440px">
+    <el-dialog v-model="createVisible" :title="t('mcp.dialog.createTitle')" width="440px">
       <el-form label-width="80px" @submit.prevent>
-        <el-form-item label="名称" required>
-          <el-input v-model="createForm.name" maxlength="64" show-word-limit placeholder="给钥匙起个名字，如：研发知识助手" data-test="mcp-key-name" />
+        <el-form-item :label="t('common.name')" required>
+          <el-input v-model="createForm.name" maxlength="64" show-word-limit :placeholder="t('mcp.form.namePlaceholder')" data-test="mcp-key-name" />
         </el-form-item>
-        <el-form-item label="知识域" required>
-          <el-select v-model="createForm.domain" placeholder="选择该钥匙服务的知识域" style="width: 100%" data-test="mcp-key-domain">
+        <el-form-item :label="t('mcp.field.knowledgeDomain')" required>
+          <el-select v-model="createForm.domain" :placeholder="t('mcp.form.domainPlaceholder')" style="width: 100%" data-test="mcp-key-domain">
             <el-option v-for="d in domainStore.enabledDomains" :key="d.domain_id" :value="d.domain_id" :label="d.domain_id" />
           </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" :disabled="!createForm.name.trim() || !createForm.domain" @click="submitCreate">创建</el-button>
+        <el-button @click="createVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="creating" :disabled="!createForm.name.trim() || !createForm.domain" @click="submitCreate">{{ t('common.create') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 明文一次性展示 dialog（创建成功） -->
-    <el-dialog v-model="freshVisible" title="钥匙已创建" width="640px" :close-on-click-modal="false">
+    <el-dialog v-model="freshVisible" :title="t('mcp.dialog.freshTitle')" width="640px" :close-on-click-modal="false">
       <el-alert type="warning" :closable="false" style="margin-bottom: 12px">
-        <template #title>密钥明文仅此一次显示，关闭后无法再查看。请立即复制并填入你的 Agent 配置。</template>
+        <template #title>{{ t('mcp.dialog.freshAlert') }}</template>
       </el-alert>
       <div class="mcp-view__fresh-row">
         <code class="mcp-view__fresh-key">{{ freshCreated?.key }}</code>
-        <el-button size="small" type="primary" plain @click="copy(freshCreated?.key ?? '')">复制</el-button>
+        <el-button size="small" type="primary" plain @click="copy(freshCreated?.key ?? '')">{{ t('mcp.action.copy') }}</el-button>
       </div>
       <div class="mcp-view__code-wrap">
-        <button class="mcp-view__copy" title="复制" @click="copy(freshConfigJson)">复制</button>
+        <button class="mcp-view__copy" :title="t('mcp.action.copy')" @click="copy(freshConfigJson)">{{ t('mcp.action.copy') }}</button>
         <pre class="mcp-view__code">{{ freshConfigJson }}</pre>
       </div>
-      <p class="mcp-view__note">连接地址由当前部署地址推导（{{ mcpEndpoint }}）；JSON 已预填本次明文。</p>
+      <p class="mcp-view__note">{{ t('mcp.view.freshNote', { endpoint: mcpEndpoint }) }}</p>
       <template #footer>
-        <el-button type="primary" @click="freshVisible = false">我已保存好密钥</el-button>
+        <el-button type="primary" @click="freshVisible = false">{{ t('mcp.action.savedSecret') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 每把钥匙配置 drawer。destroy-on-close：关闭即卸载面板——轮换后的
          一次性明文随面板销毁，重开不再出现；会话内的列表刷新/保存不抹掉它。 -->
-    <el-drawer v-model="configVisible" size="620px" destroy-on-close :title="configKey ? `钥匙配置 · ${configKey.name}` : '钥匙配置'">
+    <el-drawer v-model="configVisible" size="620px" destroy-on-close :title="configKey ? t('mcp.view.configTitleNamed', { name: configKey.name }) : t('mcp.view.configTitle')">
       <McpKeyConfigPanel
         v-if="configKey"
         :key-item="configKey"
@@ -142,6 +142,7 @@ import { useDomainStore } from '@/stores/domain'
 import { useAuthStore } from '@/stores/auth'
 import type { McpKeyItem } from '@/types/kb'
 import McpKeyConfigPanel from '@/components/mcp/McpKeyConfigPanel.vue'
+import { t } from '@/locales/t'
 
 /** 与后端上限同步改：mining/kb/services/mcp_key_service.py 的
  *  MAX_KEYS_PER_USER（前端仅提前禁用按钮，最终防线在后端 409）。 */
@@ -240,17 +241,19 @@ async function submitCreate() {
   }
 }
 
-/** 建钥错误的定制文案：403 域未绑定的 detail 是 {code, message} 结构，其余走通用提取。 */
+/** 建钥错误的定制文案：403 域未绑定的 detail 是 {code, message} 结构，其余走通用提取。
+ *  409 分支的 includes('上限') 比对的是服务端返回的文案——属匹配数据，不接 t()
+ *  （译成英文会在 EN 态失配，而中文断言照绿）。 */
 async function createErrorText(e: unknown): Promise<string> {
   const resp = (e as { response?: { status?: number; data?: { detail?: { code?: string; message?: string } } } })
     ?.response
   const detail = resp?.data?.detail
   if (resp?.status === 403 && detail?.code === 'domain_not_bound') {
-    return detail.message ?? '你未绑定该知识域，无法创建钥匙'
+    return detail.message ?? t('mcp.error.domainNotBound')
   }
   if (resp?.status === 409) {
     const msg = await apiErrorDetail(e)
-    return msg.includes('上限') ? '已达 10 把上限，请先吊销不需要的钥匙' : msg
+    return msg.includes('上限') ? t('mcp.error.limitReached') : msg
   }
   return apiErrorDetail(e)
 }
@@ -298,8 +301,8 @@ async function onPanelRevoked(keyId: string) {
 async function quickRotate(row: McpKeyItem) {
   try {
     await ElMessageBox.confirm(
-      `轮换后「${row.name}」的旧密钥立即失效，正在使用它的 Agent 会断连。确定继续？`,
-      '轮换密钥', { type: 'warning', confirmButtonText: '轮换', cancelButtonText: '取消' },
+      t('mcp.confirm.rotateMessage', { name: row.name }),
+      t('mcp.dialog.rotateTitle'), { type: 'warning', confirmButtonText: t('mcp.action.rotate'), cancelButtonText: t('common.cancel') },
     )
   } catch { return }
   try {
@@ -316,13 +319,13 @@ async function quickRotate(row: McpKeyItem) {
 async function quickRevoke(row: McpKeyItem) {
   try {
     await ElMessageBox.confirm(
-      `吊销后「${row.name}」立即失效且不可恢复，正在使用它的 Agent 会断连。确定吊销？`,
-      '吊销钥匙', { type: 'warning', confirmButtonText: '吊销', cancelButtonText: '取消' },
+      t('mcp.confirm.revokeMessage', { name: row.name }),
+      t('mcp.dialog.revokeTitle'), { type: 'warning', confirmButtonText: t('mcp.action.revoke'), cancelButtonText: t('common.cancel') },
     )
   } catch { return }
   try {
     await kbApi.revokeMcpKey(row.id)
-    ElMessage.success('钥匙已吊销')
+    ElMessage.success(t('mcp.msg.keyRevoked'))
     await reload()
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
@@ -332,15 +335,15 @@ async function quickRevoke(row: McpKeyItem) {
 async function deleteRevoked(row: McpKeyItem) {
   try {
     await ElMessageBox.confirm(
-      `删除已吊销钥匙「${row.name}」的展示记录？旧密钥仍永久失效，此操作不会恢复或影响其他钥匙。`,
-      '删除钥匙记录',
-      { type: 'warning', confirmButtonText: '删除记录', cancelButtonText: '取消' },
+      t('mcp.confirm.deleteMessage', { name: row.name }),
+      t('mcp.dialog.deleteTitle'),
+      { type: 'warning', confirmButtonText: t('mcp.action.deleteRecord'), cancelButtonText: t('common.cancel') },
     )
   } catch { return }
   try {
     await kbApi.deleteMcpKey(row.id)
     await reload()
-    ElMessage.success('钥匙记录已删除')
+    ElMessage.success(t('mcp.msg.keyRecordDeleted'))
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
   }
@@ -349,7 +352,7 @@ async function deleteRevoked(row: McpKeyItem) {
 async function copy(text: string) {
   try {
     await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
+    ElMessage.success(t('mcp.msg.copied'))
   } catch {
     // http://公网IP 等非安全上下文没有 navigator.clipboard，走 execCommand 兜底
     const ta = document.createElement('textarea')
@@ -360,8 +363,8 @@ async function copy(text: string) {
     ta.select()
     const ok = document.execCommand('copy')
     document.body.removeChild(ta)
-    if (ok) ElMessage.success('已复制')
-    else ElMessage.warning('复制失败，请手动选择复制')
+    if (ok) ElMessage.success(t('mcp.msg.copied'))
+    else ElMessage.warning(t('mcp.msg.copyFailed'))
   }
 }
 

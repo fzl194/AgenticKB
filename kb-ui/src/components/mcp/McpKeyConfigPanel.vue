@@ -2,33 +2,33 @@
   <div v-if="key" class="mkey-panel">
     <!-- 基本信息 -->
     <el-descriptions :column="3" border size="small">
-      <el-descriptions-item label="名称">{{ key.name }}</el-descriptions-item>
-      <el-descriptions-item label="知识域">
+      <el-descriptions-item :label="t('common.name')">{{ key.name }}</el-descriptions-item>
+      <el-descriptions-item :label="t('mcp.field.knowledgeDomain')">
         <el-tag size="small">{{ key.domain }}</el-tag>
       </el-descriptions-item>
-      <el-descriptions-item label="密钥标识">{{ key.key_prefix }}…</el-descriptions-item>
-      <el-descriptions-item label="最近使用">{{ fmtTime(key.last_used_at) || '从未' }}</el-descriptions-item>
-      <el-descriptions-item label="创建时间">{{ fmtTime(key.created_at) }}</el-descriptions-item>
-      <el-descriptions-item label="上次轮换">{{ fmtTime(key.rotated_at) || '—' }}</el-descriptions-item>
+      <el-descriptions-item :label="t('mcp.field.secretId')">{{ key.key_prefix }}…</el-descriptions-item>
+      <el-descriptions-item :label="t('mcp.field.lastUsed')">{{ fmtTime(key.last_used_at) || t('mcp.field.never') }}</el-descriptions-item>
+      <el-descriptions-item :label="t('mcp.field.createdAt')">{{ fmtTime(key.created_at) }}</el-descriptions-item>
+      <el-descriptions-item :label="t('mcp.field.lastRotated')">{{ fmtTime(key.rotated_at) || '—' }}</el-descriptions-item>
     </el-descriptions>
 
     <!-- 接入配置 JSON -->
     <section class="mkey-panel__card">
       <div class="mkey-panel__card-head">
         <div>
-          <h4 class="mkey-panel__title">Agent 接入配置</h4>
+          <h4 class="mkey-panel__title">{{ t('mcp.panel.configTitle') }}</h4>
           <p class="mkey-panel__desc">
-            选一种格式，点击复制后粘贴进你的 Agent / MCP 客户端（{{ mcpEndpoint }}）。
-            平时显示 <code>__KEY__</code> 占位——密钥明文只在生成/轮换时显示一次，丢了只能轮换。
+            {{ t('mcp.panel.configDesc', { endpoint: mcpEndpoint }) }}
+            {{ t('mcp.panel.configDescPlaceholderPrefix') }}<code>__KEY__</code>{{ t('mcp.panel.configDescPlaceholderSuffix') }}
           </p>
         </div>
         <el-radio-group v-model="configFormat" size="small" :disabled="!freshKey">
-          <el-radio-button value="generic">通用</el-radio-button>
+          <el-radio-button value="generic">{{ t('mcp.panel.formatGeneric') }}</el-radio-button>
           <el-radio-button value="dify">dify</el-radio-button>
         </el-radio-group>
       </div>
       <div class="mkey-panel__code-wrap">
-        <button class="mkey-panel__copy" title="复制" @click="copy(configJson)">复制</button>
+        <button class="mkey-panel__copy" :title="t('mcp.action.copy')" @click="copy(configJson)">{{ t('mcp.action.copy') }}</button>
         <pre class="mkey-panel__code">{{ configJson }}</pre>
       </div>
     </section>
@@ -37,17 +37,17 @@
     <section class="mkey-panel__card">
       <div class="mkey-panel__card-head">
         <div>
-          <h4 class="mkey-panel__title">开放的工具</h4>
-          <p class="mkey-panel__desc">关掉的工具对这把钥匙的 Agent 完全不可见。至少保留一个。</p>
+          <h4 class="mkey-panel__title">{{ t('mcp.panel.openToolsTitle') }}</h4>
+          <p class="mkey-panel__desc">{{ t('mcp.panel.openToolsDesc') }}</p>
         </div>
-        <el-button size="small" :loading="savingTools" :disabled="readonly || !toolsDirty" @click="saveTools">保存</el-button>
+        <el-button size="small" :loading="savingTools" :disabled="readonly || !toolsDirty" @click="saveTools">{{ t('common.save') }}</el-button>
       </div>
       <div class="mkey-panel__tools">
-        <div v-for="t in ALL_TOOLS" :key="t.name" class="mkey-panel__tool">
-          <el-switch v-model="toolOn[t.name]" :disabled="readonly || savingTools" />
+        <div v-for="tool in ALL_TOOLS" :key="tool.name" class="mkey-panel__tool">
+          <el-switch v-model="toolOn[tool.name]" :disabled="readonly || savingTools" />
           <div class="mkey-panel__tool-text">
-            <span class="mkey-panel__tool-name">{{ t.name }}</span>
-            <span class="mkey-panel__tool-desc">{{ t.label }}</span>
+            <span class="mkey-panel__tool-name">{{ tool.name }}</span>
+            <span class="mkey-panel__tool-desc">{{ t(tool.labelKey) }}</span>
           </div>
         </div>
       </div>
@@ -57,56 +57,56 @@
     <section class="mkey-panel__card">
       <div class="mkey-panel__card-head">
         <div>
-          <h4 class="mkey-panel__title">开放的知识库（{{ key.domain }} 域）</h4>
+          <h4 class="mkey-panel__title">{{ t('mcp.panel.openKbsTitle', { domain: key.domain }) }}</h4>
           <p class="mkey-panel__desc">
-            这把钥匙只能访问这里勾选的库。数据源固定为钥匙所属域——与页面顶部的当前域切换无关。
+            {{ t('mcp.panel.openKbsDesc') }}
           </p>
         </div>
-        <el-button size="small" :loading="savingKbs" :disabled="readonly || !kbsDirty" @click="saveOpenKbs">保存</el-button>
+        <el-button size="small" :loading="savingKbs" :disabled="readonly || !kbsDirty" @click="saveOpenKbs">{{ t('common.save') }}</el-button>
       </div>
       <el-checkbox-group v-model="selectedKbs" class="mkey-panel__kbs" :disabled="readonly">
         <el-checkbox v-for="kb in domainKbs" :key="kb.id" :value="kb.id" :label="kb.id">
-          {{ kb.name }}<span class="mkey-panel__kb-meta">{{ kb.document_count }} 文档</span>
+          {{ kb.name }}<span class="mkey-panel__kb-meta">{{ t('mcp.panel.kbDocCount', { n: kb.document_count }) }}</span>
         </el-checkbox>
       </el-checkbox-group>
-      <el-empty v-if="!domainKbs.length" description="该域没有你能看到的知识库" :image-size="60" />
+      <el-empty v-if="!domainKbs.length" :description="t('mcp.panel.openKbsEmpty')" :image-size="60" />
     </section>
 
     <!-- 开放的知识制品（008）：Agent 制品通道只经这里——public 也不会自动暴露 -->
     <section class="mkey-panel__card">
       <div class="mkey-panel__card-head">
         <div>
-          <h4 class="mkey-panel__title">开放的知识制品（{{ key.domain }} 域）</h4>
+          <h4 class="mkey-panel__title">{{ t('mcp.panel.openArtifactsTitle', { domain: key.domain }) }}</h4>
           <p class="mkey-panel__desc">
-            Agent 通过这把钥匙只能查到勾选的知识制品（表格：说明卡与行查询；Wiki：说明卡、搜页、整页读取与链接导航）。
-            候选=你在本域能看到的已发布制品（公开+你是成员）；不勾=制品通道对这把钥匙关闭。
+            {{ t('mcp.panel.openArtifactsDescScope') }}
+            {{ t('mcp.panel.openArtifactsDescCandidates') }}
           </p>
         </div>
-        <el-button size="small" :loading="savingArtifacts" :disabled="readonly || !artifactsDirty" data-test="save-open-artifacts" @click="saveOpenArtifacts">保存</el-button>
+        <el-button size="small" :loading="savingArtifacts" :disabled="readonly || !artifactsDirty" data-test="save-open-artifacts" @click="saveOpenArtifacts">{{ t('common.save') }}</el-button>
       </div>
       <el-checkbox-group v-model="selectedArtifacts" class="mkey-panel__kbs" :disabled="readonly || savingArtifacts">
         <el-checkbox v-for="a in domainArtifacts" :key="a.artifact_id" :value="a.artifact_id" :label="a.artifact_id">
           {{ a.title }}
           <span class="mkey-panel__kb-meta">
-            {{ artifactStatusLabel(a.status) }}{{ a.visibility === 'public' ? ' · 公开' : '' }}
+            {{ artifactStatusLabel(a.status) }}{{ a.visibility === 'public' ? t('mcp.panel.visibilityPublic') : '' }}
           </span>
         </el-checkbox>
       </el-checkbox-group>
-      <el-empty v-if="!domainArtifacts.length" description="该域没有你能开放的已发布知识制品" :image-size="60" />
+      <el-empty v-if="!domainArtifacts.length" :description="t('mcp.panel.openArtifactsEmpty')" :image-size="60" />
     </section>
 
     <!-- 提示词 -->
     <section class="mkey-panel__card">
       <div class="mkey-panel__card-head">
         <div>
-          <h4 class="mkey-panel__title">提示词与工具说明</h4>
+          <h4 class="mkey-panel__title">{{ t('mcp.panel.promptTitle') }}</h4>
           <p class="mkey-panel__desc">
-            默认文案已预填，直接在原文上增改；内容与默认一致时按默认下发（默认文案将来更新也能跟随）。
+            {{ t('mcp.panel.promptDesc') }}
           </p>
         </div>
         <div class="mkey-panel__prompt-actions">
-          <el-button size="small" :disabled="readonly" @click="restoreDefaults">恢复默认值</el-button>
-          <el-button size="small" :loading="savingPrompt" :disabled="readonly || !promptDirty" @click="savePrompt">保存</el-button>
+          <el-button size="small" :disabled="readonly" @click="restoreDefaults">{{ t('mcp.action.restoreDefaults') }}</el-button>
+          <el-button size="small" :loading="savingPrompt" :disabled="readonly || !promptDirty" @click="savePrompt">{{ t('common.save') }}</el-button>
         </div>
       </div>
       <el-input
@@ -116,31 +116,31 @@
         maxlength="4000"
         show-word-limit
         :disabled="readonly"
-        placeholder="正在加载默认提示词…"
+        :placeholder="t('mcp.panel.promptPlaceholder')"
         @input="markPromptTouched"
       />
       <div class="mkey-panel__descs">
-        <div v-for="t in ALL_TOOLS" :key="t.name" class="mkey-panel__desc-row">
-          <span class="mkey-panel__desc-name">{{ t.name }}</span>
+        <div v-for="tool in ALL_TOOLS" :key="tool.name" class="mkey-panel__desc-row">
+          <span class="mkey-panel__desc-name">{{ tool.name }}</span>
           <div class="mkey-panel__desc-edit">
             <el-input
-              v-model="toolDescs[t.name]"
+              v-model="toolDescs[tool.name]"
               type="textarea"
               :rows="4"
               maxlength="2000"
               :disabled="readonly"
-              placeholder="正在加载默认说明…"
+              :placeholder="t('mcp.panel.descPlaceholder')"
               @input="markPromptTouched"
             />
-            <el-collapse v-if="paramRows[t.name]?.length" class="mkey-panel__params">
-              <el-collapse-item :title="`参数（${paramRows[t.name].length}）`">
+            <el-collapse v-if="paramRows[tool.name]?.length" class="mkey-panel__params">
+              <el-collapse-item :title="t('mcp.panel.paramCount', { n: paramRows[tool.name].length })">
                 <table class="mkey-panel__param-table">
-                  <thead><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+                  <thead><tr><th>{{ t('mcp.panel.paramName') }}</th><th>{{ t('common.type') }}</th><th>{{ t('mcp.panel.paramRequired') }}</th><th>{{ t('mcp.panel.paramDescription') }}</th></tr></thead>
                   <tbody>
-                    <tr v-for="p in paramRows[t.name]" :key="p.name">
+                    <tr v-for="p in paramRows[tool.name]" :key="p.name">
                       <td><code>{{ p.name }}</code></td>
                       <td>{{ p.type }}</td>
-                      <td>{{ p.required ? '是' : '否' }}</td>
+                      <td>{{ p.required ? t('mcp.panel.yes') : t('mcp.panel.no') }}</td>
                       <td>{{ p.description }}</td>
                     </tr>
                   </tbody>
@@ -155,15 +155,15 @@
     <!-- 明文一次性展示（轮换后） -->
     <el-alert v-if="freshKey" type="success" :closable="false" class="mkey-panel__fresh">
       <template #title>
-        新密钥（仅此一次可见）：<code class="mkey-panel__key">{{ freshKey }}</code>
-        <el-button size="small" text type="primary" @click="copy(freshKey)">复制</el-button>
+        {{ t('mcp.panel.freshKeyTitle') }}<code class="mkey-panel__key">{{ freshKey }}</code>
+        <el-button size="small" text type="primary" @click="copy(freshKey)">{{ t('mcp.action.copy') }}</el-button>
       </template>
     </el-alert>
 
     <!-- 危险操作 -->
     <section v-if="!readonly" class="mkey-panel__card mkey-panel__card--danger">
-      <el-button :loading="rotating" @click="rotate">轮换密钥（旧钥立即失效）</el-button>
-      <el-button type="danger" plain :loading="revoking" @click="revoke">吊销这把钥匙（不可恢复）</el-button>
+      <el-button :loading="rotating" @click="rotate">{{ t('mcp.panel.rotateButton') }}</el-button>
+      <el-button type="danger" plain :loading="revoking" @click="revoke">{{ t('mcp.panel.revokeButton') }}</el-button>
     </section>
   </div>
 </template>
@@ -200,13 +200,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { McpKeyItem } from '@/types/kb'
+import { t } from '@/locales/t'
 
-/** 三件套（与后端 MCP_TOOL_NAMES 一致）；label 为默认文案摘要。
+/** 三件套（与后端 MCP_TOOL_NAMES 一致）；labelKey 为默认文案摘要的字典 key。
+ * 非响应式常量表只存 key，渲染处 t(tool.labelKey)——切语言随重渲染重算（R8）。
  * 58号：upload_document → manage_files（上传/替换双 action，不提供删除/移动/重命名）。 */
 const ALL_TOOLS = [
-  { name: 'search_knowledge', label: '检索知识证据（domain 单域免传）' },
-  { name: 'get_knowledge', label: '深入读取：浏览层级 / 逐层看目录 / 取原文 / 看能力 / 导航 / 查表格' },
-  { name: 'manage_files', label: '管理文件：上传到指定目录 / 替换任意本地文件（zip 自动解压，自动排队挖掘；不提供删除/移动/重命名）' },
+  { name: 'search_knowledge', labelKey: 'mcp.tool.searchKnowledge' },
+  { name: 'get_knowledge', labelKey: 'mcp.tool.getKnowledge' },
+  { name: 'manage_files', labelKey: 'mcp.tool.manageFiles' },
 ] as const
 
 const props = withDefaults(defineProps<{
@@ -249,7 +251,7 @@ const meta = ref<McpToolMeta | null>(null)
 
 const defaultInstructions = computed(() => meta.value?.instructions ?? '')
 function defaultDesc(name: string): string {
-  return meta.value?.tools.find(t => t.name === name)?.description ?? ''
+  return meta.value?.tools.find(item => item.name === name)?.description ?? ''
 }
 
 const toolOn = ref<Record<string, boolean>>({})
@@ -279,10 +281,10 @@ const mcpEndpoint = computed(() => `${window.location.hostname}:9000/mcp`)
 
 function initFromKey(item: McpKeyItem) {
   const savedOn = item.open_tools
-  for (const t of ALL_TOOLS) {
-    toolOn.value[t.name] = savedOn == null ? true : savedOn.includes(t.name)
+  for (const tool of ALL_TOOLS) {
+    toolOn.value[tool.name] = savedOn == null ? true : savedOn.includes(tool.name)
     // 默认值预填：没存过自定义 → 显示默认文案，用户在原文上增改
-    toolDescs.value[t.name] = item.tool_descriptions?.[t.name] ?? defaultDesc(t.name)
+    toolDescs.value[tool.name] = item.tool_descriptions?.[tool.name] ?? defaultDesc(tool.name)
   }
   instructions.value = item.instructions ?? defaultInstructions.value
   // 幽灵 id 剔除：只保留当前仍可见的库——软删/权限收走的库自动从勾选中消失，
@@ -340,7 +342,7 @@ const configJson = computed(() => {
 })
 
 const toolsDirty = computed(() => {
-  const on = ALL_TOOLS.filter(t => toolOn.value[t.name]).map(t => t.name)
+  const on = ALL_TOOLS.filter(tool => toolOn.value[tool.name]).map(tool => tool.name)
   const saved = props.keyItem.open_tools
   if (saved == null) return on.length !== ALL_TOOLS.length
   return JSON.stringify(on) !== JSON.stringify(saved)
@@ -361,18 +363,18 @@ const artifactsDirty = computed(() => {
 })
 
 function artifactStatusLabel(status: string): string {
-  if (status === 'published') return '已发布'
-  if (status === 'deprecated') return '已停用'
-  return '草稿'
+  if (status === 'published') return t('common.docStatus.published')
+  if (status === 'deprecated') return t('mcp.artifactStatus.deprecated')
+  return t('mcp.artifactStatus.draft')
 }
 
 const promptDirty = computed(() => {
   // 生效值 = 已存自定义（非空）否则默认文案；与显示内容比对决定可保存性
   const effInstr = (props.keyItem.instructions ?? '').trim() || defaultInstructions.value.trim()
   if (instructions.value.trim() !== effInstr) return true
-  return ALL_TOOLS.some(t => {
-    const eff = (props.keyItem.tool_descriptions?.[t.name] ?? '').trim() || defaultDesc(t.name).trim()
-    return (toolDescs.value[t.name] || '').trim() !== eff
+  return ALL_TOOLS.some(tool => {
+    const eff = (props.keyItem.tool_descriptions?.[tool.name] ?? '').trim() || defaultDesc(tool.name).trim()
+    return (toolDescs.value[tool.name] || '').trim() !== eff
   })
 })
 
@@ -384,17 +386,17 @@ function paramTypeLabel(prop: Record<string, unknown>): string {
   const variants = ['anyOf', 'oneOf']
     .flatMap(key => (Array.isArray(prop[key]) ? prop[key] as Array<Record<string, unknown>> : []))
     .map(v => v.type)
-    .filter((t): t is string => typeof t === 'string' && t !== 'null')
+    .filter((variant): variant is string => typeof variant === 'string' && variant !== 'null')
   return variants.length ? variants.join(' | ') : '—'
 }
 
 const paramRows = computed<Record<string, ParamRow[]>>(() => {
   const rowsByTool: Record<string, ParamRow[]> = {}
-  for (const t of ALL_TOOLS) {
-    const schema = meta.value?.tools.find(m => m.name === t.name)?.parameters
+  for (const tool of ALL_TOOLS) {
+    const schema = meta.value?.tools.find(item => item.name === tool.name)?.parameters
     const properties = schema?.properties ?? {}
     const required = new Set(schema?.required ?? [])
-    rowsByTool[t.name] = Object.entries(properties).map(([name, prop]) => ({
+    rowsByTool[tool.name] = Object.entries(properties).map(([name, prop]) => ({
       name,
       type: paramTypeLabel(prop),
       required: required.has(name),
@@ -407,20 +409,20 @@ const paramRows = computed<Record<string, ParamRow[]>>(() => {
 /** 一键把提示词与全部工具说明填回默认文案（仍需点保存生效）。 */
 function restoreDefaults() {
   instructions.value = defaultInstructions.value
-  for (const t of ALL_TOOLS) {
-    toolDescs.value[t.name] = defaultDesc(t.name)
+  for (const tool of ALL_TOOLS) {
+    toolDescs.value[tool.name] = defaultDesc(tool.name)
   }
-  ElMessage.info('已填回默认文案，点「保存」生效')
+  ElMessage.info(t('mcp.msg.defaultsRestored'))
 }
 
 async function saveTools() {
-  const on = ALL_TOOLS.filter(t => toolOn.value[t.name]).map(t => t.name)
-  if (!on.length) { ElMessage.warning('至少保留一个工具'); return }
+  const on = ALL_TOOLS.filter(tool => toolOn.value[tool.name]).map(tool => tool.name)
+  if (!on.length) { ElMessage.warning(t('mcp.msg.keepOneTool')); return }
   savingTools.value = true
   try {
     const item = await kbApi.putMcpKeyConfig(props.keyItem.id, { open_tools: on })
     emit('updated', item)
-    ElMessage.success('工具开关已保存')
+    ElMessage.success(t('mcp.msg.toolsSaved'))
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
   } finally {
@@ -434,7 +436,7 @@ async function saveOpenKbs() {
     const r = await kbApi.putMcpKeyOpenKbs(props.keyItem.id, selectedKbs.value)
     selectedKbs.value = [...r.open_kb_ids]  // 以响应为准（后端剔除了失效勾选）
     emit('updated', { ...props.keyItem, open_kb_ids: r.open_kb_ids })
-    ElMessage.success('开放库已更新')
+    ElMessage.success(t('mcp.msg.openKbsUpdated'))
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
   } finally {
@@ -454,9 +456,10 @@ async function saveOpenArtifacts() {
     const omitted = submitted.filter(id => !saved.has(id))
     if (omitted.length) {
       const titles = omitted.map(id => props.domainArtifacts.find(a => a.artifact_id === id)?.title ?? id)
-      ElMessage.warning(`部分制品未保存：${titles.join('、')}。请刷新页面并检查制品权限后重试。`)
+      // 标题清单的分隔符跟随界面语言（zh「、」/ en「, 」）
+      ElMessage.warning(t('mcp.msg.artifactsPartiallySaved', { titles: titles.join(t('mcp.separator')) }))
     } else {
-      ElMessage.success('开放制品已更新')
+      ElMessage.success(t('mcp.msg.artifactsUpdated'))
     }
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
@@ -472,16 +475,16 @@ async function savePrompt() {
     // 自定义副本，将来默认文案更新时这些钥匙能跟着走。
     const instrIsDefault = instructions.value.trim() === defaultInstructions.value.trim()
     const descs: Record<string, string> = {}
-    for (const t of ALL_TOOLS) {
-      const v = (toolDescs.value[t.name] || '').trim()
-      if (v && v !== defaultDesc(t.name).trim()) descs[t.name] = v
+    for (const tool of ALL_TOOLS) {
+      const v = (toolDescs.value[tool.name] || '').trim()
+      if (v && v !== defaultDesc(tool.name).trim()) descs[tool.name] = v
     }
     const item = await kbApi.putMcpKeyConfig(props.keyItem.id, {
       instructions: instrIsDefault ? '' : instructions.value,
       tool_descriptions: descs,
     })
     emit('updated', item)
-    ElMessage.success('提示词已保存')
+    ElMessage.success(t('mcp.msg.promptSaved'))
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
   } finally {
@@ -492,8 +495,9 @@ async function savePrompt() {
 async function rotate() {
   try {
     await ElMessageBox.confirm(
-      `轮换后「${props.keyItem.name}」的旧密钥立即失效，正在使用它的 Agent 会断连。确定继续？`,
-      '轮换密钥', { type: 'warning', confirmButtonText: '轮换', cancelButtonText: '取消' },
+      t('mcp.confirm.rotateMessage', { name: props.keyItem.name }),
+      t('mcp.dialog.rotateTitle'),
+      { type: 'warning', confirmButtonText: t('mcp.action.rotate'), cancelButtonText: t('common.cancel') },
     )
   } catch { return }
   rotating.value = true
@@ -501,7 +505,7 @@ async function rotate() {
     const r = await kbApi.rotateMcpKey(props.keyItem.id)
     freshKey.value = r.key
     configFormat.value = 'generic'
-    ElMessage.success('密钥已轮换；旧密钥立即失效')
+    ElMessage.success(t('mcp.msg.keyRotated'))
     emit('rotated', props.keyItem.id)
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
@@ -513,14 +517,15 @@ async function rotate() {
 async function revoke() {
   try {
     await ElMessageBox.confirm(
-      `吊销后「${props.keyItem.name}」立即失效且不可恢复，正在使用它的 Agent 会断连。确定吊销？`,
-      '吊销钥匙', { type: 'warning', confirmButtonText: '吊销', cancelButtonText: '取消' },
+      t('mcp.confirm.revokeMessage', { name: props.keyItem.name }),
+      t('mcp.dialog.revokeTitle'),
+      { type: 'warning', confirmButtonText: t('mcp.action.revoke'), cancelButtonText: t('common.cancel') },
     )
   } catch { return }
   revoking.value = true
   try {
     await kbApi.revokeMcpKey(props.keyItem.id)
-    ElMessage.success('钥匙已吊销')
+    ElMessage.success(t('mcp.msg.keyRevoked'))
     emit('revoked', props.keyItem.id)
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
@@ -532,7 +537,7 @@ async function revoke() {
 async function copy(text: string) {
   try {
     await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
+    ElMessage.success(t('mcp.msg.copied'))
   } catch {
     // http://公网IP 等非安全上下文没有 navigator.clipboard，走 execCommand 兜底
     const ta = document.createElement('textarea')
@@ -543,8 +548,8 @@ async function copy(text: string) {
     ta.select()
     const ok = document.execCommand('copy')
     document.body.removeChild(ta)
-    if (ok) ElMessage.success('已复制')
-    else ElMessage.warning('复制失败，请手动选择复制')
+    if (ok) ElMessage.success(t('mcp.msg.copied'))
+    else ElMessage.warning(t('mcp.msg.copyFailed'))
   }
 }
 

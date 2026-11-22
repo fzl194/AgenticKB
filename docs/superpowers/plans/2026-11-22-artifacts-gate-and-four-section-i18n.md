@@ -209,7 +209,7 @@ git mv src/locales/en.ts src/locales/en/shell.ts
 ```
 
 `zh/shell.ts`：首行改为 `export const zhShell = {`（去掉 `: Record<string, string>`），文件头注释改为"壳层文案字典（2026-11-20 批次原样平移）"，对象结尾 `}` 改 `} as const`。
-`en/shell.ts`：`import { zh } from './zh'` 改为 `import type { zhShell } from '../../zh/shell'`；签名改 `export const enShell: Record<keyof typeof zhShell, string> = {`；注释改为"与 zhShell key 严格对齐（keyof 为字面量联合，漏 key/多 key 编译即错）"。
+`en/shell.ts`：`import { zh } from './zh'` 改为 `import type { zhShell } from '../zh/shell'`；签名改 `export const enShell: Record<keyof typeof zhShell, string> = {`；注释改为"与 zhShell key 严格对齐（keyof 为字面量联合，漏 key/多 key 编译即错）"。
 
 - [ ] **Step 4: 写 `translate.ts` 与 `t.ts`**
 
@@ -343,7 +343,7 @@ export const zhCommon = {
 
 Task 3 还会往本文件追加 `common.mgmtError.*`（管理面错误码映射）——届时加在末尾 `} as const` 之前。
 
-`en/common.ts` 对应（类型 `Record<keyof typeof zhCommon, string>`，`import type { zhCommon } from '../../zh/common'`）：
+`en/common.ts` 对应（类型 `Record<keyof typeof zhCommon, string>`，`import type { zhCommon } from '../zh/common'`）：
 
 ```typescript
 export const enCommon: Record<keyof typeof zhCommon, string> = {
@@ -424,7 +424,7 @@ en 侧：
 
 ```typescript
 // src/locales/en/dashboard.ts
-import type { zhDashboard } from '../../zh/dashboard'
+import type { zhDashboard } from '../zh/dashboard'
 
 export const enDashboard: Record<keyof typeof zhDashboard, string> = {
 }

@@ -1,5 +1,5 @@
-/** 壳层文案字典（spec: 2026-11-20-shell-i18n）。key 为 vue-i18n 兼容扁平点号结构。 */
-export const zh: Record<string, string> = {
+/** 壳层文案字典（2026-11-20 批次原样平移）。 */
+export const zhShell = {
   // Sidebar 导航（ALL_NAV 12 项）
   'nav.dashboard': '概览',
   'nav.kb': '知识库',
@@ -72,4 +72,4 @@ export const zh: Record<string, string> = {
   'release.failedTip': '版本信息加载失败',
   'release.title': '版本信息',
   'release.releasedAt': '发布日期：{date}',
-}
+} as const

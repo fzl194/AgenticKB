@@ -1,8 +1,7 @@
-import { zh } from './zh'
+import type { zhShell } from '../zh/shell'
 
-/** key 对齐由 __tests__/dict.spec.ts 运行时断言保证——zh 侧标注 Record<string,string>
- * 使 keyof 退化为 string，编译期不拦漏 key（对抗审查 LOW-2 核实）。 */
-export const en: Record<keyof typeof zh, string> = {
+/** 与 zhShell key 严格对齐（keyof 为字面量联合，漏 key/多 key 编译即错）。 */
+export const enShell: Record<keyof typeof zhShell, string> = {
   'nav.dashboard': 'Overview',
   'nav.kb': 'Knowledge Bases',
   'nav.retrievalRecords': 'Retrieval Records',

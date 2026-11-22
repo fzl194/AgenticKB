@@ -1,9 +1,8 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import type { App } from 'vue'
 import { applyAppLocale, type Language } from '@/locales/element'
-import { zh } from '@/locales/zh'
-import { en } from '@/locales/en'
+import { translate } from '@/locales/translate'
 
 const GLOBAL_KEY = 'kb-ui-lang'
 const USER_KEY_PREFIX = 'kb-ui-lang:'
@@ -45,18 +44,10 @@ export const useLocaleStore = defineStore('locale', () => {
     app = instance
   }
 
-  const messages = computed<Record<string, string>>(() =>
-    lang.value === 'en' ? (en as unknown as Record<string, string>) : zh,
-  )
-
-  /** 查字典：当前语言 → zh 兜底 → key 本身（漏译开发期立即可见）。
-   * params 支持 {name} 插值（壳层仅 login.adminVerify/login.contact/release.releasedAt 用到）。 */
+  /** 查表委托 locales/translate.ts（纯函数）；渲染期读 lang.value 即建立响应依赖。
+   * params 支持 {name} 插值。 */
   function t(key: string, params?: Record<string, string | number>): string {
-    const text = messages.value[key] ?? zh[key] ?? key
-    if (!params) return text
-    return text.replace(/\{(\w+)\}/g, (token, name) =>
-      params[name] !== undefined ? String(params[name]) : token,
-    )
+    return translate(lang.value, key, params)
   }
 
   function setLang(next: Language): void {

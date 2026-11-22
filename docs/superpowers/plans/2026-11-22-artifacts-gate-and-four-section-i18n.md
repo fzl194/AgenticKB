@@ -593,7 +593,7 @@ describe('mapping utils follow the language switch', () => {
     expect(runStatusLabel('not_a_status')).toBe('not_a_status')
   })
 
-  it('pendingTasks / docStatusLabel / documentStatusSlices / unitTypeBars', () => {
+  it('pendingTasks / docStatusChartLabel / documentStatusSlices / unitTypeBars', () => {
     const kb = {
       id: 'kb1', name: '库一', can_write: true,
       awaiting_review_run_id: 'run1',

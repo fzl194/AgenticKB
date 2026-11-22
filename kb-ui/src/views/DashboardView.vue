@@ -7,24 +7,24 @@
     -->
     <section v-if="!domainReady" class="dash__block">
       <div class="dash__notice">
-        <strong>知识域尚未就绪</strong>
-        <span>当前没有可用的知识域，无法加载统计。请检查域配置或稍后重试。</span>
-        <el-button text type="primary" size="small" @click="load">重试</el-button>
+        <strong>{{ t('dashboard.notice.domainNotReady') }}</strong>
+        <span>{{ t('dashboard.notice.domainNotReadyHint') }}</span>
+        <el-button text type="primary" size="small" @click="load">{{ t('common.retry') }}</el-button>
       </div>
     </section>
 
     <template v-else>
     <div v-if="staleRefreshError" class="dash__refresh-warning">
-      刷新失败，显示上次数据
+      {{ t('dashboard.warning.refreshFailed') }}
     </div>
     <!-- ── 区块 1：汇总数字 ──────────────────────────────────────────── -->
     <section class="dash__block">
       <div class="dash__block-head">
-        <h3 class="dash__block-title">知识库概况</h3>
+        <h3 class="dash__block-title">{{ t('dashboard.block.overview') }}</h3>
         <div class="dash__block-actions">
-          <span class="dash__scope">口径：本域我可见的 {{ stats?.kb_count ?? kbs.length }} 个知识库</span>
+          <span class="dash__scope">{{ t('dashboard.scope.overview', { n: stats?.kb_count ?? kbs.length }) }}</span>
           <el-button text type="primary" size="small" :loading="refreshing" @click="load">
-            刷新
+            {{ t('dashboard.action.refresh') }}
           </el-button>
         </div>
       </div>
@@ -46,7 +46,7 @@
 
     <!-- ── 区块 2：待处理（有内容才渲染，无则整块不出现）─────────────── -->
     <section v-if="tasks.length" class="dash__block dash__block--pending">
-      <h3 class="dash__block-title">⚠ 待处理</h3>
+      <h3 class="dash__block-title">{{ t('dashboard.block.pending') }}</h3>
       <div
         v-for="task in tasks"
         :key="task.key"
@@ -79,10 +79,10 @@
       真相是「还没建库」。与 设置→系统状态 处理无 release 的做法同一条原则。
     -->
     <section v-if="!statsLoading && (!statsError || !!stats) && !hasAnyKb" class="dash__block">
-      <EmptyState text="还没有知识库，建一个就能看到统计">
+      <EmptyState :text="t('dashboard.empty.noKbForCharts')">
         <template #action>
           <el-button type="primary" size="small" @click="router.push('/kb')">
-            新建知识库
+            {{ t('dashboard.action.newKb') }}
           </el-button>
         </template>
       </EmptyState>
@@ -91,7 +91,7 @@
     <div v-else class="dash__charts">
       <!-- 文档状态分布 -->
       <section class="dash__block">
-        <h3 class="dash__block-title">文档状态分布</h3>
+        <h3 class="dash__block-title">{{ t('dashboard.block.docStatus') }}</h3>
         <div v-if="statsLoading && !stats" class="dash__skeleton dash__skeleton--chart" />
         <BlockError v-else-if="statsError && !stats" @retry="load" />
         <div v-else class="dash__donut">
@@ -116,9 +116,9 @@
       <!-- 挖掘趋势 -->
       <section class="dash__block">
         <div class="dash__block-head">
-          <h3 class="dash__block-title">近 {{ trendDays }} 天入库文档数</h3>
+          <h3 class="dash__block-title">{{ t('dashboard.block.trend', { n: trendDays }) }}</h3>
           <span class="dash__scope">
-            共 {{ totals.documents }} 篇 · {{ totals.runs }} 次挖掘
+            {{ t('dashboard.scope.trendTotals', { docs: totals.documents, runs: totals.runs }) }}
           </span>
         </div>
         <div v-if="statsLoading && !stats" class="dash__skeleton dash__skeleton--chart" />
@@ -127,14 +127,14 @@
         <LineChart
           v-else
           :labels="trend.labels"
-          :series="[{ name: '入库文档数', data: trend.data }]"
+          :series="[{ name: t('dashboard.series.indexedDocs'), data: trend.data }]"
           height="220px"
         />
       </section>
 
       <!-- 各知识库文档数 -->
       <section class="dash__block">
-        <h3 class="dash__block-title">各知识库文档数（前 {{ TOP_KB_BAR_LIMIT }}）</h3>
+        <h3 class="dash__block-title">{{ t('dashboard.block.kbDocs', { n: TOP_KB_BAR_LIMIT }) }}</h3>
         <div v-if="overviewLoading && !overviewLoaded" class="dash__skeleton dash__skeleton--chart" />
         <BlockError v-else-if="overviewError && !overviewLoaded" @retry="load" />
         <!-- 单一色相：谁是谁由 y 轴标签说明，颜色不承担身份，不必也不该上分类色 -->
@@ -144,12 +144,12 @@
           horizontal
           :height="barChartHeight(kbBars.length)"
         />
-        <p v-else class="dash__muted">还没有文档</p>
+        <p v-else class="dash__muted">{{ t('dashboard.empty.noDocs') }}</p>
       </section>
 
       <!-- 检索单元类型 -->
       <section class="dash__block">
-        <h3 class="dash__block-title">检索单元类型分布</h3>
+        <h3 class="dash__block-title">{{ t('dashboard.block.unitTypes') }}</h3>
         <div v-if="statsLoading && !stats" class="dash__skeleton dash__skeleton--chart" />
         <BlockError v-else-if="statsError && !stats" @retry="load" />
         <BarChart
@@ -158,17 +158,17 @@
           horizontal
           :height="barChartHeight(unitBars.length)"
         />
-        <p v-else class="dash__muted">还没有挖掘出检索单元</p>
+        <p v-else class="dash__muted">{{ t('dashboard.empty.noUnits') }}</p>
       </section>
     </div>
 
     <!-- ── 区块 4：我的知识库 ────────────────────────────────────────── -->
     <section class="dash__block">
       <div class="dash__block-head">
-        <h3 class="dash__block-title">我的知识库</h3>
+        <h3 class="dash__block-title">{{ t('dashboard.block.myKbs') }}</h3>
         <div class="dash__block-actions">
           <el-button text type="primary" size="small" @click="router.push('/kb')">
-            + 新建
+            {{ t('dashboard.action.new') }}
           </el-button>
           <el-button
             v-if="kbs.length > cards.length"
@@ -177,7 +177,7 @@
             size="small"
             @click="router.push('/kb')"
           >
-            查看全部 →
+            {{ t('dashboard.action.viewAll') }}
           </el-button>
         </div>
       </div>
@@ -194,10 +194,10 @@
           @open="router.push(`/kb/${$event}`)"
         />
       </div>
-      <EmptyState v-else text="还没有知识库">
+      <EmptyState v-else :text="t('dashboard.empty.noKb')">
         <template #action>
           <el-button type="primary" size="small" @click="router.push('/kb')">
-            新建知识库
+            {{ t('dashboard.action.newKb') }}
           </el-button>
         </template>
       </EmptyState>
@@ -205,7 +205,7 @@
 
     <!-- ── 区块 5：最近挖掘 ──────────────────────────────────────────── -->
     <section class="dash__block">
-      <h3 class="dash__block-title">最近挖掘</h3>
+      <h3 class="dash__block-title">{{ t('dashboard.block.recentRuns') }}</h3>
 
       <div v-if="overviewLoading && !overviewLoaded" class="dash__skeleton-list">
         <div v-for="i in 3" :key="i" class="dash__skeleton dash__skeleton--row" />
@@ -228,7 +228,7 @@
           <span class="run-row__time">{{ formatTime(run.started_at) }}</span>
         </div>
       </div>
-      <EmptyState v-else text="还没有挖掘记录" />
+      <EmptyState v-else :text="t('dashboard.empty.noRuns')" />
     </section>
     </template>
   </div>
@@ -242,6 +242,7 @@ import { useDomainStore } from '@/stores/domain'
 import { useAuthStore } from '@/stores/auth'
 import { useKbApi } from '@/api/kb'
 import { useOpsApi } from '@/api/ops'
+import { t } from '@/locales/t'
 import {
   TOP_KB_BAR_LIMIT, barChartHeight, documentStatusSlices, kbDocumentBars,
   pendingTasks, trendSeries, trendTotals, unitTypeBars, visibleKbCards,
@@ -258,14 +259,15 @@ import PieChart from '@/components/charts/PieChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
 import LineChart from '@/components/charts/LineChart.vue'
 
-/** 区块级失败提示。单块失败只在该块显示，不牵连其余。 */
+/** 区块级失败提示。单块失败只在该块显示，不牵连其余。
+ * 文案在渲染函数体内 t()：函数式组件每次渲染重新求值，切语言即重算（R8）。 */
 const BlockError = (_: unknown, { emit }: { emit: (e: 'retry') => void }) => h(
   'div',
   { class: 'dash__block-error' },
   [
-    '加载失败',
+    t('common.loadFailed'),
     h(ElButton, { text: true, type: 'primary', size: 'small', onClick: () => emit('retry') },
-      () => '重试'),
+      () => t('common.retry')),
   ],
 )
 
@@ -324,10 +326,10 @@ const tiles = computed(() => {
   const s = stats.value?.document_status
   const docTotal = s ? Object.values(s).reduce((x, y) => x + y, 0) : 0
   return [
-    { label: '知识库', value: stats.value?.kb_count ?? kbs.value.length, icon: '📚' },
-    { label: '文档', value: docTotal, icon: '📄' },
-    { label: '已挖掘', value: s?.mined ?? 0, icon: '✅' },
-    { label: '检索单元', value: a?.retrieval_units ?? 0, icon: '🔎' },
+    { label: t('dashboard.tile.kb'), value: stats.value?.kb_count ?? kbs.value.length, icon: '📚' },
+    { label: t('dashboard.tile.docs'), value: docTotal, icon: '📄' },
+    { label: t('dashboard.tile.mined'), value: s?.mined ?? 0, icon: '✅' },
+    { label: t('dashboard.tile.units'), value: a?.retrieval_units ?? 0, icon: '🔎' },
   ]
 })
 
@@ -428,9 +430,9 @@ function docDelta(run: KbOverviewRun): string {
   return parts.length ? parts.join(' ') : String(run.total_documents ?? 0)
 }
 
-function formatTime(t: string | null): string {
-  if (!t) return '-'
-  const d = new Date(t)
+function formatTime(value: string | null): string {
+  if (!value) return '-'
+  const d = new Date(value)
   if (Number.isNaN(d.getTime())) return '-'
   return d.toLocaleString('zh-CN', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',

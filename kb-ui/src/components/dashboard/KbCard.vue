@@ -8,7 +8,7 @@
     </div>
 
     <div class="kb-card__meta">
-      <span>{{ kb.status_counts.total }} 篇</span>
+      <span>{{ t('dashboard.kbCard.docCount', { n: kb.status_counts.total }) }}</span>
       <span class="kb-card__sep">·</span>
       <span>{{ roleLabel }}</span>
     </div>
@@ -22,7 +22,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { kbCardStatus } from '@/utils/dashboard'
+import { kbCardStatus, type KbCardStatus } from '@/utils/dashboard'
+import { t } from '@/locales/t'
 import type { KbOverviewItem } from '@/types/kb'
 import { roleLabel as kbRoleLabel } from '@/views/kb/kbMeta'
 
@@ -35,18 +36,23 @@ const badgeIcon = computed(() => (
   { failed: '⚠', mining: '⏳', ready: '✓' }[status.value]
 ))
 
-const badgeTitle = computed(() => (
-  { failed: '有文档处理失败', mining: '正在挖掘', ready: '就绪' }[status.value]
-))
+/** 角标提示的文案 key——表里只存 key，渲染期经 computed 翻译（切语言即重算，R8）。 */
+const BADGE_TITLE_KEYS: Record<KbCardStatus, string> = {
+  failed: 'dashboard.kbCard.badgeFailed',
+  mining: 'dashboard.kbCard.badgeMining',
+  ready: 'dashboard.kbCard.badgeReady',
+}
+
+const badgeTitle = computed(() => t(BADGE_TITLE_KEYS[status.value]))
 
 const roleLabel = computed(() => kbRoleLabel(props.kb.my_role) ?? props.kb.my_role)
 
 const subline = computed(() => {
   const { failed, mining, total } = props.kb.status_counts
-  if (failed > 0) return `${failed} 篇待处理`
-  if (mining > 0) return `挖掘中 ${mining}/${total}`
-  if (props.kb.last_mined_at) return `最近挖掘 ${formatTime(props.kb.last_mined_at)}`
-  return '尚未挖掘'
+  if (failed > 0) return t('dashboard.kbCard.failedPending', { n: failed })
+  if (mining > 0) return t('dashboard.kbCard.miningProgress', { done: mining, total })
+  if (props.kb.last_mined_at) return t('dashboard.kbCard.lastMined', { time: formatTime(props.kb.last_mined_at) })
+  return t('dashboard.kbCard.notMined')
 })
 
 function formatTime(iso: string): string {

@@ -2,7 +2,7 @@
   <ul class="qlist">
     <li v-for="item in items" :key="item.text" class="qlist__row">
       <span class="qlist__text" :title="item.text">{{ item.text }}</span>
-      <span class="qlist__count">{{ item.count }} 次</span>
+      <span class="qlist__count">{{ t('dashboard.queryList.count', { n: item.count }) }}</span>
       <span
         v-if="item.note"
         class="qlist__note"
@@ -15,6 +15,8 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '@/locales/t'
+
 /**
  * 查询原文清单。概览页的「答不上来的问题」与设置页的三处清单共用同一份标记与样式。
  *

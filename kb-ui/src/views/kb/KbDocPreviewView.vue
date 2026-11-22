@@ -4,7 +4,7 @@
     <div class="doc-preview__header">
       <div class="doc-preview__head-left">
         <el-button text @click="back">
-          <el-icon><ArrowLeft /></el-icon> 返回
+          <el-icon><ArrowLeft /></el-icon> {{ t('kbView.preview.back') }}
         </el-button>
         <el-icon class="doc-preview__icon"><component :is="icon" /></el-icon>
         <span class="doc-preview__name">{{ doc?.document_name || '…' }}</span>
@@ -12,35 +12,35 @@
           {{ docStatusLabel(doc.status) }}
         </el-tag>
         <span v-if="doc?.knowledge_outdated" class="doc-preview__outdated" data-testid="knowledge-outdated">
-          待更新（旧知识可用）
+          {{ t('kbView.preview.outdated') }}
         </span>
       </div>
       <div class="doc-preview__head-right">
         <el-button size="small" :loading="downloading" @click="download">
-          <el-icon class="el-icon--left"><Download /></el-icon>下载最新原文件
+          <el-icon class="el-icon--left"><Download /></el-icon>{{ t('kbView.preview.downloadLatest') }}
         </el-button>
       </div>
     </div>
 
     <!-- 原件读取与当前知识读取保留各自的版本语义。 -->
     <el-tabs v-model="activeTab" class="doc-preview__tabs">
-      <el-tab-pane label="最新原文件预览" name="preview">
+      <el-tab-pane :label="t('kbView.preview.tab.preview')" name="preview">
         <p class="doc-preview__source-notice" data-testid="latest-source-notice">
-          此处预览和下载的是最新原文件，可能与当前可搜索知识不同。替换文件后需重新挖掘；
-          搜索证据请从搜索结果的来源入口核验对应版本。
+          {{ t('kbView.preview.sourceNotice1') }}
+          {{ t('kbView.preview.sourceNotice2') }}
         </p>
         <!-- Body -->
         <div class="doc-preview__body" v-loading="previewLoading">
           <div v-if="error" class="doc-preview__state">
             <el-icon :size="32"><WarningFilled /></el-icon>
             <p>{{ error }}</p>
-            <el-button size="small" @click="download">下载最新原文件</el-button>
+            <el-button size="small" @click="download">{{ t('kbView.preview.downloadLatest') }}</el-button>
           </div>
 
           <div v-else-if="tooLarge" class="doc-preview__state">
             <el-icon :size="32"><Document /></el-icon>
-            <p>文件较大（{{ (blobSize / 1024 / 1024).toFixed(1) }} MB），未在线渲染。</p>
-            <el-button type="primary" size="small" @click="download">下载最新原文件</el-button>
+            <p>{{ t('kbView.preview.tooLarge', { size: (blobSize / 1024 / 1024).toFixed(1) }) }}</p>
+            <el-button type="primary" size="small" @click="download">{{ t('kbView.preview.downloadLatest') }}</el-button>
           </div>
 
           <!-- 预签名直连：浏览器对 MinIO 按 Range 分页按需加载 -->
@@ -55,8 +55,8 @@
           <div v-else-if="html" class="doc-preview__rich">
             <div v-html="html" />
             <div v-if="textTruncated" class="doc-preview__more">
-              <span>已展示前 {{ (renderLimit / 1000).toFixed(0) }}k 字符</span>
-              <el-button size="small" @click="showMoreText">展示更多</el-button>
+              <span>{{ t('kbView.preview.shownChars', { n: (renderLimit / 1000).toFixed(0) }) }}</span>
+              <el-button size="small" @click="showMoreText">{{ t('kbView.preview.showMore') }}</el-button>
             </div>
           </div>
 
@@ -71,16 +71,16 @@
           <template v-else-if="text !== null">
             <pre class="doc-preview__text">{{ text }}</pre>
             <div v-if="textTruncated" class="doc-preview__more">
-              <span>已展示前 {{ (renderLimit / 1000).toFixed(0) }}k 字符</span>
-              <el-button size="small" @click="showMoreText">展示更多</el-button>
+              <span>{{ t('kbView.preview.shownChars', { n: (renderLimit / 1000).toFixed(0) }) }}</span>
+              <el-button size="small" @click="showMoreText">{{ t('kbView.preview.showMore') }}</el-button>
             </div>
           </template>
 
           <div v-else-if="kind === 'unsupported'" class="doc-preview__state">
             <el-icon :size="32"><Document /></el-icon>
-            <p>该类型暂不支持在线预览（.{{ ext || '未知' }}）。</p>
-            <p class="doc-preview__sub">支持：md / html / 纯文本代码（txt/json/yaml/csv/xml 等） / 图片（png/jpg/gif/webp/svg）/ PDF</p>
-            <el-button size="small" @click="download">下载最新原文件</el-button>
+            <p>{{ t('kbView.preview.unsupported', { ext: ext || t('kbView.preview.unknownExt') }) }}</p>
+            <p class="doc-preview__sub">{{ t('kbView.preview.supportedTypes') }}</p>
+            <el-button size="small" @click="download">{{ t('kbView.preview.downloadLatest') }}</el-button>
           </div>
         </div>
       </el-tab-pane>
@@ -89,7 +89,7 @@
       <!-- M5：结构化数据（新解析链产出的知识快照视图） -->
       <el-tab-pane name="structured">
         <template #label>
-          结构化数据
+          {{ t('kbView.preview.tab.structured') }}
           <el-tag v-if="parseResult" size="small" effect="light" class="doc-preview__tab-tag">
             {{ parseResult.snapshot.quality_status }}
           </el-tag>
@@ -100,12 +100,12 @@
           <div v-else-if="parseError" class="doc-preview__state">
             <el-icon :size="32"><WarningFilled /></el-icon>
             <p>{{ parseError }}</p>
-            <el-button v-if="parseRetryable" size="small" @click="loadParseResult">重试</el-button>
+            <el-button v-if="parseRetryable" size="small" @click="loadParseResult">{{ t('common.retry') }}</el-button>
           </div>
 
           <template v-else-if="parseResult">
             <p v-if="!canQueryCurrentKnowledge" class="doc-preview__muted" data-testid="current-only-actions-notice">
-              章节范围搜索和表格精确查询仅当前可搜索版本可用；此解析结果尚未进入搜索，请切回当前可搜索版本。
+              {{ t('kbView.preview.searchOnlyNotice') }}
             </p>
             <!-- A0-1 版本横幅：当前可搜索版本 vs 最新上传版本 -->
             <div
@@ -115,15 +115,15 @@
               data-testid="doc-version-banner"
             >
               <template v-if="parseResult.versioning.in_sync">
-                当前可搜索版本与最新上传版本一致（rev.{{ parseResult.versioning.latest?.source_content_revision ?? '—' }}）
+                {{ t('kbView.preview.version.inSync', { rev: parseResult.versioning.latest?.source_content_revision ?? '—' }) }}
               </template>
               <template v-else-if="parseResult.versioning.serving">
-                当前可搜索 rev.{{ parseResult.versioning.serving.source_content_revision ?? '—' }}；
-                最新上传 rev.{{ parseResult.versioning.latest?.source_content_revision ?? '—' }} 尚未进入搜索
+                {{ t('kbView.preview.version.servingPrefix', { rev: parseResult.versioning.serving.source_content_revision ?? '—' }) }}
+                {{ t('kbView.preview.version.latestNotInSearch', { rev: parseResult.versioning.latest?.source_content_revision ?? '—' }) }}
               </template>
               <template v-else>
-                以下为最新上传版本（rev.{{ parseResult.versioning.latest?.source_content_revision ?? '—' }}）的解析结果，
-                尚未进入搜索——搜索与 Agent 读取暂不可用
+                {{ t('kbView.preview.version.latestOnlyPrefix', { rev: parseResult.versioning.latest?.source_content_revision ?? '—' }) }}
+                {{ t('kbView.preview.version.notSearchable') }}
               </template>
               <el-button
                 v-if="parseResult.versioning.serving && !parseResult.versioning.in_sync"
@@ -131,40 +131,40 @@
                 data-testid="doc-version-toggle"
                 @click="toggleParseView"
               >
-                {{ parseView === 'current_serving' ? '查看最新解析' : '查看当前可搜索版本' }}
+                {{ parseView === 'current_serving' ? t('kbView.preview.version.viewLatest') : t('kbView.preview.version.viewServing') }}
               </el-button>
             </div>
 
             <!-- 各区块独立收缩；顺序：快照 → 结构图 → 大纲 → 切片 → 元素 → 表格 -->
             <el-collapse v-model="openCards" class="doc-preview__cards">
               <!-- 知识快照 -->
-              <el-collapse-item name="snapshot" title="知识快照">
+              <el-collapse-item name="snapshot" :title="t('kbView.preview.card.snapshot')">
                 <div class="doc-preview__meta-grid">
                   <div class="doc-preview__meta-item">
-                    <span class="doc-preview__meta-label">质量结论</span>
+                    <span class="doc-preview__meta-label">{{ t('kbView.preview.qualityResult') }}</span>
                     <el-tag :type="parseResult.snapshot.quality_status === 'PASS' ? 'success' : 'warning'" size="small">
                       {{ parseResult.snapshot.quality_status }}
                     </el-tag>
                   </div>
                   <div class="doc-preview__meta-item">
-                    <span class="doc-preview__meta-label">内容版本</span>
+                    <span class="doc-preview__meta-label">{{ t('kbView.preview.contentVersion') }}</span>
                     <span>rev.{{ parseResult.snapshot.source_content_revision ?? '—' }}</span>
                   </div>
                   <div class="doc-preview__meta-item">
-                    <span class="doc-preview__meta-label">元素 / 容器 / 关系</span>
+                    <span class="doc-preview__meta-label">{{ t('kbView.preview.elementCounts') }}</span>
                     <span>{{ parseResult.elements.count }} / {{ parseResult.diagnostics.containers }} / {{ parseResult.diagnostics.relations }}</span>
                   </div>
                   <div class="doc-preview__meta-item">
-                    <span class="doc-preview__meta-label">切片数</span>
+                    <span class="doc-preview__meta-label">{{ t('kbView.preview.chunkCount') }}</span>
                     <span>{{ parseResult.segments.count }}</span>
                   </div>
                   <div class="doc-preview__meta-item">
-                    <span class="doc-preview__meta-label">解析管线</span>
+                    <span class="doc-preview__meta-label">{{ t('kbView.preview.parsePipeline') }}</span>
                     <span class="doc-preview__mono">{{ parseResult.snapshot.parser_fingerprint || '—' }}</span>
                   </div>
                   <div class="doc-preview__meta-item">
-                    <span class="doc-preview__meta-label">切片策略</span>
-                    <span class="doc-preview__mono">{{ parseResult.snapshot.compiler_fingerprint || '默认' }}</span>
+                    <span class="doc-preview__meta-label">{{ t('kbView.preview.chunkStrategy') }}</span>
+                    <span class="doc-preview__mono">{{ parseResult.snapshot.compiler_fingerprint || t('kbView.preview.default') }}</span>
                   </div>
                 </div>
               </el-collapse-item>
@@ -173,17 +173,17 @@
               <el-collapse-item
                 v-if="parseResult.outline.length || parseResult.tables.length"
                 name="structure-graph"
-                title="文档结构图"
+                :title="t('kbView.preview.card.structureGraph')"
               >
                 <DocumentStructureGraph
                   v-if="activeTab === 'structured' && openCards.includes('structure-graph')"
-                  :document-title="doc?.document_name || parseResult.snapshot.title || '未命名文档'"
+                  :document-title="doc?.document_name || parseResult.snapshot.title || t('kbStruct.untitledDoc')"
                   :result="parseResult"
                 />
               </el-collapse-item>
 
               <!-- 文档大纲（A2：可选中 + 前后/父子导航 + 范围搜索入口） -->
-              <el-collapse-item v-if="parseResult.outline.length" name="outline" title="文档大纲">
+              <el-collapse-item v-if="parseResult.outline.length" name="outline" :title="t('kbView.preview.card.outline')">
                 <el-tree
                   ref="outlineTreeRef"
                   :data="outlineTree"
@@ -201,26 +201,26 @@
                   data-testid="doc-outline-actions"
                 >
                   <span class="doc-preview__outline-title">{{ selectedOutline.title }}</span>
-                  <el-button size="small" :disabled="!outlineParent" @click="jumpOutline(outlineParent?.element_id)">父章节</el-button>
-                  <el-button size="small" :disabled="!outlinePrev" @click="jumpOutline(outlinePrev?.element_id)">上一节</el-button>
-                  <el-button size="small" :disabled="!outlineNext" @click="jumpOutline(outlineNext?.element_id)">下一节</el-button>
-                  <el-button v-if="outlineChildren.length" size="small" @click="jumpOutline(outlineChildren[0].element_id)">首个子节</el-button>
+                  <el-button size="small" :disabled="!outlineParent" @click="jumpOutline(outlineParent?.element_id)">{{ t('kbView.preview.parentSection') }}</el-button>
+                  <el-button size="small" :disabled="!outlinePrev" @click="jumpOutline(outlinePrev?.element_id)">{{ t('kbView.preview.prevSection') }}</el-button>
+                  <el-button size="small" :disabled="!outlineNext" @click="jumpOutline(outlineNext?.element_id)">{{ t('kbView.preview.nextSection') }}</el-button>
+                  <el-button v-if="outlineChildren.length" size="small" @click="jumpOutline(outlineChildren[0].element_id)">{{ t('kbView.preview.firstChildSection') }}</el-button>
                   <el-button
                     v-if="selectedOutline.section_ref"
                     size="small" type="primary" plain
                     :disabled="!canQueryCurrentKnowledge"
                     @click="goScopedSearch('exact')"
                     data-testid="outline-search-exact"
-                  >本节搜索</el-button>
+                  >{{ t('kbView.preview.searchSection') }}</el-button>
                   <el-button
                     v-if="selectedOutline.section_ref"
                     size="small" type="primary" plain
                     :disabled="!canQueryCurrentKnowledge"
                     @click="goScopedSearch('descendants')"
                     data-testid="outline-search-descendants"
-                  >本节及子节搜索</el-button>
+                  >{{ t('kbView.preview.searchDescendants') }}</el-button>
                   <span v-else class="doc-preview__muted">
-                    此版本章节无范围锚（旧版本快照），重新挖掘后可用
+                    {{ t('kbView.preview.noScopeAnchor') }}
                   </span>
                 </div>
               </el-collapse-item>
@@ -229,7 +229,7 @@
               <el-collapse-item
                 v-if="parseResult.segments.items.length"
                 name="segments"
-                :title="`切片（${parseResult.segments.count}）`"
+                :title="t('kbView.preview.card.chunks', { n: parseResult.segments.count })"
               >
                 <el-collapse>
                   <el-collapse-item
@@ -251,7 +251,7 @@
                   </el-collapse-item>
                 </el-collapse>
                 <p v-if="parseResult.segments.count > parseResult.segments.items.length" class="doc-preview__muted">
-                  当前仅展示前 {{ parseResult.segments.items.length }} 条切片。
+                  {{ t('kbView.preview.chunksTruncated', { n: parseResult.segments.items.length }) }}
                 </p>
               </el-collapse-item>
 
@@ -259,7 +259,7 @@
               <el-collapse-item
                 v-if="parseResult.elements.items.length"
                 name="elements"
-                :title="`结构元素（${parseResult.elements.count}）`"
+                :title="t('kbView.preview.card.elements', { n: parseResult.elements.count })"
               >
                 <el-collapse>
                   <el-collapse-item
@@ -269,14 +269,14 @@
                   >
                     <template #title>
                       <el-tag size="small" effect="plain">{{ element.element_type }}</el-tag>
-                      <span class="doc-preview__element-title">{{ element.text || '空元素' }}</span>
+                      <span class="doc-preview__element-title">{{ element.text || t('kbView.preview.emptyElement') }}</span>
                     </template>
                     <pre class="doc-preview__seg-text">{{ element.text }}</pre>
-                    <p v-if="element.has_evidence" class="doc-preview__muted">已保留来源定位</p>
+                    <p v-if="element.has_evidence" class="doc-preview__muted">{{ t('kbView.preview.evidenceKept') }}</p>
                   </el-collapse-item>
                 </el-collapse>
                 <p v-if="parseResult.elements.count > parseResult.elements.items.length" class="doc-preview__muted">
-                  当前仅展示前 {{ parseResult.elements.items.length }} 个元素。
+                  {{ t('kbView.preview.elementsTruncated', { n: parseResult.elements.items.length }) }}
                 </p>
               </el-collapse-item>
 
@@ -284,34 +284,34 @@
               <el-collapse-item
                 v-if="parseResult.tables.length"
                 name="tables"
-                :title="`表格（${parseResult.tables.length}）`"
+                :title="t('kbView.preview.card.tables', { n: parseResult.tables.length })"
               >
                 <div
-                  v-for="t in parseResult.tables"
-                  :key="t.table_id"
+                  v-for="table in parseResult.tables"
+                  :key="table.table_id"
                   class="doc-preview__table-block"
-                  :class="{ 'doc-preview__table-block--hit': t.table_id === highlightedTableId }"
-                  :data-testid="`doc-table-${t.table_id}`"
+                  :class="{ 'doc-preview__table-block--hit': table.table_id === highlightedTableId }"
+                  :data-testid="`doc-table-${table.table_id}`"
                 >
                   <div class="doc-preview__table-caption">
-                    <el-tag v-if="t.sheet_name" size="small" effect="plain">{{ t.sheet_name }}</el-tag>
-                    {{ t.rows }} 行 × {{ t.columns }} 列
+                    <el-tag v-if="table.sheet_name" size="small" effect="plain">{{ table.sheet_name }}</el-tag>
+                    {{ t('kbStruct.tableDims', { rows: table.rows, columns: table.columns }) }}
                     <el-button
                       size="small" type="primary" plain
                       :disabled="!canQueryCurrentKnowledge"
-                      :data-testid="`table-query-toggle-${t.table_id}`"
-                      @click="toggleQueryPanel(t.table_id)"
-                    >精确查询</el-button>
+                      :data-testid="`table-query-toggle-${table.table_id}`"
+                      @click="toggleQueryPanel(table.table_id)"
+                    >{{ t('kbView.preview.exactQuery') }}</el-button>
                   </div>
                   <el-table
-                    :data="tableRows(t)" size="small" border class="kb-table"
+                    :data="tableRows(table)" size="small" border class="kb-table"
                     :row-class-name="({ rowIndex }: { rowIndex: number }) =>
-                      tableQueryRowClass(t.table_id, rowIndex)"
+                      tableQueryRowClass(table.table_id, rowIndex)"
                   >
                     <el-table-column
-                      v-for="(_, ci) in tableRows(t)[0] || []"
+                      v-for="(_, ci) in tableRows(table)[0] || []"
                       :key="ci"
-                      :label="t.header[ci] || String(ci + 1)"
+                      :label="table.header[ci] || String(ci + 1)"
                     >
                       <template #default="{ row }">
                         <span>{{ row[ci] }}</span>
@@ -319,22 +319,22 @@
                     </el-table-column>
                   </el-table>
                   <TbTableQueryPanel
-                    v-if="canQueryCurrentKnowledge && queryPanelTableId === t.table_id && tableAssetRef(t)"
-                    :asset-ref="tableAssetRef(t)!"
+                    v-if="canQueryCurrentKnowledge && queryPanelTableId === table.table_id && tableAssetRef(table)"
+                    :asset-ref="tableAssetRef(table)!"
                     :kb-id="kbId"
                     :domain="domain"
-                    :default-columns="t.header"
+                    :default-columns="table.header"
                     @row-click="onQueryRowHit"
                   />
-                  <p v-if="t.rows > t.preview.length" class="doc-preview__muted">
-                    仅预览前 {{ t.preview.length }} 行（共 {{ t.rows }} 行数据行）——用「精确查询」筛选/排序/统计全表数据。
+                  <p v-if="table.rows > table.preview.length" class="doc-preview__muted">
+                    {{ t('kbView.preview.tablePreviewOnly', { shown: table.preview.length, total: table.rows }) }}
                   </p>
                 </div>
               </el-collapse-item>
             </el-collapse>
 
             <div v-if="parseResult.diagnostics.warnings.length" class="doc-preview__card">
-              <div class="doc-preview__card-title">解析诊断</div>
+              <div class="doc-preview__card-title">{{ t('kbView.preview.parseDiagnostics') }}</div>
               <ul class="doc-preview__diagnostics">
                 <li v-for="warning in parseResult.diagnostics.warnings" :key="warning">{{ warning }}</li>
               </ul>
@@ -343,10 +343,10 @@
         </div>
       </el-tab-pane>
       <template v-if="knowledgeMined">
-        <el-tab-pane v-if="units.length || assistUnits.length" :label="`检索单元 (${units.length})`" name="units">
+        <el-tab-pane v-if="units.length || assistUnits.length" :label="t('kbView.preview.tab.units', { n: units.length })" name="units">
           <div class="doc-preview__knowledge">
             <div v-if="!units.length" class="doc-preview__muted">
-              当前可搜索版本没有可返回的原始证据表示——可能挖掘未完成或未生成检索表示。
+              {{ t('kbView.preview.noUnits') }}
             </div>
             <div v-else class="doc-preview__units" data-testid="doc-retrieval-units">
               <div v-for="(u, i) in units" :key="u.representation_id || i" class="doc-preview__unit">
@@ -363,14 +363,14 @@
               <el-collapse-item name="assist">
                 <template #title>
                   <span class="doc-preview__assist-title">
-                    搜索辅助表示（{{ assistUnits.length }}）——帮助召回，不是原文
+                    {{ t('kbView.preview.assistTitle', { n: assistUnits.length }) }}
                   </span>
                 </template>
                 <div class="doc-preview__units" data-testid="doc-search-assist">
                   <div v-for="(u, i) in assistUnits" :key="u.representation_id || i" class="doc-preview__unit">
                     <div class="doc-preview__unit-head">
                       <el-tag size="small" effect="plain">{{ u.unit_type }}</el-tag>
-                      <span class="doc-preview__seg-path">搜索辅助</span>
+                      <span class="doc-preview__seg-path">{{ t('kbView.preview.searchAssist') }}</span>
                     </div>
                     <pre v-if="u.text" class="doc-preview__seg-text">{{ u.text }}</pre>
                   </div>
@@ -398,6 +398,7 @@ import type { ParseResult } from '@/api/mining'
 import DocumentStructureGraph from '@/components/kb/DocumentStructureGraph.vue'
 import TbTableQueryPanel from '@/components/kb/TbTableQueryPanel.vue'
 import { apiErrorDetail } from '@/api/proxyClient'
+import { t } from '@/locales/t'
 import { filenameFromDisposition, saveBlob } from '@/utils/download'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
 import type { Component } from 'vue'
@@ -460,8 +461,8 @@ const outlineTree = computed(() => {
   return roots
 })
 
-function tableRows(t: { preview: string[][] }): string[][] {
-  return t.preview.map(row => row.map(cell => cell ?? ''))
+function tableRows(table: { preview: string[][] }): string[][] {
+  return table.preview.map(row => row.map(cell => cell ?? ''))
 }
 
 // A2 大纲导航（39 号 §2.4）：树内父子/前后由大纲自身结构客户端完成；
@@ -559,9 +560,9 @@ function toggleQueryPanel(tableId: string) {
   queryPanelTableId.value = queryPanelTableId.value === tableId ? '' : tableId
   queryHitRow.value = undefined
 }
-function tableAssetRef(t: { table_id: string }): string | null {
+function tableAssetRef(table: { table_id: string }): string | null {
   const docRef = parseResult.value?.snapshot?.document_ref
-  return docRef ? `${docRef}#table:${t.table_id}` : null
+  return docRef ? `${docRef}#table:${table.table_id}` : null
 }
 function tableQueryRowClass(tableId: string, rowIndex: number): string {
   // 预览不含表头行；查询 _row 是网格行号（单表头为主型，多表头时不高亮——诚实降级）
@@ -572,7 +573,7 @@ function tableQueryRowClass(tableId: string, rowIndex: number): string {
 
 function onQueryRowHit(row: number | undefined) {
   queryHitRow.value = row
-  ElMessage.info(row != null ? `命中数据行 ${row}（预览区高亮，超出预览范围请看查询结果）` : '')
+  ElMessage.info(row != null ? t('kbView.preview.rowHit', { row }) : '')
 }
 
 function applyNavigationAnchors() {
@@ -632,9 +633,9 @@ async function loadParseResult() {
     const status = (e as { response?: { status?: number } })?.response?.status
     parseRetryable.value = status !== 404 && status !== 503
     if (status === 404) {
-      parseError.value = '该文档还没有新链解析结果。触发「更新知识」后，这里会展示解析出的标题树、表格网格与切片。'
+      parseError.value = t('kbView.preview.noParseResult')
     } else if (status === 503) {
-      parseError.value = '结构化数据视图未在本部署启用。'
+      parseError.value = t('kbView.preview.structuredDisabled')
     } else {
       parseError.value = await apiErrorDetail(e)
     }

@@ -2,13 +2,13 @@
   <div class="run-detail" v-loading="initialLoading">
     <div class="run-detail__back">
       <el-button text @click="$router.push(`/kb/${props.kbId}`)">
-        <el-icon><ArrowLeft /></el-icon> 返回列表
+        <el-icon><ArrowLeft /></el-icon> {{ t('kbView.detail.backToList') }}
       </el-button>
     </div>
 
     <div v-if="!initialLoading && miningStore.error && !miningStore.currentRun" class="run-detail__error-banner">
       {{ miningStore.error }}
-      <el-button size="small" @click="startPolling">重试</el-button>
+      <el-button size="small" @click="startPolling">{{ t('common.retry') }}</el-button>
     </div>
 
     <template v-if="miningStore.currentRun">
@@ -21,27 +21,27 @@
         <div class="run-detail__metrics">
           <div class="metric">
             <span class="metric__value">{{ miningStore.currentRun.total_documents }}</span>
-            <span class="metric__label">文档</span>
+            <span class="metric__label">{{ t('dashboard.tile.docs') }}</span>
           </div>
           <div class="metric" v-if="miningStore.currentRun.new_count">
             <span class="metric__value metric__value--success">{{ miningStore.currentRun.new_count }}</span>
-            <span class="metric__label">新增</span>
+            <span class="metric__label">{{ t('kbView.runDoc.action.new') }}</span>
           </div>
           <div class="metric" v-if="miningStore.currentRun.updated_count">
             <span class="metric__value metric__value--accent">{{ miningStore.currentRun.updated_count }}</span>
-            <span class="metric__label">更新</span>
+            <span class="metric__label">{{ t('kbView.runDoc.action.updated') }}</span>
           </div>
           <div class="metric" v-if="miningStore.currentRun.failed_count">
             <span class="metric__value metric__value--danger">{{ miningStore.currentRun.failed_count }}</span>
-            <span class="metric__label">失败</span>
+            <span class="metric__label">{{ t('common.docStatus.failed') }}</span>
           </div>
           <div class="metric">
             <span class="metric__value">{{ formatDuration(miningStore.currentRun.started_at, miningStore.currentRun.finished_at) }}</span>
-            <span class="metric__label">总历时</span>
+            <span class="metric__label">{{ t('kbView.run.totalDuration') }}</span>
           </div>
           <div class="metric">
             <span class="metric__value">{{ formatTime(miningStore.currentRun.started_at) }}</span>
-            <span class="metric__label">提交时间</span>
+            <span class="metric__label">{{ t('common.submittedAt') }}</span>
           </div>
         </div>
       </div>
@@ -56,13 +56,13 @@
 
       <!-- 36号 §九：部分成功横幅——成功文档已入库，失败文档等待重试 -->
       <div v-if="partialStats" class="run-detail__partial-banner" data-testid="run-partial-banner">
-        <div class="partial-banner__title">任务部分完成</div>
+        <div class="partial-banner__title">{{ t('kbView.run.partialTitle') }}</div>
         <div class="partial-banner__stats">
-          <span>成功入库：{{ partialStats.committed }}</span>
-          <span v-if="partialStats.failed">失败待重试：{{ partialStats.failed }}</span>
-          <span v-if="partialStats.skipped">跳过未变化：{{ partialStats.skipped }}</span>
+          <span>{{ t('kbView.run.partial.committed', { n: partialStats.committed }) }}</span>
+          <span v-if="partialStats.failed">{{ t('kbView.run.partial.failed', { n: partialStats.failed }) }}</span>
+          <span v-if="partialStats.skipped">{{ t('kbView.run.partial.skipped', { n: partialStats.skipped }) }}</span>
         </div>
-        <div class="partial-banner__hint">失败的文档下次点击「挖掘」会自动重试，不影响已入库内容</div>
+        <div class="partial-banner__hint">{{ t('kbView.run.partialHint') }}</div>
       </div>
 
       <!-- 人审暂停横幅（B7）-->
@@ -70,14 +70,14 @@
         <div class="review-banner__main">
           <div class="review-banner__icon">⏸</div>
           <div class="review-banner__text">
-            <div class="review-banner__title">挖掘已暂停，等待人工处理</div>
+            <div class="review-banner__title">{{ t('kbView.run.pausedTitle') }}</div>
             <div class="review-banner__sub">
-              {{ trace?.pause_step ? `暂停节点：${trace.pause_step}` : '处理完成后可继续' }}
+              {{ trace?.pause_step ? t('kbView.run.pausedNode', { node: trace.pause_step }) : t('kbView.run.resumeHint') }}
             </div>
           </div>
         </div>
         <div class="review-banner__actions">
-          <el-button type="success" :loading="resuming" @click="handleResume">继续挖掘</el-button>
+          <el-button type="success" :loading="resuming" @click="handleResume">{{ t('kbView.run.resume') }}</el-button>
         </div>
       </div>
 
@@ -99,10 +99,10 @@
           </div>
         </div>
         <div class="progress-card__stats">
-          <span class="progress-stat progress-stat--completed">{{ miningStore.progress.completed }} 完成</span>
-          <span class="progress-stat progress-stat--failed" v-if="miningStore.progress.failed">{{ miningStore.progress.failed }} 失败</span>
-          <span class="progress-stat progress-stat--skipped" v-if="miningStore.progress.skipped">{{ miningStore.progress.skipped }} 跳过</span>
-          <span class="progress-stat progress-stat--processing" v-if="miningStore.progress.processing">{{ miningStore.progress.processing }} 处理中</span>
+          <span class="progress-stat progress-stat--completed">{{ t('kbView.run.progress.completed', { n: miningStore.progress.completed }) }}</span>
+          <span class="progress-stat progress-stat--failed" v-if="miningStore.progress.failed">{{ t('kbView.run.progress.failed', { n: miningStore.progress.failed }) }}</span>
+          <span class="progress-stat progress-stat--skipped" v-if="miningStore.progress.skipped">{{ t('kbView.run.progress.skipped', { n: miningStore.progress.skipped }) }}</span>
+          <span class="progress-stat progress-stat--processing" v-if="miningStore.progress.processing">{{ t('kbView.run.progress.processing', { n: miningStore.progress.processing }) }}</span>
           <span class="progress-stat progress-stat--stage" v-if="miningStore.progress.current_stage">{{ stageLabel(miningStore.progress.current_stage) }}</span>
         </div>
       </div>
@@ -110,14 +110,14 @@
       <!-- Pipeline Flow -->
       <div class="run-detail__section">
         <div class="run-detail__stage-header">
-          <h4 class="section-label" style="margin-bottom: 0">Pipeline 阶段</h4>
+          <h4 class="section-label" style="margin-bottom: 0">{{ t('kbView.run.pipelineStages') }}</h4>
           <!-- A0-6：历史 legacy Run（真实记录过实体/本体阶段）如实标识，
                不因兼容组件宣称当前产品仍有实体/本体能力 -->
           <el-tag
             v-if="isLegacyRun"
             size="small" effect="plain" type="info"
             data-testid="legacy-run-tag"
-          >历史任务</el-tag>
+          >{{ t('kbView.run.legacyTask') }}</el-tag>
         </div>
         <MiningWorkflowTrace v-if="trace?.workflow" :trace="trace" />
         <!-- A0-6：真实阶段事件存在才渲染流程条（PipelineFlow 按事件推导，
@@ -131,19 +131,19 @@
           class="run-detail__stages-unavailable"
           data-testid="stages-unavailable"
         >
-          任务阶段暂不可用
+          {{ t('kbView.run.stagesUnavailable') }}
           <el-button
             size="small" text type="primary"
             data-testid="stages-retry"
             @click="fetchTrace"
-          >重试</el-button>
+          >{{ t('common.retry') }}</el-button>
         </div>
       </div>
 
       <!-- Documents Table -->
       <div class="run-detail__section">
         <div class="section-header">
-          <h4 class="section-label" style="margin-bottom: 0">文档处理结果 ({{ miningStore.documentsTotal }})</h4>
+          <h4 class="section-label" style="margin-bottom: 0">{{ t('kbView.run.docResults', { n: miningStore.documentsTotal }) }}</h4>
           <div class="doc-filters">
             <button
               v-for="f in docFilters"
@@ -164,37 +164,37 @@
           @row-click="(row: Record<string, unknown>) => $router.push(`/kb/${props.kbId}/run/${props.runId}/doc/${row.id}`)"
           style="cursor: pointer"
         >
-          <el-table-column label="文件名" min-width="200">
+          <el-table-column :label="t('kbView.run.column.fileName')" min-width="200">
             <template #default="{ row }">
               <span class="doc-name">{{ docDisplayName(row) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="大小" width="100">
+          <el-table-column :label="t('common.size')" width="100">
             <template #default="{ row }">
               <span class="duration-text">{{ row.file_size != null ? formatFileSize(row.file_size) : '-' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="120">
+          <el-table-column :label="t('common.status')" width="120">
             <template #default="{ row }">
               <StatusBadge :status="row.status" size="small">{{ docStatusLabel(row.status) }}</StatusBadge>
             </template>
           </el-table-column>
-          <el-table-column label="阶段" width="120">
+          <el-table-column :label="t('kbView.run.column.stage')" width="120">
             <template #default="{ row }">
               <span class="stage-text">{{ row.current_stage ? stageLabel(row.current_stage) : '-' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100">
+          <el-table-column :label="t('common.actions')" width="100">
             <template #default="{ row }">
               <span class="action-badge" :class="`action-badge--${String(row.action).toLowerCase()}`">{{ actionLabel(row.action) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="耗时" width="100">
+          <el-table-column :label="t('common.duration')" width="100">
             <template #default="{ row }">
               <span class="duration-text">{{ row.duration_ms ? formatMs(row.duration_ms) : '-' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="错误" min-width="200">
+          <el-table-column :label="t('kbView.run.column.error')" min-width="200">
             <template #default="{ row }">
               <span class="text-error" v-if="row.error_message">{{ row.error_message }}</span>
               <span v-else class="text-muted">-</span>
@@ -229,6 +229,7 @@ import StatusBadge from '@/components/common/StatusBadge.vue'
 import PipelineFlow from '@/components/kb/PipelineFlow.vue'
 import MiningWorkflowTrace from '@/components/mining/workflow/MiningWorkflowTrace.vue'
 import { miningOperatorLabel } from '@/utils/miningWorkflowPresentation'
+import { t } from '@/locales/t'
 
 const props = defineProps<{ kbId: string; runId: string }>()
 const domainStore = useDomainStore()
@@ -262,35 +263,54 @@ const partialStats = computed<{ committed: number; failed: number; skipped: numb
   }
 })
 
+/** Run 内文档状态（mining_run_documents.status）→ 文案 key；表里只存 key，调用期经 t() 翻译 */
+const DOC_STATUS_LABEL_KEYS: Record<string, string> = {
+  committed: 'kbView.runDoc.docStatus.committed',
+  processing: 'common.docStatus.mining',
+  failed: 'common.docStatus.failed',
+  pending: 'kbView.runDoc.docStatus.pending',
+  skipped: 'kbView.runDoc.docStatus.skipped',
+}
+
 function docStatusLabel(status: string) {
-  const map: Record<string, string> = {
-    committed: '完成', processing: '处理中', failed: '失败', pending: '等待', skipped: '跳过',
-  }
-  return map[status] || status
+  const key = DOC_STATUS_LABEL_KEYS[status]
+  return key ? t(key) : status
+}
+
+/** 文档动作（action）→ 文案 key */
+const ACTION_LABEL_KEYS: Record<string, string> = {
+  NEW: 'kbView.runDoc.action.new', UPDATE: 'kbView.runDoc.action.updated',
+  SKIP: 'kbView.runDoc.action.unchanged', REMOVE: 'kbView.runDoc.action.removed',
+  new: 'kbView.runDoc.action.new', updated: 'kbView.runDoc.action.updated',
+  unchanged: 'kbView.runDoc.action.unchanged',
 }
 
 function actionLabel(action: string) {
-  const map: Record<string, string> = {
-    NEW: '新增', UPDATE: '更新', SKIP: '无变化', REMOVE: '移除',
-    new: '新增', updated: '更新', unchanged: '无变化',
-  }
-  return map[action] || action
+  const key = ACTION_LABEL_KEYS[action]
+  return key ? t(key) : action
+}
+
+/** 兼容阶段名 → 文案 key（正式算子名由 miningOperatorLabel 先行翻译） */
+const STAGE_LABEL_KEYS: Record<string, string> = {
+  parse: 'kbView.runDoc.stage.parse', segment: 'kbView.runDoc.stage.segment',
+  enrich: 'kbView.run.stage.enrich', entity_extract: 'kbView.run.stage.entity_extract',
+  resolve: 'kbView.run.stage.resolve', entity_relations: 'kbView.run.stage.entity_relations',
+  graph_write: 'kbView.run.stage.graph_write',
+  discourse: 'kbView.runDoc.stage.discourse', discourse_relations: 'kbView.runDoc.stage.discourse',
+  retrieval_units: 'kbView.runDoc.stage.retrieval_units', embedding: 'common.miningOperator.embedding',
+  db_write: 'kbView.runDoc.stage.db_write', commit_segments: 'kbView.runDoc.stage.commit_segments',
+  build_relations: 'kbView.runDoc.stage.build_relations',
+  build_retrieval_units: 'kbView.runDoc.stage.build_retrieval_units',
+  select_snapshot: 'kbView.runDoc.stage.select_snapshot', assemble_build: 'kbView.runDoc.stage.assemble_build',
+  validate_build: 'kbView.runDoc.stage.validate_build',
+  publish_release: 'kbView.runDoc.stage.publish_release',
 }
 
 function stageLabel(stage: string) {
   const operatorLabel = miningOperatorLabel(stage)
   if (operatorLabel !== stage) return operatorLabel
-  const map: Record<string, string> = {
-    parse: '解析', segment: '分段', enrich: '段落理解', entity_extract: '实体抽取',
-    resolve: '实体归一', entity_relations: '关系抽取', graph_write: '落图',
-    discourse: '语篇分析', discourse_relations: '语篇分析',
-    retrieval_units: '检索单元构建', embedding: '向量化',
-    db_write: '数据写入', commit_segments: '写入分段',
-    build_relations: '写入关系', build_retrieval_units: '写入检索单元',
-    select_snapshot: '快照选择', assemble_build: '构建组装', validate_build: '构建校验',
-    publish_release: '发布',
-  }
-  return map[stage] || stage
+  const key = STAGE_LABEL_KEYS[stage]
+  return key ? t(key) : stage
 }
 
 function docDisplayName(row: Record<string, unknown>) {
@@ -301,9 +321,9 @@ function docDisplayName(row: Record<string, unknown>) {
   return '-'
 }
 
-function formatTime(t: string | undefined) {
-  if (!t) return '-'
-  return new Date(t).toLocaleString('zh-CN')
+function formatTime(value: string | undefined) {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('zh-CN')
 }
 
 function formatDuration(start?: string, end?: string) {
@@ -359,10 +379,10 @@ const allDocsSettled = computed(() => {
 const docFilters = computed(() => {
   const docs = miningStore.documents
   return [
-    { key: 'all', label: '全部', count: docs.length },
-    { key: 'processing', label: '处理中', count: docs.filter(d => d.status === 'processing' || d.status === 'pending').length },
-    { key: 'failed', label: '失败', count: docs.filter(d => d.status === 'failed').length },
-    { key: 'committed', label: '已完成', count: docs.filter(d => d.status === 'committed').length },
+    { key: 'all', label: t('kbView.run.filter.all'), count: docs.length },
+    { key: 'processing', label: t('common.docStatus.mining'), count: docs.filter(d => d.status === 'processing' || d.status === 'pending').length },
+    { key: 'failed', label: t('common.docStatus.failed'), count: docs.filter(d => d.status === 'failed').length },
+    { key: 'committed', label: t('common.runStatus.completed'), count: docs.filter(d => d.status === 'committed').length },
   ]
 })
 
@@ -423,18 +443,18 @@ async function handleResume() {
   try {
     const res = await miningApi.resumeRun(props.runId, domainStore.currentDomain)
     if (res.status === 'awaiting_review') {
-      ElMessage.warning('仍有待审项，请先处理完再继续')
+      ElMessage.warning(t('kbView.run.reviewPending'))
     } else if (res.status === 'completed') {
-      ElMessage.success('该 run 已完成')
+      ElMessage.success(t('kbView.run.runCompleted'))
     } else {
       // resuming：续跑已在后台开始（建库/发布耗时较久），开始轮询看进度
-      ElMessage.success('已开始继续挖掘，正在后台运行…')
+      ElMessage.success(t('kbView.run.resumeStarted'))
     }
     // 给后台线程一点时间把状态翻成 running 再轮询，避免第一拍还停在旧状态导致轮询过早停止
     if (resumeTimer) clearTimeout(resumeTimer)
     resumeTimer = setTimeout(() => { resumeTimer = null; startPolling() }, 1500)
   } catch (e: unknown) {
-    ElMessage.error(e instanceof Error ? e.message : '继续失败')
+    ElMessage.error(e instanceof Error ? e.message : t('kbView.run.resumeFailed'))
   } finally {
     resuming.value = false
   }

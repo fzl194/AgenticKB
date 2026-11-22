@@ -2,13 +2,13 @@
   <div class="doc-detail" v-loading="miningStore.loading">
     <div class="doc-detail__back">
       <el-button text @click="$router.push(`/kb/${props.kbId}/run/${props.runId}`)">
-        <el-icon><ArrowLeft /></el-icon> 返回 Run
+        <el-icon><ArrowLeft /></el-icon> {{ t('kbView.runDoc.back') }}
       </el-button>
     </div>
 
     <div v-if="miningStore.error && !miningStore.currentDocument" class="doc-detail__load-error">
-      <p>文档详情加载失败：{{ miningStore.error }}</p>
-      <el-button size="small" @click="loadAll">重试</el-button>
+      <p>{{ t('kbView.runDoc.loadFailed', { error: miningStore.error }) }}</p>
+      <el-button size="small" @click="loadAll">{{ t('common.retry') }}</el-button>
     </div>
 
     <template v-if="miningStore.currentDocument">
@@ -26,10 +26,10 @@
         <div class="doc-detail__info-right">
           <div class="metric" v-if="docDuration">
             <span class="metric__value">{{ docDuration }}</span>
-            <span class="metric__label">耗时</span>
+            <span class="metric__label">{{ t('common.duration') }}</span>
           </div>
           <div class="metric" v-if="miningStore.currentDocument.error_message">
-            <span class="metric__value metric__value--danger">有错误</span>
+            <span class="metric__value metric__value--danger">{{ t('kbView.runDoc.hasErrors') }}</span>
           </div>
         </div>
       </div>
@@ -55,14 +55,14 @@
       >
         <el-icon><WarningFilled v-if="skipIsFaulty" /><InfoFilled v-else /></el-icon>
         <div class="skip-banner__body">
-          <div><strong>跳过原因：</strong>{{ skipReasonText }}</div>
+          <div><strong>{{ t('kbView.runDoc.skipReason') }}</strong>{{ skipReasonText }}</div>
           <div v-if="skipReasonDetail" class="skip-banner__detail">{{ skipReasonDetail }}</div>
         </div>
       </div>
 
       <!-- Stage Timeline -->
       <div class="doc-detail__section">
-        <h4 class="section-label">阶段时间线</h4>
+        <h4 class="section-label">{{ t('kbView.runDoc.stageTimeline') }}</h4>
         <div class="stage-timeline">
           <div
             v-for="(stage, idx) in mergedStages"
@@ -76,7 +76,9 @@
               <div class="stage-item__header">
                 <span class="stage-item__name">{{ stageLabel(stage.stage || '') }}</span>
                 <StatusBadge :status="mapStageStatus(stage.status)" size="small">
-                  {{ stage.status === 'completed' ? '完成' : stage.status === 'failed' ? '失败' : stage.status === 'started' ? '进行中' : '跳过' }}
+                  {{ t(stage.status === 'completed' ? 'kbView.runDoc.docStatus.committed'
+                    : stage.status === 'failed' ? 'common.docStatus.failed'
+                      : stage.status === 'started' ? 'kbView.runDoc.stageInProgress' : 'kbView.runDoc.docStatus.skipped') }}
                 </StatusBadge>
               </div>
               <div class="stage-item__meta">
@@ -87,21 +89,21 @@
               <div v-if="stage.output_summary" class="stage-item__summary">{{ stage.output_summary }}</div>
             </div>
           </div>
-          <div v-if="mergedStages.length === 0" class="stage-empty">暂无阶段数据</div>
+          <div v-if="mergedStages.length === 0" class="stage-empty">{{ t('kbView.runDoc.noStageData') }}</div>
         </div>
       </div>
 
       <!-- Artifact Summary -->
       <div class="doc-detail__section" v-if="miningStore.documentArtifacts">
-        <h4 class="section-label">产物摘要</h4>
+        <h4 class="section-label">{{ t('kbView.runDoc.artifactSummary') }}</h4>
         <div class="artifact-stats">
           <div class="artifact-stat">
             <span class="artifact-stat__value">{{ miningStore.documentArtifacts.segment_count }}</span>
-            <span class="artifact-stat__label">原始分段</span>
+            <span class="artifact-stat__label">{{ t('kbView.runDoc.rawSegments') }}</span>
           </div>
           <div class="artifact-stat">
             <span class="artifact-stat__value">{{ miningStore.documentArtifacts.unit_count }}</span>
-            <span class="artifact-stat__label">检索单元</span>
+            <span class="artifact-stat__label">{{ t('dashboard.tile.units') }}</span>
           </div>
         </div>
       </div>
@@ -109,7 +111,7 @@
       <!-- Artifact Tabs -->
       <div class="doc-detail__section">
         <div class="section-header">
-          <h4 class="section-label" style="margin-bottom: 0">知识产物</h4>
+          <h4 class="section-label" style="margin-bottom: 0">{{ t('kbView.runDoc.knowledgeArtifacts') }}</h4>
           <div class="artifact-filters">
             <button
               v-for="f in artifactTabs"
@@ -117,7 +119,7 @@
               class="filter-tag"
               :class="{ 'filter-tag--active': activeArtifactTab === f.key }"
               @click="activeArtifactTab = f.key"
-            >{{ f.label }}</button>
+            >{{ t(f.labelKey) }}</button>
           </div>
         </div>
 
@@ -130,10 +132,10 @@
           v-loading="artifactsLoading"
         >
           <el-table-column label="#" width="60" prop="segment_index" />
-          <el-table-column label="类型" width="100" prop="block_type" />
-          <el-table-column label="角色" width="100" prop="semantic_role" />
-          <el-table-column label="标题" min-width="150" prop="section_title" />
-          <el-table-column label="内容" min-width="300">
+          <el-table-column :label="t('common.type')" width="100" prop="block_type" />
+          <el-table-column :label="t('kbView.runDoc.column.role')" width="100" prop="semantic_role" />
+          <el-table-column :label="t('kbView.runDoc.column.title')" min-width="150" prop="section_title" />
+          <el-table-column :label="t('kbView.runDoc.column.content')" min-width="300">
             <template #default="{ row }">
               <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`seg-${row.segment_index}`) }" @click="toggleExpand(`seg-${row.segment_index}`)">{{ row.raw_text || '-' }}</span>
             </template>
@@ -150,9 +152,9 @@
           :header-cell-style="{ background: 'transparent' }"
           v-loading="artifactsLoading"
         >
-          <el-table-column label="类型" width="120" prop="unit_type" />
-          <el-table-column label="结构上下文" min-width="200" prop="title" />
-          <el-table-column label="内容" min-width="300">
+          <el-table-column :label="t('common.type')" width="120" prop="unit_type" />
+          <el-table-column :label="t('kbView.runDoc.column.structuralContext')" min-width="200" prop="title" />
+          <el-table-column :label="t('kbView.runDoc.column.content')" min-width="300">
             <template #default="{ row }">
               <span class="text-preview expandable" :class="{ 'is-expanded': expandedKeys.has(`unit-${row.id ?? row.title}`) }" @click="toggleExpand(`unit-${row.id ?? row.title}`)">{{ row.text || '-' }}</span>
             </template>
@@ -168,7 +170,7 @@
             {{ rawError }}
           </div>
           <div v-else-if="rawHtml" class="raw-content-body" v-html="rawHtml" />
-          <div v-else-if="!rawLoading" class="stage-empty">无可渲染的原始文件</div>
+          <div v-else-if="!rawLoading" class="stage-empty">{{ t('kbView.runDoc.noRawContent') }}</div>
         </div>
       </div>
     </template>
@@ -185,6 +187,7 @@ import PreprocessNotice from '@/components/kb/PreprocessNotice.vue'
 import { miningOperatorLabel } from '@/utils/miningWorkflowPresentation'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { t } from '@/locales/t'
 
 const props = defineProps<{ kbId: string; runId: string; docId: string }>()
 const miningStore = useMiningStore()
@@ -220,10 +223,11 @@ const segments = ref<any[]>([])
 const units = ref<any[]>([])
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 
+/** 产物 Tab：非响应式常量表只存 labelKey，渲染期经 t() 翻译（切语言即重算——R8） */
 const artifactTabs = [
-  { key: 'segments', label: '原始分段' },
-  { key: 'units', label: '检索单元' },
-  { key: 'raw-content', label: '原始文本' },
+  { key: 'segments', labelKey: 'kbView.runDoc.rawSegments' },
+  { key: 'units', labelKey: 'dashboard.tile.units' },
+  { key: 'raw-content', labelKey: 'kbView.runDoc.rawText' },
 ]
 
 // ── Computed ──
@@ -271,20 +275,21 @@ const docDuration = computed(() => {
 })
 
 // 跳过原因：后端在 mining_run_documents.metadata_json.skip_reason 里记录机器码，
-// 这里翻译成中文。老数据没有该字段 → 按状态给出兜底说明。
-const SKIP_REASON_LABELS: Record<string, string> = {
+// 这里翻译成界面文案。老数据没有该字段 → 按状态给出兜底说明。
+// 非响应式常量表只存文案 key，computed 内经 t() 翻译（切语言即重算——R8）。
+const SKIP_REASON_LABEL_KEYS: Record<string, string> = {
   // 复用已有成果 —— 正常，无需处理
-  unchanged: '内容与已发布快照一致（哈希未变），复用原快照，未重新挖掘',
-  restored: '内容与历史快照一致，直接恢复该快照，未重新挖掘',
+  unchanged: 'kbView.runDoc.skip.unchanged',
+  restored: 'kbView.runDoc.skip.restored',
   // 系统没能处理它 —— 属于故障，需排查
-  preprocess_failed: '摄取时格式转换失败（PDF 抽取 / HTML 转换 / 压缩包解包 / doc 转 docx），未能取到正文',
-  parser_failed: '文件解析失败（可能已加密、损坏或格式异常），未生成快照',
-  unsupported_type: '该文件类型没有对应的解析器，未生成快照',
+  preprocess_failed: 'kbView.runDoc.skip.preprocess_failed',
+  parser_failed: 'kbView.runDoc.skip.parser_failed',
+  unsupported_type: 'kbView.runDoc.skip.unsupported_type',
   // 文件本身没内容 —— 通常无需处理
-  empty_file: '文件内容为空或未抽取到文本（如扫描件 PDF），未生成快照',
-  no_segments: '分段结果为空，未生成快照',
+  empty_file: 'kbView.runDoc.skip.empty_file',
+  no_segments: 'kbView.runDoc.skip.no_segments',
   // 兜底：解析未产出内容但不属于以上任何一种
-  parse_no_tree: '解析未产出内容，未生成快照',
+  parse_no_tree: 'kbView.runDoc.skip.parse_no_tree',
 }
 
 /** 系统故障类原因 → 横幅标红，与"正常复用/空文件"区分开 */
@@ -300,11 +305,14 @@ const skipReasonText = computed(() => {
   const doc = miningStore.currentDocument
   if (!doc || !isSkippedDoc.value) return ''
   const code = doc.skip_reason
-  if (code) return SKIP_REASON_LABELS[code] || code
+  if (code) {
+    const key = SKIP_REASON_LABEL_KEYS[code]
+    return key ? t(key) : code
+  }
   // 老数据没有 skip_reason 字段 → 只能按状态给泛化说明
   return doc.status === 'skipped'
-    ? '该文档未产出可入库的内容（解析为空或分段为空）'
-    : '内容未发生变化，复用已发布快照'
+    ? t('kbView.runDoc.skip.noContent')
+    : t('kbView.runDoc.skip.unchangedLegacy')
 })
 
 const skipReasonDetail = computed(() => {
@@ -320,30 +328,51 @@ const skipIsFaulty = computed(() => {
 
 // ── Formatters ──
 
+/** Run 内文档状态（mining_run_documents.status）→ 文案 key；与 Run 详情文档表同一套 */
+const DOC_STATUS_LABEL_KEYS: Record<string, string> = {
+  committed: 'kbView.runDoc.docStatus.committed',
+  processing: 'common.docStatus.mining',
+  failed: 'common.docStatus.failed',
+  pending: 'kbView.runDoc.docStatus.pending',
+  skipped: 'kbView.runDoc.docStatus.skipped',
+}
+
 function docStatusLabel(status: string) {
-  const map: Record<string, string> = {
-    committed: '完成', processing: '处理中', failed: '失败', pending: '等待', skipped: '跳过',
-  }
-  return map[status] || status
+  const key = DOC_STATUS_LABEL_KEYS[status]
+  return key ? t(key) : status
+}
+
+/** 文档动作（action）→ 文案 key */
+const ACTION_LABEL_KEYS: Record<string, string> = {
+  new: 'kbView.runDoc.action.new', updated: 'kbView.runDoc.action.updated',
+  unchanged: 'kbView.runDoc.action.unchanged',
+  NEW: 'kbView.runDoc.action.new', UPDATE: 'kbView.runDoc.action.updated',
+  SKIP: 'kbView.runDoc.docStatus.skipped',
 }
 
 function actionLabel(action: string) {
-  const map: Record<string, string> = { new: '新增', updated: '更新', unchanged: '无变化', NEW: '新增', UPDATE: '更新', SKIP: '跳过' }
-  return map[action] || action
+  const key = ACTION_LABEL_KEYS[action]
+  return key ? t(key) : action
+}
+
+/** 阶段名 → 文案 key（正式算子名由 miningOperatorLabel 先行翻译） */
+const STAGE_LABEL_KEYS: Record<string, string> = {
+  parse: 'kbView.runDoc.stage.parse', segment: 'kbView.runDoc.stage.segment',
+  enrich: 'kbView.runDoc.stage.enrich', discourse: 'kbView.runDoc.stage.discourse',
+  retrieval_units: 'kbView.runDoc.stage.retrieval_units', embedding: 'common.miningOperator.embedding',
+  db_write: 'kbView.runDoc.stage.db_write', commit_segments: 'kbView.runDoc.stage.commit_segments',
+  build_relations: 'kbView.runDoc.stage.build_relations',
+  build_retrieval_units: 'kbView.runDoc.stage.build_retrieval_units',
+  select_snapshot: 'kbView.runDoc.stage.select_snapshot', assemble_build: 'kbView.runDoc.stage.assemble_build',
+  validate_build: 'kbView.runDoc.stage.validate_build',
+  publish_release: 'kbView.runDoc.stage.publish_release',
 }
 
 function stageLabel(stage: string) {
   const operatorLabel = miningOperatorLabel(stage)
   if (operatorLabel !== stage) return operatorLabel
-  const map: Record<string, string> = {
-    parse: '解析', segment: '分段', enrich: '增强', discourse: '语篇分析',
-    retrieval_units: '检索单元构建', embedding: '向量化',
-    db_write: '数据写入', commit_segments: '写入分段',
-    build_relations: '写入关系', build_retrieval_units: '写入检索单元',
-    select_snapshot: '快照选择', assemble_build: '构建组装', validate_build: '构建校验',
-    publish_release: '发布',
-  }
-  return map[stage] || stage
+  const key = STAGE_LABEL_KEYS[stage]
+  return key ? t(key) : stage
 }
 
 function mapStageStatus(status: string): 'completed' | 'running' | 'failed' | 'cancelled' | 'pending' | 'queued' | 'succeeded' | 'dead_letter' | 'committed' | 'processing' | 'skipped' {
@@ -351,9 +380,9 @@ function mapStageStatus(status: string): 'completed' | 'running' | 'failed' | 'c
   return (map[status] || status) as typeof mapStageStatus extends (...args: unknown[]) => infer R ? R : never
 }
 
-function formatTime(t: string | undefined) {
-  if (!t) return '-'
-  return new Date(t).toLocaleString('zh-CN')
+function formatTime(value: string | undefined) {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('zh-CN')
 }
 
 function formatMs(ms: number) {
@@ -405,9 +434,10 @@ async function loadRawContent() {
       rawHtml.value = `<pre class="raw-plain">${escapeHtml(res.content)}</pre>`
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : '加载失败'
+    const msg = e instanceof Error ? e.message : t('common.loadFailed')
+    // 「not renderable」/「404」是与错误原文比对的匹配数据（R2：不翻）
     if (msg.includes('not renderable') || msg.includes('404')) {
-      rawError.value = '该文件类型不支持在线预览'
+      rawError.value = t('kbView.runDoc.rawUnpreviewable')
     } else {
       rawError.value = msg
     }

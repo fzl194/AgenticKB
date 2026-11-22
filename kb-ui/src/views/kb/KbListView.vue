@@ -3,7 +3,7 @@
     <!-- Header -->
     <div class="kb-list__header">
       <div class="kb-list__header-left">
-        <span class="kb-list__count">{{ kbs.length }} 个</span>
+        <span class="kb-list__count">{{ t('kbView.list.kbCount', { n: kbs.length }) }}</span>
         <span class="kb-list__domain">@ {{ domainStore.currentDomain }}</span>
       </div>
       <div class="kb-list__actions">
@@ -12,7 +12,7 @@
         </el-button>
         <el-button type="primary" @click="showCreate = true">
           <el-icon class="el-icon--left"><Plus /></el-icon>
-          新建知识库
+          {{ t('dashboard.action.newKb') }}
         </el-button>
       </div>
     </div>
@@ -37,19 +37,19 @@
                 {{ visibilityLabel(kb.visibility) }}
               </el-tag>
               <el-tag :type="roleTagType(kb.my_role)" size="small" effect="plain">
-                我：{{ roleLabel(kb.my_role) }}
+                {{ t('kbView.role.my', { role: roleLabel(kb.my_role) }) }}
               </el-tag>
             </div>
           </div>
         </div>
 
-        <p class="kb-card__desc">{{ kb.description || '暂无描述' }}</p>
+        <p class="kb-card__desc">{{ kb.description || t('kbView.list.noDescription') }}</p>
 
         <div class="kb-card__meta">
           <span class="kb-card__meta-item">
-            <el-icon><Document /></el-icon>{{ kb.document_count }} 个文档
+            <el-icon><Document /></el-icon>{{ t('kbView.list.docCount', { n: kb.document_count }) }}
           </span>
-          <span class="kb-card__meta-item">创建者：{{ kb.owner_name || '—' }}</span>
+          <span class="kb-card__meta-item">{{ t('kbView.list.creator', { name: kb.owner_name || '—' }) }}</span>
           <span class="kb-card__meta-item">{{ formatDate(kb.created_at) }}</span>
         </div>
 
@@ -61,7 +61,7 @@
             :loading="miningId === kb.id"
             @click="mine(kb)"
           >
-            <el-icon class="el-icon--left"><Cpu /></el-icon>挖掘
+            <el-icon class="el-icon--left"><Cpu /></el-icon>{{ t('kbView.list.mine') }}
           </el-button>
           <el-dropdown trigger="click" @click.stop>
             <el-button size="small" text><el-icon><MoreFilled /></el-icon></el-button>
@@ -69,12 +69,12 @@
               <el-dropdown-menu>
                 <!-- v1.1 整库拷贝：read 即可拷（成员/公开库均可起步） -->
                 <el-dropdown-item @click="copy(kb)">
-                  <el-icon><CopyDocument /></el-icon>拷贝
+                  <el-icon><CopyDocument /></el-icon>{{ t('kbView.list.copy') }}
                 </el-dropdown-item>
                 <!-- 整库导出下载：read 即可导（copy 超 5000 文档的互补通道） -->
-                <el-dropdown-item @click="exportZip(kb)">导出下载</el-dropdown-item>
-                <el-dropdown-item v-if="canWrite(kb)" @click="rename(kb)">改名</el-dropdown-item>
-                <el-dropdown-item v-if="canManageLifecycle(kb)" @click="remove(kb)" divided>删除知识库</el-dropdown-item>
+                <el-dropdown-item @click="exportZip(kb)">{{ t('kbView.list.exportDownload') }}</el-dropdown-item>
+                <el-dropdown-item v-if="canWrite(kb)" @click="rename(kb)">{{ t('kbView.list.rename') }}</el-dropdown-item>
+                <el-dropdown-item v-if="canManageLifecycle(kb)" @click="remove(kb)" divided>{{ t('kbView.list.deleteKb') }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -83,45 +83,48 @@
 
       <!-- 删除中的知识库（后台任务进度；owner/admin 可见） -->
       <div v-if="runningPurgeTasks.length" class="kb-purging">
-        <div v-for="t in runningPurgeTasks" :key="t.id" class="kb-purging__row">
+        <div v-for="task in runningPurgeTasks" :key="task.id" class="kb-purging__row">
           <el-icon class="is-loading"><Loading /></el-icon>
-          <span class="kb-purging__name">{{ t.kb_name }}</span>
-          <span class="kb-purging__phase">{{ purgePhaseLabel(t) }}</span>
-          <el-progress v-if="purgePercent(t) !== null" :percentage="purgePercent(t) ?? 0"
+          <span class="kb-purging__name">{{ task.kb_name }}</span>
+          <span class="kb-purging__phase">{{ purgePhaseLabel(task) }}</span>
+          <el-progress v-if="purgePercent(task) !== null" :percentage="purgePercent(task) ?? 0"
                        style="width: 180px" :stroke-width="8" />
-          <span class="kb-purging__meta">{{ purgeProgressText(t) }}</span>
+          <span class="kb-purging__meta">{{ purgeProgressText(task) }}</span>
         </div>
       </div>
       <!-- 删除失败的任务（可重删） -->
       <el-alert v-if="failedPurgeTasks.length" type="error" :closable="false">
-        <div v-for="t in failedPurgeTasks" :key="t.id">
-          「{{ t.kb_name }}」删除失败：{{ t.error ?? '未知原因' }}——可重新发起删除
+        <div v-for="task in failedPurgeTasks" :key="task.id">
+          {{ t('kbView.list.purgeFailed', {
+            name: task.kb_name,
+            reason: task.error ?? t('kbView.list.unknownReason'),
+          }) }}
         </div>
       </el-alert>
 
       <!-- 系统管理员或当前域管理员：恢复/清理本域软删除库。 -->
       <el-collapse v-if="canManageDomainKbs && deletedKbs.length" class="kb-deleted">
-        <el-collapse-item :title="`已删除的知识库（${deletedKbs.length}）`">
+        <el-collapse-item :title="t('kbView.list.deletedTitle', { n: deletedKbs.length })">
           <div v-for="dkb in deletedKbs" :key="dkb.id" class="kb-deleted__row">
             <span class="kb-deleted__name">{{ dkb.name }}</span>
-            <span class="kb-deleted__meta">删除于 {{ formatDate(dkb.deleted_at ?? '') }}</span>
+            <span class="kb-deleted__meta">{{ t('kbView.list.deletedAt', { date: formatDate(dkb.deleted_at ?? '') }) }}</span>
             <el-button size="small" plain
                        :loading="restoringId === dkb.id"
-                       @click="restoreDeleted(dkb)">恢复</el-button>
+                       @click="restoreDeleted(dkb)">{{ t('kbView.list.restore') }}</el-button>
             <el-button size="small" type="danger" plain
                        :loading="purgingId === dkb.id"
-                       @click="removeDeleted(dkb)">彻底删除</el-button>
+                       @click="removeDeleted(dkb)">{{ t('kbView.list.purge') }}</el-button>
           </div>
         </el-collapse-item>
       </el-collapse>
 
       <EmptyState
         v-if="!loading && !loadError && !kbs.length"
-        text="当前域还没有知识库，点击右上角「新建知识库」开始"
+        :text="t('kbView.list.empty')"
       />
       <div v-if="!loading && loadError" class="kb-list__error">
         <span>{{ loadError }}</span>
-        <el-button size="small" @click="load">重试</el-button>
+        <el-button size="small" @click="load">{{ t('common.retry') }}</el-button>
       </div>
     </div>
 
@@ -142,6 +145,7 @@ import { canManageDomainKnowledgeBases } from '@/utils/domainPermissions'
 import { useKbApi } from '@/api/kb'
 import type { DeletedKbRow, KbPurgeTask } from '@/types/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
+import { t } from '@/locales/t'
 import EmptyState from '@/components/common/EmptyState.vue'
 import KbCreateDialog from '@/components/kb/KbCreateDialog.vue'
 import KbCopyDialog from '@/components/kb/KbCopyDialog.vue'
@@ -182,36 +186,47 @@ const purgeTasks = ref<KbPurgeTask[]>([])
 let purgeTimer: ReturnType<typeof setInterval> | null = null
 
 const runningPurgeTasks = computed(() =>
-  purgeTasks.value.filter((t) => t.status === 'queued' || t.status === 'running'))
+  purgeTasks.value.filter((task) => task.status === 'queued' || task.status === 'running'))
 const failedPurgeTasks = computed(() =>
-  purgeTasks.value.filter((t) => t.status === 'failed'))
+  purgeTasks.value.filter((task) => task.status === 'failed'))
 
-function purgePhaseLabel(t: KbPurgeTask): string {
-  const labels: Record<string, string> = {
-    queued: '排队中', prepare: '准备', documents: '删除文档',
-    snapshots: '回收知识快照', objects: '回收存储对象', finalize: '收尾',
-  }
-  return labels[t.phase] ?? t.phase
+/** 阶段 → 文案 key（表里只存 key，调用期经 t() 翻译） */
+const PURGE_PHASE_LABEL_KEYS: Record<string, string> = {
+  queued: 'common.runStatus.queued',
+  prepare: 'kbView.list.purgePhase.prepare',
+  documents: 'kbView.list.purgePhase.documents',
+  snapshots: 'kbView.list.purgePhase.snapshots',
+  objects: 'kbView.list.purgePhase.objects',
+  finalize: 'kbView.list.purgePhase.finalize',
+}
+
+function purgePhaseLabel(task: KbPurgeTask): string {
+  const key = PURGE_PHASE_LABEL_KEYS[task.phase]
+  return key ? t(key) : task.phase
 }
 
 /** 快照阶段有 total/reclaimed 可算百分比；其余阶段显示计数 */
-function purgePercent(t: KbPurgeTask): number | null {
-  if (t.phase === 'snapshots' && t.progress.snapshots_total > 0) {
+function purgePercent(task: KbPurgeTask): number | null {
+  if (task.phase === 'snapshots' && task.progress.snapshots_total > 0) {
     return Math.min(99, Math.round(
-      (t.progress.snapshots_reclaimed ?? 0) / t.progress.snapshots_total * 100))
+      (task.progress.snapshots_reclaimed ?? 0) / task.progress.snapshots_total * 100))
   }
   return null
 }
 
-function purgeProgressText(t: KbPurgeTask): string {
-  const p = t.progress ?? {}
-  if (t.phase === 'snapshots') {
-    return `${p.snapshots_reclaimed ?? 0}/${p.snapshots_total ?? '?'} 快照`
+function purgeProgressText(task: KbPurgeTask): string {
+  const p = task.progress ?? {}
+  if (task.phase === 'snapshots') {
+    return t('kbView.list.purgeProgress.snapshots', {
+      done: p.snapshots_reclaimed ?? 0, total: p.snapshots_total ?? '?',
+    })
   }
-  if (t.phase === 'objects') {
-    return `${p.objects_reclaimed ?? 0}/${p.objects_total ?? '?'} 对象`
+  if (task.phase === 'objects') {
+    return t('kbView.list.purgeProgress.objects', {
+      done: p.objects_reclaimed ?? 0, total: p.objects_total ?? '?',
+    })
   }
-  if (t.phase === 'finalize') return '完成中'
+  if (task.phase === 'finalize') return t('kbView.list.purgeFinishing')
   return ''
 }
 
@@ -220,7 +235,7 @@ async function pollPurgeTasks() {
   if (!domain) return
   try {
     purgeTasks.value = await kbApi.purgeTasks(domain)
-    if (purgeTasks.value.some((t) => t.status === 'done')
+    if (purgeTasks.value.some((task) => task.status === 'done')
         && runningPurgeTasks.value.length === 0) {
       await load()
     }
@@ -299,7 +314,7 @@ async function mine(kb: KbSummary) {
   miningId.value = kb.id
   try {
     const res = await kbApi.mineKb(kb.id)
-    ElMessage.success(`挖掘已排队（run ${res.run_id.slice(0, 8)}）`)
+    ElMessage.success(t('kbView.list.mineQueued', { id: res.run_id.slice(0, 8) }))
     await load()
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
@@ -311,15 +326,15 @@ async function mine(kb: KbSummary) {
 async function rename(kb: KbSummary) {
   let name: string
   try {
-    const r = await ElMessageBox.prompt('新名称', '重命名知识库', {
-      inputValue: kb.name, confirmButtonText: '保存', cancelButtonText: '取消',
-      inputValidator: (v) => !!v?.trim() || '名称不能为空',
+    const r = await ElMessageBox.prompt(t('kbView.list.newName'), t('kbView.list.renameTitle'), {
+      inputValue: kb.name, confirmButtonText: t('common.save'), cancelButtonText: t('common.cancel'),
+      inputValidator: (v) => !!v?.trim() || t('kbView.list.nameRequired'),
     })
     name = r.value.trim()
   } catch { return }
   try {
     await kbApi.updateKb(kb.id, { name })
-    ElMessage.success('已改名')
+    ElMessage.success(t('kbView.list.renamed'))
     await load()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
@@ -329,19 +344,21 @@ async function remove(kb: KbSummary) {
   let name = ''
   try {
     const { value } = await ElMessageBox.prompt(
-      `此操作将永久删除知识库「${kb.name}」及其全部文档、挖掘知识与历史记录，不可恢复。请输入库全名确认：`,
-      '永久删除知识库',
+      t('kbView.list.deletePrompt', { name: kb.name }),
+      t('kbView.list.deleteTitle'),
       {
-        type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonText: t('common.deletePermanently'),
+        cancelButtonText: t('common.cancel'),
         confirmButtonClass: 'el-button--danger',
-        inputValidator: (v) => v?.trim() === kb.name || '名称不一致',
+        inputValidator: (v) => v?.trim() === kb.name || t('kbView.list.nameMismatch'),
       },
     )
     name = value.trim()
   } catch { return }
   try {
     await kbApi.deleteKb(kb.id, name)
-    ElMessage.success('已开始后台删除：库即刻停用（成员不可见），进度见列表下方')
+    ElMessage.success(t('kbView.list.deleteStarted'))
     startPurgePolling()
     await load()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
@@ -352,11 +369,11 @@ async function removeDeleted(dkb: DeletedKbRow) {
   let name = ''
   try {
     const { value } = await ElMessageBox.prompt(
-      `将彻底清除「${dkb.name}」的全部残留数据（文档/知识/存储），不可恢复。请输入库全名确认：`,
-      '彻底删除',
+      t('kbView.list.purgePrompt', { name: dkb.name }),
+      t('kbView.list.purge'),
       {
-        type: 'warning', confirmButtonText: '彻底删除', cancelButtonText: '取消',
-        inputValidator: (v) => v?.trim() === dkb.name || '名称不一致',
+        type: 'warning', confirmButtonText: t('kbView.list.purge'), cancelButtonText: t('common.cancel'),
+        inputValidator: (v) => v?.trim() === dkb.name || t('kbView.list.nameMismatch'),
       },
     )
     name = value.trim()
@@ -364,7 +381,7 @@ async function removeDeleted(dkb: DeletedKbRow) {
   purgingId.value = dkb.id
   try {
     await kbApi.deleteKb(dkb.id, name)
-    ElMessage.success('已开始后台彻底清除，进度见列表下方')
+    ElMessage.success(t('kbView.list.purgeStarted'))
     startPurgePolling()
     await load()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
@@ -374,23 +391,23 @@ async function removeDeleted(dkb: DeletedKbRow) {
 async function restoreDeleted(dkb: DeletedKbRow) {
   try {
     await ElMessageBox.confirm(
-      `确认恢复知识库「${dkb.name}」？若当前域已有同名知识库，恢复会被拒绝。`,
-      '恢复知识库',
-      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+      t('kbView.list.restorePrompt', { name: dkb.name }),
+      t('kbView.list.restoreTitle'),
+      { type: 'warning', confirmButtonText: t('kbView.list.restore'), cancelButtonText: t('common.cancel') },
     )
   } catch { return }
   restoringId.value = dkb.id
   try {
     await kbApi.restoreKb(dkb.id)
-    ElMessage.success('知识库已恢复')
+    ElMessage.success(t('kbView.list.restored'))
     await load()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
   finally { restoringId.value = '' }
 }
 
-function formatDate(t: string): string {
-  if (!t) return '-'
-  return new Date(t).toLocaleDateString('zh-CN')
+function formatDate(value: string): string {
+  if (!value) return '-'
+  return new Date(value).toLocaleDateString('zh-CN')
 }
 
 onMounted(load)

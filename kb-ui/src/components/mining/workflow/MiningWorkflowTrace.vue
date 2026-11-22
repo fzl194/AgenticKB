@@ -2,7 +2,7 @@
   <section class="workflow-trace">
     <div v-if="!trace.workflow" class="workflow-trace__legacy">
       <strong>Legacy Pipeline</strong>
-      <span>该 Run 未绑定 Workflow Manifest，继续展示兼容阶段事件。</span>
+      <span>{{ t('kbView.trace.legacyHint') }}</span>
     </div>
     <template v-else>
       <header class="workflow-trace__header">
@@ -14,7 +14,7 @@
       </header>
 
       <div v-if="trace.pause_step" class="workflow-trace__pause">
-        暂停位置：<strong>{{ trace.pause_step }}</strong>
+        {{ t('kbView.trace.pauseAt') }}<strong>{{ trace.pause_step }}</strong>
       </div>
 
       <div v-if="graph" class="workflow-trace__viewport">
@@ -50,11 +50,11 @@
           </article>
         </div>
       </div>
-      <p v-else class="workflow-trace__empty">冻结 Manifest 中没有可渲染的图。</p>
+      <p v-else class="workflow-trace__empty">{{ t('kbView.trace.emptyGraph') }}</p>
 
       <footer class="workflow-trace__footer">
-        <span>节点事件 {{ trace.node_events.length }}</span>
-        <span v-if="trace.build_id">最终 Build/Release：<strong>{{ trace.build_id }}</strong></span>
+        <span>{{ t('kbView.trace.nodeEvents', { n: trace.node_events.length }) }}</span>
+        <span v-if="trace.build_id">{{ t('kbView.trace.finalBuild') }}<strong>{{ trace.build_id }}</strong></span>
       </footer>
     </template>
   </section>
@@ -65,6 +65,7 @@ import { computed } from 'vue'
 import type { RunTrace } from '@/types'
 import type { MiningWorkflowNodeEvent } from '@/types/miningWorkflow'
 import { miningOperatorLabel } from '@/utils/miningWorkflowPresentation'
+import { t } from '@/locales/t'
 
 const props = defineProps<{ trace: RunTrace }>()
 const NODE_WIDTH = 190
@@ -133,11 +134,23 @@ function nodeClasses(nodeId: string): Record<string, boolean> {
   }
 }
 
+/** 节点状态 → 文案 key；表里只存 key，调用期经 t() 翻译 */
+const NODE_STATUS_LABEL_KEYS: Record<string, string> = {
+  pending: 'kbView.trace.nodeStatus.pending',
+  running: 'common.runStatus.running',
+  paused: 'kbView.trace.nodeStatus.paused',
+  completed: 'kbView.runDoc.docStatus.committed',
+  success: 'kbView.runDoc.docStatus.committed',
+  failed: 'common.docStatus.failed',
+  skipped: 'kbView.runDoc.docStatus.skipped',
+  fallback: 'kbView.trace.nodeStatus.fallback',
+  not_applicable: 'kbView.trace.nodeStatus.not_applicable',
+}
+
 function statusLabel(nodeId: string): string {
-  return ({
-    pending: '未运行', running: '运行中', paused: '已暂停', completed: '完成',
-    success: '完成', failed: '失败', skipped: '跳过', fallback: '降级完成', not_applicable: '不适用',
-  } as Record<string, string>)[nodeStatus(nodeId)] ?? nodeStatus(nodeId)
+  const status = nodeStatus(nodeId)
+  const key = NODE_STATUS_LABEL_KEYS[status]
+  return key ? t(key) : status
 }
 
 function formatDuration(value: number | null | undefined): string {

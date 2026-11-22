@@ -5,9 +5,9 @@
       <div class="kb-detail-view__head-left">
         <router-link to="/kb" class="kb-back">
           <el-icon><ArrowLeft /></el-icon>
-          <span>知识库</span>
+          <span>{{ t('title.kb') }}</span>
         </router-link>
-        <h2 class="kb-detail-view__title">{{ kb?.name || '加载中…' }}</h2>
+        <h2 class="kb-detail-view__title">{{ kb?.name || t('common.loading') }}</h2>
         <el-tag
           v-if="kb"
           :type="visibilityTagType(kb.visibility)"
@@ -22,7 +22,7 @@
           size="small"
           effect="plain"
         >
-          我：{{ roleLabel(kb.my_role) }}
+          {{ t('kbView.role.my', { role: roleLabel(kb.my_role) }) }}
         </el-tag>
         <el-tag
           v-if="miningWorkflowId"
@@ -30,10 +30,10 @@
           type="success"
           effect="plain"
         >
-          范式已绑定
+          {{ t('kbView.detail.paradigmBound') }}
         </el-tag>
-        <el-tooltip v-if="copySource" :content="`拷贝于 ${formatCopyTime(copySource.copied_at)}`">
-          <el-tag size="small" type="info" effect="plain">拷贝自「{{ copySource.kb_name }}」</el-tag>
+        <el-tooltip v-if="copySource" :content="t('kbView.detail.copiedAt', { time: formatCopyTime(copySource.copied_at) })">
+          <el-tag size="small" type="info" effect="plain">{{ t('kbView.detail.copiedFrom', { name: copySource.kb_name }) }}</el-tag>
         </el-tooltip>
       </div>
     </div>
@@ -43,22 +43,22 @@
     <!-- 批次4：检索就绪度——这个库现在到底能搜什么，一眼可见 -->
     <div v-if="readiness" class="kb-detail-view__readiness">
       <div class="kb-detail-view__readiness-main">
-        <span class="kb-detail-view__readiness-label">检索就绪度</span>
+        <span class="kb-detail-view__readiness-label">{{ t('kbView.detail.readiness') }}</span>
         <el-tag :type="readinessTagType(readiness.level)" effect="dark" size="small">
           {{ readinessLabel(readiness.level) }}
         </el-tag>
         <el-tooltip
           v-if="readiness.embedding_fallback"
-          content="嵌入服务当时不可用，向量缺失已留痕；恢复后重新挖掘可补齐语义检索"
+          :content="t('kbView.detail.embeddingFallbackTip')"
         >
-          <el-tag type="warning" effect="plain" size="small">向量缺失已留痕</el-tag>
+          <el-tag type="warning" effect="plain" size="small">{{ t('kbView.detail.embeddingFallback') }}</el-tag>
         </el-tooltip>
       </div>
       <div class="kb-detail-view__readiness-stats">
-        <span>文档 {{ readiness.documents }}</span>
-        <span>切片 {{ readiness.segments }}</span>
-        <span>检索单元 {{ readiness.retrieval_units }}</span>
-        <span>向量 {{ readiness.embeddings }}</span>
+        <span>{{ t('kbView.detail.readinessDocs', { n: readiness.documents }) }}</span>
+        <span>{{ t('kbView.detail.readinessSegments', { n: readiness.segments }) }}</span>
+        <span>{{ t('kbView.detail.readinessUnits', { n: readiness.retrieval_units }) }}</span>
+        <span>{{ t('kbView.detail.readinessEmbeddings', { n: readiness.embeddings }) }}</span>
       </div>
     </div>
 
@@ -70,28 +70,28 @@
       class="kb-detail-view__copy-banner"
     >
       <template #title>
-        这是「{{ copySource.kb_name }}」的副本：文件与知识血缘已就绪。选择挖掘范式并开始挖掘后，知识才可被检索——选与源库相同的范式可复用已有解析与向量，几乎零成本。
+        {{ t('kbView.detail.copyBanner', { name: copySource.kb_name }) }}
       </template>
       <el-button size="small" type="primary" @click="activeTab = 'mining'">
-        去选择挖掘范式
+        {{ t('kbView.detail.chooseParadigm') }}
       </el-button>
     </el-alert>
 
     <!-- Not found / no access -->
     <div v-if="!loading && loadError" class="kb-detail-view__missing">
       <EmptyState :text="loadError" />
-      <el-button type="primary" @click="reload">重试</el-button>
+      <el-button type="primary" @click="reload">{{ t('common.retry') }}</el-button>
     </div>
     <div v-else-if="!loading && !kb" class="kb-detail-view__missing">
-      <EmptyState text="知识库不存在或无权访问" />
+      <EmptyState :text="t('kbView.detail.notFound')" />
       <router-link to="/kb">
-        <el-button type="primary">返回列表</el-button>
+        <el-button type="primary">{{ t('kbView.detail.backToList') }}</el-button>
       </router-link>
     </div>
 
     <!-- Tabs -->
     <el-tabs v-if="kb" v-model="activeTab" class="kb-detail-view__tabs">
-      <el-tab-pane label="文件" name="files">
+      <el-tab-pane :label="t('kbView.detail.tab.files')" name="files">
         <KbFileManager
           :kb-id="kbId"
           :can-write="canWrite"
@@ -100,16 +100,16 @@
           @mine-queued="onMineQueued"
         />
       </el-tab-pane>
-      <el-tab-pane label="检索" name="search">
+      <el-tab-pane :label="t('kbView.detail.tab.search')" name="search">
         <KbSearchWorkspace
           :kb="kb" :can-write="canWrite" :readiness="readiness"
           @updated="reload" @go-mining="activeTab = 'mining'"
         />
       </el-tab-pane>
-      <el-tab-pane label="成员" name="members">
+      <el-tab-pane :label="t('kbView.detail.tab.members')" name="members">
         <KbMembersPanel :kb-id="kbId" :can-write="canWrite" :visibility="kb?.visibility ?? 'private'" />
       </el-tab-pane>
-      <el-tab-pane label="挖掘" name="mining">
+      <el-tab-pane :label="t('kbView.detail.tab.mining')" name="mining">
         <KbMiningPanel
           ref="miningPanelRef"
           :kb-id="kbId"
@@ -117,13 +117,13 @@
           :can-write="canWrite"
         />
       </el-tab-pane>
-      <el-tab-pane label="质量" name="quality">
+      <el-tab-pane :label="t('kbView.detail.tab.quality')" name="quality">
         <KbQualityPanel :kb-id="kbId" :active="activeTab === 'quality'" />
       </el-tab-pane>
-      <el-tab-pane label="一张网" name="onenet">
+      <el-tab-pane :label="t('kbView.detail.tab.onenet')" name="onenet">
         <OnenetRefPanel :kb-id="kbId" :can-write="canWrite" :active="activeTab === 'onenet'" />
       </el-tab-pane>
-      <el-tab-pane label="设置" name="settings">
+      <el-tab-pane :label="t('kbView.detail.tab.settings')" name="settings">
         <KbSettingsPanel
           :kb="kb"
           :can-write="canWrite"
@@ -143,6 +143,7 @@ import { ElMessage } from 'element-plus'
 import { useDomainStore } from '@/stores/domain'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
+import { t } from '@/locales/t'
 import EmptyState from '@/components/common/EmptyState.vue'
 import KbFileManager from '@/components/kb/KbFileManager.vue'
 import KbSearchWorkspace from '@/components/kb/KbSearchWorkspace.vue'
@@ -167,10 +168,10 @@ const loadError = ref('')
 const activeTab = ref<'files' | 'search' | 'members' | 'mining' | 'quality' | 'onenet' | 'settings'>('files')
 // A2：文档页「本节搜索」跳转带 tab=search + 范围参数（面板自行吸收）
 {
-  const t = (route.query as Record<string, string | undefined>).tab
+  const tab = (route.query as Record<string, string | undefined>).tab
   const allowed = ['search', 'mining', 'members', 'quality', 'onenet', 'settings', 'files'] as const
-  if (t && (allowed as readonly string[]).includes(t)) {
-    activeTab.value = t as typeof allowed[number]
+  if (tab && (allowed as readonly string[]).includes(tab)) {
+    activeTab.value = tab as typeof allowed[number]
   }
 }
 const miningPanelRef = ref<InstanceType<typeof KbMiningPanel> | null>(null)
@@ -187,20 +188,21 @@ const canWrite = computed(
 /** v1.1 拷贝溯源（详情 metadata_json.copy_source；非拷贝库为 null）。 */
 const copySource = computed(() => kb.value?.metadata_json?.copy_source ?? null)
 
-function formatCopyTime(t: string): string {
-  return t ? new Date(t).toLocaleString('zh-CN') : ''
+function formatCopyTime(time: string): string {
+  return time ? new Date(time).toLocaleString('zh-CN') : ''
 }
 
-const READINESS_LABELS: Record<KbReadinessLevel, string> = {
-  empty: '空库',
-  parsed: '已解析',
-  segmented: '已切片',
-  lexical_ready: '关键词可搜',
-  vector_ready: '语义可搜',
+/** 就绪度档位 → 文案 key（表里只存 key，调用期经 t() 翻译——R8） */
+const READINESS_LABEL_KEYS: Record<KbReadinessLevel, string> = {
+  empty: 'kbView.detail.readinessLevel.empty',
+  parsed: 'kbView.detail.readinessLevel.parsed',
+  segmented: 'kbView.detail.readinessLevel.segmented',
+  lexical_ready: 'kbView.detail.readinessLevel.lexical_ready',
+  vector_ready: 'kbView.detail.readinessLevel.vector_ready',
 }
 
 function readinessLabel(level: KbReadinessLevel): string {
-  return READINESS_LABELS[level] ?? level
+  return t(READINESS_LABEL_KEYS[level] ?? level)
 }
 
 function readinessTagType(level: KbReadinessLevel): 'info' | 'warning' | 'success' | 'primary' {
@@ -257,7 +259,7 @@ function onMineQueued() {
 }
 
 function onDeleted() {
-  ElMessage.success('知识库已删除')
+  ElMessage.success(t('kbView.detail.deleted'))
   router.replace('/kb')
 }
 

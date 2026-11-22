@@ -91,3 +91,13 @@ t() store、按用户分键记忆、EP 双通道（树内 provider + 脱挂重�
 - 不动制品区自身文案的英化（其页面保持中文，管理员混合态已接受）；
 - 不动 KB"表格查询"tab；
 - 不引入 vue-i18n。
+
+## 8. 实施期说明（2026-11-23 回写）
+
+- **触点 44 个**（较 §1 的 42 补入 `views/kb/kbMeta.ts`、`components/mining/workflow/MiningWorkflowTrace.vue`；另有 `MiningOperatorPalette.vue` 2 行消费点适配）。
+- **字典结构**：`src/locales/{zh,en}/` 目录，按 `shell / common / dashboard / kbView / kbSearch / kbManage / kbStruct / records / mcp` 九个 part 拆分（§3.2 原写的 `kb.*` 单命名空间因此拆成四个），en part 以 `Record<keyof typeof zhX, string>` 在编译期强制对齐；共约 1040 个 key。
+- **新增两个基础模块**（§3.3 原称"零新增基建"，特此更正，机制未变）：`locales/translate.ts`（纯查表）与 `locales/t.ts`（非组件统一入口；无活动 pinia 时回落 zh，使既有中文断言零改动保持绿）。
+- **管理面泄漏第三项**（接受）：`apiErrorDetail` 的兜底 `'请求失败'` 在 EN 态显示为 `Request failed`。
+- **"不动 KB 表格查询 tab"的准确含义是不隐藏**；其文案已随检索质量簇英化。
+- **新增闸门**：`locales/__tests__/keyUsage.spec.ts` 双向对账（未被引用的 key / 调用了字典里不存在的 key）。
+- 验收：全量 122 文件 / 908 用例通过，`vue-tsc -b` 与 `vite build` 通过；后端零改动、零新依赖。

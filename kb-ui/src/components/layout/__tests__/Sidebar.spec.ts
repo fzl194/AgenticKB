@@ -45,9 +45,9 @@ describe('Sidebar navigation', () => {
     expect(wrapper.text()).toContain('概览')
     expect(wrapper.text()).toContain('知识库')
     expect(wrapper.text()).toContain('检索记录')
-    // 61号批次4：知识制品对普通成员开放（viewer 也有运行态视图）
-    expect(wrapper.text()).toContain('知识制品')
-    expect(wrapper.html()).toContain('/artifacts')
+    // 2026-11-22 收紧：知识制品功能未完善，暂不引导普通用户（仅前端菜单隐藏，后端权限不动）
+    expect(wrapper.text()).not.toContain('知识制品')
+    expect(wrapper.html()).not.toContain('/artifacts')
     expect(wrapper.html()).toContain('/retrieval-records')
     expect(wrapper.text()).not.toContain('检索范式')
     expect(wrapper.text()).not.toContain('挖掘范式')
@@ -75,6 +75,9 @@ describe('Sidebar navigation', () => {
     expect(wrapper.text()).toContain('制作工作台')
     expect(wrapper.html()).toContain('/workspaces')
     expect(wrapper.text()).not.toContain('系统设置')
+    // 2026-11-22：知识制品对域管理员/站点管理员仍可见
+    expect(wrapper.text()).toContain('知识制品')
+    expect(wrapper.html()).toContain('/artifacts')
   })
 
   it('shows standalone user management to the site administrator', () => {
@@ -84,6 +87,9 @@ describe('Sidebar navigation', () => {
     // 2026-11-17 收紧：站点管理员可见制作工作台
     expect(wrapper.text()).toContain('制作工作台')
     expect(wrapper.html()).toContain('/workspaces')
+    // 2026-11-22：知识制品对域管理员/站点管理员仍可见
+    expect(wrapper.text()).toContain('知识制品')
+    expect(wrapper.html()).toContain('/artifacts')
   })
 
   it('does not present an unmatched raw domain id as a display name', () => {

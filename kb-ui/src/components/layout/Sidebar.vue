@@ -86,8 +86,10 @@ const ALL_NAV = [
   // 可见模式（语义=站点管理员或域管理员：mining auth 把 domain_role='admin'
   // 映射为全量 capabilities，site admin 由 main_control 直给），与用户管理同门。
   { path: '/workspaces', labelKey: 'nav.workspaces', icon: MagicStick, access: 'domain-users' },
-  // 61号批次4：知识制品（表格建表发布，viewer 也有运行态视图）
-  { path: '/artifacts', labelKey: 'nav.artifacts', icon: Grid, access: 'all' },
+  // 61号批次4：知识制品（表格建表发布）。2026-11-22 收紧（用户指令）：功能未完善，
+  // 暂不引导普通用户——仅前端菜单隐藏（复用 'domain-users'，与制作工作台同门）；
+  // 后端权限不动、路由不加门（手输 URL 仍可达，属产品性隐藏非安全门）。
+  { path: '/artifacts', labelKey: 'nav.artifacts', icon: Grid, access: 'domain-users' },
   { path: '/llm', labelKey: 'nav.llm', icon: Cpu, access: 'site-admin' },
   { path: '/users', labelKey: 'nav.users', icon: UserFilled, access: 'domain-users' },
   { path: '/settings', labelKey: 'nav.settings', icon: Setting, access: 'site-admin' },

@@ -18,7 +18,7 @@
 1. **只改 `kb-ui/`，后端零改动**（接口/权限/迁移都不动）；**零新依赖**（package.json 不动）。
 2. **所有 Run 命令一律以 `cd /d/mywork/AgenticKB/kb-ui &&` 开头**（下文为简洁省略该前缀时也必须补上）——cwd 漂移到仓库根会让 vitest 丢 `@` alias 且可能退出 0（上批踩过）；子代理的工作目录不保证。提交命令单独 `cd /d/mywork/AgenticKB`。
 3. 提交只显式 add 本任务列出的文件路径（禁止 `git add -A`）；`kb-ui/components.d.ts` 预期脏、不入库。
-4. 类型验证必须 `npm run build`（vue-tsc references 下 `--noEmit` 假通过）。
+4. 类型验证必须走 **build 模式**的 vue-tsc：任务内用 `npx vue-tsc -b`，Task 11 用完整 `npm run build`（= `vue-tsc -b && vite build`）；单独 `--noEmit` 在 references 根 tsconfig 下是假通过。
 5. **zh 字典值必须与原文逐字节一致**（含全角标点、`…`）——这是既有数百条中文断言不改即绿的根基。
 6. 开工第一步：`cd /d/mywork/AgenticKB && git rev-parse HEAD` 记下 pre-batch SHA，Task 11 红线核查用。
 
@@ -42,7 +42,7 @@
 
 与壳层既有译法保持一致：Workbench=制作工作台、Mining Paradigms=挖掘范式、System Settings=系统设置、Healthy/Issues=健康灯。
 
-## 转换规则 R1–R11（分区任务逐条照做）
+## 转换规则 R1–R13（分区任务逐条照做）
 
 - **R1 统一入口**：`import { t } from '@/locales/t'`；模板与脚本一律 `t('key')` / `t('key', { n })`。四区文件**不引入** `useLocaleStore`（壳层既有文件保持原样）。
 - **R2 只翻用户可见文案**：模板文本节点；属性（label/placeholder/title/tooltip/description/content/aria-label/empty-text/active-text/inactive-text/el-table-column label，静态属性改绑定 `:label="t('…')"`）；脚本里进 UI 的字符串（ElMessage/校验返回/抛给 UI 的 Error/映射值）。**不翻**：代码注释、`console.*`、**匹配数据**（正则源文本；与后端/服务端文本比对的字面量——如 `managementError.ts` 的中文键、`McpAccessView.vue:253` 的 `msg.includes('上限')`；翻译它们会让匹配在 EN 态静默失效而 zh 测试照绿）、`components/retrieval/segmentTerms.ts` 停用词表。
@@ -55,13 +55,13 @@
 - **R9 完整性闸门**（每个文件转完即查；**R9 输出是唯一真相源，配套清单只是起点——审查抽测清单仅覆盖约 89% 的可见中文行**，漏检形态：独占一行的文本节点、与 `<el-icon>`/`{{ }}`/`<code>` 相邻的文本）。去噪命令（先剥行尾 `//` 注释再筛）：
 
   ```bash
-  cd /d/mywork/AgenticKB/kb-ui && for f in <本任务文件…>; do echo "## $f"; sed -E 's/[[:space:]]\/\/.*$//' "$f" | grep -nP '[\x{4e00}-\x{9fa5}]' | grep -vP '^[0-9]+:\s*(\*|/\*|<!--)'; done
+  cd /d/mywork/AgenticKB/kb-ui && for f in <本任务文件…>; do echo "## $f"; sed -E 's/[[:space:]]\/\/.*$//' "$f" | grep -nP '[\x{4e00}-\x{9fa5}]' | grep -vP '^[0-9]+:\s*(//|\*|/\*|<!--)'; done
   ```
 
   每一行剩余命中必须能归入 R2 不翻项，否则就是漏翻。已知盲区（grep 不显眼但属文案）：`join('、')` 的分隔符、全角括号拼接（约 12 行），遇到时一并入字典。
 - **R10 既有断言零放松**：只允许因"断言对象形态变化"等价替换（如常量 `.label` → 函数返回值），断言的中文期望值不变。
 - **R11 每个分区任务交付物**：①字典 part（zh+en）②转换后的文件 ③分区既有 spec 全绿 ④`npx vue-tsc -b` 零错（en 的 keyof 对齐只在类型检查时强制，不要攒到 Task 11）⑤**至少一条 EN 渲染/求值断言**（挂载 harness 复制同目录既有 spec 的 mock 块；`beforeEach` 里 `localStorage.setItem('kb-ui-lang','en')` 必须在 `setActivePinia(createPinia())` **之前**——store 在创建时读全局键；`afterEach` 清 `kb-ui-lang`）。
-- **R12 标识符冲突**：`t` 在 5 个目标文件里已是局部变量名（`McpKeyConfigPanel.vue` L46–52/L123–134、`KbListView.vue` L86–98 及 `purgePhaseLabel(t)`/`purgeProgressText(t)`、`KbDocPreviewView.vue` L290–298、`TbTableQueryPanel.vue` L158、`KbFileManager.vue` L562–568 的 `const t = await kbApi.getArchiveTask(…)`）。**一律改名局部变量**（`tool`/`task`/`phase` 等语义名），**绝不**改 import 别名、**绝不**因此跳过翻译。转换任何文件前先 `grep -n "\bt\b" <文件>` 预检。
+- **R12 标识符冲突**：`t` 在至少 15 个目标文件里已是局部变量名或模板别名（`McpKeyConfigPanel.vue` L46–52/L123–134、`KbListView.vue` L86–98 及 `purgePhaseLabel(t)`/`purgeProgressText(t)`、`KbDocPreviewView.vue` L290–298、`TbTableQueryPanel.vue` L158、`KbFileManager.vue` L562–568 的 `const t = await kbApi.getArchiveTask(…)`）；另有 10 处函数作用域遮蔽或模板别名——`DashboardView` L431、`KbDetailView` L170/L190、`KbRunDetailView` L304、`KbRunDocDetailView` L354、`KbExportDialog` L112–118、`KbMembersPanel` L159、`KbMiningPanel` L320/L325、`KbQualityPanel` L47–49（模板 `v-for`）、`RetrievalRecordsAnalysis` L110、`KbFileManager` L787——`t()` 落在这些作用域里同样编译不过。**一律改名局部变量**（`tool`/`task`/`phase` 等语义名），**绝不**改 import 别名、**绝不**因此跳过翻译。转换任何文件前先 `grep -n "\bt\b" <文件>` 预检。
 - **R13 导出口径**：CSV 导出表头与文件名（`RetrievalRecordsPanel.vue` L316/L366）**跟随界面语言**（导出时 `t()`）。
 
 ---
@@ -107,7 +107,7 @@
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `npx vitest run src/components/layout/__tests__/Sidebar.spec.ts`
+Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/components/layout/__tests__/Sidebar.spec.ts`
 Expected: FAIL（member 用例仍见"知识制品"；域管理员用例此前就可见——仅 member 用例红）
 
 - [ ] **Step 3: 改 Sidebar.vue**
@@ -130,7 +130,7 @@ Expected: FAIL（member 用例仍见"知识制品"；域管理员用例此前就
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `npx vitest run src/components/layout/__tests__/Sidebar.spec.ts`
+Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/components/layout/__tests__/Sidebar.spec.ts`
 Expected: PASS（8 用例）
 
 - [ ] **Step 5: 提交**
@@ -197,7 +197,7 @@ describe('EmptyState text', () => {
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `npx vitest run src/components/common/__tests__/EmptyState.spec.ts`
+Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/components/common/__tests__/EmptyState.spec.ts`
 Expected: FAIL（`暂无数据` 在模板里是写死的，切 EN 不变；或文件尚无 t 可用）
 
 - [ ] **Step 3: 平移既有字典为 shell part**
@@ -572,10 +572,11 @@ import { visibilityLabel, roleLabel, docStatusLabel } from '@/views/kb/kbMeta'
 import {
   miningOperatorLabel, miningZoneLabel, groupMiningOperators,
 } from '@/utils/miningWorkflowPresentation'
-import {
-  managementErrorCodeMessage, managementErrorMessage,
-} from '@/utils/managementError'
+import { managementErrorCodeMessage } from '@/utils/managementError'
 import { validateCustomRange } from '@/components/retrieval/timeRange'
+import {
+  buildDocumentStructureGraph, DOCUMENT_ROOT_ID, UNASSIGNED_GROUP_ID,
+} from '@/utils/documentStructureGraph'
 import type { KbOverviewItem, KbStats } from '@/types/kb'
 import type { MiningOperatorDef } from '@/types/miningWorkflow'
 
@@ -648,15 +649,31 @@ describe('mapping utils follow the language switch', () => {
   })
 
   it('document structure graph labels', () => {
-    // 夹具：复制 utils/__tests__/documentStructureGraph.spec.ts 里最小的合法输入
-    // （一个未命名文档 + 1 个片段），断言 en 输出，例如：
-    // expect(model.root.label).toBe('Untitled document')
-    // expect(model.sections[0].subtitle).toBe('1 segments')
+    const graph = buildDocumentStructureGraph({
+      documentTitle: '',
+      outline: [{ element_id: 'h1', level: 1, title: '', order_index: 0 }],
+      tables: [{
+        table_id: 't1', rows: 2, columns: 3, header: [], preview: [],
+        source_element_id: 'e1', parent_section_element_id: 'h1',
+        caption: '', preview_truncated: false,
+      }],
+      segments: [{
+        segment_index: 0, block_type: 'prose', heading_chain: [], text: 'x', element_ids: [],
+        section_element_id: 'missing', source_order_start: 1, source_order_end: 1,
+        table_ref: null, table_caption: null,
+      }],
+      segmentCount: 1, elementCount: 1, relationCount: 0,
+    })
+    const node = (id: string) => graph.nodes.find(n => n.id === id)
+    expect(node(DOCUMENT_ROOT_ID)).toMatchObject({ label: 'Untitled document', subtitle: 'Current document' })
+    expect(node('section:h1')).toMatchObject({ label: 'Untitled section', subtitle: 'Heading level 1' })
+    expect(node('table:t1')).toMatchObject({ label: 'Table 1', subtitle: '2 rows × 3 columns' })
+    expect(node(UNASSIGNED_GROUP_ID)).toMatchObject({ label: 'Unassigned content', subtitle: '1 segments' })
   })
 })
 ```
 
-最后一条用例的夹具按注释从既有 spec 复制后补全断言——它是本任务七个映射文件里唯一没有现成 EN 断言的。
+documentStructureGraph 用例的夹具与断言已经对着真实 `buildDocumentStructureGraph`（返回结构是 `{ nodes, edges, diagnostics, … }`，**没有** `root`/`sections` 字段）试跑验证过——不要改回臆测的形态，也不要留空用例（空用例会空泛通过，让"全红"失真）。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -813,7 +830,7 @@ export function miningZoneLabel(zone: MiningExecutionZone): string {
 
 **消费点适配**：`src/components/mining/workflow/MiningOperatorPalette.vue` 第 32 行 import 改为 `import { groupMiningOperators, miningZoneLabel } from '@/utils/miningWorkflowPresentation'`，第 50 行 `return MINING_ZONE_LABELS[operator.zone]` 改 `return miningZoneLabel(operator.zone)`。（该组件属管理面——EN 态其标签随之变英文，spec 已裁定接受。）
 
-`MINING_OPERATOR_LABELS`/`MINING_ZONE_LABELS` 两个旧导出删除（唯一外部消费点已改；grep 确认无其他引用：`grep -rn "MINING_OPERATOR_LABELS\|MINING_ZONE_LABELS" src` 应只剩本文件内部）。
+`MINING_OPERATOR_LABELS`/`MINING_ZONE_LABELS` 两个旧导出删除（唯一外部消费点已改；grep 确认无其他引用：`grep -rn "MINING_OPERATOR_LABELS\|MINING_ZONE_LABELS" src` 必须无任何输出（旧导出已删、常量已改名 `_KEYS`））。
 
 - [ ] **Step 6: 转换 `utils/documentStructureGraph.ts`**
 
@@ -957,7 +974,7 @@ export async function managementErrorMessage(
 
 `managementErrorCodeMessage` 内两次 `normalized` 兜底返回的是**原 code**（不在字典里的 key 经 `t()` 原样返回，行为等价）。
 
-字典——追加到 `zh/common.ts` 与 `en/common.ts` 末尾（`} as const` / `}` 之前）：
+字典——追加到 `zh/common.ts` 与 `en/common.ts` 末尾（`} as const` / `}` 之前）；管理面角色称谓统一用壳层译法 System Admin / Domain Admin：
 
 | key（`common.mgmtError.` 后缀） | zh（原样） | en |
 |---|---|---|
@@ -1031,7 +1048,7 @@ export const enRecords: Record<keyof typeof zhRecords, string> = {
 }
 ```
 
-（管理面角色称谓统一用壳层译法 System Admin / Domain Admin。）
+（`timeRange` 的三条校验文案归 records 区——它只在检索记录面板消费。）
 
 - [ ] **Step 8b: 转换 `views/kb/kbMeta.ts`**（审查补入；函数内部调 `t()`，调用点零改动）
 
@@ -1093,10 +1110,25 @@ export function docStatusLabel(s: KbDocStatus, unchanged = false): string {
 
 （`已入库`/`处理中`/`已发布`/`已撤回` 复用 `common.docStatus.*`；`系统管理员`/`域管理员` 复用壳层 `header.roleAdmin`/`header.roleDomainAdmin`。）
 
+**补 zh 表值守护**（公开/私有/拥有者/编辑者/只读/未知等新 zh 值此前没有任何断言——R3 的字节一致性靠这条钉住）：`src/views/kb/__tests__/kbMeta.spec.ts` 末尾追加
+
+```typescript
+it('keeps the zh labels byte-identical to the pre-i18n text', () => {
+  expect(visibilityLabel('public')).toBe('公开')
+  expect(visibilityLabel('private')).toBe('私有')
+  expect(roleLabel('owner')).toBe('拥有者')
+  expect(roleLabel('editor')).toBe('编辑者')
+  expect(roleLabel('viewer')).toBe('只读')
+  expect(docStatusLabel('unknown')).toBe('未知')
+  expect(docStatusLabel('failed')).toBe('挖掘失败，等待重试')
+  expect(docStatusLabel('update_failed')).toBe('更新失败，仍用上一版本')
+})
+```
+
 - [ ] **Step 9: 跑映射 utils 全部相关 spec + 类型闸门**
 
-Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/utils/__tests__ src/views/kb/__tests__/kbMeta.spec.ts src/components/retrieval src/components/dashboard src/components/mining/workflow src/components/layout`
-Expected: 全 PASS——`i18n.en.spec.ts` 7 用例绿；`runStatus.spec`/`dashboard.spec`/`dashboardStats.spec`/`docStatus36.spec`/`documentStructureGraph.spec`/`managementError.spec`/`miningWorkflowGraph.spec`/`kbMeta.spec`/`MiningWorkflowEditor.spec`/`MiningWorkflowTrace.spec` 的既有中文断言**未改即绿**（`t()` 无 pinia 回落 zh）
+Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/utils/__tests__ src/views/kb src/views/__tests__/DashboardView.spec.ts src/components/retrieval src/components/dashboard src/components/mining/workflow src/components/layout`
+Expected: 全 PASS——`i18n.en.spec.ts` 7 用例绿；`runStatus.spec`/`dashboard.spec`/`dashboardStats.spec`/`docStatus36.spec`/`documentStructureGraph.spec`/`managementError.spec`/`miningWorkflowGraph.spec`/`kbMeta.spec`/`MiningWorkflowEditor.spec`/`MiningWorkflowTrace.spec`/`DashboardView.spec`（经 KbCard 渲染 kbMeta 标签）的既有中文断言**未改即绿**（`t()` 无 pinia 回落 zh）
 
 Run: `cd /d/mywork/AgenticKB/kb-ui && npx vue-tsc -b`
 Expected: 零错（含 kbMeta 新字典 key 的 en 对齐）
@@ -1125,6 +1157,7 @@ cd /d/mywork/AgenticKB && git add kb-ui/src/utils kb-ui/src/views/kb/kbMeta.ts k
 
 ```typescript
 import { apiErrorDetail } from '@/api/proxyClient'
+import { managementErrorMessage } from '@/utils/managementError'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -1133,6 +1166,11 @@ import EmptyState from '@/components/common/EmptyState.vue'
 ```typescript
   it('api fallback error text', async () => {
     expect(await apiErrorDetail(new Error(''))).toBe('Request failed')
+  })
+
+  it('managementErrorMessage default fallback follows the language', async () => {
+    // 改成 t() 后的默认 fallback 与 detail !== t('common.requestFailed') 比较都只有这条 EN 覆盖
+    expect(await managementErrorMessage({})).toBe('Request failed')
   })
 
   it('EmptyState follows the language (imported t helper in a template)', async () => {
@@ -1148,7 +1186,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 
 - [ ] **Step 2: 跑测试确认新增用例失败**
 
-Run: `npx vitest run src/utils/__tests__/i18n.en.spec.ts`
+Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/utils/__tests__/i18n.en.spec.ts`
 Expected: FAIL（`Expected 'Request failed'` 收到 `'请求失败'`；EmptyState 仍中文）
 
 - [ ] **Step 3: 转换 api/store 四处**
@@ -1183,7 +1221,7 @@ Expected: FAIL（`Expected 'Request failed'` 收到 `'请求失败'`；EmptyStat
 | key | zh（原样） | en |
 |---|---|---|
 | kbView.search.noActiveBuild | 所选知识库暂无可检索内容：尚未完成挖掘，或全部文档挖掘失败。请先完成一次成功的挖掘（部分文档成功即可检索）。 | The selected knowledge base has no retrievable content: mining has not completed, or all documents failed to mine. Complete a successful mining run first (partial success is enough to search). |
-| kbView.search.kbNotFound | 无法访问所选知识库：库不存在，或当前账号无读取权限（需库主/成员/public/站点管理员）。 | Cannot access the selected knowledge base: it does not exist, or this account cannot read it (owner/member/public/site administrator required). |
+| kbView.search.kbNotFound | 无法访问所选知识库：库不存在，或当前账号无读取权限（需库主/成员/public/站点管理员）。 | Cannot access the selected knowledge base: it does not exist, or this account cannot read it (owner/member/public/System Admin required). |
 | kbView.search.forbidden | 没有访问所选知识库的权限，请确认知识库可见性或联系管理员。 | No permission to access the selected knowledge base; check its visibility or contact an administrator. |
 | kbView.runDetail.partialLoad | 任务已加载，但部分进度或文档明细暂时不可用 | The task was loaded, but some progress or document details are temporarily unavailable |
 
@@ -1224,7 +1262,7 @@ withDefaults(defineProps<{
 - [ ] **Step 5: 跑相关 spec + 类型闸门**
 
 Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/utils/__tests__ src/api src/stores/__tests__/mining.spec.ts src/components/common src/components/charts src/components/retrieval src/components/kb`
-Expected: 全 PASS（api 层 spec 的中文兜底断言未改即绿；`i18n.en.spec.ts` 9 用例绿（Task 3 的 7 + 本任务 2）；EmptyState 样板 3 用例转绿；`docStatus36.spec` 里的 `localizeSearchError` 中文断言在 serving.ts 改动后重跑即绿）
+Expected: 全 PASS（api 层 spec 的中文兜底断言未改即绿；`i18n.en.spec.ts` 10 用例绿（Task 3 的 7 + 本任务 3）；EmptyState 样板 3 用例转绿；`docStatus36.spec` 里的 `localizeSearchError` 中文断言在 serving.ts 改动后重跑即绿）
 
 Run: `cd /d/mywork/AgenticKB/kb-ui && npx vue-tsc -b`
 Expected: 零错
@@ -1258,7 +1296,7 @@ cd /d/mywork/AgenticKB && git add kb-ui/src/api/proxyClient.ts kb-ui/src/api/ser
 > 3. **写字典 part**：按配套清单逐文件把字符串录入本区 `zh/<part>.ts`（R3 逐字节原样）与 `en/<part>.ts`（R5/R6）；key 前缀见任务。
 > 4. **转换文件**：R1–R13 逐条执行；每个文件转完跑 R9 去噪检查，逐行归类（注释/匹配数据/不翻项），有漏即补。
 > 5. **跑本任务全部 spec + 类型闸门**（命令见任务）→ 全绿，且 `npx vue-tsc -b` 零错。
-> 6. **提交**（只 add 列出的文件 + 本区字典 part + `zh/common.ts`/`en/common.ts`（R5 允许提公共词）+ 新 spec）。单任务文案多（200+ 条）时**允许按文件分多次提交**，每次提交自身必须 spec 绿 + 类型零错——不得把未验证的文件混进已验证的提交。
+> 6. **提交**（只 add 列出的文件 + 本区字典 part + `zh/common.ts`/`en/common.ts`（R5 允许提公共词）+ 新 spec）。**字典 part 必须随本任务第一个提交一起入库**——`t(key: string)` 无类型，代码引用了尚未入库的 key 时 vitest 与 vue-tsc 都发现不了。单任务文案多（200+ 条）时**允许按文件分多次提交**，每次提交自身必须 spec 绿 + 类型零错——不得把未验证的文件混进已验证的提交。
 >
 > 清单里的行号是转换前行号；一行多句时全部处理。`QueryList.vue` 当前无任何引用方（与 searchScope.ts 同类的死代码）——照常转换其 1 条文案，但不要拿它当 EN 断言目标。
 
@@ -1285,7 +1323,7 @@ cd /d/mywork/AgenticKB && git add kb-ui/src/api/proxyClient.ts kb-ui/src/api/ser
 
 - [ ] **Step 1:** 动作清单 1–2（EN 断言 `范式分布` 的 en 值）
 - [ ] **Step 2:** Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/components/retrieval/__tests__/RetrievalRecordsAnalysis.en.spec.ts` → FAIL
-- [ ] **Step 3:** 动作清单 3–4（CSV 导出表头与文件名按 R13 跟随界面语言；`statusLabel()`/`readinessLabel()`/`opLabel()` 等查找函数体内直接 `t()`；`EXPORT_HEADERS` 属非渲染用途常量——改函数或导出时 `t()`；L123 被标签切碎的句子按 R4 片段 key）
+- [ ] **Step 3:** 动作清单 3–4（CSV 导出表头与文件名按 R13 跟随界面语言；本区查找函数（如 `:412` 的 `statusLabel()`）体内直接 `t()`；`EXPORT_HEADERS` 属非渲染用途常量——改函数或导出时 `t()`；L123 被标签切碎的句子按 R4 片段 key）
 - [ ] **Step 4:** Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/views/__tests__/McpAccessRecordsLink.spec.ts src/api/__tests__/retrievalRecords.spec.ts src/components/retrieval && npx vue-tsc -b` → 全 PASS（`RetrievalRecordsPanel.spec` ~73 行中文断言未改即绿）、类型零错
 - [ ] **Step 5:** 提交：`cd /d/mywork/AgenticKB && git add kb-ui/src/views/RetrievalRecordsView.vue kb-ui/src/components/retrieval kb-ui/src/locales/zh/records.ts kb-ui/src/locales/en/records.ts`（提了公共词再 common.ts），message：`feat(kb-ui): 检索记录区双语——列表/分析面板/自定义时间校验`
 
@@ -1308,7 +1346,7 @@ cd /d/mywork/AgenticKB && git add kb-ui/src/api/proxyClient.ts kb-ui/src/api/ser
 
 > Task 8–10 同样照 Task 5 开头的"分区任务动作清单"六步执行。
 
-### Task 8: 知识库视图（`kbView.*`，6 文件 / 清单 219 条 + 审查补入 1 文件）
+### Task 8: 知识库视图（`kbView.*`，5 文件 / 清单 219 条 + 审查补入 1 文件 MiningWorkflowTrace）
 
 **Files:**
 - Modify: `src/views/kb/KbListView.vue`（39）、`KbDetailView.vue`（27）、`KbDocPreviewView.vue`（40）、`KbRunDetailView.vue`（60）、`KbRunDocDetailView.vue`（53）
@@ -1331,7 +1369,7 @@ cd /d/mywork/AgenticKB && git add kb-ui/src/api/proxyClient.ts kb-ui/src/api/ser
 
 - [ ] **Step 1:** 动作清单 1–2（EN 断言 `部分解析成功` 的 en 值）
 - [ ] **Step 2:** Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/components/kb/__tests__/PreprocessNotice.en.spec.ts` → FAIL
-- [ ] **Step 3:** 动作清单 3–4（`DocumentStructureGraph.vue` 消费的 utils 标签已在 Task 3 翻译；**该组件 `:387` 的 `watch(graph, …)` 会在切换语言时随 computed 重算而触发**——转换后实测一次切换：若它只是初始化选中/滚动则属可接受瞬态，在提交说明注明；若会清掉用户当前选中节点，则把该 watch 的初始化逻辑改为与语言无关的一次性初始化。`TbTableQueryPanel.vue:158` 的 `(t: string) =>` 与 `:145` 的 `ref('中文')`、`KbSearchPanel.vue:194` 的 `ref('中文')` 分别按 R12、R8 处理；`KbQualityPanel.vue` L13–15 被标签切碎的句子按 R4 片段 key）
+- [ ] **Step 3:** 动作清单 3–4（`DocumentStructureGraph.vue` 消费的 utils 标签已在 Task 3 翻译；**该组件 `:387` 的 `watch(graph, …)` 会在切换语言时随 computed 重算而触发**——已核对（计划审查）：它只在"当前选中节点 id 已不存在"时才重置选中，而节点 id 与语言无关，故选中保留，属可接受；照常转换，不改 watch，在提交说明注明这一裁定。`TbTableQueryPanel.vue:158` 的 `(t: string) =>` 与 `:145` 的 `ref('中文')`、`KbSearchPanel.vue:194` 的 `ref('中文')` 分别按 R12、R8 处理；`KbQualityPanel.vue` L13–15 被标签切碎的句子按 R4 片段 key）
 - [ ] **Step 4:** Run: `cd /d/mywork/AgenticKB/kb-ui && npx vitest run src/components/kb/__tests__ && npx vue-tsc -b` → 全 PASS、类型零错
 - [ ] **Step 5:** 提交：`cd /d/mywork/AgenticKB && git add kb-ui/src/components/kb/KbSearchPanel.vue kb-ui/src/components/kb/KbSearchWorkspace.vue kb-ui/src/components/kb/TbTableQueryPanel.vue kb-ui/src/components/kb/OnenetRefPanel.vue kb-ui/src/components/kb/KbQualityPanel.vue kb-ui/src/components/kb/DocumentStructureGraph.vue kb-ui/src/components/kb/PipelineFlow.vue kb-ui/src/components/kb/PreprocessNotice.vue kb-ui/src/components/kb/__tests__/PreprocessNotice.en.spec.ts kb-ui/src/locales/zh/kbSearch.ts kb-ui/src/locales/en/kbSearch.ts`（提了公共词再 common.ts），message：`feat(kb-ui): 知识库组件双语·检索质量簇——检索/表格查询/一张网引用/质量/结构图/流水线`
 
@@ -1383,7 +1421,11 @@ function sourceFiles(dir: string): string[] {
 }
 
 // 形如字典 key、但确实不是文案 key 的字面量（如埋点名）——出现误报时在此登记并写明来源
-const ALLOWED_NON_KEYS = new Set<string>()
+const ALLOWED_NON_KEYS = new Set<string>([
+  // RetrievalRecordsPanel.vue:82 的 `v-if="records.length" class="…"`——字面量正则跨两个属性
+  // 误配出 "records.length"，形如 records.* 前缀但不是文案 key（计划审查模拟对账时唯一误报）
+  'records.length',
+])
 
 // 全部字典 part 的 key 前缀（新增 part 时同步）
 const KEY_PREFIX = /^(common|nav|title|header|pwd|login|release|sidebar|dashboard|kbView|kbSearch|kbManage|kbStruct|records|mcp)\./
@@ -1427,11 +1469,23 @@ cd /d/mywork/AgenticKB/kb-ui && for f in \
   src/utils/runStatus.ts src/utils/dashboard.ts src/utils/documentStructureGraph.ts \
   src/utils/miningWorkflowPresentation.ts src/utils/managementError.ts \
   src/api/proxyClient.ts src/api/serving.ts src/api/kb.ts src/stores/mining.ts; do
-  echo "## $f"; sed -E 's|[[:space:]]//.*$||' "$f" | grep -nP '[\x{4e00}-\x{9fa5}]' | grep -vP '^[0-9]+:\s*(\*|/\*|<!--)'
+  echo "## $f"; sed -E 's|[[:space:]]//.*$||' "$f" | grep -nP '[\x{4e00}-\x{9fa5}]' | grep -vP '^[0-9]+:\s*(//|\*|/\*|<!--)'
 done
 ```
 
 （`segmentTerms.ts` 不在列表里——它是语言数据。）Expected: 剩余每一行都能归入 R2 不翻项（注释尾、console、匹配数据如 managementError 的中文键与 `msg.includes('上限')`、专有名词）。发现漏翻 → 回对应分区补齐并单独提交。
+
+完美转换后此命令仍会剩约 17 行 HTML 注释续行/结束行（DashboardView 11、KbListView 2、KbRunDetailView 2、KbSearchPanel 1、McpAccessView 1）——属噪声。
+
+- [ ] **Step 2b: R3 字节级抽查（一次性脚本，不入库）**
+
+字节一致性目前只对"有 spec 断言的文案"有保护，其余约七成靠这一步：从本批 diff 的**删除行**里提取被移除的中文串，逐个核对是否出现在 zh 字典值里。
+
+```bash
+cd /d/mywork/AgenticKB && git diff <pre-batch-sha>..HEAD -- kb-ui/src ':(exclude)kb-ui/src/locales' ':(exclude)kb-ui/src/**/__tests__/**' | grep '^-' | grep -v '^---' | grep -P '[\x{4e00}-\x{9fa5}]'
+```
+
+对该输出的每个引号字面量/模板文本，与 `Object.values(zh)`（node 一次性脚本 import `src/locales/zh/index.ts` 或直接正则抓 `': '…'` 值）做比对。**允许的差异仅限**：`${x}` 插值 → `{x}` 占位、跨行/相邻标签拼接、`|` 两侧空格；其余不在字典里的残留逐条归类（代码注释、匹配数据、被改成 key 的映射值、专有名词）。发现字典值与原文不一致（多字/少字/标点漂移）→ 修字典值，zh 断言不受影响但这是 R3 红线。
 
 - [ ] **Step 3: 全量单测**
 
@@ -1453,7 +1507,7 @@ cd /d/mywork/AgenticKB && git add kb-ui/src/locales/__tests__/keyUsage.spec.ts &
 
 ```bash
 cd /d/mywork/AgenticKB && git diff --stat <pre-batch-sha>..HEAD -- . ':(exclude)kb-ui' ':(exclude)docs'
-git diff --stat <pre-batch-sha>..HEAD -- kb-ui/package.json kb-ui/package-lock.json
+cd /d/mywork/AgenticKB && git diff --stat <pre-batch-sha>..HEAD -- kb-ui/package.json kb-ui/package-lock.json
 ```
 
 Expected: 两条输出均为空（**后端零改动、零新依赖**）。
@@ -1476,7 +1530,7 @@ Expected: 两条输出均为空（**后端零改动、零新依赖**）。
 
 1. **`t()` 助手依赖"渲染期调用"建立响应性**：顶层常量表里提前求值不随语言切换（R8）——EN 渲染用例只抽查每区一个组件，其余靠评审 Step 8 ①走查；若线上发现某处切语言不刷新，按 R8 改为存 key。
 2. **配套清单覆盖率约 89%**：以 R9 去噪输出为准；已知盲区 `join('、')`、全角括号拼接。
-3. **`DocumentStructureGraph.vue:387` 的 `watch(graph, …)`** 会随语言切换触发的 computed 重算——Task 9 Step 3 实测并裁定（瞬态可接受 / 改一次性初始化）。
+3. **`DocumentStructureGraph.vue:387` 的 `watch(graph, …)`** 会随语言切换触发的 computed 重算——已核对：它只在"当前选中节点 id 已不存在"时才重置选中，而节点 id 与语言无关，故选中得以保留，已裁定可接受（Task 9 Step 3）。
 4. **管理面泄漏**（接受）：`managementError`/`miningWorkflowPresentation`/`apiErrorDetail` 兜底的 EN 文案会出现在设置页、挖掘范式编辑器、制品/工作台组件。
 5. **五个无既有 spec 的组件**（KbCreateDialog/KbExportDialog/KbCopyDialog/KbMembersPanel/KbSettingsPanel，约 130 条文案）：唯一闸门是 R9 + `vue-tsc -b`——按文件逐个提交，并在 Step 8 ① 重点走查。
 6. **手输 URL 仍可达制品页**（spec 拍板：仅菜单隐藏）。

@@ -1,31 +1,31 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="拷贝知识库"
+    :title="t('kbManage.copy.title')"
     width="480px"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <el-alert type="info" :closable="false" class="kb-copy__notice">
-      <p>拷贝包含全部文件、目录结构与知识血缘（共享源库的解析与向量资产）。</p>
-      <p>拷贝完成即可开始挖掘：选择与源库<b>相同的挖掘范式</b>可复用已有解析与向量，几乎零成本；换范式则全量重算。</p>
+      <p>{{ t('kbManage.copy.intro') }}</p>
+      <p>{{ t('kbManage.copy.hint1') }}<b>{{ t('kbManage.copy.hint2') }}</b>{{ t('kbManage.copy.hint3') }}</p>
     </el-alert>
     <el-form :model="form" label-width="72px" @submit.prevent>
-      <el-form-item label="源库">
+      <el-form-item :label="t('kbManage.copy.source')">
         <el-input :model-value="kb?.name ?? ''" disabled />
       </el-form-item>
-      <el-form-item label="名称" required>
+      <el-form-item :label="t('common.name')" required>
         <el-input v-model="form.name" maxlength="80" show-word-limit />
       </el-form-item>
-      <el-form-item label="可见性">
+      <el-form-item :label="t('kbManage.copy.visibility')">
         <el-radio-group v-model="form.visibility" :disabled="!canSetPublic && form.visibility === 'public'">
-          <el-radio value="private">私有</el-radio>
-          <el-radio value="public" :disabled="!canSetPublic">公开</el-radio>
+          <el-radio value="private">{{ t('kbView.visibility.private') }}</el-radio>
+          <el-radio value="public" :disabled="!canSetPublic">{{ t('kbView.visibility.public') }}</el-radio>
         </el-radio-group>
         <div v-if="!canSetPublic" class="kb-copy__hint">
-          仅源库 owner / 站点管理员可将副本设为公开（防止他人私有知识被扩散）。
+          {{ t('kbManage.copy.publicHint') }}
         </div>
       </el-form-item>
-      <el-form-item label="描述">
+      <el-form-item :label="t('common.description')">
         <el-input
           v-model="form.description"
           type="textarea"
@@ -36,8 +36,8 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="close">取消</el-button>
-      <el-button type="primary" :loading="submitting" @click="submit">拷贝</el-button>
+      <el-button @click="close">{{ t('common.cancel') }}</el-button>
+      <el-button type="primary" :loading="submitting" @click="submit">{{ t('kbManage.copy.submit') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -49,6 +49,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { KbCopyResult, KbSummary, KbVisibility } from '@/types/kb'
+import { t } from '@/locales/t'
 
 const props = defineProps<{ modelValue: boolean; kb: KbSummary | null }>()
 const emit = defineEmits<{
@@ -73,7 +74,9 @@ const canSetPublic = computed(
 
 /** 缺省名派生（与后端 _derive_copy_name 同规则）：源名超长先截源名保后缀。 */
 function deriveName(sourceName: string): string {
-  const suffix = `-副本-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
+  const suffix = t('kbManage.copy.nameSuffix', {
+    date: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+  })
   const stem = sourceName.length + suffix.length > 80
     ? sourceName.slice(0, 80 - suffix.length).trimEnd()
     : sourceName
@@ -102,7 +105,7 @@ function close() {
 async function submit() {
   const name = form.name.trim()
   if (!name) {
-    ElMessage.warning('请输入新知识库名称')
+    ElMessage.warning(t('kbManage.copy.nameRequired'))
     return
   }
   submitting.value = true
@@ -113,8 +116,10 @@ async function submit() {
       description: form.description.trim() || null,
     })
     ElMessage.success(
-      `已拷贝 ${result.copy_stats.documents} 个文档`
-      + `（${result.copy_stats.linked_snapshots} 份知识血缘）——选择挖掘范式后即可挖掘`,
+      t('kbManage.copy.success', {
+        docs: result.copy_stats.documents,
+        lineage: result.copy_stats.linked_snapshots,
+      }),
     )
     emit('update:modelValue', false)
     emit('copied', result)

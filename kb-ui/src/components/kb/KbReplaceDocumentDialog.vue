@@ -2,27 +2,27 @@
   <el-dialog
     v-if="canWrite"
     :model-value="true"
-    title="替换当前文件"
+    :title="t('kbManage.replace.title')"
     width="520px"
     :close-on-click-modal="false"
     :close-on-press-escape="!uploading"
     :show-close="!uploading"
     @update:model-value="close"
   >
-    <p>将替换「{{ document.document_name }}」的原文件，文件名和所在目录保持不变。</p>
-    <p>替换后自动排队挖掘；已有的当前可搜索知识继续可用，直到新内容挖掘成功。</p>
+    <p>{{ t('kbManage.replace.intro', { name: document.document_name }) }}</p>
+    <p>{{ t('kbManage.replace.note') }}</p>
     <label class="replace-file__label">
-      选择新文件
+      {{ t('kbManage.replace.pickFile') }}
       <input type="file" :disabled="uploading || blocked" @change="selectFile" />
     </label>
-    <p v-if="!hasRevision" role="alert">缺少文件版本信息，请关闭窗口并刷新文件列表后重试。</p>
-    <p v-if="blocked" role="alert">文件已被更新或不可操作，请关闭窗口并刷新后重新选择。</p>
+    <p v-if="!hasRevision" role="alert">{{ t('kbManage.replace.noRevision') }}</p>
+    <p v-if="blocked" role="alert">{{ t('kbManage.replace.blocked') }}</p>
     <template #footer>
-      <el-button data-testid="replace-cancel" :disabled="uploading" @click="close">取消</el-button>
+      <el-button data-testid="replace-cancel" :disabled="uploading" @click="close">{{ t('common.cancel') }}</el-button>
       <el-button
         data-testid="replace-confirm" type="primary" :loading="uploading"
         :disabled="!file || !hasRevision || blocked || uploading" @click="replace"
-      >确认替换</el-button>
+      >{{ t('kbManage.replace.confirm') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -33,6 +33,7 @@ import { ElMessage } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { KbDocument } from '@/types/kb'
+import { t } from '@/locales/t'
 
 const props = defineProps<{ kbId: string; document: KbDocument; canWrite: boolean }>()
 const emit = defineEmits<{
@@ -64,16 +65,16 @@ async function replace() {
     )
     // 57号：替换后自动排队挖掘——挖完前旧知识继续可检索（不再要求手动重挖）
     ElMessage.success(result.auto_mined
-      ? '原文件已替换，已自动排队挖掘；挖完前旧知识继续可检索'
-      : '原文件已替换，请到「挖掘」tab 手动发起挖掘以更新知识')
+      ? t('kbManage.replace.doneAutoMined')
+      : t('kbManage.replace.doneManual'))
     emit('replaced', result)
   } catch (error) {
     const status = (error as { response?: { status?: number } })?.response?.status
     const errors: Record<number, string> = {
-      409: '文件已被更新或当前不可替换，请刷新后重新选择文件',
-      403: '没有替换此文件的权限，请刷新后确认访问权限',
-      404: '文件不存在或已不可访问，请刷新文件列表',
-      413: '文件超过上传大小限制，请选择较小的文件',
+      409: t('kbManage.replace.err409'),
+      403: t('kbManage.replace.err403'),
+      404: t('kbManage.replace.err404'),
+      413: t('kbManage.replace.err413'),
     }
     if (status === 409 || status === 403 || status === 404) {
       blocked.value = true

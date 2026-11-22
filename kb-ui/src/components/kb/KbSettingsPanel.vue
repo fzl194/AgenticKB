@@ -2,18 +2,18 @@
   <div class="kb-settings">
     <div class="kb-settings__form">
       <el-form :model="form" label-width="72px" @submit.prevent>
-        <el-form-item label="名称">
+        <el-form-item :label="t('common.name')">
           <el-input v-model="form.name" :disabled="!canWrite" maxlength="80" show-word-limit />
         </el-form-item>
-        <el-form-item label="公开读">
+        <el-form-item :label="t('kbManage.create.publicRead')">
           <el-switch
             v-model="isPublic"
             :disabled="!canWrite"
-            active-text="公开（全员可读）"
-            inactive-text="私有（仅成员）"
+            :active-text="t('kbManage.create.publicText')"
+            :inactive-text="t('kbManage.create.privateText')"
           />
         </el-form-item>
-        <el-form-item label="描述">
+        <el-form-item :label="t('common.description')">
           <el-input
             v-model="form.description"
             type="textarea"
@@ -24,43 +24,43 @@
           />
         </el-form-item>
         <el-form-item v-if="canWrite">
-          <el-button type="primary" :loading="saving" @click="save">保存修改</el-button>
-          <el-button @click="reset">重置</el-button>
+          <el-button type="primary" :loading="saving" @click="save">{{ t('kbManage.settings.saveChanges') }}</el-button>
+          <el-button @click="reset">{{ t('kbManage.settings.reset') }}</el-button>
         </el-form-item>
       </el-form>
     </div>
 
     <div v-if="canManageLifecycle" class="kb-settings__owner">
       <div>
-        <div class="kb-settings__owner-title">知识库所有者</div>
-        <div class="kb-settings__hint">转移后新所有者必须是启用的同域用户。</div>
+        <div class="kb-settings__owner-title">{{ t('kbManage.settings.ownerTitle') }}</div>
+        <div class="kb-settings__hint">{{ t('kbManage.settings.ownerHint') }}</div>
       </div>
-      <el-button plain @click="openOwnerTransfer">转移所有者</el-button>
+      <el-button plain @click="openOwnerTransfer">{{ t('kbManage.settings.transferOwner') }}</el-button>
     </div>
 
     <div v-if="canManageLifecycle" class="kb-settings__danger">
       <div class="kb-settings__danger-text">
-        <div class="kb-settings__danger-title">删除知识库</div>
+        <div class="kb-settings__danger-title">{{ t('kbManage.settings.deleteTitle') }}</div>
         <div class="kb-settings__danger-desc">
-          软删除：知识库对所有人不可见；库内已上传文档与已挖掘知识保留，不会物理删除。
-          删除后原名称可重新使用；历史数据仍保留。
+          {{ t('kbManage.settings.deleteDesc1') }}
+          {{ t('kbManage.settings.deleteDesc2') }}
         </div>
       </div>
       <el-button type="danger" plain :loading="deleting" @click="confirmDelete">
-        删除知识库
+        {{ t('kbManage.settings.deleteKb') }}
       </el-button>
     </div>
 
-    <el-dialog v-model="ownerDialogVisible" title="转移知识库所有者" width="460px">
+    <el-dialog v-model="ownerDialogVisible" :title="t('kbManage.settings.transferTitle')" width="460px">
       <el-form label-width="90px">
-        <el-form-item label="新所有者">
+        <el-form-item :label="t('kbManage.settings.newOwner')">
           <el-select
             v-model="newOwnerId"
             filterable
             remote
             :remote-method="loadOwnerCandidates"
             :loading="ownerCandidatesLoading"
-            placeholder="搜索用户名或显示名"
+            :placeholder="t('kbManage.settings.searchUser')"
             style="width: 100%"
           >
             <el-option
@@ -71,14 +71,14 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="原所有者">
-          <el-checkbox v-model="keepOldAsEditor">保留为编辑者</el-checkbox>
+        <el-form-item :label="t('kbManage.settings.oldOwner')">
+          <el-checkbox v-model="keepOldAsEditor">{{ t('kbManage.settings.keepAsEditor') }}</el-checkbox>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="ownerDialogVisible = false">取消</el-button>
+        <el-button @click="ownerDialogVisible = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="ownerTransferring" :disabled="!newOwnerId" @click="confirmOwnerTransfer">
-          确认转移
+          {{ t('kbManage.settings.confirmTransfer') }}
         </el-button>
       </template>
     </el-dialog>
@@ -92,6 +92,7 @@ import { useKbApi } from '@/api/kb'
 import { managementErrorMessage } from '@/utils/managementError'
 import type { KbSummary, KbUserCandidate, KbVisibility } from '@/types/kb'
 import { canManageKbLifecycle as roleCanManageLifecycle } from '@/views/kb/kbMeta'
+import { t } from '@/locales/t'
 
 const props = defineProps<{ kb: KbSummary; canWrite: boolean }>()
 const emit = defineEmits<{ updated: []; deleted: [] }>()
@@ -136,7 +137,7 @@ watch(() => props.kb, reset, { immediate: true })
 async function save() {
   const name = form.name.trim()
   if (!name) {
-    ElMessage.warning('名称不能为空')
+    ElMessage.warning(t('kbManage.settings.nameRequired'))
     return
   }
   saving.value = true
@@ -146,7 +147,7 @@ async function save() {
       visibility: form.visibility,
       description: form.description.trim() || null,
     })
-    ElMessage.success('已保存')
+    ElMessage.success(t('kbManage.settings.saved'))
     emit('updated')
   } catch (e) {
     ElMessage.error(await managementErrorMessage(e))
@@ -182,7 +183,7 @@ async function confirmOwnerTransfer() {
       keep_old_as_editor: keepOldAsEditor.value,
     })
     ownerDialogVisible.value = false
-    ElMessage.success('所有者已转移')
+    ElMessage.success(t('kbManage.settings.ownerTransferred'))
     emit('updated')
   } catch (e) {
     ElMessage.error(await managementErrorMessage(e))
@@ -196,11 +197,11 @@ async function confirmDelete() {
   let name = ''
   try {
     const { value } = await ElMessageBox.prompt(
-      `此操作将永久删除知识库「${props.kb.name}」及其全部文档、挖掘知识与历史记录，不可恢复。请输入库全名确认：`,
-      '永久删除知识库',
+      t('kbManage.settings.deletePrompt', { name: props.kb.name }),
+      t('kbManage.settings.deleteConfirmTitle'),
       {
-        type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消',
-        inputValidator: (v) => v?.trim() === props.kb.name || '名称不一致',
+        type: 'warning', confirmButtonText: t('common.deletePermanently'), cancelButtonText: t('common.cancel'),
+        inputValidator: (v) => v?.trim() === props.kb.name || t('kbManage.settings.nameMismatch'),
       },
     )
     name = value.trim()
@@ -210,7 +211,7 @@ async function confirmDelete() {
   deleting.value = true
   try {
     await kbApi.deleteKb(props.kb.id, name)
-    ElMessage.success('已开始后台删除：库即刻停用，可在知识库列表查看进度')
+    ElMessage.success(t('kbManage.settings.deleteStarted'))
     emit('deleted')
   } catch (e) {
     ElMessage.error(await managementErrorMessage(e))

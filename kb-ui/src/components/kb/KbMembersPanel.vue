@@ -4,11 +4,11 @@
       <el-select
         v-model="selectedUsername"
         filterable
-        placeholder="选择用户（登录名）"
+        :placeholder="t('kbManage.members.pickUser')"
         size="small"
         class="kb-members__user-select"
         :loading="loadingCandidates"
-        no-data-text="无可添加的用户"
+        :no-data-text="t('kbManage.members.noUsers')"
       >
         <el-option
           v-for="u in candidates"
@@ -18,16 +18,16 @@
         />
       </el-select>
       <el-select v-model="newRole" size="small" class="kb-members__role">
-        <el-option v-if="visibility !== 'public'" label="只读" value="viewer" />
-        <el-option label="编辑者" value="editor" />
+        <el-option v-if="visibility !== 'public'" :label="t('kbView.role.viewer')" value="viewer" />
+        <el-option :label="t('kbView.role.editor')" value="editor" />
       </el-select>
       <el-button type="primary" size="small" :loading="adding" @click="addOne">
-        添加成员
+        {{ t('kbManage.members.add') }}
       </el-button>
     </div>
-    <p v-else class="kb-members__hint">仅拥有者或编辑者可管理成员。</p>
+    <p v-else class="kb-members__hint">{{ t('kbManage.members.writeOnlyHint') }}</p>
     <p v-if="canWrite && visibility === 'public'" class="kb-members__hint">
-      公开库全员可读,无需添加只读成员;此处仅可授予「编辑者」写权限。
+      {{ t('kbManage.members.publicHint') }}
     </p>
 
     <div class="kb-members__table-wrap">
@@ -37,31 +37,31 @@
         class="kb-table"
         :header-cell-style="{ background: 'transparent' }"
       >
-        <el-table-column label="用户名" min-width="180">
+        <el-table-column :label="t('kbManage.members.username')" min-width="180">
           <template #default="{ row }">
             <span class="kb-member-name">{{ row.username }}</span>
             <span v-if="row.display_name" class="kb-member-dn">{{ row.display_name }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="角色" width="120">
+        <el-table-column :label="t('kbManage.members.role')" width="120">
           <template #default="{ row }">
             <el-tag :type="roleTagType(row.role)" size="small" effect="plain">
               {{ roleLabel(row.role) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="加入时间" min-width="160">
+        <el-table-column :label="t('kbManage.members.joinedAt')" min-width="160">
           <template #default="{ row }">{{ formatTime(row.added_at) }}</template>
         </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="90" fixed="right">
+        <el-table-column v-if="canWrite" :label="t('common.actions')" width="90" fixed="right">
           <template #default="{ row }">
             <el-button size="small" text type="danger" @click="removeOne(row)">
-              移除
+              {{ t('kbManage.members.remove') }}
             </el-button>
           </template>
         </el-table-column>
         <template #empty>
-          <EmptyState text="还没有成员（拥有者即创建者，不在成员列表中）" />
+          <EmptyState :text="t('kbManage.members.empty')" />
         </template>
       </el-table>
     </div>
@@ -76,6 +76,7 @@ import { apiErrorDetail } from '@/api/proxyClient'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { roleLabel, roleTagType } from '@/views/kb/kbMeta'
 import type { KbMember, KbMemberRole, KbUserCandidate, KbVisibility } from '@/types/kb'
+import { t } from '@/locales/t'
 
 const props = defineProps<{ kbId: string; canWrite: boolean; visibility: KbVisibility }>()
 const kbApi = useKbApi()
@@ -121,13 +122,13 @@ async function loadCandidates(): Promise<void> {
 async function addOne(): Promise<void> {
   const username = selectedUsername.value
   if (!username) {
-    ElMessage.warning('请选择用户')
+    ElMessage.warning(t('kbManage.members.pickRequired'))
     return
   }
   adding.value = true
   try {
     await kbApi.addMember(props.kbId, { username, role: newRole.value })
-    ElMessage.success(`已添加 ${username}`)
+    ElMessage.success(t('kbManage.members.added', { username }))
     selectedUsername.value = ''
     await Promise.all([loadMembers(), loadCandidates()])
   } catch (e) {
@@ -140,8 +141,8 @@ async function addOne(): Promise<void> {
 async function removeOne(row: KbMember): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确定将 ${row.username} 移出该知识库？`,
-      '移除成员',
+      t('kbManage.members.removeConfirm', { username: row.username }),
+      t('kbManage.members.removeTitle'),
       { type: 'warning' },
     )
   } catch {
@@ -149,16 +150,16 @@ async function removeOne(row: KbMember): Promise<void> {
   }
   try {
     await kbApi.removeMember(props.kbId, row.user_id)
-    ElMessage.success(`已移除 ${row.username}`)
+    ElMessage.success(t('kbManage.members.removed', { username: row.username }))
     await Promise.all([loadMembers(), loadCandidates()])
   } catch (e) {
     ElMessage.error(await apiErrorDetail(e))
   }
 }
 
-function formatTime(t: string): string {
-  if (!t) return '-'
-  return new Date(t).toLocaleString('zh-CN')
+function formatTime(value: string): string {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('zh-CN')
 }
 
 onMounted(() => {

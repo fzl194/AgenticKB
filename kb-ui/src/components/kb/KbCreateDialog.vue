@@ -1,40 +1,40 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="新建知识库"
+    :title="t('dashboard.action.newKb')"
     width="480px"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <el-form :model="form" label-width="72px" @submit.prevent>
-      <el-form-item label="域">
+      <el-form-item :label="t('kbManage.create.domain')">
         <el-input :model-value="domain" disabled />
       </el-form-item>
-      <el-form-item label="名称" required>
+      <el-form-item :label="t('common.name')" required>
         <el-input
           v-model="form.name"
-          placeholder="如：5G 规范库"
+          :placeholder="t('kbManage.create.namePlaceholder')"
           maxlength="80"
           show-word-limit
         />
       </el-form-item>
-      <el-form-item label="公开读">
-        <el-switch v-model="isPublic" active-text="公开（全员可读）" inactive-text="私有（仅成员）" />
-        <div class="kb-create__hint">{{ isPublic ? '任何人可读；写仍需 owner/成员。' : '仅 owner 与成员可见可读。' }}</div>
+      <el-form-item :label="t('kbManage.create.publicRead')">
+        <el-switch v-model="isPublic" :active-text="t('kbManage.create.publicText')" :inactive-text="t('kbManage.create.privateText')" />
+        <div class="kb-create__hint">{{ isPublic ? t('kbManage.create.publicHint') : t('kbManage.create.privateHint') }}</div>
       </el-form-item>
-      <el-form-item label="描述">
+      <el-form-item :label="t('common.description')">
         <el-input
           v-model="form.description"
           type="textarea"
           :rows="3"
-          placeholder="可选，简要描述这个知识库的用途"
+          :placeholder="t('kbManage.create.descPlaceholder')"
           maxlength="300"
           show-word-limit
         />
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="close">取消</el-button>
-      <el-button type="primary" :loading="submitting" @click="submit">创建</el-button>
+      <el-button @click="close">{{ t('common.cancel') }}</el-button>
+      <el-button type="primary" :loading="submitting" @click="submit">{{ t('common.create') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -45,6 +45,7 @@ import { ElMessage } from 'element-plus'
 import { useKbApi } from '@/api/kb'
 import { apiErrorDetail } from '@/api/proxyClient'
 import type { KbVisibility } from '@/types/kb'
+import { t } from '@/locales/t'
 
 const props = defineProps<{ modelValue: boolean; domain: string }>()
 const emit = defineEmits<{
@@ -86,7 +87,7 @@ function close() {
 async function submit() {
   const name = form.name.trim()
   if (!name) {
-    ElMessage.warning('请输入知识库名称')
+    ElMessage.warning(t('kbManage.create.nameRequired'))
     return
   }
   submitting.value = true
@@ -97,7 +98,7 @@ async function submit() {
       visibility: form.visibility,
       description: form.description.trim() || null,
     })
-    ElMessage.success('知识库已创建')
+    ElMessage.success(t('kbManage.create.created'))
     emit('update:modelValue', false)
     emit('created')
   } catch (e) {

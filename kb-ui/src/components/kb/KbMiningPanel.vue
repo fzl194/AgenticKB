@@ -3,13 +3,13 @@
     <!-- 顶部：范式选择 + 刷新（挖掘触发已移至文件列表多选批量操作） -->
     <div class="kb-mining__top">
       <div class="kb-mining__workflow">
-        <label class="kb-mining__workflow-label">挖掘范式</label>
+        <label class="kb-mining__workflow-label">{{ t('kbManage.mining.workflowLabel') }}</label>
         <el-select
           v-model="workflowId"
           size="default"
           :loading="loadingOptions"
           :disabled="!canWrite"
-          placeholder="选择已发布的挖掘范式"
+          :placeholder="t('kbManage.mining.workflowPlaceholder')"
           class="kb-mining__workflow-select"
           @change="onWorkflowChange"
         >
@@ -20,15 +20,15 @@
             :value="opt.id"
           />
         </el-select>
-        <span v-if="!canWrite" class="kb-mining__readonly-hint">仅拥有者或编辑者可修改</span>
+        <span v-if="!canWrite" class="kb-mining__readonly-hint">{{ t('kbManage.mining.readonlyHint') }}</span>
       </div>
       <div class="kb-mining__trigger">
         <el-tooltip
           v-if="canWrite"
-          content="忽略内容哈希缓存，对所有文档重跑 pipeline（含 LLM 阶段），重生已挖知识"
+          :content="t('kbManage.mining.forceRedoTip')"
           placement="top"
         >
-          <el-checkbox v-model="forceRedo">强制重挖</el-checkbox>
+          <el-checkbox v-model="forceRedo">{{ t('kbManage.mining.forceRedo') }}</el-checkbox>
         </el-tooltip>
         <el-button
           v-if="canWrite" type="primary" :loading="mining"
@@ -39,15 +39,15 @@
         </el-button>
         <el-button :loading="loadingRuns" @click="loadRuns">
           <el-icon class="el-icon--left"><Refresh /></el-icon>
-          刷新记录
+          {{ t('kbManage.mining.refreshRuns') }}
         </el-button>
       </div>
     </div>
     <p v-if="!workflowId" class="kb-mining__warn">
-      尚未选择挖掘范式。在「文件」tab 多选文档后点「挖掘选中」前，请先绑定一个已发布范式。
+      {{ t('kbManage.mining.noWorkflowWarn') }}
     </p>
     <p v-else class="kb-mining__tip">
-      点「整库挖掘」对本库文档发起挖掘；或在「文件」tab 多选文档 →「挖掘选中」。点下方任一任务查看实时进度与流水线。
+      {{ t('kbManage.mining.tip') }}
     </p>
 
     <!-- 挖掘记录列表（行可点 → 任务详情：实时进度 + 12 阶段流水线） -->
@@ -60,14 +60,14 @@
         style="cursor: pointer"
         @row-click="onRowClick"
       >
-        <el-table-column label="状态" width="110">
+        <el-table-column :label="t('common.status')" width="110">
           <template #default="{ row }">
             <el-tag :type="runStatusTagType(row.status)" size="small" effect="light">
               {{ runStatusLabel(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="进度" width="170">
+        <el-table-column :label="t('kbManage.mining.progress')" width="170">
           <template #default="{ row }">
             <div class="kb-mining__progress">
               <div class="kb-mining__progress-bar">
@@ -83,19 +83,19 @@
               <span class="kb-mining__progress-text">
                 {{ processedDocumentCount(row) }}/{{ row.total_documents ?? 0 }}
                 <span v-if="(row.failed_count ?? 0) > 0" class="kb-mining__progress-fail">
-                  ·失败 {{ row.failed_count }}
+                  {{ t('kbManage.mining.failedCount', { n: row.failed_count }) }}
                 </span>
               </span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="当前阶段" min-width="130">
+        <el-table-column :label="t('kbManage.mining.stage')" min-width="130">
           <template #default="{ row }">
             <span v-if="row.current_stage">{{ row.current_stage }}</span>
             <span v-else class="kb-mining__muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="文档（新/更/跳）" min-width="150">
+        <el-table-column :label="t('kbManage.mining.docsColumn')" min-width="150">
           <template #default="{ row }">
             <span class="kb-mining__counts">
               <span class="kb-mining__count kb-mining__count--new">+{{ row.new_count ?? 0 }}</span>
@@ -104,16 +104,16 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="范式版本" width="90">
+        <el-table-column :label="t('kbManage.mining.workflowVersion')" width="90">
           <template #default="{ row }">
             <span v-if="row.workflow_version !== null">v{{ row.workflow_version }}</span>
             <span v-else class="kb-mining__muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="提交时间" min-width="160">
+        <el-table-column :label="t('common.submittedAt')" min-width="160">
           <template #default="{ row }">{{ formatTime(row.started_at) }}</template>
         </el-table-column>
-        <el-table-column label="错误摘要" min-width="180">
+        <el-table-column :label="t('kbManage.mining.errorSummary')" min-width="180">
           <template #default="{ row }">
             <el-tooltip
               v-if="row.error_summary"
@@ -129,9 +129,9 @@
         <template #empty>
           <div v-if="runsError" class="kb-mining__error">
             <span>{{ runsError }}</span>
-            <el-button size="small" @click="loadRuns">重试</el-button>
+            <el-button size="small" @click="loadRuns">{{ t('common.retry') }}</el-button>
           </div>
-          <EmptyState v-else text="还没有挖掘记录。到「文件」tab 多选文档后点「挖掘选中」触发。" />
+          <EmptyState v-else :text="t('kbManage.mining.emptyRuns')" />
         </template>
       </el-table>
     </div>
@@ -155,6 +155,7 @@ import {
 import EmptyState from '@/components/common/EmptyState.vue'
 import type { KbRunRecord } from '@/types/kb'
 import type { MiningWorkflowOption } from '@/types/miningWorkflow'
+import { t } from '@/locales/t'
 
 const props = defineProps<{
   kbId: string
@@ -186,10 +187,10 @@ const busyRun = computed(() => runs.value.find((run) =>
   ['queued', 'running', 'awaiting_review', 'interrupted'].includes(run.status),
 ) ?? null)
 const mineButtonLabel = computed(() => {
-  if (busyRun.value?.status === 'queued') return '排队中'
-  if (busyRun.value?.status === 'running') return '挖掘中'
-  if (busyRun.value) return '任务待处理'
-  return forceRedo.value ? '强制整库重挖' : '整库挖掘'
+  if (busyRun.value?.status === 'queued') return t('common.runStatus.queued')
+  if (busyRun.value?.status === 'running') return t('kbManage.mining.miningNow')
+  if (busyRun.value) return t('kbManage.mining.taskPending')
+  return forceRedo.value ? t('kbManage.mining.forceMineAll') : t('kbManage.mining.mineAll')
 })
 
 let pollTimer: number | null = null
@@ -216,7 +217,7 @@ async function loadOptions() {
 }
 
 function workflowLabel(opt: MiningWorkflowOption): string {
-  return opt.is_system_default ? `${opt.name}（默认）` : opt.name
+  return opt.is_system_default ? t('kbManage.mining.defaultWorkflow', { name: opt.name }) : opt.name
 }
 
 async function onWorkflowChange(value: string | null) {
@@ -224,7 +225,7 @@ async function onWorkflowChange(value: string | null) {
   emit('update:selectedWorkflowId', value) // 立即同步父组件
   try {
     await kbApi.updateKb(props.kbId, { mining_workflow_id: value })
-    ElMessage.success(value ? '已绑定挖掘范式' : '已解除挖掘范式绑定')
+    ElMessage.success(value ? t('kbManage.mining.bound') : t('kbManage.mining.unbound'))
   } catch (e) {
     emit('update:selectedWorkflowId', prev) // 回滚
     workflowId.value = prev
@@ -235,7 +236,7 @@ async function onWorkflowChange(value: string | null) {
 // ── 触发整库挖掘（无 document_ids = 提交本库全部当前文档）──
 async function triggerMine() {
   if (!workflowId.value) {
-    ElMessage.warning('请先选择挖掘范式')
+    ElMessage.warning(t('kbManage.mining.pickWorkflowFirst'))
     return
   }
   if (busyRun.value) {
@@ -246,8 +247,11 @@ async function triggerMine() {
   try {
     const res = await kbApi.mineKb(props.kbId, undefined, forceRedo.value)
     ElMessage.success(
-      `${forceRedo.value ? '强制整库重挖' : '整库挖掘'}已加入队列（run ${res.run_id.slice(0, 8)}）` +
-        (res.auto_force_redo ? '（范式已变更，自动强制重挖）' : ''),
+      t('kbManage.mining.queued', {
+        action: forceRedo.value ? t('kbManage.mining.forceMineAll') : t('kbManage.mining.mineAll'),
+        run: res.run_id.slice(0, 8),
+        note: res.auto_force_redo ? t('kbManage.mining.autoForceRedoNote') : '',
+      }),
     )
     await loadRuns()
     schedulePolling()

@@ -3,11 +3,8 @@ import type { zhCommon } from '../zh/common'
 export const enCommon: Record<keyof typeof zhCommon, string> = {
   'common.retry': 'Retry',
   'common.cancel': 'Cancel',
-  'common.confirm': 'Confirm',
   'common.save': 'Save',
   'common.create': 'Create',
-  'common.add': 'Add',
-  'common.update': 'Update',
   'common.delete': 'Delete',
   'common.deletePermanently': 'Delete Permanently',
   'common.view': 'View',

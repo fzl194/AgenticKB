@@ -2,11 +2,8 @@ export const zhCommon = {
   // 通用 UI 词（跨 ≥2 个四区文件重复出现）
   'common.retry': '重试',
   'common.cancel': '取消',
-  'common.confirm': '确认',
   'common.save': '保存',
   'common.create': '创建',
-  'common.add': '新增',
-  'common.update': '更新',
   'common.delete': '删除',
   'common.deletePermanently': '永久删除',
   'common.view': '查看',

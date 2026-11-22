@@ -4,7 +4,7 @@
     <div class="fm__toolbar">
       <el-breadcrumb separator="/" class="fm__crumb">
         <el-breadcrumb-item>
-          <span class="fm__crumb-root" @click="navTo(null)">根目录</span>
+          <span class="fm__crumb-root" @click="navTo(null)">{{ t('kbManage.files.root') }}</span>
         </el-breadcrumb-item>
         <el-breadcrumb-item v-for="seg in breadcrumb" :key="seg.id">
           <span class="fm__crumb-seg" @click="navTo(seg.id)">{{ seg.name }}</span>
@@ -12,7 +12,7 @@
       </el-breadcrumb>
       <div class="fm__actions">
         <el-button v-if="canWrite" size="small" @click="newFolder">
-          <el-icon class="el-icon--left"><FolderAdd /></el-icon>新建文件夹
+          <el-icon class="el-icon--left"><FolderAdd /></el-icon>{{ t('kbManage.files.newFolder') }}
         </el-button>
         <el-upload
           v-if="canWrite"
@@ -24,7 +24,7 @@
           accept=".md,.markdown,.txt,.html,.htm,.pdf,.doc,.docx,.xls,.xlsx,.zip,.chm,.hdx"
         >
           <el-button size="small" type="primary" :loading="uploading > 0">
-            <el-icon class="el-icon--left"><UploadFilled /></el-icon>上传到当前文件夹
+            <el-icon class="el-icon--left"><UploadFilled /></el-icon>{{ t('kbManage.files.uploadHere') }}
           </el-button>
         </el-upload>
         <el-button text size="small" :loading="loading" @click.stop="reload">
@@ -33,14 +33,14 @@
       </div>
     </div>
     <div v-if="canWrite" class="fm__formats">
-      支持 Markdown、文本、HTML、PDF、Word（.doc/.docx）、Excel（.xls/.xlsx）及 ZIP 等格式
+      {{ t('kbManage.files.formats') }}
     </div>
 
     <!-- 文件搜索（57 号）：未挖掘/挖失败的文件也能搜到——这是它相对内容检索的独特价值 -->
     <div class="fm__search">
       <el-input
         v-model="searchKeyword"
-        :placeholder="isSearching ? '搜索中…（清空关键词退出搜索）' : '按文件名搜索（未挖掘/失败的文件也能搜到）'"
+        :placeholder="isSearching ? t('kbManage.files.searchingPlaceholder') : t('kbManage.files.searchPlaceholder')"
         size="small" clearable data-testid="fm-search-input"
         @keyup.enter="onSearchTrigger" @clear="onSearchTrigger"
       >
@@ -50,40 +50,40 @@
         v-model="searchStatus" size="small" class="fm__search-status"
         data-testid="fm-search-status" @change="onSearchTrigger"
       >
-        <el-option label="全部状态" value="" />
-        <el-option v-for="opt in STATUS_FILTERS" :key="opt.value" :label="opt.label" :value="opt.value" />
+        <el-option :label="t('kbManage.files.allStatus')" value="" />
+        <el-option v-for="opt in STATUS_FILTERS" :key="opt.value" :label="t(opt.labelKey)" :value="opt.value" />
       </el-select>
       <el-radio-group v-model="searchScope" size="small" @change="onSearchTrigger">
-        <el-radio-button value="tree">当前目录及子目录</el-radio-button>
-        <el-radio-button value="all">整个库</el-radio-button>
+        <el-radio-button value="tree">{{ t('kbManage.files.scopeTree') }}</el-radio-button>
+        <el-radio-button value="all">{{ t('kbManage.files.scopeAll') }}</el-radio-button>
       </el-radio-group>
     </div>
 
     <!-- 批量操作栏（多选文件后出现） -->
     <div v-if="selectedCount > 0" class="fm__batch">
       <span class="fm__batch-count" data-testid="fm-batch-count">
-        已选 {{ selectedCount }} 个文件
+        {{ t('kbManage.files.selectedCount', { n: selectedCount }) }}
         <template v-if="selectedFolderIds.length">
-          （含 {{ selectedFolderNames }} 的全部内容）
+          {{ t('kbManage.files.selectedWithFolders', { names: selectedFolderNames }) }}
         </template>
-        <template v-else-if="pageFilesSelected">（本页）</template>
+        <template v-else-if="pageFilesSelected">{{ t('kbManage.files.thisPage') }}</template>
       </span>
       <el-tooltip
         v-if="canWrite"
-        content="忽略内容哈希缓存，对选中文档重跑 pipeline（含 LLM 阶段），重生已挖知识"
+        :content="t('kbManage.files.forceRedoTip')"
         placement="top"
       >
-        <el-checkbox v-if="canWrite" v-model="forceRedo" size="small">强制重挖</el-checkbox>
+        <el-checkbox v-if="canWrite" v-model="forceRedo" size="small">{{ t('kbManage.mining.forceRedo') }}</el-checkbox>
       </el-tooltip>
       <el-button v-if="canWrite" size="small" type="primary" :disabled="!workflowId"
                  data-testid="fm-batch-mine" @click="batchMine">
-        <el-icon class="el-icon--left"><Cpu /></el-icon>{{ forceRedo ? '强制重挖选中' : '挖掘选中' }} ({{ selectedCount }})
+        <el-icon class="el-icon--left"><Cpu /></el-icon>{{ forceRedo ? t('kbManage.files.mineSelectedForced') : t('kbManage.files.mineSelected') }} ({{ selectedCount }})
       </el-button>
       <el-button v-if="canWrite" size="small" type="danger" plain @click="batchDelete">
-        <el-icon class="el-icon--left"><Delete /></el-icon>删除选中
+        <el-icon class="el-icon--left"><Delete /></el-icon>{{ t('kbManage.files.deleteSelected') }}
       </el-button>
-      <el-button link size="small" @click="clearSelection">清除选择</el-button>
-      <span v-if="canWrite && !workflowId" class="fm__batch-warn">先到「挖掘」tab 绑定范式才能挖掘</span>
+      <el-button link size="small" @click="clearSelection">{{ t('kbManage.files.clearSelection') }}</el-button>
+      <span v-if="canWrite && !workflowId" class="fm__batch-warn">{{ t('kbManage.files.bindWorkflowFirst') }}</span>
     </div>
 
     <!-- List -->
@@ -92,7 +92,7 @@
         <div class="fm__col fm__col--check">
           <el-tooltip
             v-if="files.length"
-            content="全选当前页（分页视图下其他页用翻页后勾选）"
+            :content="t('kbManage.files.selectAllTip')"
             placement="top"
           >
             <el-checkbox
@@ -101,11 +101,11 @@
             />
           </el-tooltip>
         </div>
-        <div class="fm__col fm__col--name">名称</div>
-        <div class="fm__col fm__col--type">类型</div>
-        <div class="fm__col fm__col--size">大小</div>
-        <div class="fm__col fm__col--status">状态</div>
-        <div class="fm__col fm__col--time">修改时间</div>
+        <div class="fm__col fm__col--name">{{ t('common.name') }}</div>
+        <div class="fm__col fm__col--type">{{ t('common.type') }}</div>
+        <div class="fm__col fm__col--size">{{ t('common.size') }}</div>
+        <div class="fm__col fm__col--status">{{ t('common.status') }}</div>
+        <div class="fm__col fm__col--time">{{ t('kbManage.files.modifiedAt') }}</div>
       </div>
 
       <div
@@ -113,7 +113,7 @@
         class="fm__rootdrop"
         @dragover.prevent
         @drop.stop="dropToRoot"
-      >拖到此处 = 移到根目录</div>
+      >{{ t('kbManage.files.dropToRoot') }}</div>
 
       <!-- folders（搜索态隐藏：结果只按文件过滤呈现） -->
       <div
@@ -145,7 +145,7 @@
             @dblclick="onNameDblClick('folder', f)"
           >{{ f.name }}</span>
         </div>
-        <div class="fm__col fm__col--type">文件夹</div>
+        <div class="fm__col fm__col--type">{{ t('kbManage.files.folder') }}</div>
         <div class="fm__col fm__col--size fm__col--muted">—</div>
         <div class="fm__col fm__col--status fm__col--muted">—</div>
         <div class="fm__col fm__col--time">{{ formatDate(f.created_at) }}</div>
@@ -185,7 +185,7 @@
             >{{ file.directory_path }}/</span>
           </div>
         </div>
-        <div class="fm__col fm__col--type">{{ extOf(file.document_name) || '文件' }}</div>
+        <div class="fm__col fm__col--type">{{ extOf(file.document_name) || t('kbManage.files.file') }}</div>
         <div class="fm__col fm__col--size">{{ humanSize(file.file_size) }}</div>
         <div class="fm__col fm__col--status">
           <el-tag v-if="file.status" :type="docStatusTagType(file.status)" size="small" effect="light">
@@ -193,7 +193,7 @@
           </el-tag>
           <span v-else class="fm__col--muted">—</span>
           <span v-if="file.knowledge_outdated" class="fm__knowledge-outdated" data-testid="knowledge-outdated">
-            待更新（旧知识可用）
+            {{ t('kbManage.files.outdated') }}
           </span>
         </div>
         <div class="fm__col fm__col--time">{{ formatDate(file.modified_at || file.created_at) }}</div>
@@ -217,12 +217,12 @@
       <EmptyState
         v-if="!loading && !visibleChildFolders.length && !files.length"
         :text="isSearching
-          ? '没有匹配的文件'
-          : (canWrite ? '空文件夹，上传文件或新建子文件夹（右键更多操作）' : '空文件夹')"
+          ? t('kbManage.files.noMatch')
+          : (canWrite ? t('kbManage.files.emptyWritable') : t('kbManage.files.empty'))"
       />
     </div>
 
-    <div v-if="hint" class="fm__hint">提示：左键进入 · 双击文件名改名 · 右键更多操作 · 拖拽移动</div>
+    <div v-if="hint" class="fm__hint">{{ t('kbManage.files.hint') }}</div>
 
     <!-- 右键菜单 -->
     <teleport to="body">
@@ -233,10 +233,10 @@
         @click.stop
         @contextmenu.prevent
       >
-        <div v-if="ctx.kind === 'file'" class="fm__ctx-item" @click="ctxDownload">下载最新原文件</div>
-        <div v-if="canWrite && ctx.kind === 'file'" class="fm__ctx-item" data-testid="replace-document" @click="ctxReplace">替换当前文件</div>
-        <div v-if="canWrite" class="fm__ctx-item" @click="ctxRename">重命名</div>
-        <div v-if="canWrite" class="fm__ctx-item fm__ctx-item--danger" @click="ctxDelete">删除</div>
+        <div v-if="ctx.kind === 'file'" class="fm__ctx-item" @click="ctxDownload">{{ t('kbManage.files.downloadLatest') }}</div>
+        <div v-if="canWrite && ctx.kind === 'file'" class="fm__ctx-item" data-testid="replace-document" @click="ctxReplace">{{ t('kbManage.replace.title') }}</div>
+        <div v-if="canWrite" class="fm__ctx-item" @click="ctxRename">{{ t('kbManage.files.rename') }}</div>
+        <div v-if="canWrite" class="fm__ctx-item fm__ctx-item--danger" @click="ctxDelete">{{ t('common.delete') }}</div>
       </div>
     </teleport>
     <KbReplaceDocumentDialog
@@ -264,6 +264,7 @@ import KbReplaceDocumentDialog from '@/components/kb/KbReplaceDocumentDialog.vue
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
 import type { Component } from 'vue'
 import type { KbDocument, KbFolder } from '@/types/kb'
+import { t } from '@/locales/t'
 
 const NAME_CLICK_DELAY = 250 // 区分「单击进入」与「双击改名」
 
@@ -394,11 +395,11 @@ const childFolders = computed(() => folders.value.filter((f) => f.parent_id === 
 
 // ── 文件搜索（57 号）：名 + 目录 + 状态；搜索态下隐藏文件夹行、结果带所在目录 ──
 const STATUS_FILTERS = [
-  { value: 'uploaded', label: '未挖掘' },
-  { value: 'mining', label: '处理中' },
-  { value: 'mined', label: '已入库' },
-  { value: 'failed', label: '挖掘失败' },
-  { value: 'update_failed', label: '更新失败' },
+  { value: 'uploaded', labelKey: 'kbView.docStatus.uploaded' },
+  { value: 'mining', labelKey: 'common.docStatus.mining' },
+  { value: 'mined', labelKey: 'common.docStatus.mined' },
+  { value: 'failed', labelKey: 'kbManage.files.statusFailed' },
+  { value: 'update_failed', labelKey: 'common.docStatus.update_failed' },
 ] as const
 const searchKeyword = ref('')
 const searchStatus = ref('')
@@ -511,21 +512,21 @@ function onNameDblClick(_kind: 'file' | 'folder', item: KbDocument | KbFolder) {
 async function newFolder() {
   let name: string
   try {
-    const r = await ElMessageBox.prompt('文件夹名称', '新建文件夹', {
-      confirmButtonText: '创建', cancelButtonText: '取消',
-      inputValidator: (v) => (!!v?.trim() && !/[\\/]/.test(v)) || '名称无效',
+    const r = await ElMessageBox.prompt(t('kbManage.files.folderName'), t('kbManage.files.newFolder'), {
+      confirmButtonText: t('common.create'), cancelButtonText: t('common.cancel'),
+      inputValidator: (v) => (!!v?.trim() && !/[\\/]/.test(v)) || t('kbManage.files.nameInvalid'),
     })
     name = r.value.trim()
   } catch { return }
-  try { await kbApi.createFolder(props.kbId, { parent_id: currentFolderId.value, name }); ElMessage.success('已创建'); await loadFolders() }
+  try { await kbApi.createFolder(props.kbId, { parent_id: currentFolderId.value, name }); ElMessage.success(t('kbManage.files.created')); await loadFolders() }
   catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
 async function renameFolder(f: KbFolder) {
   let name: string
   try {
-    const r = await ElMessageBox.prompt('新名称', '重命名文件夹', {
-      inputValue: f.name, confirmButtonText: '保存', cancelButtonText: '取消',
-      inputValidator: (v) => (!!v?.trim() && !/[\\/]/.test(v)) || '名称无效',
+    const r = await ElMessageBox.prompt(t('kbManage.files.newName'), t('kbManage.files.renameFolder'), {
+      inputValue: f.name, confirmButtonText: t('common.save'), cancelButtonText: t('common.cancel'),
+      inputValidator: (v) => (!!v?.trim() && !/[\\/]/.test(v)) || t('kbManage.files.nameInvalid'),
     })
     name = r.value.trim()
   } catch { return }
@@ -539,15 +540,14 @@ async function deleteFolder(f: KbFolder) {
   catch (e) { ElMessage.error(await apiErrorDetail(e)); return }
   try {
     await ElMessageBox.confirm(
-      `将永久删除文件夹「${f.name}」及 ${preview.folders} 个子文件夹、`
-      + `${preview.documents} 篇文档（含全部挖掘内容），不可恢复。`,
-      '级联删除文件夹',
-      { type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消' },
+      t('kbManage.files.deleteFolderPrompt', { name: f.name, folders: preview.folders, docs: preview.documents }),
+      t('kbManage.files.deleteFolderTitle'),
+      { type: 'warning', confirmButtonText: t('common.deletePermanently'), cancelButtonText: t('common.cancel') },
     )
   } catch { return }
   try {
     await kbApi.deleteFolder(props.kbId, f.id)
-    ElMessage.success(`已删除（${preview.documents} 篇文档）`)
+    ElMessage.success(t('kbManage.files.folderDeleted', { docs: preview.documents }))
     await loadFolders(); await loadFiles()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
@@ -559,23 +559,23 @@ const ARCHIVE_EXTS = ['.zip', '.hdx', '.chm']
 async function pollArchiveTask(taskId: string, name: string) {
   for (let i = 0; i < 600; i++) { // 最长 30 分钟（3s × 600）
     await new Promise((r) => setTimeout(r, 3000))
-    const t = await kbApi.getArchiveTask(props.kbId, taskId)
-    if (t.status === 'completed') {
-      ElMessage.success(`「${name}」解压完成：入库 ${t.document_count ?? 0} 个文档`)
+    const task = await kbApi.getArchiveTask(props.kbId, taskId)
+    if (task.status === 'completed') {
+      ElMessage.success(t('kbManage.files.archiveDone', { name, docs: task.document_count ?? 0 }))
       return
     }
-    if (t.status === 'failed') {
-      ElMessage.error(`「${name}」解压失败：${t.error ?? '未知错误'}`)
+    if (task.status === 'failed') {
+      ElMessage.error(t('kbManage.files.archiveFailed', { name, error: task.error ?? t('kbManage.files.unknownError') }))
       return
     }
   }
-  ElMessage.warning(`「${name}」解压耗时较长，可稍后刷新文件列表查看结果`)
+  ElMessage.warning(t('kbManage.files.archiveSlow', { name }))
 }
 
 /** 57号：自动挖掘入队信息的提示后缀（未触发时给可读原因）。 */
 function autoMineSuffix(auto?: { auto_mined?: boolean; reason?: string }): string {
-  if (auto?.auto_mined) return '（已自动排队挖掘）'
-  if (auto && auto.reason) return '（自动挖掘未触发，可到「挖掘」tab 手动发起）'
+  if (auto?.auto_mined) return t('kbManage.files.autoQueued')
+  if (auto && auto.reason) return t('kbManage.files.autoNotTriggered')
   return ''
 }
 
@@ -587,16 +587,16 @@ async function handleUpload(opts: UploadRequestOptions) {
     if (ARCHIVE_EXTS.some((e) => lower.endsWith(e))) {
       const r = await kbApi.uploadArchive(props.kbId, file, currentPath.value || undefined)
       if (r.archiveTaskId) {
-        ElMessage.info(`「${file.name}」较大，正在后台解压入库…${autoMineSuffix(r)}`)
+        ElMessage.info(t('kbManage.files.archiveExtracting', { name: file.name, note: autoMineSuffix(r) }))
         // 后台跑着：解除上传锁，轮询完成后再刷新树
         pollArchiveTask(r.archiveTaskId, file.name).finally(() => reload())
       } else {
-        ElMessage.success(`已解压上传 ${r.documents?.length ?? 0} 个文档${autoMineSuffix(r)}`)
+        ElMessage.success(t('kbManage.files.uploadedArchive', { docs: r.documents?.length ?? 0, note: autoMineSuffix(r) }))
         await reload()
       }
     } else {
       const r = await kbApi.uploadDocument(props.kbId, file, { directory: currentPath.value || undefined })
-      ElMessage.success(`已上传 ${file.name}${autoMineSuffix(r)}`)
+      ElMessage.success(t('kbManage.files.uploaded', { name: file.name, note: autoMineSuffix(r) }))
       await loadFiles()
     }
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
@@ -605,9 +605,9 @@ async function handleUpload(opts: UploadRequestOptions) {
 async function renameFile(file: KbDocument) {
   let name: string
   try {
-    const r = await ElMessageBox.prompt('新文件名', '重命名', {
-      inputValue: file.document_name, confirmButtonText: '保存', cancelButtonText: '取消',
-      inputValidator: (v) => !!v?.trim() || '名称无效',
+    const r = await ElMessageBox.prompt(t('kbManage.files.newFilename'), t('kbManage.files.rename'), {
+      inputValue: file.document_name, confirmButtonText: t('common.save'), cancelButtonText: t('common.cancel'),
+      inputValidator: (v) => !!v?.trim() || t('kbManage.files.nameInvalid'),
     })
     name = r.value.trim()
   } catch { return }
@@ -623,14 +623,14 @@ async function download(file: KbDocument) {
 async function deleteFile(file: KbDocument) {
   try {
     await ElMessageBox.confirm(
-      `将永久删除文件「${file.document_name}」及其全部挖掘内容，不可恢复。`,
-      '永久删除文件',
-      { type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消' },
+      t('kbManage.files.deleteFilePrompt', { name: file.document_name }),
+      t('kbManage.files.deleteFileTitle'),
+      { type: 'warning', confirmButtonText: t('common.deletePermanently'), cancelButtonText: t('common.cancel') },
     )
   } catch { return }
   try {
     await kbApi.deleteDocument(props.kbId, file.id)
-    ElMessage.success('已删除')
+    ElMessage.success(t('kbManage.export.deleted'))
     await loadFiles()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
@@ -638,7 +638,7 @@ async function deleteFile(file: KbDocument) {
 // ── 批量操作（多选文件后出现批量栏） ──
 async function batchMine() {
   if (!props.workflowId) {
-    ElMessage.warning('请先在「挖掘」tab 选择挖掘范式')
+    ElMessage.warning(t('kbManage.files.pickWorkflowFirst'))
     return
   }
   const ids = [...selectedFileIds.value]
@@ -646,8 +646,12 @@ async function batchMine() {
   try {
     const res = await kbApi.mineKb(props.kbId, ids, forceRedo.value)
     ElMessage.success(
-      `已排队${forceRedo.value ? '强制重挖' : '挖掘'} ${ids.length} 个文档（run ${res.run_id.slice(0, 8)}）` +
-        (res.auto_force_redo ? '（范式已变更，自动强制重挖）' : ''),
+      t('kbManage.files.queued', {
+        action: forceRedo.value ? t('kbManage.mining.forceRedo') : t('kbManage.files.mineShort'),
+        n: ids.length,
+        run: res.run_id.slice(0, 8),
+        note: res.auto_force_redo ? t('kbManage.mining.autoForceRedoNote') : '',
+      }),
     )
     forceRedo.value = false
     clearSelection()
@@ -661,9 +665,9 @@ async function batchDelete() {
   if (!ids.length) return
   try {
     await ElMessageBox.confirm(
-      `将永久删除选中的 ${ids.length} 个文件及其全部挖掘内容，不可恢复。`,
-      '批量永久删除',
-      { type: 'warning', confirmButtonText: '永久删除', cancelButtonText: '取消' },
+      t('kbManage.files.batchDeletePrompt', { n: ids.length }),
+      t('kbManage.files.batchDeleteTitle'),
+      { type: 'warning', confirmButtonText: t('common.deletePermanently'), cancelButtonText: t('common.cancel') },
     )
   } catch {
     return
@@ -694,8 +698,8 @@ async function batchDelete() {
     }
   }
   const folderNote = foldersDeleted
-    ? `，清理空文件夹 ${foldersDeleted} 个` : ''
-  ElMessage.success(`已永久删除 ${ids.length} 个文件${folderNote}`)
+    ? t('kbManage.files.batchFolderNote', { n: foldersDeleted }) : ''
+  ElMessage.success(t('kbManage.files.batchDeleted', { n: ids.length, note: folderNote }))
   clearSelection()
   await reload()
 }
@@ -715,7 +719,7 @@ async function onDrop(_e: DragEvent, targetFolderId: string) {
   try {
     if (kind === 'file') await kbApi.moveDocument(props.kbId, id, targetFolderId)
     else if (kind === 'folder') await kbApi.moveFolder(props.kbId, id, targetFolderId)
-    ElMessage.success('已移动'); await reload()
+    ElMessage.success(t('kbManage.files.moved')); await reload()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
 async function dropToRoot() {
@@ -725,7 +729,7 @@ async function dropToRoot() {
   try {
     if (kind === 'file') await kbApi.moveDocument(props.kbId, id, null)
     else if (kind === 'folder') await kbApi.moveFolder(props.kbId, id, null)
-    ElMessage.success('已移到根目录'); await reload()
+    ElMessage.success(t('kbManage.files.movedToRoot')); await reload()
   } catch (e) { ElMessage.error(await apiErrorDetail(e)) }
 }
 

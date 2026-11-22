@@ -874,7 +874,7 @@ export function miningZoneLabel(zone: MiningExecutionZone): string {
 | kbStruct.untitledSection | 未命名章节 | Untitled section |
 | kbStruct.headingLevel | {level} 级标题 | Heading level {level} |
 | kbStruct.segmentCount | {n} 个内容片段 | {n} segments |
-| kbStruct.diag.tooManyTables | 表格数量较多，当前结构视图仅构建前 {max} 张表格 | Too many tables; the structure view only builds the first {max} sections |
+| kbStruct.diag.tooManyTables | 表格数量较多，当前结构视图仅构建前 {max} 张表格 | Too many tables; the structure view only builds the first {max} tables |
 | kbStruct.diag.tablesTruncated | 表格列表已由服务端截断，完整结构请查看高级信息 | The table list was truncated by the server; see the advanced details for the full list |
 | kbStruct.unassigned | 未归属内容 | Unassigned content |
 | kbStruct.diag.dupTable | 发现重复表格编号 {id}，已保留为独立表格 | Duplicate table id {id}; kept as a separate table |

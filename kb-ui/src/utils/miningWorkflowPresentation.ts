@@ -1,42 +1,48 @@
 import type { MiningExecutionZone, MiningOperatorDef } from '@/types/miningWorkflow'
+import { t } from '@/locales/t'
 
 export interface MiningOperatorFamily {
   key: string
-  label: string
+  labelKey: string
   types: readonly string[]
 }
 
 // 批次8 M6：正式目录 9 算子（实体/本体研究线不在 catalog，不分组展示）
 export const MINING_OPERATOR_FAMILIES: readonly MiningOperatorFamily[] = [
-  { key: 'input_parse', label: '输入与解析', types: ['input_ingest', 'document_parse', 'segment_compile'] },
+  { key: 'input_parse', labelKey: 'common.miningFamily.input_parse', types: ['input_ingest', 'document_parse', 'segment_compile'] },
   {
     key: 'retrieval_assets',
-    label: '搜索表示与增强',
+    labelKey: 'common.miningFamily.retrieval_assets',
     types: ['retrieval_unit_project', 'query_expansion_generate', 'hierarchical_summary_generate', 'embedding'],
   },
-  { key: 'asset_publish', label: '资产与发布', types: ['asset_persist', 'mining_finalize'] },
+  { key: 'asset_publish', labelKey: 'common.miningFamily.asset_publish', types: ['asset_persist', 'mining_finalize'] },
 ]
 
-export const MINING_OPERATOR_LABELS: Readonly<Record<string, string>> = {
-  input_ingest: '输入发现',
-  document_parse: '文档解析',
-  segment_compile: '切片编译',
-  retrieval_unit_project: '检索表示投影',
-  query_expansion_generate: '问题别名生成',
-  hierarchical_summary_generate: '层级摘要生成',
-  embedding: '向量化',
-  asset_persist: '资产持久化',
-  mining_finalize: '构建收尾',
+const MINING_OPERATOR_LABEL_KEYS: Readonly<Record<string, string>> = {
+  input_ingest: 'common.miningOperator.input_ingest',
+  document_parse: 'common.miningOperator.document_parse',
+  segment_compile: 'common.miningOperator.segment_compile',
+  retrieval_unit_project: 'common.miningOperator.retrieval_unit_project',
+  query_expansion_generate: 'common.miningOperator.query_expansion_generate',
+  hierarchical_summary_generate: 'common.miningOperator.hierarchical_summary_generate',
+  embedding: 'common.miningOperator.embedding',
+  asset_persist: 'common.miningOperator.asset_persist',
+  mining_finalize: 'common.miningOperator.mining_finalize',
 }
 
 export function miningOperatorLabel(operatorType: string): string {
-  return MINING_OPERATOR_LABELS[operatorType] ?? operatorType
+  const key = MINING_OPERATOR_LABEL_KEYS[operatorType]
+  return key ? t(key) : operatorType
 }
 
-export const MINING_ZONE_LABELS: Record<MiningExecutionZone, string> = {
-  input: '输入阶段',
-  document: '逐文档',
-  global: '整批次',
+const MINING_ZONE_LABEL_KEYS: Record<MiningExecutionZone, string> = {
+  input: 'common.miningZone.input',
+  document: 'common.miningZone.document',
+  global: 'common.miningZone.global',
+}
+
+export function miningZoneLabel(zone: MiningExecutionZone): string {
+  return t(MINING_ZONE_LABEL_KEYS[zone])
 }
 
 export interface MiningOperatorPresentationGroup {
@@ -50,13 +56,13 @@ export function groupMiningOperators(operators: MiningOperatorDef[]): MiningOper
   const knownTypes = new Set(MINING_OPERATOR_FAMILIES.flatMap(family => [...family.types]))
   const groups = MINING_OPERATOR_FAMILIES.map(family => ({
     key: family.key,
-    label: family.label,
+    label: t(family.labelKey),
     items: family.types.flatMap(type => {
       const operator = byType.get(type)
       return operator ? [operator] : []
     }),
   })).filter(group => group.items.length)
   const unknown = operators.filter(operator => !knownTypes.has(operator.type))
-  if (unknown.length) groups.push({ key: 'other', label: '其他', items: unknown })
+  if (unknown.length) groups.push({ key: 'other', label: t('common.miningFamily.other'), items: unknown })
   return groups
 }

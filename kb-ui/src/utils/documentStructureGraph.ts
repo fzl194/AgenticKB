@@ -3,6 +3,7 @@ import type {
   ParseResultSegment,
   ParseResultTable,
 } from '@/api/mining'
+import { t } from '@/locales/t'
 
 export type DocumentStructureNodeKind = 'document' | 'section' | 'content_group' | 'table'
 export type DocumentContentType =
@@ -82,11 +83,11 @@ const MAX_MODEL_SECTIONS = 500
 const MAX_MODEL_TABLES = 100
 
 const CONTENT_LABELS: Record<Exclude<DocumentContentType, 'unassigned'>, string> = {
-  prose: '正文',
-  list: '列表',
-  code: '代码',
-  formula: '公式',
-  figure_caption: '图片说明',
+  prose: 'kbStruct.block.prose',
+  list: 'kbStruct.block.list',
+  code: 'kbStruct.block.code',
+  formula: 'kbStruct.block.formula',
+  figure_caption: 'kbStruct.block.figure_caption',
 }
 
 const TYPE_ALIASES: Record<string, Exclude<DocumentContentType, 'unassigned'> | null> = {
@@ -146,8 +147,8 @@ export function buildDocumentStructureGraph(
   let nodes: DocumentStructureNode[] = [{
     id: DOCUMENT_ROOT_ID,
     kind: 'document',
-    label: input.documentTitle || '未命名文档',
-    subtitle: '当前文档',
+    label: input.documentTitle || t('kbStruct.untitledDoc'),
+    subtitle: t('kbStruct.currentDoc'),
     level: 0,
     parentId: null,
     orderIndex: null,
@@ -171,9 +172,9 @@ export function buildDocumentStructureGraph(
     })
     .slice(0, MAX_MODEL_SECTIONS)
   if (input.outline.length > orderedOutline.length) {
-    diagnostics.push(`章节数量较多，当前结构视图仅构建前 ${MAX_MODEL_SECTIONS} 个章节`)
+    diagnostics.push(t('kbStruct.diag.tooManySections', { max: MAX_MODEL_SECTIONS }))
   } else if ((input.sectionCount ?? input.outline.length) > input.outline.length) {
-    diagnostics.push('章节列表已由服务端截断，完整结构请查看高级信息')
+    diagnostics.push(t('kbStruct.diag.sectionsTruncated'))
   }
 
   orderedOutline.forEach(({ item, inputIndex }) => {
@@ -181,7 +182,7 @@ export function buildDocumentStructureGraph(
     const rawId = `section:${elementId}`
     const seen = seenIds.get(rawId) ?? 0
     seenIds.set(rawId, seen + 1)
-    if (seen > 0) diagnostics.push(`发现重复结构元素编号 ${elementId}，已保留为独立章节`)
+    if (seen > 0) diagnostics.push(t('kbStruct.diag.dupSection', { id: elementId }))
     const id = seen === 0 ? rawId : `${rawId}:${seen}`
     const level = Math.max(1, Number.isFinite(item.level) ? item.level : 1)
 
@@ -198,14 +199,14 @@ export function buildDocumentStructureGraph(
       ? explicitParentId ?? DOCUMENT_ROOT_ID
       : sectionStack.at(-1)?.id ?? DOCUMENT_ROOT_ID
     if (hasExplicitParent && item.parent_section_element_id && !explicitParentId) {
-      diagnostics.push(`章节 ${item.title || elementId} 的父章节不可用，已降级到文档根节点`)
+      diagnostics.push(t('kbStruct.diag.parentMissing', { title: item.title || elementId }))
     }
     if (!sectionIdByElement.has(elementId)) sectionIdByElement.set(elementId, id)
     nodes.push({
       id,
       kind: 'section',
-      label: item.title || '未命名章节',
-      subtitle: `${level} 级标题`,
+      label: item.title || t('kbStruct.untitledSection'),
+      subtitle: t('kbStruct.headingLevel', { level }),
       level,
       parentId,
       orderIndex: item.order_index ?? null,
@@ -252,8 +253,8 @@ export function buildDocumentStructureGraph(
     nodes.push({
       id,
       kind: 'content_group',
-      label: CONTENT_LABELS[contentType],
-      subtitle: `${items.length} 个内容片段`,
+      label: t(CONTENT_LABELS[contentType]),
+      subtitle: t('kbStruct.segmentCount', { n: items.length }),
       level: (nodes.find(node => node.id === parentId)?.level ?? 0) + 1,
       parentId,
       orderIndex: items[0]?.source_order_start ?? null,
@@ -266,9 +267,9 @@ export function buildDocumentStructureGraph(
 
   const visibleTables = input.tables.slice(0, MAX_MODEL_TABLES)
   if (input.tables.length > visibleTables.length) {
-    diagnostics.push(`表格数量较多，当前结构视图仅构建前 ${MAX_MODEL_TABLES} 张表格`)
+    diagnostics.push(t('kbStruct.diag.tooManyTables', { max: MAX_MODEL_TABLES }))
   } else if ((input.tableCount ?? input.tables.length) > input.tables.length) {
-    diagnostics.push('表格列表已由服务端截断，完整结构请查看高级信息')
+    diagnostics.push(t('kbStruct.diag.tablesTruncated'))
   }
   const tablesToRender = visibleTables.filter(table => (
     !table.parent_section_element_id
@@ -282,8 +283,8 @@ export function buildDocumentStructureGraph(
     nodes.push({
       id: UNASSIGNED_GROUP_ID,
       kind: 'content_group',
-      label: '未归属内容',
-      subtitle: `${unassignedSegments.length} 个内容片段`,
+      label: t('kbStruct.unassigned'),
+      subtitle: t('kbStruct.segmentCount', { n: unassignedSegments.length }),
       level: 1,
       parentId: DOCUMENT_ROOT_ID,
       orderIndex: null,
@@ -299,7 +300,7 @@ export function buildDocumentStructureGraph(
     const rawId = `table:${table.table_id || index}`
     const seen = seenIds.get(rawId) ?? 0
     seenIds.set(rawId, seen + 1)
-    if (seen > 0) diagnostics.push(`发现重复表格编号 ${table.table_id || index}，已保留为独立表格`)
+    if (seen > 0) diagnostics.push(t('kbStruct.diag.dupTable', { id: table.table_id || index }))
     const id = seen === 0 ? rawId : `${rawId}:${seen}`
     const knownParent = table.parent_section_element_id
       ? sectionIdByElement.get(table.parent_section_element_id)
@@ -308,8 +309,8 @@ export function buildDocumentStructureGraph(
     nodes.push({
       id,
       kind: 'table',
-      label: table.caption?.trim() || `表格 ${index + 1}`,
-      subtitle: `${table.rows} 行 × ${table.columns} 列`,
+      label: table.caption?.trim() || t('kbStruct.tableFallback', { n: index + 1 }),
+      subtitle: t('kbStruct.tableDims', { rows: table.rows, columns: table.columns }),
       level: (nodes.find(node => node.id === parentId)?.level ?? 0) + 1,
       parentId,
       orderIndex: null,

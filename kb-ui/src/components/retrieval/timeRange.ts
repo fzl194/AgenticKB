@@ -1,4 +1,5 @@
 import type { RetrievalRecordFilters } from '@/types/retrievalRecords'
+import { t } from '@/locales/t'
 
 /** 时间范围档位：近 N 天快捷档或自定义日期窗口。 */
 export type RangePreset = number | 'custom'
@@ -28,11 +29,11 @@ export function prefillCustomRange(state: TimeRangeState): void {
 /** 校验自定义窗口；返回错误文案，空串=通过。 */
 export function validateCustomRange(state: TimeRangeState): string {
   if (state.days !== 'custom') return ''
-  if (!state.startDate || !state.endDate) return '自定义时间需要选择开始与结束日期'
+  if (!state.startDate || !state.endDate) return t('records.range.missingDates')
   // ISO 日期字符串的字典序即时间序
-  if (state.startDate > state.endDate) return '开始日期不能晚于结束日期'
+  if (state.startDate > state.endDate) return t('records.range.startAfterEnd')
   const spanDays = (new Date(state.endDate).getTime() - new Date(state.startDate).getTime()) / 86400000
-  if (spanDays > MAX_CUSTOM_RANGE_DAYS) return `自定义时间最长跨 ${MAX_CUSTOM_RANGE_DAYS} 天`
+  if (spanDays > MAX_CUSTOM_RANGE_DAYS) return t('records.range.maxSpan', { days: MAX_CUSTOM_RANGE_DAYS })
   return ''
 }
 

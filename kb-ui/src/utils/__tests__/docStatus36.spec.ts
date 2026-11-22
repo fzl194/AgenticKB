@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 
 import { localizeSearchError } from '@/api/serving'
 import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
-import { DOC_STATUS_META, documentStatusSlices } from '@/utils/dashboard'
+import { DOC_STATUS_META, docStatusChartLabel, documentStatusSlices } from '@/utils/dashboard'
 import type { KbStats } from '@/types/kb'
 
 describe('docStatusLabel（36号 §九）', () => {
@@ -35,7 +35,7 @@ describe('DOC_STATUS_META / documentStatusSlices', () => {
     const keys = DOC_STATUS_META.map(m => m.key)
     expect(keys).toContain('update_failed')
     expect(keys).toContain('mined')
-    expect(DOC_STATUS_META.find(m => m.key === 'mined')?.label).toBe('已入库')
+    expect(docStatusChartLabel('mined')).toBe('已入库')
   })
 
   it('无 release 时摘掉 published/withdrawn，保留 update_failed', () => {

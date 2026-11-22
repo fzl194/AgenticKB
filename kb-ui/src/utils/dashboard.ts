@@ -7,6 +7,7 @@
  * - 待处理只列**有写权限**的库——对只读的库列待办没有意义，他也处理不了。
  */
 import type { KbDocStatusKey, KbOverviewItem, KbStats } from '@/types/kb'
+import { t } from '@/locales/t'
 
 export type KbCardStatus = 'failed' | 'mining' | 'ready'
 
@@ -53,8 +54,8 @@ export function pendingTasks(kbs: KbOverviewItem[]): PendingTask[] {
       type: 'review' as const,
       kbId: kb.id,
       kbName: kb.name,
-      text: '挖掘已暂停，等待人工审核',
-      actionLabel: '去处理',
+      text: t('dashboard.pending.reviewText'),
+      actionLabel: t('dashboard.pending.reviewAction'),
       to: `/kb/${kb.id}/run/${kb.awaiting_review_run_id}`,
     }))
 
@@ -65,8 +66,8 @@ export function pendingTasks(kbs: KbOverviewItem[]): PendingTask[] {
       type: 'failed' as const,
       kbId: kb.id,
       kbName: kb.name,
-      text: `${kb.status_counts.failed} 篇文档解析失败`,
-      actionLabel: '查看',
+      text: t('dashboard.pending.failedDocs', { n: kb.status_counts.failed }),
+      actionLabel: t('common.view'),
       to: `/kb/${kb.id}`,
     }))
 
@@ -112,17 +113,23 @@ export function barChartHeight(count: number): string {
  * 下限过，色环必须同时给图例和数值表，绝不能只靠颜色区分（见 DashboardView 模板）。
  * 「待挖掘」用中性灰是刻意的：它是"尚未发生"，不该和三个真状态抢注意力。
  */
-export const DOC_STATUS_META: { key: KbDocStatusKey; label: string; color: string }[] = [
-  { key: 'mined', label: '已入库', color: '#10b981' },
-  { key: 'mining', label: '处理中', color: '#f59e0b' },
-  { key: 'uploaded', label: '待挖掘', color: '#64748b' },
-  { key: 'failed', label: '失败', color: '#ef4444' },
+export const DOC_STATUS_META: { key: KbDocStatusKey; labelKey: string; color: string }[] = [
+  { key: 'mined', labelKey: 'common.docStatus.mined', color: '#10b981' },
+  { key: 'mining', labelKey: 'common.docStatus.mining', color: '#f59e0b' },
+  { key: 'uploaded', labelKey: 'common.docStatus.uploaded', color: '#64748b' },
+  { key: 'failed', labelKey: 'common.docStatus.failed', color: '#ef4444' },
   // 36号 §九：已入库但最近一次更新失败（检索仍用上一版本）——橙红系与
   // failed 区分：旧版本仍可检索，严重度低于彻底失败。
-  { key: 'update_failed', label: '更新失败', color: '#f97316' },
-  { key: 'published', label: '已发布', color: '#0891b2' },
-  { key: 'withdrawn', label: '已撤回', color: '#8b5cf6' },
+  { key: 'update_failed', labelKey: 'common.docStatus.update_failed', color: '#f97316' },
+  { key: 'published', labelKey: 'common.docStatus.published', color: '#0891b2' },
+  { key: 'withdrawn', labelKey: 'common.docStatus.withdrawn', color: '#8b5cf6' },
 ]
+
+/** 文档状态的图表标签（按当前语言翻译；label 入字典后不再在常量里求值——R8）。
+ * 注意与 views/kb/kbMeta.ts 的 docStatusLabel（文档派生状态，文案不同）区分。 */
+export function docStatusChartLabel(key: KbDocStatusKey): string {
+  return t(DOC_STATUS_META.find(meta => meta.key === key)?.labelKey ?? key)
+}
 
 /** 无 active release 时不适用的两档——它们恒为 0，画出来会被读成「一篇都没发布」。 */
 const RELEASE_ONLY_STATUSES: KbDocStatusKey[] = ['published', 'withdrawn']
@@ -134,7 +141,7 @@ const RELEASE_ONLY_STATUSES: KbDocStatusKey[] = ['published', 'withdrawn']
 export function documentStatusSlices(stats: KbStats): ChartDatum[] {
   return DOC_STATUS_META
     .filter(m => stats.has_active_release || !RELEASE_ONLY_STATUSES.includes(m.key))
-    .map(m => ({ name: m.label, value: stats.document_status?.[m.key] ?? 0, color: m.color }))
+    .map(m => ({ name: t(m.labelKey), value: stats.document_status?.[m.key] ?? 0, color: m.color }))
 }
 
 /** 概览页横向柱状图取前几名。再多的话每根柱子矮到读不出差异，剩下的去 /kb 看。 */
@@ -159,22 +166,25 @@ export function kbDocumentBars(
     .reverse()
 }
 
-/** 检索单元类型的中文名。后端只回 DB 里出现过的键，没收录的原样显示。 */
-const UNIT_TYPE_LABELS: Record<string, string> = {
-  raw_text: '原始文本',
-  contextual_text: '上下文文本',
-  summary: '摘要',
-  generated_question: '生成问题',
-  entity_card: '实体卡片',
-  table_row: '表格行',
-  other: '其他',
+/** 检索单元类型的文案 key（经 t() 按当前语言翻译）。后端只回 DB 里出现过的键，没收录的原样显示。 */
+const UNIT_TYPE_LABEL_KEYS: Record<string, string> = {
+  raw_text: 'common.unitType.raw_text',
+  contextual_text: 'common.unitType.contextual_text',
+  summary: 'common.unitType.summary',
+  generated_question: 'common.unitType.generated_question',
+  entity_card: 'common.unitType.entity_card',
+  table_row: 'common.unitType.table_row',
+  other: 'common.unitType.other',
 }
 
 /** 检索单元类型分布（横向柱）。reverse 的理由同 kbDocumentBars。 */
 export function unitTypeBars(byType: Record<string, number> | undefined): ChartDatum[] {
   return Object.entries(byType ?? {})
     .filter(([, v]) => v > 0)
-    .map(([k, v]) => ({ name: UNIT_TYPE_LABELS[k] ?? k, value: v }))
+    .map(([k, v]) => ({
+      name: UNIT_TYPE_LABEL_KEYS[k] ? t(UNIT_TYPE_LABEL_KEYS[k]) : k,
+      value: v,
+    }))
     .sort((a, b) => b.value - a.value)
     .reverse()
 }

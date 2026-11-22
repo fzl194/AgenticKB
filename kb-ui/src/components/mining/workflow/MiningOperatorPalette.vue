@@ -29,7 +29,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { effectiveEditReason, effectiveEditState } from '@/utils/miningWorkflowGraph'
-import { groupMiningOperators, MINING_ZONE_LABELS } from '@/utils/miningWorkflowPresentation'
+import { groupMiningOperators, miningZoneLabel } from '@/utils/miningWorkflowPresentation'
 import type { MiningOperatorDef, MiningWorkflowNode } from '@/types/miningWorkflow'
 
 const props = withDefaults(defineProps<{
@@ -47,7 +47,7 @@ function policyLabel(operator: MiningOperatorDef): string {
 }
 
 function zoneLabel(operator: MiningOperatorDef): string {
-  return MINING_ZONE_LABELS[operator.zone]
+  return miningZoneLabel(operator.zone)
 }
 
 function startDrag(event: DragEvent, operator: MiningOperatorDef) {

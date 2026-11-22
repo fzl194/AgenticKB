@@ -1,21 +1,23 @@
 import { apiErrorDetail } from '@/api/proxyClient'
+import { t } from '@/locales/t'
 
-const STABLE_MESSAGES: Record<string, string> = {
-  username_reserved: '该用户名已被已删除账号保留，请恢复原账号',
-  user_deleted: '用户已删除，请先恢复账号',
-  user_not_active: '用户未启用，无法执行该操作',
-  last_active_admin: '至少保留一个启用的系统管理员',
-  cannot_delete_self: '不能删除自己的账号',
-  user_owns_active_kbs: '该用户仍拥有知识库，请先转移所有者',
-  owner_target_not_domain_bound: '新所有者必须是已启用且绑定该知识域的用户',
-  domain_grants_must_not_be_empty: '启用的普通用户至少需要一个知识域',
-  domain_admin_requires_password: '设为域管理员前必须设置密码',
-  cannot_manage_domain_admin: '域管理员不能修改或移除其他域管理员',
-  mcp_key_must_be_revoked_before_delete: '请先吊销钥匙，再删除记录',
-  invalid_member_role: '知识库成员角色只能是编辑者或只读用户',
-  import_validation_failed: '导入校验失败，请修正错误行后重试',
+const STABLE_KEYS: Record<string, string> = {
+  username_reserved: 'common.mgmtError.username_reserved',
+  user_deleted: 'common.mgmtError.user_deleted',
+  user_not_active: 'common.mgmtError.user_not_active',
+  last_active_admin: 'common.mgmtError.last_active_admin',
+  cannot_delete_self: 'common.mgmtError.cannot_delete_self',
+  user_owns_active_kbs: 'common.mgmtError.user_owns_active_kbs',
+  owner_target_not_domain_bound: 'common.mgmtError.owner_target_not_domain_bound',
+  domain_grants_must_not_be_empty: 'common.mgmtError.domain_grants_must_not_be_empty',
+  domain_admin_requires_password: 'common.mgmtError.domain_admin_requires_password',
+  cannot_manage_domain_admin: 'common.mgmtError.cannot_manage_domain_admin',
+  mcp_key_must_be_revoked_before_delete: 'common.mgmtError.mcp_key_must_be_revoked_before_delete',
+  invalid_member_role: 'common.mgmtError.invalid_member_role',
+  import_validation_failed: 'common.mgmtError.import_validation_failed',
 }
 
+// 别名归一（原样保留）：中文键 = 后端 detail 文本的匹配数据，**不得翻译**
 const CODE_ALIASES: Record<string, string> = {
   user_owns_knowledge_bases: 'user_owns_active_kbs',
   domain_has_owned_kbs: 'user_owns_active_kbs',
@@ -26,36 +28,36 @@ const CODE_ALIASES: Record<string, string> = {
   '请先吊销钥匙，再删除记录': 'mcp_key_must_be_revoked_before_delete',
 }
 
-const CURRENT_MESSAGES: Record<string, string> = {
-  '至少保留一个启用的管理员': STABLE_MESSAGES.last_active_admin,
-  '不能删除自己的账号': STABLE_MESSAGES.cannot_delete_self,
-  '请先吊销钥匙，再删除记录': STABLE_MESSAGES.mcp_key_must_be_revoked_before_delete,
-  confirm_username_mismatch: '输入的用户名与待删除账号不一致',
-  password_changed_concurrently: '用户密码状态已变化，请刷新后重试',
-  initial_password_not_required: '该用户已有密码，无需再次设置初始密码',
-  new_owner_has_same_name_kb: '新所有者在当前域已有同名知识库',
-  owner_target_not_found: '新所有者不存在',
-  owner_target_inactive: '新所有者未启用或已删除',
-  owner_previous_inactive: '原所有者未启用，不能保留为编辑者',
-  owner_transfer_actor_forbidden: '你没有转移该知识库所有者的权限',
-  user_not_found: '用户不存在或已删除',
-  domain_membership_not_found: '用户不属于当前知识域',
-  domain_admin_required: '需要当前知识域管理员权限',
-  site_admin_does_not_require_domain_grant: '系统管理员默认全域通行，无需分配域权限',
-  invalid_domain: '知识域不存在或未启用',
-  domain_not_bound: '未绑定该知识域，请联系管理员分配',
-  import_changed_since_preview: '预检后用户数据已变化，请重新预检',
-  file_too_large: '文件超过 5 MB 上限',
-  unsupported_file_type: '仅支持 CSV 或 XLSX 文件',
-  empty_import: '导入文件没有数据',
-  missing_required_columns: '导入文件缺少必需列',
-  too_many_rows: '导入文件超过 5,000 行上限',
-  formula_not_allowed: '导入字段不能包含公式',
-  csv_must_be_utf8: 'CSV 文件必须使用 UTF-8 编码',
-  invalid_xlsx: 'XLSX 文件无效或已损坏',
-  xlsx_archive_limits_exceeded: 'XLSX 文件解压规模超过安全限制',
-  username_required: '用户名不能为空',
-  conflicting_display_name: '同一用户名存在冲突的显示名',
+const CURRENT_KEYS: Record<string, string> = {
+  '至少保留一个启用的管理员': STABLE_KEYS.last_active_admin,
+  '不能删除自己的账号': STABLE_KEYS.cannot_delete_self,
+  '请先吊销钥匙，再删除记录': STABLE_KEYS.mcp_key_must_be_revoked_before_delete,
+  confirm_username_mismatch: 'common.mgmtError.confirm_username_mismatch',
+  password_changed_concurrently: 'common.mgmtError.password_changed_concurrently',
+  initial_password_not_required: 'common.mgmtError.initial_password_not_required',
+  new_owner_has_same_name_kb: 'common.mgmtError.new_owner_has_same_name_kb',
+  owner_target_not_found: 'common.mgmtError.owner_target_not_found',
+  owner_target_inactive: 'common.mgmtError.owner_target_inactive',
+  owner_previous_inactive: 'common.mgmtError.owner_previous_inactive',
+  owner_transfer_actor_forbidden: 'common.mgmtError.owner_transfer_actor_forbidden',
+  user_not_found: 'common.mgmtError.user_not_found',
+  domain_membership_not_found: 'common.mgmtError.domain_membership_not_found',
+  domain_admin_required: 'common.mgmtError.domain_admin_required',
+  site_admin_does_not_require_domain_grant: 'common.mgmtError.site_admin_does_not_require_domain_grant',
+  invalid_domain: 'common.mgmtError.invalid_domain',
+  domain_not_bound: 'common.mgmtError.domain_not_bound',
+  import_changed_since_preview: 'common.mgmtError.import_changed_since_preview',
+  file_too_large: 'common.mgmtError.file_too_large',
+  unsupported_file_type: 'common.mgmtError.unsupported_file_type',
+  empty_import: 'common.mgmtError.empty_import',
+  missing_required_columns: 'common.mgmtError.missing_required_columns',
+  too_many_rows: 'common.mgmtError.too_many_rows',
+  formula_not_allowed: 'common.mgmtError.formula_not_allowed',
+  csv_must_be_utf8: 'common.mgmtError.csv_must_be_utf8',
+  invalid_xlsx: 'common.mgmtError.invalid_xlsx',
+  xlsx_archive_limits_exceeded: 'common.mgmtError.xlsx_archive_limits_exceeded',
+  username_required: 'common.mgmtError.username_required',
+  conflicting_display_name: 'common.mgmtError.conflicting_display_name',
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -66,8 +68,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function stableCode(code: string): string | null {
   const trimmed = code.trim()
-  if (STABLE_MESSAGES[trimmed]) return trimmed
-  if (CURRENT_MESSAGES[trimmed]) return trimmed
+  if (STABLE_KEYS[trimmed]) return trimmed
+  if (CURRENT_KEYS[trimmed]) return trimmed
   const alias = CODE_ALIASES[trimmed]
   if (alias) return alias
   if (trimmed.startsWith('invalid_domain:')) return 'invalid_domain'
@@ -127,14 +129,14 @@ export function managementErrorCodeMessage(code: string): string {
   const trimmed = code.trim()
   const normalized = stableCode(trimmed)
   if (normalized) {
-    return STABLE_MESSAGES[normalized] ?? CURRENT_MESSAGES[normalized] ?? normalized
+    return t(STABLE_KEYS[normalized] ?? CURRENT_KEYS[normalized] ?? normalized)
   }
-  return CURRENT_MESSAGES[trimmed] ?? trimmed
+  return CURRENT_KEYS[trimmed] ? t(CURRENT_KEYS[trimmed]) : trimmed
 }
 
 export async function managementErrorMessage(
   error: unknown,
-  fallback = '请求失败',
+  fallback: string = t('common.requestFailed'),
 ): Promise<string> {
   const code = codeFromValue(responseData(error))
   if (code) return managementErrorCodeMessage(code)
@@ -142,5 +144,5 @@ export async function managementErrorMessage(
   const detail = await apiErrorDetail(error)
   const translated = managementErrorCodeMessage(detail)
   if (translated !== detail) return translated
-  return detail && detail !== '请求失败' ? detail : fallback
+  return detail && detail !== t('common.requestFailed') ? detail : fallback
 }

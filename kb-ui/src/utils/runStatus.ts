@@ -1,5 +1,5 @@
 /**
- * 挖掘 run 状态的中文文案。
+ * 挖掘 run 状态的文案（key 经 t() 按当前语言翻译）。
  *
  * 权威取值来自 DB 的 CHECK 约束（`002_mining_runtime_postgresql.sql:12`），共 **7 个**：
  *   queued / running / completed / interrupted / failed / cancelled / awaiting_review
@@ -10,18 +10,21 @@
  *
  * `StatusBadge.vue` 的配色本来就覆盖全部 7 个，缺的只是文案。
  */
-const RUN_STATUS_LABELS: Record<string, string> = {
-  queued: '排队中',
-  running: '运行中',
-  completed: '已完成',
-  interrupted: '已中断',
-  failed: '失败',
-  cancelled: '已取消',
-  awaiting_review: '待人审',
+import { t } from '@/locales/t'
+
+const RUN_STATUS_LABEL_KEYS: Record<string, string> = {
+  queued: 'common.runStatus.queued',
+  running: 'common.runStatus.running',
+  completed: 'common.runStatus.completed',
+  interrupted: 'common.runStatus.interrupted',
+  failed: 'common.runStatus.failed',
+  cancelled: 'common.runStatus.cancelled',
+  awaiting_review: 'common.runStatus.awaiting_review',
 }
 
 export function runStatusLabel(status: string): string {
-  return RUN_STATUS_LABELS[status] || status
+  const key = RUN_STATUS_LABEL_KEYS[status]
+  return key ? t(key) : status
 }
 
 export function runStatusTagType(
@@ -49,4 +52,4 @@ export function processedDocumentCount(counts: {
 }
 
 /** 供测试与类型收敛用：DB CHECK 里的全部 run 状态。 */
-export const RUN_STATUSES = Object.keys(RUN_STATUS_LABELS)
+export const RUN_STATUSES = Object.keys(RUN_STATUS_LABEL_KEYS)

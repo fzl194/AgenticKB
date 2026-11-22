@@ -8,7 +8,7 @@
 ## 1. 背景与目标
 
 1. 知识制品功能未完善，**不引导普通用户使用**——前端菜单对普通成员隐藏（后端权限本就允许，保持不动）；
-2. 英化范围从壳层扩展到**普通用户可见的四区**：概览、知识库、检索记录、MCP 接入（~36 文件）。
+2. 英化范围从壳层扩展到**普通用户可见的四区**：概览、知识库、检索记录、MCP 接入（清单 38 文件 + api/store 层错误文案 4 处 ≈ 42 个触点）。
 
 ### 现状（2026-11-22 探查 + 审查修订）
 
@@ -50,7 +50,9 @@
 
 **状态映射 utils 的行为面改动**：`runStatus.ts`、`dashboard.ts`、`documentStructureGraph.ts`、`miningWorkflowPresentation.ts`、`managementError.ts`、`timeRange.ts` 的枚举→中文映射，值改为字典 key，渲染/抛出处 `t()`；被测试断言的映射同步其 spec。**只翻映射值，不翻后端数据**。
 
-**api/store 层前端错误文案的口径（审查裁定）**：`proxyClient.ts` 兜底、`serving.ts`/`kb.ts`/`mining.ts` 的写死中文——这些是**前端代码**（非后端透传），四区用户会看到，纳入翻译（key 归所在区或 common）。已知边界：`managementError` 等共用 utils 在设置页等管理面也会被 EN 用户看到英文 toast——接受（toast 级混合，代价小于成员页中英混排）。
+**api/store 层前端错误文案的口径（审查裁定）**：`proxyClient.ts` 兜底、`serving.ts`/`kb.ts`/`mining.ts` 的写死中文——这些是**前端代码**（非后端透传），四区用户会看到，纳入翻译（key 归所在区或 common）。已知边界（接受，实施时勿当 bug 报）：共用 utils 会把 EN 带到管理面——`managementError`（设置页 toast）、`miningWorkflowPresentation`（挖掘范式编辑器的算子标签）——EN 用户在管理页看到英文 toast/标签，代价小于成员页中英混排。
+
+**插值约定**：带参数文案（`timeRange` 的 `最长跨 {n} 天`、WordCloud 的 `{name}：{value} 次`）一律走 store 的 `t(key, params)` 插值（`stores/locale.ts:53` 既有约定），禁止调用点字符串拼接。
 
 **不翻清单（口径写死）**：
 - 后端真正返回的错误消息（apiErrorDetail 从响应体透出的部分，原样显示）；

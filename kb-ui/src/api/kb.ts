@@ -7,6 +7,7 @@
  */
 import { createProxyClient, extractItems, extractOne } from '@/api/proxyClient'
 import type { ParseResult } from '@/api/mining'
+import { t } from '@/locales/t'
 import type {
   KbCreateBody, KbDetail, KbDocument, KbFolder, KbMember, KbMemberRole, KbMineResult,
   DeletedKbRow, KbPurgeTask,
@@ -341,7 +342,7 @@ export function useKbApi() {
       kbId: string, docId: string, file: File, expectedRevision: number,
     ): Promise<KbDocument & AutoMineFields> {
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
-        throw new Error('文件版本信息无效，请刷新后重试')
+        throw new Error(t('kbManage.replace.invalidRevision'))
       }
       const form = new FormData()
       form.append('file', file)

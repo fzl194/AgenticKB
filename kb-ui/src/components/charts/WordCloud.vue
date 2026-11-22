@@ -5,13 +5,14 @@
       :key="w.name"
       class="wordcloud__word"
       :style="{ left: `${w.x}px`, top: `${w.y}px`, fontSize: `${w.size}px`, color: w.color }"
-      :title="`${w.name}：${w.value} 次`"
+      :title="t('records.wordTooltip', { name: w.name, value: w.value })"
     >{{ w.name }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { t } from '@/locales/t'
 
 /**
  * 手写词云（零新依赖——echarts 词云是独立插件 echarts-wordcloud，不在依赖冻结清单内）。

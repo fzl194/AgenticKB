@@ -1,4 +1,5 @@
 import axios, { type AxiosInstance } from 'axios'
+import { t } from '@/locales/t'
 import { useDomainStore } from '@/stores/domain'
 import { loadToken } from './tokenStorage'
 
@@ -136,5 +137,5 @@ export async function apiErrorDetail(error: unknown): Promise<string> {
   }
 
   if (error instanceof Error && error.message.trim()) return error.message
-  return '请求失败'
+  return t('common.requestFailed')
 }

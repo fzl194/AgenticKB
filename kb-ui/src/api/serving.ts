@@ -1,6 +1,7 @@
 import type { HealthStatus } from '@/types'
 import type { EvidenceItem, EvidenceLocator, EvidenceResponse } from '@/types/operator'
 import { createProxyClient } from '@/api/proxyClient'
+import { t } from '@/locales/t'
 
 export type { EvidenceItem, EvidenceResponse }
 
@@ -36,15 +37,15 @@ export function localizeSearchError(err: unknown): unknown {
   if (status === 404) {
     const isNoActiveBuild = /no_active_kb_build|no mined content/i.test(text)
     if (isNoActiveBuild) {
-      return new Error('所选知识库暂无可检索内容：尚未完成挖掘，或全部文档挖掘失败。请先完成一次成功的挖掘（部分文档成功即可检索）。')
+      return new Error(t('kbView.search.noActiveBuild'))
     }
     const isKbNotFound = /kb_not_found|knowledge bases were not found/i.test(text)
     if (isKbNotFound) {
-      return new Error('无法访问所选知识库：库不存在，或当前账号无读取权限（需库主/成员/public/站点管理员）。')
+      return new Error(t('kbView.search.kbNotFound'))
     }
   }
   if (status === 401 || status === 403) {
-    return new Error('没有访问所选知识库的权限，请确认知识库可见性或联系管理员。')
+    return new Error(t('kbView.search.forbidden'))
   }
   return err
 }

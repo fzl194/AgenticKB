@@ -1,19 +1,19 @@
 <template>
   <div class="empty-state">
     <el-icon :size="40" class="empty-state__icon"><component :is="icon" /></el-icon>
-    <p class="empty-state__text">{{ text }}</p>
+    <p class="empty-state__text">{{ text || t('common.empty') }}</p>
     <slot name="action" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { FolderOpened } from '@element-plus/icons-vue'
+import { t } from '@/locales/t'
 
 withDefaults(defineProps<{
   text?: string
   icon?: typeof FolderOpened
 }>(), {
-  text: '暂无数据',
   icon: FolderOpened,
 })
 </script>

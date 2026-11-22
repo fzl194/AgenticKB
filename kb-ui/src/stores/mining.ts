@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { MiningRun, MiningRunStage, MiningRunDocument } from '@/types'
 import { useMiningApi } from '@/api/mining'
+import { t } from '@/locales/t'
 import { useDomainStore } from '@/stores/domain'
 
 export const useMiningStore = defineStore('mining', () => {
@@ -77,7 +78,7 @@ export const useMiningStore = defineStore('mining', () => {
         documentsTotal.value = 0
       }
       if (stageResult.status === 'rejected' || documentResult.status === 'rejected') {
-        error.value = '任务已加载，但部分进度或文档明细暂时不可用'
+        error.value = t('kbView.runDetail.partialLoad')
       }
     } catch (e: unknown) {
       if (generation === runDetailGeneration && domain === domainStore.currentDomain) {

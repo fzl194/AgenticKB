@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
+import { apiErrorDetail } from '@/api/proxyClient'
+import { useLocaleStore } from '@/stores/locale'
+import EmptyState from '@/components/common/EmptyState.vue'
 import { runStatusLabel } from '@/utils/runStatus'
 import {
   pendingTasks, docStatusChartLabel, documentStatusSlices, unitTypeBars,
@@ -9,7 +14,7 @@ import { visibilityLabel, roleLabel, docStatusLabel } from '@/views/kb/kbMeta'
 import {
   miningOperatorLabel, miningZoneLabel, groupMiningOperators,
 } from '@/utils/miningWorkflowPresentation'
-import { managementErrorCodeMessage } from '@/utils/managementError'
+import { managementErrorCodeMessage, managementErrorMessage } from '@/utils/managementError'
 import { validateCustomRange } from '@/components/retrieval/timeRange'
 import {
   buildDocumentStructureGraph, DOCUMENT_ROOT_ID, UNASSIGNED_GROUP_ID,
@@ -106,5 +111,22 @@ describe('mapping utils follow the language switch', () => {
     expect(node('section:h1')).toMatchObject({ label: 'Untitled section', subtitle: 'Heading level 1' })
     expect(node('table:t1')).toMatchObject({ label: 'Table 1', subtitle: '2 rows × 3 columns' })
     expect(node(UNASSIGNED_GROUP_ID)).toMatchObject({ label: 'Unassigned content', subtitle: '1 segments' })
+  })
+
+  it('api fallback error text', async () => {
+    expect(await apiErrorDetail(new Error(''))).toBe('Request failed')
+  })
+
+  it('managementErrorMessage default fallback follows the language', async () => {
+    // 改成 t() 后的默认 fallback 与 detail !== t('common.requestFailed') 比较都只有这条 EN 覆盖
+    expect(await managementErrorMessage({})).toBe('Request failed')
+  })
+
+  it('EmptyState follows the language (imported t helper in a template)', async () => {
+    const wrapper = mount(EmptyState)
+    expect(wrapper.text()).toContain('No data')
+    useLocaleStore().setLang('zh')
+    await nextTick()
+    expect(wrapper.text()).toContain('暂无数据')
   })
 })

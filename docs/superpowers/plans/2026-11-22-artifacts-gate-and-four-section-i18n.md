@@ -867,14 +867,14 @@ export function miningZoneLabel(zone: MiningExecutionZone): string {
 | kbStruct.block.figure_caption | 图片说明 | Figure caption |
 | kbStruct.untitledDoc | 未命名文档 | Untitled document |
 | kbStruct.currentDoc | 当前文档 | Current document |
-| kbStruct.diag.tooManySections | 章节数量较多，当前结构视图仅构建前 {max} 个章节 | Too many sections; the structure view only builds the first {max} |
+| kbStruct.diag.tooManySections | 章节数量较多，当前结构视图仅构建前 {max} 个章节 | Too many sections; the structure view only builds the first {max} sections |
 | kbStruct.diag.sectionsTruncated | 章节列表已由服务端截断，完整结构请查看高级信息 | The section list was truncated by the server; see the advanced details for the full structure |
 | kbStruct.diag.dupSection | 发现重复结构元素编号 {id}，已保留为独立章节 | Duplicate structure element id {id}; kept as a separate section |
 | kbStruct.diag.parentMissing | 章节 {title} 的父章节不可用，已降级到文档根节点 | The parent of section "{title}" is unavailable; moved to the document root |
 | kbStruct.untitledSection | 未命名章节 | Untitled section |
 | kbStruct.headingLevel | {level} 级标题 | Heading level {level} |
 | kbStruct.segmentCount | {n} 个内容片段 | {n} segments |
-| kbStruct.diag.tooManyTables | 表格数量较多，当前结构视图仅构建前 {max} 张表格 | Too many tables; the structure view only builds the first {max} |
+| kbStruct.diag.tooManyTables | 表格数量较多，当前结构视图仅构建前 {max} 张表格 | Too many tables; the structure view only builds the first {max} sections |
 | kbStruct.diag.tablesTruncated | 表格列表已由服务端截断，完整结构请查看高级信息 | The table list was truncated by the server; see the advanced details for the full list |
 | kbStruct.unassigned | 未归属内容 | Unassigned content |
 | kbStruct.diag.dupTable | 发现重复表格编号 {id}，已保留为独立表格 | Duplicate table id {id}; kept as a separate table |
@@ -1136,7 +1136,7 @@ Expected: 零错（含 kbMeta 新字典 key 的 en 对齐）
 - [ ] **Step 10: 提交**
 
 ```bash
-cd /d/mywork/AgenticKB && git add kb-ui/src/utils kb-ui/src/views/kb/kbMeta.ts kb-ui/src/components/retrieval/timeRange.ts kb-ui/src/components/mining/workflow/MiningOperatorPalette.vue kb-ui/src/locales && git commit -m "feat(kb-ui): 七个映射文件接t()——调用点零改动/中文匹配键保留/EN求值测试"
+cd /d/mywork/AgenticKB && git add kb-ui/src/utils kb-ui/src/views/kb/kbMeta.ts kb-ui/src/views/kb/__tests__/kbMeta.spec.ts kb-ui/src/components/retrieval/timeRange.ts kb-ui/src/components/mining/workflow/MiningOperatorPalette.vue kb-ui/src/locales && git commit -m "feat(kb-ui): 七个映射文件接t()——调用点零改动/中文匹配键保留/EN求值测试"
 ```
 
 提交前 `git status --short` 核对暂存区**只含**本任务 Files 列出的文件（5 个 utils + timeRange + kbMeta + MiningOperatorPalette + docStatus36.spec + 新 en spec + locales）；有非预期文件即取消暂存重查。

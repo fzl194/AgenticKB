@@ -1,9 +1,9 @@
 <template>
   <div class="retrieval-records-view">
-    <p class="retrieval-records-view__desc">统一查看网页、API 与 MCP Tool 的知识访问调用；明细从本版本上线后开始。</p>
-    <div class="retrieval-records-view__switch" role="tablist" aria-label="检索记录视图">
-      <button type="button" role="tab" :aria-selected="mode === 'records'" :class="{ active: mode === 'records' }" @click="mode = 'records'">记录明细</button>
-      <button type="button" role="tab" :aria-selected="mode === 'analysis'" :class="{ active: mode === 'analysis' }" @click="mode = 'analysis'">使用分析</button>
+    <p class="retrieval-records-view__desc">{{ t('records.view.desc') }}</p>
+    <div class="retrieval-records-view__switch" role="tablist" :aria-label="t('records.view.switchLabel')">
+      <button type="button" role="tab" :aria-selected="mode === 'records'" :class="{ active: mode === 'records' }" @click="mode = 'records'">{{ t('records.view.tabRecords') }}</button>
+      <button type="button" role="tab" :aria-selected="mode === 'analysis'" :class="{ active: mode === 'analysis' }" @click="mode = 'analysis'">{{ t('records.view.tabAnalysis') }}</button>
     </div>
     <RetrievalRecordsPanel v-if="mode === 'records'" :kb-id="kbId" :mcp-key-id="mcpKeyId" />
     <RetrievalRecordsAnalysis v-else :kb-id="kbId" :mcp-key-id="mcpKeyId" />
@@ -13,6 +13,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { t } from '@/locales/t'
 import RetrievalRecordsPanel from '@/components/retrieval/RetrievalRecordsPanel.vue'
 import RetrievalRecordsAnalysis from '@/components/retrieval/RetrievalRecordsAnalysis.vue'
 

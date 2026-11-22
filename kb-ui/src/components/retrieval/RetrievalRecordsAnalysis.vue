@@ -1,61 +1,61 @@
 <template>
   <section class="records-analysis">
     <div class="records-analysis__toolbar">
-      <span class="records-analysis__toolbar-label">时间范围</span>
-      <select v-model.number="range.days" class="records-analysis__select" aria-label="时间范围" @change="onPresetChange">
-        <option :value="7">近 7 天</option>
-        <option :value="30">近 30 天</option>
-        <option :value="90">近 90 天</option>
-        <option value="custom">自定义</option>
+      <span class="records-analysis__toolbar-label">{{ t('records.range.label') }}</span>
+      <select v-model.number="range.days" class="records-analysis__select" :aria-label="t('records.range.label')" @change="onPresetChange">
+        <option :value="7">{{ t('records.range.last7Days') }}</option>
+        <option :value="30">{{ t('records.range.last30Days') }}</option>
+        <option :value="90">{{ t('records.range.last90Days') }}</option>
+        <option value="custom">{{ t('records.range.custom') }}</option>
       </select>
       <template v-if="range.days === 'custom'">
-        <input v-model="range.startDate" type="date" class="records-analysis__date" aria-label="开始日期" />
-        <span class="records-analysis__sep">至</span>
-        <input v-model="range.endDate" type="date" class="records-analysis__date" aria-label="结束日期" />
+        <input v-model="range.startDate" type="date" class="records-analysis__date" :aria-label="t('records.range.startDate')" />
+        <span class="records-analysis__sep">{{ t('records.range.to') }}</span>
+        <input v-model="range.endDate" type="date" class="records-analysis__date" :aria-label="t('records.range.endDate')" />
       </template>
       <span v-if="rangeError" class="records-analysis__range-error">{{ rangeError }}</span>
     </div>
 
-    <div v-if="loading" class="records-analysis__notice">正在加载使用分析…</div>
+    <div v-if="loading" class="records-analysis__notice">{{ t('records.analysis.loading') }}</div>
     <div v-else-if="error" class="records-analysis__notice records-analysis__notice--error">
-      {{ error }} <button type="button" @click="load">重试</button>
+      {{ error }} <button type="button" @click="load">{{ t('common.retry') }}</button>
     </div>
     <div v-else-if="!summary?.available" class="records-analysis__notice">
-      统一记录从本版本上线后开始产生，当前尚无可分析的调用。
+      {{ t('records.analysis.empty') }}
     </div>
     <template v-else-if="summary">
       <div class="records-analysis__stats">
-        <StatsCard label="调用量" :value="summary.summary.total_calls" icon="🔍" />
-        <StatsCard label="检索调用" :value="summary.summary.calls" icon="⌕" />
-        <StatsCard label="零结果率" :value="formatRate(summary.summary.no_result_rate)" icon="🕳" />
-        <StatsCard label="失败率" :value="formatRate(summary.summary.failure_rate)" icon="⚠" />
-        <StatsCard label="平均延迟" :value="formatDuration(summary.summary.avg_duration_ms)" icon="〽" />
-        <StatsCard label="P95 延迟" :value="formatDuration(summary.summary.p95_duration_ms)" icon="⏱" />
+        <StatsCard :label="t('records.metric.calls')" :value="summary.summary.total_calls" icon="🔍" />
+        <StatsCard :label="t('records.metric.retrievalCalls')" :value="summary.summary.calls" icon="⌕" />
+        <StatsCard :label="t('records.metric.noResultRate')" :value="formatRate(summary.summary.no_result_rate)" icon="🕳" />
+        <StatsCard :label="t('records.metric.failureRate')" :value="formatRate(summary.summary.failure_rate)" icon="⚠" />
+        <StatsCard :label="t('records.metric.avgLatency')" :value="formatDuration(summary.summary.avg_duration_ms)" icon="〽" />
+        <StatsCard :label="t('records.metric.p95Latency')" :value="formatDuration(summary.summary.p95_duration_ms)" icon="⏱" />
       </div>
 
       <div class="records-analysis__card records-analysis__card--wide">
-        <h3>调用趋势</h3>
+        <h3>{{ t('records.analysis.trend') }}</h3>
         <LineChart
           :labels="trendLabels"
           :series="[
-            { name: '全部调用', data: trendCalls },
-            { name: '零结果', data: trendNoResult },
-            { name: '失败', data: trendFailed },
+            { name: t('records.series.allCalls'), data: trendCalls },
+            { name: t('records.status.no_result'), data: trendNoResult },
+            { name: t('records.status.failed'), data: trendFailed },
           ]"
           height="260px"
         />
       </div>
 
       <div class="records-analysis__grid">
-        <div class="records-analysis__card"><h3>范式分布</h3><BarChart v-if="paradigmBars.length" :data="paradigmBars" horizontal height="220px" /><p v-else>暂无范式调用</p></div>
-        <div class="records-analysis__card"><h3>MCP Tool 分布</h3><BarChart v-if="toolBars.length" :data="toolBars" horizontal height="220px" /><p v-else>暂无 Tool 调用</p></div>
-        <div class="records-analysis__card"><h3>来源分布</h3><BarChart v-if="sourceBars.length" :data="sourceBars" horizontal height="220px" /><p v-else>暂无来源数据</p></div>
+        <div class="records-analysis__card"><h3>{{ t('records.analysis.paradigm') }}</h3><BarChart v-if="paradigmBars.length" :data="paradigmBars" horizontal height="220px" /><p v-else>{{ t('records.analysis.paradigmEmpty') }}</p></div>
+        <div class="records-analysis__card"><h3>{{ t('records.analysis.tool') }}</h3><BarChart v-if="toolBars.length" :data="toolBars" horizontal height="220px" /><p v-else>{{ t('records.analysis.toolEmpty') }}</p></div>
+        <div class="records-analysis__card"><h3>{{ t('records.analysis.source') }}</h3><BarChart v-if="sourceBars.length" :data="sourceBars" horizontal height="220px" /><p v-else>{{ t('records.analysis.sourceEmpty') }}</p></div>
       </div>
 
       <div class="records-analysis__card records-analysis__card--wide">
-        <h3>查询热词</h3>
+        <h3>{{ t('records.analysis.topTerms') }}</h3>
         <WordCloud v-if="cloudItems.length" :items="cloudItems" height="260px" />
-        <p v-else>窗口内没有查询</p>
+        <p v-else>{{ t('records.analysis.topTermsEmpty') }}</p>
       </div>
     </template>
   </section>
@@ -66,6 +66,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRetrievalRecordsApi } from '@/api/retrievalRecords'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
+import { t } from '@/locales/t'
 import StatsCard from '@/components/common/StatsCard.vue'
 import { useRetrievalNames } from '@/components/retrieval/useRetrievalNames'
 import {
@@ -107,7 +108,7 @@ const sourceBars = computed(() => Object.entries(summary.value?.sources ?? {}).m
 // 热词 = 去重问句分词后的词频（原句统计几乎全是 count=1 的噪音）；超量由词云内部截断
 const cloudItems = computed(() => aggregateTerms(
   (summary.value?.top_queries ?? []).map(q => ({ text: q.query_text, count: q.count, noResult: q.no_result ?? 0 })),
-).map(t => ({ name: t.term, value: t.count })))
+).map(item => ({ name: item.term, value: item.count })))
 
 async function load(): Promise<void> {
   const domain = domainStore.currentDomain
@@ -135,7 +136,7 @@ async function load(): Promise<void> {
 
 function formatRate(value: number): string { return `${(value * 100).toFixed(1)}%` }
 function formatDuration(value: number): string { return `${Math.round(value)} ms` }
-function sourceLabel(value: string): string { return ({ web: '网页', mcp: 'MCP', api: 'API' } as Record<string, string>)[value] ?? value }
+function sourceLabel(value: string): string { return ({ web: t('records.source.web'), mcp: 'MCP', api: 'API' } as Record<string, string>)[value] ?? value }
 
 onMounted(load)
 watch(() => domainStore.currentDomain, load)

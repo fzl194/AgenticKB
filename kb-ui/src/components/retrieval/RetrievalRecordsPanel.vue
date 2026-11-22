@@ -1,66 +1,66 @@
 <template>
   <section class="records-panel">
     <div v-if="showSummary" class="records-panel__summary">
-      <StatsCard label="调用量" :value="summary?.summary.total_calls ?? '—'" icon="🔍" />
-      <StatsCard label="零结果率" :value="formatRate(summary?.summary.no_result_rate)" icon="🕳" />
-      <StatsCard label="失败率" :value="formatRate(summary?.summary.failure_rate)" icon="⚠" />
-      <StatsCard label="P95 延迟" :value="formatDuration(summary?.summary.p95_duration_ms)" icon="⏱" />
+      <StatsCard :label="t('records.metric.calls')" :value="summary?.summary.total_calls ?? '—'" icon="🔍" />
+      <StatsCard :label="t('records.metric.noResultRate')" :value="formatRate(summary?.summary.no_result_rate)" icon="🕳" />
+      <StatsCard :label="t('records.metric.failureRate')" :value="formatRate(summary?.summary.failure_rate)" icon="⚠" />
+      <StatsCard :label="t('records.metric.p95Latency')" :value="formatDuration(summary?.summary.p95_duration_ms)" icon="⏱" />
     </div>
 
     <form class="records-panel__filters" @submit.prevent="applyFilters">
-      <select v-model.number="draft.days" class="records-panel__select" aria-label="时间范围" @change="onRangePresetChange">
-        <option :value="7">近 7 天</option>
-        <option :value="30">近 30 天</option>
-        <option :value="90">近 90 天</option>
-        <option value="custom">自定义</option>
+      <select v-model.number="draft.days" class="records-panel__select" :aria-label="t('records.range.label')" @change="onRangePresetChange">
+        <option :value="7">{{ t('records.range.last7Days') }}</option>
+        <option :value="30">{{ t('records.range.last30Days') }}</option>
+        <option :value="90">{{ t('records.range.last90Days') }}</option>
+        <option value="custom">{{ t('records.range.custom') }}</option>
       </select>
       <template v-if="draft.days === 'custom'">
-        <input v-model="draft.startDate" type="date" class="records-panel__input records-panel__input--date" aria-label="开始日期" />
-        <span class="records-panel__range-sep">至</span>
-        <input v-model="draft.endDate" type="date" class="records-panel__input records-panel__input--date" aria-label="结束日期" />
+        <input v-model="draft.startDate" type="date" class="records-panel__input records-panel__input--date" :aria-label="t('records.range.startDate')" />
+        <span class="records-panel__range-sep">{{ t('records.range.to') }}</span>
+        <input v-model="draft.endDate" type="date" class="records-panel__input records-panel__input--date" :aria-label="t('records.range.endDate')" />
       </template>
-      <select v-model="draft.source" class="records-panel__select" aria-label="来源">
-        <option value="">全部来源</option>
-        <option value="web">网页</option>
+      <select v-model="draft.source" class="records-panel__select" :aria-label="t('records.source.label')">
+        <option value="">{{ t('records.filter.allSources') }}</option>
+        <option value="web">{{ t('records.source.web') }}</option>
         <option value="mcp">MCP</option>
         <option value="api">API</option>
       </select>
-      <select v-model="draft.status" class="records-panel__select" aria-label="状态">
-        <option value="">全部状态</option>
-        <option v-for="item in STATUS_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
+      <select v-model="draft.status" class="records-panel__select" :aria-label="t('common.status')">
+        <option value="">{{ t('records.filter.allStatuses') }}</option>
+        <option v-for="item in STATUS_OPTIONS" :key="item.value" :value="item.value">{{ t(item.labelKey) }}</option>
       </select>
-      <select v-model="draft.operation" class="records-panel__select" aria-label="操作">
-        <option value="">全部操作</option><option value="search">检索</option><option value="read">读取</option><option value="upload">上传</option><option value="replace">替换</option>
+      <select v-model="draft.operation" class="records-panel__select" :aria-label="t('records.operation.label')">
+        <option value="">{{ t('records.filter.allOperations') }}</option><option value="search">{{ t('records.operation.search') }}</option><option value="read">{{ t('records.operation.read') }}</option><option value="upload">{{ t('records.operation.upload') }}</option><option value="replace">{{ t('records.operation.replace') }}</option>
       </select>
-      <input v-model.trim="draft.tool" class="records-panel__input records-panel__input--tool" placeholder="Tool 名称" aria-label="Tool 名称" />
-      <select v-if="!kbId" v-model="draft.kbId" class="records-panel__select" aria-label="知识库">
-        <option value="">全部知识库</option>
+      <input v-model.trim="draft.tool" class="records-panel__input records-panel__input--tool" :placeholder="t('records.filter.toolName')" :aria-label="t('records.filter.toolName')" />
+      <select v-if="!kbId" v-model="draft.kbId" class="records-panel__select" :aria-label="t('records.filter.kb')">
+        <option value="">{{ t('records.filter.allKbs') }}</option>
         <option v-for="kb in kbFilterOptions" :key="kb.id" :value="kb.id">{{ kb.name }}</option>
       </select>
-      <input v-model.trim="draft.actorUserId" class="records-panel__input records-panel__input--tool" placeholder="用户 ID" aria-label="用户 ID" />
-      <select v-model="draft.paradigmId" class="records-panel__select" aria-label="范式">
-        <option value="">全部范式</option>
+      <input v-model.trim="draft.actorUserId" class="records-panel__input records-panel__input--tool" :placeholder="t('records.filter.userId')" :aria-label="t('records.filter.userId')" />
+      <select v-model="draft.paradigmId" class="records-panel__select" :aria-label="t('records.paradigm.label')">
+        <option value="">{{ t('records.filter.allParadigms') }}</option>
         <option v-for="paradigm in paradigmFilterOptions" :key="paradigm.id" :value="paradigm.id">{{ paradigm.name }}</option>
       </select>
-      <button type="submit" class="records-panel__button">筛选</button>
-      <button type="button" class="records-panel__button records-panel__button--plain" @click="resetFilters">重置</button>
-      <button type="button" class="records-panel__button records-panel__button--plain" :disabled="exporting" @click="exportCsv">{{ exporting ? '导出中…' : '导出' }}</button>
+      <button type="submit" class="records-panel__button">{{ t('records.filter.apply') }}</button>
+      <button type="button" class="records-panel__button records-panel__button--plain" @click="resetFilters">{{ t('records.filter.reset') }}</button>
+      <button type="button" class="records-panel__button records-panel__button--plain" :disabled="exporting" @click="exportCsv">{{ exporting ? t('records.export.inProgress') : t('records.export.submit') }}</button>
       <p v-if="filterError" class="records-panel__filter-error">{{ filterError }}</p>
       <p v-else-if="exportNotice" class="records-panel__filter-notice">{{ exportNotice }}</p>
     </form>
 
     <div v-if="error" class="records-panel__notice records-panel__notice--error">
       {{ error }}
-      <button type="button" class="records-panel__link" @click="reload">重试</button>
+      <button type="button" class="records-panel__link" @click="reload">{{ t('common.retry') }}</button>
     </div>
-    <div v-else-if="loading && !records.length" class="records-panel__notice">正在加载检索记录…</div>
+    <div v-else-if="loading && !records.length" class="records-panel__notice">{{ t('records.list.loading') }}</div>
     <div v-else-if="!records.length" class="records-panel__empty">
-      <strong>还没有检索记录</strong>
-      <span>统一记录从本版本上线后开始记录，旧 Java 日志不会迁入这里。</span>
+      <strong>{{ t('records.list.emptyTitle') }}</strong>
+      <span>{{ t('records.list.emptyHint') }}</span>
     </div>
     <div v-else class="records-panel__table-wrap">
       <table class="records-panel__table">
-        <thead><tr><th>时间</th><th>用户</th><th>来源</th><th>Tool / 操作</th><th>查询或动作</th><th>目标知识库</th><th>范式</th><th>状态</th><th>结果</th><th>耗时</th><th></th></tr></thead>
+        <thead><tr><th>{{ t('records.column.time') }}</th><th>{{ t('records.column.user') }}</th><th>{{ t('records.source.label') }}</th><th>{{ t('records.column.toolOrOperation') }}</th><th>{{ t('records.column.queryOrAction') }}</th><th>{{ t('records.column.targetKb') }}</th><th>{{ t('records.paradigm.label') }}</th><th>{{ t('common.status') }}</th><th>{{ t('records.column.result') }}</th><th>{{ t('common.duration') }}</th><th></th></tr></thead>
         <tbody>
           <tr v-for="item in records" :key="item.id">
             <td class="records-panel__time">{{ formatTime(item.occurred_at) }}</td>
@@ -68,41 +68,41 @@
             <td>{{ sourceLabel(item.source) }}</td>
             <td>{{ item.tool_name || operationLabel(item.operation) }}</td>
             <td class="records-panel__query" :title="actionSummary(item)">{{ actionSummary(item) }}</td>
-            <td>{{ item.kb_ids.length ? item.kb_ids.map(kbName).join('、') : '—' }}</td>
+            <td>{{ item.kb_ids.length ? item.kb_ids.map(kbName).join(t('records.list.separator')) : '—' }}</td>
             <td>{{ paradigmText(item) }}</td>
             <td><span class="records-panel__status" :class="`is-${item.status}`">{{ statusLabel(item.status) }}</span></td>
             <td>{{ item.result_count ?? '—' }}</td>
             <td>{{ formatDuration(item.duration_ms) }}</td>
-            <td><button type="button" class="records-panel__link" :data-test="`record-detail-${item.id}`" @click="openDetail(item.id)">详情</button></td>
+            <td><button type="button" class="records-panel__link" :data-test="`record-detail-${item.id}`" @click="openDetail(item.id)">{{ t('records.list.detail') }}</button></td>
           </tr>
         </tbody>
       </table>
     </div>
 
     <div v-if="records.length" class="records-panel__pager">
-      <span>当前页 {{ records.length }} 条</span>
-      <button type="button" class="records-panel__button records-panel__button--plain" :disabled="!cursorStack.length || loading" @click="previousPage">上一页</button>
-      <button type="button" class="records-panel__button records-panel__button--plain" :disabled="!nextCursor || loading" @click="nextPage">下一页</button>
+      <span>{{ t('records.pager.currentPage', { n: records.length }) }}</span>
+      <button type="button" class="records-panel__button records-panel__button--plain" :disabled="!cursorStack.length || loading" @click="previousPage">{{ t('records.pager.previous') }}</button>
+      <button type="button" class="records-panel__button records-panel__button--plain" :disabled="!nextCursor || loading" @click="nextPage">{{ t('records.pager.next') }}</button>
     </div>
 
     <div v-if="detailVisible" class="records-panel__backdrop" @click.self="closeDetail">
-      <aside class="records-panel__drawer" role="dialog" aria-modal="true" aria-label="调用详情">
-        <div class="records-panel__drawer-head"><h3>调用详情</h3><button type="button" aria-label="关闭" class="records-panel__close" @click="closeDetail">×</button></div>
-        <div v-if="detailLoading" class="records-panel__notice">正在加载…</div>
+      <aside class="records-panel__drawer" role="dialog" aria-modal="true" :aria-label="t('records.detail.title')">
+        <div class="records-panel__drawer-head"><h3>{{ t('records.detail.title') }}</h3><button type="button" :aria-label="t('records.detail.close')" class="records-panel__close" @click="closeDetail">×</button></div>
+        <div v-if="detailLoading" class="records-panel__notice">{{ t('records.detail.loading') }}</div>
         <template v-else-if="detail">
           <dl class="records-panel__details">
-            <dt>调用 ID</dt><dd><code>{{ detail.id }}</code></dd>
-            <dt>发生时间</dt><dd>{{ formatTime(detail.occurred_at) }}</dd>
-            <dt>用户</dt><dd>{{ detail.actor_username || '—' }}</dd>
-            <dt>来源</dt><dd>{{ sourceLabel(detail.source) }}</dd>
-            <dt>Tool / 操作</dt><dd>{{ detail.tool_name || operationLabel(detail.operation) }}</dd>
-            <dt>查询内容</dt><dd>{{ detail.query_text || '—' }}</dd>
-            <dt>目标知识库</dt><dd>{{ detail.kb_ids.map(kbName).join('、') || '—' }}</dd>
-            <dt>范式</dt><dd>{{ paradigmText(detail) }}</dd>
-            <dt>状态</dt><dd>{{ statusLabel(detail.status) }}</dd>
-            <dt>结果数</dt><dd>{{ detail.result_count ?? '—' }}</dd>
-            <dt>总耗时</dt><dd>{{ formatDuration(detail.duration_ms) }}</dd>
-            <dt>错误码</dt><dd>{{ detail.error_code || '—' }}</dd>
+            <dt>{{ t('records.column.callId') }}</dt><dd><code>{{ detail.id }}</code></dd>
+            <dt>{{ t('records.column.occurredAt') }}</dt><dd>{{ formatTime(detail.occurred_at) }}</dd>
+            <dt>{{ t('records.column.user') }}</dt><dd>{{ detail.actor_username || '—' }}</dd>
+            <dt>{{ t('records.source.label') }}</dt><dd>{{ sourceLabel(detail.source) }}</dd>
+            <dt>{{ t('records.column.toolOrOperation') }}</dt><dd>{{ detail.tool_name || operationLabel(detail.operation) }}</dd>
+            <dt>{{ t('records.detail.query') }}</dt><dd>{{ detail.query_text || '—' }}</dd>
+            <dt>{{ t('records.column.targetKb') }}</dt><dd>{{ detail.kb_ids.map(kbName).join(t('records.list.separator')) || '—' }}</dd>
+            <dt>{{ t('records.paradigm.label') }}</dt><dd>{{ paradigmText(detail) }}</dd>
+            <dt>{{ t('common.status') }}</dt><dd>{{ statusLabel(detail.status) }}</dd>
+            <dt>{{ t('records.column.resultCount') }}</dt><dd>{{ detail.result_count ?? '—' }}</dd>
+            <dt>{{ t('records.detail.totalDuration') }}</dt><dd>{{ formatDuration(detail.duration_ms) }}</dd>
+            <dt>{{ t('records.column.errorCode') }}</dt><dd>{{ detail.error_code || '—' }}</dd>
             <template v-for="field in safeDetailFields(detail)" :key="field.key">
               <dt>{{ field.label }}</dt><dd>{{ field.value }}</dd>
             </template>
@@ -110,43 +110,43 @@
 
           <div v-if="detail.payload" class="records-panel__payload">
             <details open class="records-panel__payload-section">
-              <summary>调用参数</summary>
+              <summary>{{ t('records.detail.requestParams') }}</summary>
               <pre>{{ formatJson(detail.payload.request_json) }}</pre>
             </details>
             <details open class="records-panel__payload-section">
-              <summary>有效执行参数</summary>
+              <summary>{{ t('records.detail.effectiveParams') }}</summary>
               <pre>{{ formatJson(detail.payload.effective_context_json) }}</pre>
             </details>
             <details open class="records-panel__payload-section">
-              <summary>返回内容</summary>
+              <summary>{{ t('records.detail.response') }}</summary>
               <div v-if="detail.payload.response_truncated" class="records-panel__payload-warning">
-                返回快照已截断<span v-if="detail.payload.response_omitted_count">，省略 {{ detail.payload.response_omitted_count }} 项</span>。
+                {{ t('records.detail.responseTruncated') }}<span v-if="detail.payload.response_omitted_count">{{ t('records.detail.omitted', { n: detail.payload.response_omitted_count }) }}</span>{{ t('records.detail.sentenceEnd') }}
               </div>
               <div v-if="detail.payload.response_mode === 'reference'" class="records-panel__reference-note">
-                此操作读取已有文档或章节，正文未重复保存；下方仅保留可回查引用。
+                {{ t('records.detail.referenceNote') }}
               </div>
               <div v-if="evidenceItems(detail).length" class="records-panel__evidence-list">
                 <article v-for="(evidence, index) in evidenceItems(detail)" :key="evidenceKey(evidence, index)" class="records-panel__evidence">
                   <div class="records-panel__evidence-head">
-                    <strong>证据 {{ index + 1 }}</strong>
+                    <strong>{{ t('records.detail.evidence', { n: index + 1 }) }}</strong>
                     <code v-if="jsonString(evidence.ref)">{{ jsonString(evidence.ref) }}</code>
                     <span v-if="jsonString(evidence.type)">{{ jsonString(evidence.type) }}</span>
                   </div>
                   <p v-if="jsonString(evidence.content)" class="records-panel__evidence-content">{{ jsonString(evidence.content) }}</p>
-                  <p v-if="evidenceSource(evidence)" class="records-panel__evidence-source">来源：{{ evidenceSource(evidence) }}</p>
-                  <span v-if="evidence.truncated === true" class="records-panel__evidence-truncated">该条证据内容已截断</span>
+                  <p v-if="evidenceSource(evidence)" class="records-panel__evidence-source">{{ t('records.detail.evidenceSource', { source: evidenceSource(evidence) }) }}</p>
+                  <span v-if="evidence.truncated === true" class="records-panel__evidence-truncated">{{ t('records.detail.evidenceTruncated') }}</span>
                 </article>
               </div>
               <details class="records-panel__raw-json">
-                <summary>原始 JSON</summary>
+                <summary>{{ t('records.detail.rawJson') }}</summary>
                 <pre>{{ formatJson(responseValue(detail)) }}</pre>
               </details>
             </details>
           </div>
-          <div v-else class="records-panel__payload-empty">该记录没有留存调用参数与返回快照。</div>
+          <div v-else class="records-panel__payload-empty">{{ t('records.detail.payloadEmpty') }}</div>
         </template>
         <div v-else class="records-panel__notice records-panel__notice--error">
-          <strong>详情加载失败</strong><span v-if="detailError">：{{ detailError }}</span>
+          <strong>{{ t('records.detail.loadFailed') }}</strong><span v-if="detailError">{{ t('records.detail.errorDetail', { error: detailError }) }}</span>
         </div>
       </aside>
     </div>
@@ -159,6 +159,7 @@ import { useRetrievalRecordsApi } from '@/api/retrievalRecords'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
 import { saveBlob } from '@/utils/download'
+import { t } from '@/locales/t'
 import StatsCard from '@/components/common/StatsCard.vue'
 import { useRetrievalNames } from '@/components/retrieval/useRetrievalNames'
 import {
@@ -176,11 +177,12 @@ const props = withDefaults(defineProps<{
   showSummary?: boolean
 }>(), { kbId: '', mcpKeyId: '', showSummary: true })
 
-const STATUS_OPTIONS: Array<{ value: RetrievalStatus; label: string }> = [
-  { value: 'pending', label: '处理中' }, { value: 'success', label: '成功' },
-  { value: 'no_result', label: '零结果' }, { value: 'denied', label: '无权限' },
-  { value: 'invalid', label: '参数错误' }, { value: 'timeout', label: '超时' },
-  { value: 'failed', label: '失败' },
+/** 非响应式常量表只存文案 key，使用处再 t()——定义期翻译不会随切语言重算。 */
+const STATUS_OPTIONS: Array<{ value: RetrievalStatus; labelKey: string }> = [
+  { value: 'pending', labelKey: 'records.status.pending' }, { value: 'success', labelKey: 'records.status.success' },
+  { value: 'no_result', labelKey: 'records.status.no_result' }, { value: 'denied', labelKey: 'records.status.denied' },
+  { value: 'invalid', labelKey: 'records.status.invalid' }, { value: 'timeout', labelKey: 'records.status.timeout' },
+  { value: 'failed', labelKey: 'records.status.failed' },
 ]
 
 const api = useRetrievalRecordsApi()
@@ -312,10 +314,15 @@ function resetFilters(): void {
 
 // ── 导出：当前筛选条件下拉全量（上限后端兜底），名称解析后拼 CSV ──
 
-const EXPORT_HEADERS = [
-  '时间', '用户', '来源', 'Tool / 操作', '查询或动作', '目标知识库',
-  '范式', '状态', '结果数', '耗时(ms)', '错误码', '调用 ID',
-]
+/** CSV 表头跟随界面语言：导出时求值，不在模块常量里缓存译文。 */
+function exportHeaders(): string[] {
+  return [
+    t('records.column.time'), t('records.column.user'), t('records.source.label'), t('records.column.toolOrOperation'),
+    t('records.column.queryOrAction'), t('records.column.targetKb'),
+    t('records.paradigm.label'), t('common.status'), t('records.column.resultCount'), t('records.export.durationMs'),
+    t('records.column.errorCode'), t('records.column.callId'),
+  ]
+}
 
 /** 标准 CSV 转义：含逗号/引号/换行的单元格包引号，引号翻倍。 */
 function csvCell(value: string): string {
@@ -335,7 +342,7 @@ function exportRow(item: RetrievalRecord): string[] {
     sourceLabel(item.source),
     item.tool_name || operationLabel(item.operation),
     actionSummary(item),
-    item.kb_ids.length ? item.kb_ids.map(kbName).join('、') : '',
+    item.kb_ids.length ? item.kb_ids.map(kbName).join(t('records.list.separator')) : '',
     item.paradigm_id
       ? `${paradigmName(item.paradigm_id)}${item.paradigm_version == null ? '' : ` v${item.paradigm_version}`}`
       : '',
@@ -356,15 +363,15 @@ async function exportCsv(): Promise<void> {
   try {
     const result = await api.exportAll(domain, appliedFilters())
     if (!result.items.length) {
-      exportNotice.value = '当前筛选没有可导出的记录'
+      exportNotice.value = t('records.export.empty')
       return
     }
-    const lines = [EXPORT_HEADERS.map(csvCell).join(',')]
+    const lines = [exportHeaders().map(csvCell).join(',')]
     for (const item of result.items) lines.push(exportRow(item).map(csvCell).join(','))
     // BOM 让 Excel 直接以 UTF-8 打开中文不乱码
     const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' })
-    saveBlob(blob, `检索记录_${exportStamp()}.csv`)
-    if (result.truncated) exportNotice.value = `匹配行数超过上限 ${result.row_limit}，已按上限截断导出`
+    saveBlob(blob, t('records.export.filename', { stamp: exportStamp() }))
+    if (result.truncated) exportNotice.value = t('records.export.truncated', { limit: result.row_limit })
   } catch (reason) {
     filterError.value = await apiErrorDetail(reason)
   } finally {
@@ -407,9 +414,17 @@ function closeDetail(): void { detailVisible.value = false }
 function formatTime(value: string): string { return value.replace('T', ' ').slice(0, 19) }
 function formatDuration(value?: number | null): string { return value == null ? '—' : `${Math.round(value)} ms` }
 function formatRate(value?: number | null): string { return value == null ? '—' : `${(value * 100).toFixed(1)}%` }
-function sourceLabel(value: RetrievalSource): string { return ({ web: '网页', mcp: 'MCP', api: 'API' })[value] }
-function operationLabel(value: string): string { return ({ search: '检索', read: '读取', upload: '上传', replace: '替换' } as Record<string, string>)[value] ?? value }
-function statusLabel(value: RetrievalStatus): string { return STATUS_OPTIONS.find(item => item.value === value)?.label ?? value }
+function sourceLabel(value: RetrievalSource): string { return ({ web: t('records.source.web'), mcp: 'MCP', api: 'API' })[value] }
+function operationLabel(value: string): string {
+  return ({
+    search: t('records.operation.search'), read: t('records.operation.read'),
+    upload: t('records.operation.upload'), replace: t('records.operation.replace'),
+  } as Record<string, string>)[value] ?? value
+}
+function statusLabel(value: RetrievalStatus): string {
+  const labelKey = STATUS_OPTIONS.find(item => item.value === value)?.labelKey
+  return labelKey ? t(labelKey) : value
+}
 function paradigmText(item: RetrievalRecord): string { return item.paradigm_id ? `${paradigmName(item.paradigm_id)}${item.paradigm_version == null ? '' : ` v${item.paradigm_version}`}` : '—' }
 function detailText(item: RetrievalRecord, key: string): string | null {
   const value = item.details_json?.[key]
@@ -467,15 +482,16 @@ function responseValue(item: RetrievalRecord): unknown {
 function formatJson(value: unknown): string {
   return value === undefined || value === null ? '—' : JSON.stringify(value, null, 2)
 }
-const DETAIL_FIELD_LABELS = {
-  action: '动作', ref_type: '引用类型', file_count: '文件数',
-  uploaded_count: '上传成功数', failed_count: '失败数',
+/** 详情白名单字段 → 文案 key（常量表只存 key，取用时 t()）。 */
+const DETAIL_FIELD_LABEL_KEYS = {
+  action: 'records.detailField.action', ref_type: 'records.detailField.ref_type', file_count: 'records.detailField.file_count',
+  uploaded_count: 'records.detailField.uploaded_count', failed_count: 'records.detailField.failed_count',
 } as const
 function safeDetailFields(item: RetrievalRecord): Array<{ key: string; label: string; value: string }> {
-  return Object.entries(DETAIL_FIELD_LABELS).flatMap(([key, label]) => {
+  return Object.entries(DETAIL_FIELD_LABEL_KEYS).flatMap(([key, labelKey]) => {
     const value = item.details_json?.[key]
     return typeof value === 'string' || typeof value === 'number'
-      ? [{ key, label, value: String(value) }]
+      ? [{ key, label: t(labelKey), value: String(value) }]
       : []
   })
 }

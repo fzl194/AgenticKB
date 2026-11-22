@@ -3,13 +3,13 @@
     <header class="structure-workspace__header">
       <div>
         <div class="structure-workspace__eyebrow">{{ versionLabel }}</div>
-        <h3>文档结构浏览</h3>
-        <p>点击章节或表格直接查看当前版本返回的真实内容；不包含实体、本体或业务关系推断。</p>
+        <h3>{{ t('kbSearch.graph.title') }}</h3>
+        <p>{{ t('kbSearch.graph.intro') }}</p>
       </div>
-      <div class="structure-workspace__stats" aria-label="结构化数据统计">
-        <span>章节 {{ graph.summary.sections }}</span>
-        <span>表格 {{ graph.summary.tables }}</span>
-        <span>切片 {{ graph.summary.segments }}</span>
+      <div class="structure-workspace__stats" :aria-label="t('kbSearch.graph.statsLabel')">
+        <span>{{ t('kbSearch.graph.statSections', { n: graph.summary.sections }) }}</span>
+        <span>{{ t('kbSearch.graph.statTables', { n: graph.summary.tables }) }}</span>
+        <span>{{ t('kbView.detail.readinessSegments', { n: graph.summary.segments }) }}</span>
       </div>
     </header>
 
@@ -18,11 +18,11 @@
       class="structure-workspace__notice is-warning"
       data-testid="structure-partial-notice"
     >
-      当前工作台仅展示接口已返回的内容：切片 {{ graph.completeness.returnedSegments }}/{{ graph.completeness.totalSegments }}，
-      元素 {{ graph.completeness.returnedElements }}/{{ graph.completeness.totalElements }}。完整列表请查看高级信息。
+      {{ t('kbSearch.graph.partialNotice1', { returned: graph.completeness.returnedSegments, total: graph.completeness.totalSegments }) }}
+      {{ t('kbSearch.graph.partialNotice2', { returned: graph.completeness.returnedElements, total: graph.completeness.totalElements }) }}
     </div>
     <div v-if="navigationTruncated" class="structure-workspace__notice is-warning">
-      文档结构较大，左侧仅展示前 {{ MAX_NAVIGATION_NODES }} 个入口；可通过高级信息查看完整清单。
+      {{ t('kbSearch.graph.navigationTruncated', { max: MAX_NAVIGATION_NODES }) }}
     </div>
     <div
       v-for="(diagnostic, diagnosticIndex) in graph.diagnostics"
@@ -34,22 +34,22 @@
 
     <div class="structure-workspace__toolbar">
       <label class="structure-workspace__search">
-        <span>筛选结构</span>
+        <span>{{ t('kbSearch.graph.filterLabel') }}</span>
         <input
           v-model="searchQuery"
           data-testid="structure-search"
           type="search"
-          placeholder="搜索章节标题或表格字段"
+          :placeholder="t('kbSearch.graph.searchPlaceholder')"
         >
       </label>
-      <span class="structure-workspace__local-hint">中间仅展示当前节点的上下文，避免大文档一次铺满</span>
+      <span class="structure-workspace__local-hint">{{ t('kbSearch.graph.localHint') }}</span>
     </div>
 
     <div class="structure-workspace__grid">
       <nav
         class="structure-workspace__outline"
         data-testid="structure-outline-pane"
-        aria-label="文档结构大纲"
+        :aria-label="t('kbSearch.graph.outlineLabel')"
       >
         <button
           class="structure-outline__item is-document"
@@ -58,10 +58,10 @@
           data-testid="outline-document:root"
           @click="selectNodeById(DOCUMENT_ROOT_ID)"
         >
-          <span class="structure-outline__marker">文</span>
+          <span class="structure-outline__marker">{{ t('kbSearch.graph.markerDocument') }}</span>
           <span class="structure-outline__copy">
             <strong>{{ documentTitle }}</strong>
-            <small>文档概览</small>
+            <small>{{ t('kbSearch.graph.documentOverview') }}</small>
           </span>
         </button>
 
@@ -85,19 +85,19 @@
         </div>
         <p v-else class="structure-outline__empty">
           {{ navigationTruncated
-            ? `未在已展示的前 ${MAX_NAVIGATION_NODES} 个入口中匹配到`
-            : '没有匹配的章节或表格' }}
+            ? t('kbSearch.graph.searchMissTruncated', { max: MAX_NAVIGATION_NODES })
+            : t('kbSearch.graph.searchMiss') }}
         </p>
       </nav>
 
       <div
         class="structure-workspace__graph"
         data-testid="structure-local-graph"
-        aria-label="当前结构上下文"
+        :aria-label="t('kbSearch.graph.contextLabel')"
       >
         <div class="structure-workspace__pane-title">
-          <span>局部结构</span>
-          <small>{{ localNodes.length }} 个节点</small>
+          <span>{{ t('kbSearch.graph.localTitle') }}</span>
+          <small>{{ t('kbSearch.graph.nodeCount', { n: localNodes.length }) }}</small>
         </div>
         <VueFlow
           :key="`${result.snapshot.id}:${selectedNodeId}`"
@@ -141,7 +141,7 @@
           class="structure-workspace__local-truncated"
           data-testid="structure-local-truncated"
         >
-          当前节点共 {{ selectedChildCount }} 个直接下级，画布仅展示前 {{ MAX_LOCAL_CHILDREN }} 个，完整层级见左侧导航
+          {{ t('kbSearch.graph.localTruncated', { total: selectedChildCount, shown: MAX_LOCAL_CHILDREN }) }}
         </p>
       </div>
 
@@ -151,27 +151,27 @@
         aria-live="polite"
       >
         <div class="structure-workspace__pane-title">
-          <span>内容详情</span>
+          <span>{{ t('kbSearch.graph.inspectorTitle') }}</span>
           <small>{{ selectedKindName }}</small>
         </div>
 
         <template v-if="selectedNode?.kind === 'document'">
           <div class="structure-inspector__heading">
-            <span class="structure-inspector__kind">文档</span>
+            <span class="structure-inspector__kind">{{ t('kbSearch.graph.kindDocument') }}</span>
             <h4>{{ selectedNode.label }}</h4>
-            <p>选择左侧章节或表格，在这里查看当前所选版本的真实内容。</p>
+            <p>{{ t('kbSearch.graph.documentHint') }}</p>
           </div>
           <dl class="structure-inspector__summary">
-            <div><dt>章节</dt><dd>{{ graph.summary.sections }}</dd></div>
-            <div><dt>表格</dt><dd>{{ graph.summary.tables }}</dd></div>
-            <div><dt>内容组</dt><dd>{{ graph.summary.contentGroups }}</dd></div>
-            <div><dt>切片</dt><dd>{{ graph.summary.segments }}</dd></div>
+            <div><dt>{{ t('kbSearch.graph.kindSection') }}</dt><dd>{{ graph.summary.sections }}</dd></div>
+            <div><dt>{{ t('kbSearch.graph.kindTable') }}</dt><dd>{{ graph.summary.tables }}</dd></div>
+            <div><dt>{{ t('kbSearch.graph.kindContentGroup') }}</dt><dd>{{ graph.summary.contentGroups }}</dd></div>
+            <div><dt>{{ t('kbSearch.graph.chunk') }}</dt><dd>{{ graph.summary.segments }}</dd></div>
           </dl>
         </template>
 
         <template v-else-if="selectedNode?.kind === 'table' && selectedNode.table">
           <div class="structure-inspector__heading">
-            <span class="structure-inspector__kind">表格</span>
+            <span class="structure-inspector__kind">{{ t('kbSearch.graph.kindTable') }}</span>
             <h4>{{ selectedNode.label }}</h4>
             <p>{{ selectedNode.subtitle }}</p>
           </div>
@@ -180,7 +180,7 @@
               <thead>
                 <tr>
                   <th v-for="(heading, index) in selectedNode.table.header" :key="index">
-                    {{ heading || `列 ${index + 1}` }}
+                    {{ heading || t('kbSearch.graph.columnFallback', { n: index + 1 }) }}
                   </th>
                 </tr>
               </thead>
@@ -192,10 +192,10 @@
             </table>
           </div>
           <p v-if="selectedNode.table.preview_truncated" class="structure-inspector__partial">
-            当前仅显示预览数据，共 {{ selectedNode.table.rows }} 行。
+            {{ t('kbSearch.graph.tablePreviewOnly', { n: selectedNode.table.rows }) }}
           </p>
           <p v-if="selectedNode.parentId === UNASSIGNED_GROUP_ID" class="structure-inspector__partial">
-            该表格的所属章节暂不可用，未根据标题猜测归属。
+            {{ t('kbSearch.graph.tableParentUnavailable') }}
           </p>
         </template>
 
@@ -214,9 +214,9 @@
               <pre>{{ segment.text }}</pre>
             </article>
           </div>
-          <p v-else class="structure-inspector__empty">当前返回数据中没有该节的正文切片。</p>
+          <p v-else class="structure-inspector__empty">{{ t('kbSearch.graph.noBodyChunks') }}</p>
           <p v-if="graph.partial" class="structure-inspector__partial">
-            这是当前接口已返回的内容，不代表完整章节。
+            {{ t('kbSearch.graph.partialContent') }}
           </p>
         </template>
       </aside>
@@ -240,6 +240,7 @@ import {
   UNASSIGNED_GROUP_ID,
   type DocumentStructureNode,
 } from '@/utils/documentStructureGraph'
+import { t } from '@/locales/t'
 
 const props = defineProps<{
   documentTitle: string
@@ -253,7 +254,7 @@ const MAX_LOCAL_CHILDREN = 24
 const MAX_SEARCH_TABLE_CELLS = 200
 
 const graph = computed(() => buildDocumentStructureGraph({
-  documentTitle: props.documentTitle || props.result.snapshot.title || '未命名文档',
+  documentTitle: props.documentTitle || props.result.snapshot.title || t('kbStruct.untitledDoc'),
   outline: props.result.outline,
   tables: props.result.tables,
   segments: props.result.segments.items,
@@ -265,7 +266,7 @@ const graph = computed(() => buildDocumentStructureGraph({
   tableCount: props.result.diagnostics.tables_total,
 }))
 
-const documentTitle = computed(() => graph.value.nodes[0]?.label ?? '未命名文档')
+const documentTitle = computed(() => graph.value.nodes[0]?.label ?? t('kbStruct.untitledDoc'))
 const selectedNode = computed(() => (
   graph.value.nodes.find(node => node.id === selectedNodeId.value) ?? graph.value.nodes[0] ?? null
 ))
@@ -370,11 +371,11 @@ const versionLabel = computed(() => {
   const view = props.result.view ?? props.result.versioning?.view
   if (view === 'latest_revision') {
     return props.result.versioning?.latest_state === 'in_search'
-      ? '最新解析 · 已进入搜索'
-      : '最新解析 · 尚未进入搜索'
+      ? t('kbSearch.graph.versionLatestInSearch')
+      : t('kbSearch.graph.versionLatestNotInSearch')
   }
-  if (view === 'current_serving') return '当前可搜索版本 · 确定性结构层'
-  return '当前所选解析结果 · 确定性结构层'
+  if (view === 'current_serving') return t('kbSearch.graph.versionCurrentServing')
+  return t('kbSearch.graph.versionSelectedResult')
 })
 
 const selectedKindName = computed(() => kindName(selectedNode.value?.kind))
@@ -403,27 +404,32 @@ function outlineIndent(node: DocumentStructureNode): Record<string, string> {
 }
 
 function kindName(kind: unknown): string {
-  if (kind === 'document') return '文档'
-  if (kind === 'section') return '章节'
-  if (kind === 'table') return '表格'
-  if (kind === 'content_group') return '内容组'
-  return '结构'
+  if (kind === 'document') return t('kbSearch.graph.kindDocument')
+  if (kind === 'section') return t('kbSearch.graph.kindSection')
+  if (kind === 'table') return t('kbSearch.graph.kindTable')
+  if (kind === 'content_group') return t('kbSearch.graph.kindContentGroup')
+  return t('kbSearch.graph.kindStructure')
 }
 
 function compactKindName(node: Pick<DocumentStructureNode, 'kind' | 'contentType'>): string {
-  if (node.kind === 'document') return '文'
-  if (node.kind === 'section') return '节'
-  if (node.kind === 'table') return '表'
-  if (node.contentType === 'unassigned') return '未'
-  return '组'
+  if (node.kind === 'document') return t('kbSearch.graph.markerDocument')
+  if (node.kind === 'section') return t('kbSearch.graph.markerSection')
+  if (node.kind === 'table') return t('kbSearch.graph.markerTable')
+  if (node.contentType === 'unassigned') return t('kbSearch.graph.markerUnassigned')
+  return t('kbSearch.graph.markerGroup')
+}
+
+/** 内容组类型 → 文案 key（与 utils/documentStructureGraph 的内容组标签同源，取用时 t()）。 */
+const CONTENT_TYPE_LABEL_KEYS: Record<string, string> = {
+  prose: 'kbStruct.block.prose', paragraph: 'kbStruct.block.prose',
+  list: 'kbStruct.block.list', list_item: 'kbStruct.block.list',
+  code: 'kbStruct.block.code', code_block: 'kbStruct.block.code',
+  formula: 'kbStruct.block.formula', figure_caption: 'kbStruct.block.figure_caption',
 }
 
 function contentTypeName(value: string): string {
-  const labels: Record<string, string> = {
-    prose: '正文', paragraph: '正文', list: '列表', list_item: '列表',
-    code: '代码', code_block: '代码', formula: '公式', figure_caption: '图片说明',
-  }
-  return labels[value] ?? value
+  const key = CONTENT_TYPE_LABEL_KEYS[value]
+  return key ? t(key) : value
 }
 </script>
 

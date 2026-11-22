@@ -15,7 +15,7 @@
         <span class="preprocess-notice__code">{{ warning.code }}</span>
         <span>{{ warning.message }}</span>
         <span v-if="warning.sheet_name || warning.cell_range" class="preprocess-notice__location">
-          （{{ [warning.sheet_name, warning.cell_range].filter(Boolean).join(' / ') }}）
+          {{ t('kbSearch.notice.warningLocation', { location: [warning.sheet_name, warning.cell_range].filter(Boolean).join(' / ') }) }}
         </span>
       </li>
     </ul>
@@ -25,6 +25,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ExcelPreprocessSummary, PreprocessWarning } from '@/types'
+import { t } from '@/locales/t'
 
 const props = defineProps<{
   status?: 'success' | 'partial' | 'failed' | null
@@ -44,18 +45,18 @@ const hasNotice = computed(() => Boolean(
 const visualState = computed(() => props.status || (props.errorDetail ? 'failed' : 'success'))
 const title = computed(() => {
   const labels: Record<string, string> = {
-    success: '预处理成功',
-    partial: '部分解析成功',
-    failed: '解析失败',
+    success: t('kbSearch.notice.titleSuccess'),
+    partial: t('kbSearch.notice.titlePartial'),
+    failed: t('kbSearch.notice.titleFailed'),
   }
-  return labels[visualState.value] || '预处理结果'
+  return labels[visualState.value] || t('kbSearch.notice.titleDefault')
 })
 const actionHint = computed(() => {
   if (props.errorCode === 'doc_converter_unavailable') {
-    return '请在 Linux 环境离线安装 LibreOffice，或先将文件转换为 .docx 后重新上传。'
+    return t('kbSearch.notice.hintDocConverterUnavailable')
   }
   if (props.errorCode === 'excel_password_protected') {
-    return '暂不支持密码保护的 Excel 文件，请移除密码后重新上传。'
+    return t('kbSearch.notice.hintExcelPassword')
   }
   return ''
 })
@@ -63,11 +64,11 @@ const summaryItems = computed(() => {
   const summary = props.summary
   if (!summary) return []
   const items: Array<{ label: string; value?: number }> = [
-    { label: '工作表', value: summary.sheet_count },
-    { label: '已解析', value: summary.parsed_sheet_count },
-    { label: '空工作表', value: summary.skipped_empty_sheet_count },
-    { label: '表格区域', value: summary.table_region_count },
-    { label: '非空单元格', value: summary.nonempty_cell_count },
+    { label: t('kbSearch.notice.summarySheets'), value: summary.sheet_count },
+    { label: t('kbView.detail.readinessLevel.parsed'), value: summary.parsed_sheet_count },
+    { label: t('kbSearch.notice.summaryEmptySheets'), value: summary.skipped_empty_sheet_count },
+    { label: t('kbSearch.notice.summaryTableRegions'), value: summary.table_region_count },
+    { label: t('kbSearch.notice.summaryNonEmptyCells'), value: summary.nonempty_cell_count },
   ]
   return items.filter(
     (item): item is { label: string; value: number } => typeof item.value === 'number',

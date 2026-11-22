@@ -1,55 +1,55 @@
 <template>
   <div class="onenet-ref" v-loading="loading">
     <el-alert v-if="!canWrite" type="info" :closable="false"
-              title="只读视图：引用管理需要库主/编辑者权限" />
+              :title="t('kbSearch.onenet.readonlyTitle')" />
 
     <!-- 已引用文档（外部引用区，只读语义） -->
     <div class="onenet-ref__block">
-      <h4 class="onenet-ref__title">本库引用的一张网文档（{{ refs.length }}）</h4>
+      <h4 class="onenet-ref__title">{{ t('kbSearch.onenet.referencedTitle', { n: refs.length }) }}</h4>
       <el-table v-if="refs.length" :data="refs" size="small">
-        <el-table-column prop="document_name" label="文档" min-width="240" show-overflow-tooltip />
-        <el-table-column prop="directory_path" label="章节目录" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="source_kb_name" label="来源库" width="140" />
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column prop="document_name" :label="t('kbSearch.graph.kindDocument')" min-width="240" show-overflow-tooltip />
+        <el-table-column prop="directory_path" :label="t('kbSearch.onenet.colSectionDirectory')" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="source_kb_name" :label="t('kbSearch.onenet.colSourceKb')" width="140" />
+        <el-table-column :label="t('common.actions')" width="150" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="preview(row)">预览</el-button>
+            <el-button size="small" @click="preview(row)">{{ t('kbSearch.onenet.preview') }}</el-button>
             <el-button v-if="canWrite" size="small" type="danger" plain
-                       @click="unref([row.document_id])">取消引用</el-button>
+                       @click="unref([row.document_id])">{{ t('kbSearch.onenet.unref') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="尚未引用任何一张网文档——从下方导入池勾选一键引用" :image-size="60" />
+      <el-empty v-else :description="t('kbSearch.onenet.emptyRefs')" :image-size="60" />
     </div>
 
     <!-- 导入池（本域已完成的产品文档） -->
     <div class="onenet-ref__block">
-      <h4 class="onenet-ref__title">本域已导入的产品文档（管理员在「一张网接入」页维护）</h4>
+      <h4 class="onenet-ref__title">{{ t('kbSearch.onenet.importsTitle') }}</h4>
       <el-collapse v-if="imports.length" v-model="expanded">
         <el-collapse-item v-for="imp in imports" :key="imp.id" :name="imp.id">
           <template #title>
             {{ imp.doc_name ?? imp.source_id }}
             <el-tag size="small" type="info" style="margin-left: 8px">
-              {{ imp.document_count ?? 0 }} 篇 · {{ imp.parsed_version_seen ?? '-' }}
+              {{ t('dashboard.kbCard.docCount', { n: imp.document_count ?? 0 }) }} · {{ imp.parsed_version_seen ?? '-' }}
             </el-tag>
           </template>
           <div class="onenet-ref__docrow" v-if="documentsByImport[imp.id]?.length">
             <el-table :data="documentsByImport[imp.id]" size="small" max-height="300"
                       @selection-change="(rows: ImportDoc[]) => (selection[imp.id] = rows)">
               <el-table-column type="selection" width="40" :selectable="() => canWrite" />
-              <el-table-column prop="document_name" label="文件" min-width="220" show-overflow-tooltip />
-              <el-table-column prop="directory_path" label="目录" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="document_name" :label="t('kbSearch.onenet.colFile')" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="directory_path" :label="t('kbSearch.onenet.colDirectory')" min-width="180" show-overflow-tooltip />
             </el-table>
             <div class="onenet-ref__actions">
               <el-button type="primary" size="small" :disabled="!selection[imp.id]?.length"
                          :loading="adding === imp.id" @click="addRefs(imp.id)">
-                引用选中（{{ selection[imp.id]?.length ?? 0 }}）
+                {{ t('kbSearch.onenet.referenceSelected', { n: selection[imp.id]?.length ?? 0 }) }}
               </el-button>
             </div>
           </div>
-          <div v-else class="onenet-ref__loading">展开加载产物文档…</div>
+          <div v-else class="onenet-ref__loading">{{ t('kbSearch.onenet.expandHint') }}</div>
         </el-collapse-item>
       </el-collapse>
-      <el-empty v-else description="本域还没有已导入的一张网文档（等管理员完成导入）" :image-size="60" />
+      <el-empty v-else :description="t('kbSearch.onenet.emptyImports')" :image-size="60" />
     </div>
 
     <!-- 逻辑文档 markdown 预览 -->
@@ -64,6 +64,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useOnenetApi } from '@/api/onenet'
 import type { OnenetImport, OnenetRef } from '@/api/onenet'
+import { t } from '@/locales/t'
 
 interface ImportDoc {
   id: string
@@ -103,7 +104,7 @@ async function reload() {
       documentsByImport[imp.id] = (imp.documents ?? []) as ImportDoc[]
     }
   } catch (e) {
-    ElMessage.error((e as Error)?.message ?? '加载失败')
+    ElMessage.error((e as Error)?.message ?? t('common.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -115,11 +116,15 @@ async function addRefs(importId: string) {
   adding.value = importId
   try {
     const out = await api.addRefs(props.kbId, docs.map((d) => d.id))
-    ElMessage.success(`已引用 ${out.added.length} 篇${out.skipped.length ? `，跳过 ${out.skipped.length}` : ''}`)
+    // 「，跳过 N」是条件片段，自带标点
+    ElMessage.success(
+      t('kbSearch.onenet.added', { n: out.added.length })
+      + (out.skipped.length ? t('kbSearch.onenet.addedSkipped', { n: out.skipped.length }) : ''),
+    )
     selection[importId] = []
     await reload()
   } catch (e) {
-    ElMessage.error((e as Error)?.message ?? '引用失败')
+    ElMessage.error((e as Error)?.message ?? t('kbSearch.onenet.addFailed'))
   } finally {
     adding.value = ''
   }
@@ -128,21 +133,21 @@ async function addRefs(importId: string) {
 async function unref(documentIds: string[]) {
   try {
     const out = await api.removeRefs(props.kbId, documentIds)
-    ElMessage.success(`已取消引用 ${out.removed.length} 篇`)
+    ElMessage.success(t('kbSearch.onenet.unreferenced', { n: out.removed.length }))
     await reload()
   } catch (e) {
-    ElMessage.error((e as Error)?.message ?? '取消引用失败')
+    ElMessage.error((e as Error)?.message ?? t('kbSearch.onenet.unrefFailed'))
   }
 }
 
 async function preview(row: OnenetRef) {
-  previewTitle.value = row.document_name ?? '逻辑文档预览'
-  previewText.value = '加载中…'
+  previewTitle.value = row.document_name ?? t('kbSearch.onenet.previewTitle')
+  previewText.value = t('common.loading')
   previewVisible.value = true
   try {
     previewText.value = await api.fetchDocumentMarkdown(props.kbId, row.document_id)
   } catch (e) {
-    previewText.value = '预览加载失败：' + ((e as Error)?.message ?? String(e))
+    previewText.value = t('kbSearch.onenet.previewLoadFailed') + ((e as Error)?.message ?? String(e))
   }
 }
 

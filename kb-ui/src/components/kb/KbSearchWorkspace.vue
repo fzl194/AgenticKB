@@ -1,9 +1,9 @@
 <template>
   <section class="kb-search-workspace">
-    <div class="kb-search-workspace__switch" role="tablist" aria-label="知识库检索">
-      <button type="button" role="tab" :aria-selected="mode === 'online'" :class="{ active: mode === 'online' }" @click="mode = 'online'">在线检索</button>
-      <button type="button" role="tab" :aria-selected="mode === 'records'" :class="{ active: mode === 'records' }" @click="mode = 'records'">检索记录</button>
-      <router-link v-if="mode === 'records'" class="kb-search-workspace__full" :to="{ name: 'retrieval-records', query: { kbId: kb.id } }">查看完整记录 →</router-link>
+    <div class="kb-search-workspace__switch" role="tablist" :aria-label="t('kbSearch.workspace.switchLabel')">
+      <button type="button" role="tab" :aria-selected="mode === 'online'" :class="{ active: mode === 'online' }" @click="mode = 'online'">{{ t('kbSearch.workspace.onlineTab') }}</button>
+      <button type="button" role="tab" :aria-selected="mode === 'records'" :class="{ active: mode === 'records' }" @click="mode = 'records'">{{ t('title.retrievalRecords') }}</button>
+      <router-link v-if="mode === 'records'" class="kb-search-workspace__full" :to="{ name: 'retrieval-records', query: { kbId: kb.id } }">{{ t('kbSearch.workspace.fullRecords') }}</router-link>
     </div>
     <KbSearchPanel v-if="mode === 'online'" :kb="kb" :can-write="canWrite" :readiness="readiness" @updated="$emit('updated')" @go-mining="$emit('go-mining')" />
     <RetrievalRecordsPanel v-else :kb-id="kb.id" />
@@ -12,6 +12,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { t } from '@/locales/t'
 import KbSearchPanel from '@/components/kb/KbSearchPanel.vue'
 import RetrievalRecordsPanel from '@/components/retrieval/RetrievalRecordsPanel.vue'
 import type { KbReadiness, KbSummary } from '@/types/kb'

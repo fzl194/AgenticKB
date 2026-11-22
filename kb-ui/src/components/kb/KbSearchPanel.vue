@@ -3,11 +3,11 @@
     <!-- 管线选择区：库级绑定 + 生效说明 -->
     <div class="kb-search__pipeline">
       <div class="kb-search__pipeline-row">
-        <span class="kb-search__label">检索范式</span>
+        <span class="kb-search__label">{{ t('kbSearch.panel.paradigmLabel') }}</span>
         <el-select
           v-model="selectedParadigmId"
           :disabled="!canWrite || savingBinding"
-          placeholder="跟随官方默认"
+          :placeholder="t('kbSearch.panel.followOfficialPlaceholder')"
           clearable
           size="default"
           class="kb-search__select"
@@ -26,16 +26,16 @@
         <el-tag
           v-if="resolveInfo?.degraded"
           size="small" type="warning" effect="plain"
-        >库级绑定失效，已降级</el-tag>
-        <span v-if="savingBinding" class="kb-search__muted">保存中…</span>
+        >{{ t('kbSearch.panel.bindingInvalid') }}</el-tag>
+        <span v-if="savingBinding" class="kb-search__muted">{{ t('kbSearch.panel.saving') }}</span>
       </div>
       <p class="kb-search__pipeline-hint">
-        绑定后，这个库（含 MCP 检索）默认走所选管线；清除则跟随官方默认。
-        范式的检索范围保持"留空"即可随库注入——在这里测试即真实链路。
+        {{ t('kbSearch.panel.bindingHint1') }}
+        {{ t('kbSearch.panel.bindingHint2') }}
       </p>
       <div v-if="configurationError" class="kb-search__error">
         {{ configurationError }}
-        <el-button size="small" @click="reload">重试</el-button>
+        <el-button size="small" @click="reload">{{ t('common.retry') }}</el-button>
       </div>
     </div>
 
@@ -44,20 +44,20 @@
       <el-input
         v-model="query"
         size="large"
-        placeholder="输入问题，用当前管线测试这个知识库的检索…"
+        :placeholder="t('kbSearch.panel.queryPlaceholder')"
         :disabled="searching"
         clearable
         @keyup.enter="run"
       >
         <template #append>
-          <el-button :loading="searching" @click="run">检索</el-button>
+          <el-button :loading="searching" @click="run">{{ t('kbSearch.panel.searchButton') }}</el-button>
         </template>
       </el-input>
       <el-select
         v-if="folderOptions.length"
         v-model="directoryScope"
         class="kb-search__dir"
-        size="large" clearable placeholder="不限目录"
+        size="large" clearable :placeholder="t('kbSearch.panel.anyDirectory')"
         :disabled="searching"
         data-testid="kb-search-directory"
       >
@@ -68,16 +68,16 @@
     <!-- A2 范围徽标：本节/本节及子节（从文档页大纲进入），可一键回整篇 -->
     <div v-if="scope || scopeDocumentRef" class="kb-search__scope" data-testid="kb-search-scope">
       <el-tag size="small" type="warning" effect="light" closable @close="clearScope">
-        范围：{{ scope?.title || scopeDocumentTitle }}（{{ scope ? scopeModeLabel : '整篇' }}）
+        {{ t('kbSearch.panel.scopeTag', { title: scope?.title || scopeDocumentTitle, mode: scope ? scopeModeLabel : t('kbSearch.panel.scopeWholeDoc') }) }}
       </el-tag>
-      <el-button link size="small" @click="clearScope">{{ scope && scopeDocumentRef ? '改回整篇' : '搜索整个知识库' }}</el-button>
+      <el-button link size="small" @click="clearScope">{{ scope && scopeDocumentRef ? t('kbSearch.panel.backToWholeDoc') : t('kbSearch.panel.searchWholeKb') }}</el-button>
     </div>
 
     <!-- 生效管线 -->
     <el-alert v-if="effective" class="kb-search__effective" :closable="false" type="info">
       <template #title>
-        本次由「{{ effective.name }}」管线执行
-        <span class="kb-search__muted">（{{ effective.sourceLabel }} · v{{ effective.version }}）</span>
+        {{ t('kbSearch.panel.effectiveLine', { name: effective.name }) }}
+        <span class="kb-search__muted">{{ t('kbSearch.panel.effectiveMeta', { source: effective.sourceLabel, version: effective.version }) }}</span>
       </template>
     </el-alert>
 
@@ -85,19 +85,19 @@
     <div v-if="error" class="kb-search__error">{{ error }}</div>
     <template v-if="evidence.length">
       <div class="kb-search__meta">
-        证据 {{ evidence.length }} 条<span v-if="hasMore">（预算内未全列，has_more）</span>
+        {{ t('kbSearch.panel.evidenceCount', { n: evidence.length }) }}<span v-if="hasMore">{{ t('kbSearch.panel.evidenceHasMore') }}</span>
       </div>
       <div class="kb-search__results">
         <div v-for="(ev, i) in evidence" :key="ev.ref ?? i" class="kb-search__item">
           <div class="kb-search__item-head">
-            <span class="kb-search__item-type">{{ ev.type || '证据' }}</span>
+            <span class="kb-search__item-type">{{ ev.type || t('kbSearch.panel.evidence') }}</span>
             <span v-if="ev.ref?.startsWith('ev_')" class="kb-search__item-actions">
-              <span v-if="ev.truncated && !expanded[ev.ref ?? '']" class="kb-search__item-trunc" title="内容被预算截断；点「查看完整」取回全文">截断</span>
+              <span v-if="ev.truncated && !expanded[ev.ref ?? '']" class="kb-search__item-trunc" :title="t('kbSearch.panel.truncatedTitle')">{{ t('kbSearch.panel.truncated') }}</span>
               <el-button
                 size="small" text type="primary"
                 :loading="expanding === ev.ref"
                 @click="expandEvidence(ev)"
-              >{{ expanded[ev.ref!] ? '收起' : '查看完整' }}</el-button>
+              >{{ expanded[ev.ref!] ? t('kbSearch.panel.collapse') : t('kbSearch.panel.viewFull') }}</el-button>
             </span>
           </div>
           <p class="kb-search__item-text" :class="{ 'is-clamp': !expanded[ev.ref ?? ''] && ev.content && ev.content.length > 400 }">
@@ -107,25 +107,25 @@
                位置徽标展示 locator；跳转目标全部由服务端解析端点给出。 -->
           <div v-if="sourceLabelOf(ev) || locatorLabelOf(ev)" class="kb-search__item-src">
             <template v-if="sourceLabelOf(ev)">
-              来源：
+              {{ t('kbSearch.panel.sourcePrefix') }}
               <!-- 跳转仅支持 ev_ 前缀（doc_/st_ 直接证据走 Agent 结构工具，无解析端点） -->
               <el-button
                 v-if="ev.ref?.startsWith('ev_')"
                 text type="primary" size="small" class="kb-search__src-link"
                 :loading="navigating === ev.ref"
-                title="打开原文（原始预览）"
+                :title="t('kbSearch.panel.openOriginalTitle')"
                 @click="goToSource(ev, 'document')"
-              >{{ ev.source?.file_name || '文档' }}</el-button>
-              <span v-else>{{ ev.source?.file_name || '文档' }}</span>
+              >{{ ev.source?.file_name || t('kbSearch.graph.kindDocument') }}</el-button>
+              <span v-else>{{ ev.source?.file_name || t('kbSearch.graph.kindDocument') }}</span>
               <el-button
                 v-if="ev.ref?.startsWith('ev_') && ev.source?.section"
                 text type="primary" size="small" class="kb-search__src-link"
                 :loading="navigating === ev.ref"
-                title="在大纲中定位该章节"
+                :title="t('kbSearch.panel.locateSectionTitle')"
                 @click="goToSource(ev, 'section')"
               >{{ ev.source.section }}</el-button>
               <span v-else-if="ev.source?.section">{{ ev.source.section }}</span>
-              <span v-if="ev.source?.knowledge_base">（{{ ev.source.knowledge_base }}）</span>
+              <span v-if="ev.source?.knowledge_base">{{ t('kbSearch.panel.kbParens', { name: ev.source.knowledge_base }) }}</span>
             </template>
             <span v-if="locatorLabelOf(ev)" class="kb-search__loc" :data-testid="`loc-${ev.ref}`">
               {{ locatorLabelOf(ev) }}
@@ -135,7 +135,7 @@
               text type="primary" size="small" class="kb-search__src-link"
               :loading="navigating === ev.ref"
               @click="goToSource(ev, 'table')"
-            >查看表格</el-button>
+            >{{ t('kbSearch.panel.viewTable') }}</el-button>
           </div>
         </div>
       </div>
@@ -146,7 +146,7 @@
       :image-size="80"
     >
       <el-button v-if="readiness && readiness.retrieval_units === 0" text type="primary" @click="goMine">
-        去挖掘出检索单元
+        {{ t('kbSearch.panel.goMining') }}
       </el-button>
     </el-empty>
   </div>
@@ -161,6 +161,7 @@ import { useOperatorApi } from '@/api/operator'
 import { useServingApi, type ParadigmResolveResult } from '@/api/serving'
 import { apiErrorDetail } from '@/api/proxyClient'
 import { useDomainStore } from '@/stores/domain'
+import { t } from '@/locales/t'
 import type { KbSummary } from '@/types/kb'
 import type { EvidenceItem, ParadigmView } from '@/types/operator'
 
@@ -191,7 +192,7 @@ const searching = ref(false)
 // ref 是服务端投影的章节内部 ref（within 直收），前端不拼接。
 const scope = ref<{ ref: string; title: string; mode: 'exact' | 'descendants' } | null>(null)
 const scopeDocumentRef = ref<string | null>(null)
-const scopeDocumentTitle = ref('当前文档')
+const scopeDocumentTitle = ref(t('kbStruct.currentDoc'))
 function clearScope() {
   if (scope.value) scope.value = null
   else scopeDocumentRef.value = null
@@ -199,7 +200,7 @@ function clearScope() {
   searched.value = false
 }
 const scopeModeLabel = computed(() =>
-  scope.value?.mode === 'descendants' ? '本节及子节' : '本节')
+  scope.value?.mode === 'descendants' ? t('kbSearch.panel.scopeDescendants') : t('kbSearch.panel.scopeExact'))
 
 // 57号目录范围（含子目录递归）：目录树来自 folders 接口，filters.directory_prefix
 // 直收服务端递归语义；与章节/整篇范围可叠加（serving 平铺合并为 AND）。
@@ -245,7 +246,7 @@ async function expandEvidence(ev: EvidenceItem) {
         ref, domainStore.currentDomain, props.kb.id, 'whole_document')
       fullContent.value[ref] = item.content ?? ''
     } catch (e) {
-      ElMessage.error('取回完整原文失败，请稍后重试')
+      ElMessage.error(t('kbSearch.panel.fetchFullFailed'))
       return
     } finally {
       expanding.value = ''
@@ -262,8 +263,8 @@ const activeParadigms = computed(() => paradigms.value.filter(p => p.status === 
 
 const sourceLabel = computed(() => {
   const s = resolveInfo.value?.source
-  if (s === 'library') return '库级绑定'
-  if (s === 'official') return '官方默认'
+  if (s === 'library') return t('kbSearch.panel.sourceLibrary')
+  if (s === 'official') return t('kbSearch.panel.sourceOfficial')
   return s ?? ''
 })
 const sourceTagType = computed(() =>
@@ -271,8 +272,8 @@ const sourceTagType = computed(() =>
 
 const emptyHint = computed(() =>
   props.readiness && props.readiness.retrieval_units === 0
-    ? '这个库还没有可检索的内容——先完成挖掘（全量基线），检索单元生成后即可搜索'
-    : '没有命中，换个问法或调整检索范式试试')
+    ? t('kbSearch.panel.emptyNoUnits')
+    : t('kbSearch.panel.emptyNoHit'))
 
 async function reload() {
   const domain = domainStore.currentDomain
@@ -320,7 +321,7 @@ async function saveBinding(value: string | null) {
   savingBinding.value = true
   try {
     await kbApi.updateKb(props.kb.id, { default_paradigm_id: value ?? null })
-    ElMessage.success(value ? '已绑定本库检索范式' : '已清除绑定，跟随官方默认')
+    ElMessage.success(value ? t('kbSearch.panel.bound') : t('kbSearch.panel.unbound'))
     emit('updated')
     await refreshResolve()
   } catch (e) {
@@ -341,7 +342,7 @@ async function run() {
     return
   }
   if (!resolved?.bound || !resolved.paradigmId) {
-    error.value = '该知识域未配置检索范式（库级/官方默认均缺失），请联系管理员在「检索范式」页发布范式。'
+    error.value = t('kbSearch.panel.noParadigm')
     evidence.value = []
     hasMore.value = false
     searched.value = true
@@ -369,7 +370,9 @@ async function run() {
     effective.value = {
       name: resolved.name ?? resolved.paradigmId,
       version: resolved.version ?? 0,
-      sourceLabel: resolved.degraded ? `${sourceLabel.value}（降级）` : sourceLabel.value,
+      sourceLabel: resolved.degraded
+        ? t('kbSearch.panel.sourceDegraded', { source: sourceLabel.value })
+        : sourceLabel.value,
     }
     searched.value = true
   } catch (e) {
@@ -396,7 +399,7 @@ function sourceLabelOf(ev: EvidenceItem): string {
   if (src.file_name) parts.push(src.file_name)
   if (src.section) parts.push(src.section)
   const base = parts.join(' · ')
-  if (src.knowledge_base && parts.length) return `${base}（${src.knowledge_base}）`
+  if (src.knowledge_base && parts.length) return t('kbSearch.panel.sourceWithKb', { base, name: src.knowledge_base })
   return base || (src.knowledge_base ?? '')
 }
 
@@ -407,11 +410,13 @@ function sourceLabelOf(ev: EvidenceItem): string {
 function locatorLabelOf(ev: EvidenceItem): string {
   const loc = ev.source?.locator
   if (!loc) return ''
-  if (loc.kind === 'page') return `第 ${loc.page} 页`
+  if (loc.kind === 'page') return t('kbSearch.panel.locatorPage', { page: String(loc.page) })
   if (loc.kind === 'line_range' && loc.line_start != null) {
     const first = loc.line_start + 1
     const last = loc.line_end != null ? loc.line_end : first
-    return last > first ? `第 ${first}–${last} 行` : `第 ${first} 行`
+    return last > first
+      ? t('kbSearch.panel.locatorLines', { first, last })
+      : t('kbSearch.panel.locatorLine', { first })
   }
   if (loc.kind === 'sheet_cell') {
     if (loc.sheet && loc.cell) return `${loc.sheet}!${loc.cell}`
@@ -431,7 +436,7 @@ const navigating = ref('')
 async function goToSource(ev: EvidenceItem, mode: 'document' | 'section' | 'table') {
   const ref = ev.ref ?? ''
   if (!ref.startsWith('ev_')) {
-    ElMessage.warning('该证据没有可定位的来源引用')
+    ElMessage.warning(t('kbSearch.panel.noSourceRef'))
     return
   }
   navigating.value = ref
@@ -463,11 +468,11 @@ async function goToSource(ev: EvidenceItem, mode: 'document' | 'section' | 'tabl
   if (q.scopeRef && typeof q.scopeRef === 'string' && q.scopeRef) {
     scope.value = {
       ref: q.scopeRef,
-      title: q.scopeTitle || '选中章节',
+      title: q.scopeTitle || t('kbSearch.panel.selectedSection'),
       mode: q.scopeMode === 'descendants' ? 'descendants' : 'exact',
     }
     scopeDocumentRef.value = typeof q.scopeDocumentRef === 'string' && q.scopeDocumentRef ? q.scopeDocumentRef : null
-    scopeDocumentTitle.value = typeof q.scopeDocumentTitle === 'string' && q.scopeDocumentTitle ? q.scopeDocumentTitle : '当前文档'
+    scopeDocumentTitle.value = typeof q.scopeDocumentTitle === 'string' && q.scopeDocumentTitle ? q.scopeDocumentTitle : t('kbStruct.currentDoc')
   }
 }
 

@@ -11,21 +11,21 @@
       </div>
       <div class="pipeline-stage__info">
         <span v-if="stage.line" class="pipeline-stage__line" :class="`pipeline-stage__line--${stage.line}`">
-          {{ stage.line === 'ontology' ? '本体线' : '篇章线' }}
+          {{ stage.line === 'ontology' ? t('kbSearch.pipeline.lineOntology') : t('kbSearch.pipeline.lineDiscourse') }}
         </span>
-        <span class="pipeline-stage__name">{{ stage.label }}</span>
+        <span class="pipeline-stage__name">{{ t(stage.labelKey) }}</span>
         <span class="pipeline-stage__meta">
           <template v-if="getStageStatus(stage.key) === 'completed'">
             {{ formatMs(getStageDuration(stage.key)) }}
           </template>
           <template v-else-if="getStageStatus(stage.key) === 'running'">
-            运行中...
+            {{ t('kbSearch.pipeline.statusRunning') }}
           </template>
           <template v-else-if="getStageStatus(stage.key) === 'failed'">
-            失败
+            {{ t('common.runStatus.failed') }}
           </template>
           <template v-else>
-            等待中
+            {{ t('kbSearch.pipeline.statusPending') }}
           </template>
         </span>
       </div>
@@ -37,6 +37,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { MiningRunStage } from '@/types'
+import { t } from '@/locales/t'
 
 const props = withDefaults(defineProps<{
   stageEvents: MiningRunStage[]
@@ -47,28 +48,31 @@ const props = withDefaults(defineProps<{
 
 interface PipelineStage {
   key: string
-  label: string
+  /** 阶段名文案 key（顶层常量表不在定义期求值——模板渲染时 t(labelKey)，切语言即重算）。 */
+  labelKey: string
   backendKeys: string[]
   line?: 'discourse' | 'ontology'  // 篇章线 / 本体线（历史 legacy 阶段）
   scope?: 'document' | 'global'    // 逐文档阶段 / 全局尾段（落图、建库发布）。默认逐文档
 }
 
-// 阶段目录（标签映射，含历史 legacy 阶段——旧 Run 的真实事件要能显示名字）。
+// 阶段目录（标签 key 映射，含历史 legacy 阶段——旧 Run 的真实事件要能显示名字）。
+// 阶段名与 Run 详情 / Run 文档详情共用 kbView.run.stage.* / kbView.runDoc.stage.*；
+// 「检索单元」复用 dashboard.tile.units，「向量化」复用 common.miningOperator.embedding。
 // A0-6：渲染条目按 stageEvents 动态推导——不再预渲染固定 12 阶段骨架，
 // 新链 Run 不出现「实体抽取/落图」等当前产品不存在的阶段。
 const STAGE_CATALOG: PipelineStage[] = [
-  { key: 'parse', label: '解析', backendKeys: ['parse'] },
-  { key: 'segment', label: '分段', backendKeys: ['segment'] },
-  { key: 'enrich', label: '段落理解', backendKeys: ['enrich'], line: 'discourse' },
-  { key: 'entity_extract', label: '实体抽取', backendKeys: ['entity_extract'], line: 'ontology' },
-  { key: 'resolve', label: '实体归一', backendKeys: ['resolve'], line: 'ontology' },
-  { key: 'entity_relations', label: '关系抽取', backendKeys: ['entity_relations'], line: 'ontology' },
-  { key: 'discourse', label: '语篇分析', backendKeys: ['discourse'], line: 'discourse' },
-  { key: 'retrieval_units', label: '检索单元', backendKeys: ['retrieval_units'], line: 'discourse' },
-  { key: 'embedding', label: '向量化', backendKeys: ['embedding'] },
-  { key: 'db_write', label: '数据写入', backendKeys: ['db_write'] },
-  { key: 'graph_write', label: '落图', backendKeys: ['graph_write'], line: 'ontology', scope: 'global' },
-  { key: 'build', label: '构建&发布', backendKeys: ['assemble_build', 'validate_build'], scope: 'global' },
+  { key: 'parse', labelKey: 'kbView.runDoc.stage.parse', backendKeys: ['parse'] },
+  { key: 'segment', labelKey: 'kbView.runDoc.stage.segment', backendKeys: ['segment'] },
+  { key: 'enrich', labelKey: 'kbView.run.stage.enrich', backendKeys: ['enrich'], line: 'discourse' },
+  { key: 'entity_extract', labelKey: 'kbView.run.stage.entity_extract', backendKeys: ['entity_extract'], line: 'ontology' },
+  { key: 'resolve', labelKey: 'kbView.run.stage.resolve', backendKeys: ['resolve'], line: 'ontology' },
+  { key: 'entity_relations', labelKey: 'kbView.run.stage.entity_relations', backendKeys: ['entity_relations'], line: 'ontology' },
+  { key: 'discourse', labelKey: 'kbView.runDoc.stage.discourse', backendKeys: ['discourse'], line: 'discourse' },
+  { key: 'retrieval_units', labelKey: 'dashboard.tile.units', backendKeys: ['retrieval_units'], line: 'discourse' },
+  { key: 'embedding', labelKey: 'common.miningOperator.embedding', backendKeys: ['embedding'] },
+  { key: 'db_write', labelKey: 'kbView.runDoc.stage.db_write', backendKeys: ['db_write'] },
+  { key: 'graph_write', labelKey: 'kbView.run.stage.graph_write', backendKeys: ['graph_write'], line: 'ontology', scope: 'global' },
+  { key: 'build', labelKey: 'kbSearch.pipeline.stageBuild', backendKeys: ['assemble_build', 'validate_build'], scope: 'global' },
 ]
 
 // 只有真实记录到事件的阶段才渲染（目录顺序，与事件到达顺序无关）

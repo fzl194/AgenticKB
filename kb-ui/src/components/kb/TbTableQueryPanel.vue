@@ -3,14 +3,14 @@
     <!-- 查询构建区 -->
     <div class="tbq__builder">
       <div class="tbq__row">
-        <span class="tbq__label">筛选</span>
+        <span class="tbq__label">{{ t('kbSearch.table.filterLabel') }}</span>
         <template v-for="(f, i) in filters" :key="i">
-          <el-select v-model="f.field" size="small" class="tbq__field" placeholder="字段"
+          <el-select v-model="f.field" size="small" class="tbq__field" :placeholder="t('kbSearch.table.fieldPlaceholder')"
                      @change="f.op = f.field ? defaultOp(f.field) : undefined">
             <el-option v-for="c in columns" :key="c.name" :value="c.name"
-                       :label="`${c.name}（${typeLabel(c.value_type)}）`" />
+                       :label="t('kbSearch.table.fieldOption', { name: c.name, type: typeLabel(c.value_type) })" />
           </el-select>
-          <el-select v-model="f.op" size="small" class="tbq__op" placeholder="操作" data-testid="table-query-filter-op">
+          <el-select v-model="f.op" size="small" class="tbq__op" :placeholder="t('kbSearch.table.operatorPlaceholder')" data-testid="table-query-filter-op">
             <el-option v-for="op in opsOf(f.field)" :key="op" :value="op" :label="opLabel(op)" />
           </el-select>
           <el-input v-if="f.op !== 'is_null'" v-model="f.value" size="small"
@@ -18,20 +18,20 @@
                     @keyup.enter="run" />
           <el-button link size="small" @click="filters.splice(i, 1)">✕</el-button>
         </template>
-        <el-button size="small" plain @click="addFilter">+ 条件</el-button>
+        <el-button size="small" plain @click="addFilter">{{ t('kbSearch.table.addCondition') }}</el-button>
       </div>
       <div class="tbq__row">
-        <span class="tbq__label">排序</span>
-        <el-select v-model="orderField" size="small" class="tbq__field" clearable placeholder="（不排序）" data-testid="table-query-order-field">
+        <span class="tbq__label">{{ t('kbSearch.table.sortLabel') }}</span>
+        <el-select v-model="orderField" size="small" class="tbq__field" clearable :placeholder="t('kbSearch.table.noSort')" data-testid="table-query-order-field">
           <el-option v-for="c in sortableColumns" :key="c.name" :value="c.name" :label="c.name" />
         </el-select>
         <el-select v-model="orderDir" size="small" class="tbq__op" :disabled="!orderField" data-testid="table-query-order-dir">
-          <el-option value="asc" label="升序" />
-          <el-option value="desc" label="降序" />
+          <el-option value="asc" :label="t('kbSearch.table.ascending')" />
+          <el-option value="desc" :label="t('kbSearch.table.descending')" />
         </el-select>
-        <span class="tbq__label">统计</span>
-        <el-select v-model="aggOp" size="small" class="tbq__op" clearable placeholder="（不统计）">
-          <el-option value="count" label="计数 count" />
+        <span class="tbq__label">{{ t('kbSearch.table.aggregationLabel') }}</span>
+        <el-select v-model="aggOp" size="small" class="tbq__op" clearable :placeholder="t('kbSearch.table.noAggregation')">
+          <el-option value="count" :label="t('kbSearch.table.countOption')" />
           <el-option v-for="c in aggregableColumns" :key="c.name" :value="c.name" disabled
                      :label="`—— ${c.name} ——`" />
           <template v-for="c in aggregableColumns" :key="c.name">
@@ -40,7 +40,7 @@
           </template>
         </el-select>
         <el-button size="small" type="primary" :loading="loading" @click="run"
-                   data-testid="table-query-run">查询</el-button>
+                   data-testid="table-query-run">{{ t('kbSearch.table.run') }}</el-button>
       </div>
     </div>
 
@@ -52,12 +52,12 @@
     <div v-if="aggregate" class="tbq__aggregate" data-testid="table-query-aggregate">
       {{ aggregate.op }}<template v-if="aggregate.field">({{ aggregate.field }})</template>
       = <b>{{ aggregate.value }}</b>
-      <span class="tbq__muted">（符合条件 {{ aggregate.row_count }} 行）</span>
+      <span class="tbq__muted">{{ t('kbSearch.table.aggregateRows', { count: String(aggregate.row_count) }) }}</span>
     </div>
 
     <!-- 选列（completeness-5：select 投影复选框） -->
     <div v-if="columns.length" class="tbq__row tbq__select-cols">
-      <span class="tbq__label">显示列</span>
+      <span class="tbq__label">{{ t('kbSearch.table.visibleColumns') }}</span>
       <el-checkbox v-for="c in columns" :key="c.name" :model-value="selectedColumns.includes(c.name)"
                    size="small" @change="toggleColumn(c.name)" data-testid="table-query-col-check">
         {{ c.name }}
@@ -80,18 +80,18 @@
         </tbody>
       </table>
       <div class="tbq__pager">
-        <span class="tbq__muted">{{ rows.length }} 行{{ hasMore ? '（更多未列）' : '' }}</span>
-        <el-button v-if="hasMore" size="small" :loading="loading" :disabled="loading" data-testid="table-query-next" @click="runNext">{{ queryChanged ? '条件已修改，重新查询' : '下一页' }}</el-button>
+        <span class="tbq__muted">{{ t('kbSearch.table.rowCount', { n: rows.length }) }}{{ hasMore ? t('kbSearch.table.moreUnlisted') : '' }}</span>
+        <el-button v-if="hasMore" size="small" :loading="loading" :disabled="loading" data-testid="table-query-next" @click="runNext">{{ queryChanged ? t('kbSearch.table.rerunAfterChange') : t('records.pager.next') }}</el-button>
       </div>
     </div>
-    <p v-else-if="!loading && searched" class="tbq__muted">无符合条件的行——调整筛选条件试试。</p>
+    <p v-else-if="!loading && searched" class="tbq__muted">{{ t('kbSearch.table.noMatchingRows') }}</p>
 
     <!-- 列能力面（schema 驱动的自描述） -->
     <details class="tbq__schema">
-      <summary>列类型与可用操作</summary>
+      <summary>{{ t('kbSearch.table.schemaSummary') }}</summary>
       <ul>
         <li v-for="c in columns" :key="c.name">
-          <b>{{ c.name }}</b>（{{ typeLabel(c.value_type) }}）：{{ c.operations.join(' / ') }}
+          <b>{{ c.name }}</b>{{ t('kbSearch.table.schemaTypeSuffix', { type: typeLabel(c.value_type) }) }}{{ c.operations.join(' / ') }}
         </li>
       </ul>
     </details>
@@ -110,6 +110,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useServingApi, type TableFieldSchema, type TableQueryResult, type TableQuerySpec } from '@/api/serving'
+import { t } from '@/locales/t'
 
 const props = defineProps<{
   /** 表格资产 ref（内部 "{doc}#table:{t}" 或 st_） */
@@ -142,7 +143,7 @@ const aggregate = ref<TableQueryResult['aggregate']>(null)
 const loading = ref(false)
 const searched = ref(false)
 const error = ref('')
-const errorTitle = ref('查询失败')
+const errorTitle = ref(t('kbSearch.table.queryFailed'))
 
 type Filter = { field: string | undefined; op: string | undefined; value: string }
 const filters = ref<Filter[]>([])
@@ -150,12 +151,19 @@ const orderField = ref<string | undefined>()
 const orderDir = ref<'asc' | 'desc'>('asc')
 const aggOp = ref<string | undefined>()
 
-const OP_LABELS: Record<string, string> = {
+/** 比较类操作符（语言中性符号，原样展示）。 */
+const OP_SYMBOLS: Record<string, string> = {
   eq: '=', ne: '≠', lt: '<', lte: '≤', gt: '>', gte: '≥',
-  in: '属于', contains: '包含', is_null: '为空',
 }
-const opLabel = (op: string) => OP_LABELS[op] ?? op
-const typeLabel = (t: string) => t === 'number' ? '数值' : t === 'date' ? '日期' : '文本'
+/** 文案类操作符：常量表只存 key，取用时 t()（切语言即重算）。 */
+const OP_LABEL_KEYS: Record<string, string> = {
+  in: 'kbSearch.table.opIn', contains: 'kbSearch.table.opContains', is_null: 'kbSearch.table.opIsEmpty',
+}
+const opLabel = (op: string) => OP_SYMBOLS[op]
+  ?? (OP_LABEL_KEYS[op] ? t(OP_LABEL_KEYS[op]) : op)
+const typeLabel = (valueType: string) => (valueType === 'number'
+  ? t('kbSearch.table.typeNumber')
+  : valueType === 'date' ? t('kbSearch.table.typeDate') : t('kbSearch.table.typeText'))
 
 function schemaOf(field: string | undefined): TableFieldSchema | undefined {
   return columns.value.find(c => c.name === field)
@@ -170,10 +178,10 @@ function defaultOp(field: string): string {
 }
 function valueHint(field: string | undefined, op: string): string {
   const type = schemaOf(field)?.value_type
-  if (op === 'in') return '多个值，逗号分隔'
+  if (op === 'in') return t('kbSearch.table.valueHintIn')
   if (type === 'date') return 'YYYY-MM-DD'
-  if (type === 'number') return '数值'
-  return '文本'
+  if (type === 'number') return t('kbSearch.table.typeNumber')
+  return t('kbSearch.table.typeText')
 }
 const sortableColumns = computed(() => columns.value.filter(c => c.sortable))
 const aggregableColumns = computed(() => columns.value.filter(c => c.can_aggregate))
@@ -252,14 +260,15 @@ async function execute(spec: TableQuerySpec) {
   } catch (e) {
     const err = e as { response?: { data?: { error?: string; message?: string } }; message?: string }
     const code = err.response?.data?.error ?? ''
-    error.value = err.response?.data?.message || err.message || '查询失败'
+    error.value = err.response?.data?.message || err.message || t('kbSearch.table.queryFailed')
+    // 类型化错误码 → 可修正的标题；code 是与服务端比对的匹配数据，不入字典
     errorTitle.value = ({
-      unknown_field: '字段不存在',
-      type_mismatch: '类型不匹配',
-      unsupported_operation: '不支持的操作',
-      result_too_large: '结果过大',
-      structured_query_unavailable: '该表格暂不可精确查询',
-    } as Record<string, string>)[code] ?? '查询失败'
+      unknown_field: t('kbSearch.table.errorUnknownField'),
+      type_mismatch: t('kbSearch.table.errorTypeMismatch'),
+      unsupported_operation: t('kbSearch.table.errorUnsupportedOperation'),
+      result_too_large: t('kbSearch.table.errorResultTooLarge'),
+      structured_query_unavailable: t('kbSearch.table.errorUnavailable'),
+    } as Record<string, string>)[code] ?? t('kbSearch.table.queryFailed')
   } finally {
     loading.value = false
   }
@@ -270,7 +279,7 @@ onMounted(async () => {
   try {
     await run()
   } catch {
-    ElMessage.error('表格查询面板初始化失败')
+    ElMessage.error(t('kbSearch.table.initFailed'))
   }
 })
 </script>

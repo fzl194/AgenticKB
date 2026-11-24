@@ -1,6 +1,18 @@
 {
-  "current": "1.1.41",
+  "current": "1.2.0",
   "releases": [
+    {
+      "version": "1.2.0",
+      "released_at": "2026-11-24",
+      "title": "前端全站中英文双语（i18n）",
+      "changes": [
+        "新增语言切换：顶栏入口一键中/英切换，默认中文；语言偏好 localStorage 持久化（全局键 + 按用户名分键，登录后自动应用个人偏好、登出清当前用户防串写）",
+        "双语字典基建：locales/ 按域分模块（common/dashboard/kbManage/kbSearch/kbStruct/kbView/mcp/records/shell），Pinia locale store + translate 纯函数查表，Element Plus 组件库语言联动切换",
+        "四大区域全量英化：概览区（Dashboard/OpsPanel/KbCard/QueryList）、检索记录区（列表/分析面板/自定义时间校验）、MCP 接入区（接入页/钥匙配置面板）、知识库区（列表/详情/文档预览/run 详情/挖掘轨迹 + 文件管理/建库/导出/复制/替换/成员/设置/挖掘/检索质量等组件簇）",
+        "api/store 层前端错误文案接入 t()，EmptyState/WordCloud 等共用组件双语化",
+        "质量闸门：字典 key 双向对账测试（未引用 key / 调用未定义 key 均挂测试），中英文 key 一致性 + Element 语言映射 + locale store 各 40~130 例测试，前端全量测试通过"
+      ]
+    },
     {
       "version": "1.1.41",
       "released_at": "2026-11-17",

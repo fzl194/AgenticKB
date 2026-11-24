@@ -84,11 +84,25 @@ class CaptionOutcome:
 
 
 class FigureCaptionCache(Protocol):
-    """图注缓存（只缓存成功结果；失败不落缓存，重试有机会）。"""
+    """图注缓存（只缓存成功结果；失败不落缓存，重试有机会）。
+
+    put 携带全部键成分（审计列），键推导仍以 keys.py 为准。
+    """
 
     async def get(self, key: str) -> str | None: ...
 
-    async def put(self, key: str, caption: str, *, model: str) -> None: ...
+    async def put(
+        self,
+        key: str,
+        caption: str,
+        *,
+        model: str,
+        domain: str = "",
+        source_raw_hash: str = "",
+        parser_fingerprint: str = "",
+        figure_element_id: str = "",
+        prompt_version: str = "",
+    ) -> None: ...
 
 
 class ImageByteSource(Protocol):
@@ -321,7 +335,16 @@ class FigureCaptionFacade:
                     failed += 1
                     continue
                 caption = caption.strip()
-                await self._cache.put(key, caption, model=params.model)
+                await self._cache.put(
+                    key,
+                    caption,
+                    model=params.model,
+                    domain=domain,
+                    source_raw_hash=source_raw_hash,
+                    parser_fingerprint=parser_fingerprint,
+                    figure_element_id=candidate.element_id,
+                    prompt_version=FIGCAP_PROMPT_VERSION,
+                )
                 captioned += 1
             segments.append(_build_segment(
                 candidate, caption=caption, model=params.model, order=order,

@@ -194,6 +194,15 @@ _KB_EXPORT_TASKS_DDL = (
 _KB_WORKSPACES_DDL = (
     _REPO_ROOT / "databases" / "kb" / "schemas" / "021_kb_workspaces.sql"
 )
+# 图片VLM图注方案B：图注缓存表（自包含、无 FK，挂链尾；存量库同文版本化迁移
+# =core/20261124_013_asset_figure_caption_cache）。
+_FIGCAP_CACHE_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "asset_core"
+    / "schemas"
+    / "018_asset_figure_caption_cache.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -313,6 +322,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _KB_EXPORT_TASKS_DDL,
         # 67号工作台 MVP：kb_workspace_* 七表（自包含，挂链尾）。
         _KB_WORKSPACES_DDL,
+        # 图片VLM图注方案B：asset_figure_caption_cache（自包含，挂链尾）。
+        _FIGCAP_CACHE_DDL,
     )
 
 

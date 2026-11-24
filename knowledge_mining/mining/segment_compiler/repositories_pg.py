@@ -86,6 +86,60 @@ class PgSegmentStore:
                     ],
                 )
 
+    async def append_figures_for_snapshot(
+        self,
+        snapshot_id: str,
+        document_key: str,
+        segments: tuple[CompiledSegment, ...],
+    ) -> int:
+        """幂等追加 figure 切片（图片VLM图注·方案B）。
+
+        - 保留段 segment_index（1_000_000+）与主链命名空间隔离；
+        - 已存在的 segment_key 跳过（重放=零新增）；asset_raw_segments 无
+          segment_key 唯一约束，check-then-insert 在事务内串行足够；
+        - compiler_fingerprint 置 NULL：追加行不参与编译幂等短路
+          （compiler_fingerprint() 只读非空行）。
+        """
+        inserted = 0
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                for seg in segments:
+                    segment_key = f"{document_key}#{seg.segment_index}"
+                    cur = await conn.execute(
+                        """SELECT 1 FROM asset_raw_segments
+                           WHERE document_snapshot_id = %s AND segment_key = %s""",
+                        [snapshot_id, segment_key],
+                    )
+                    if await cur.fetchone() is not None:
+                        continue
+                    rsd = to_raw_segment_data(seg, document_key=document_key)
+                    await conn.execute(
+                        """INSERT INTO asset_raw_segments (
+                               id, document_snapshot_id, segment_key, segment_index,
+                               block_type, semantic_role, section_path, section_title,
+                               raw_text, normalized_text, content_hash,
+                               normalized_hash, token_count, structure_json,
+                               source_offsets_json, entity_refs_json, metadata_json,
+                               compiler_fingerprint
+                           ) VALUES (
+                               %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
+                           )""",
+                        [
+                            _new_id("seg"), snapshot_id, segment_key,
+                            seg.segment_index, rsd.block_type, rsd.semantic_role,
+                            json.dumps(rsd.section_path, ensure_ascii=False),
+                            rsd.section_title, rsd.raw_text, rsd.normalized_text,
+                            rsd.content_hash, rsd.normalized_hash, rsd.token_count,
+                            json.dumps(rsd.structure_json, ensure_ascii=False),
+                            json.dumps(rsd.source_offsets_json, ensure_ascii=False),
+                            json.dumps(rsd.entity_refs_json, ensure_ascii=False),
+                            json.dumps(rsd.metadata_json, ensure_ascii=False),
+                            None,
+                        ],
+                    )
+                    inserted += 1
+        return inserted
+
     async def compiler_fingerprint(self, snapshot_id: str) -> str | None:
         """该快照已落库切片的编译指纹（无切片/未编译 → None）.
 

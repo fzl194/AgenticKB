@@ -63,3 +63,8 @@ migrations:
     path: core/20261116_012_kb_workspaces.sql
     mode: online_expand
     checksum: 23b850288210072dd2ef21a78d95050a1e6e465d742d4f415e7602d00521be89
+
+  - id: core/20261124_013_asset_figure_caption_cache
+    path: core/20261124_013_asset_figure_caption_cache.sql
+    mode: online_expand
+    checksum: 2039fa487c2df93ebffe69f58e58f12c52ad9eba093f9c2bf36e3cc0828e96d5

@@ -86,13 +86,13 @@ def _figure_asset(sha: str, *, derived: dict | None = None) -> FigureAsset:
 class _FakeCache:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
-        self.puts: list[tuple[str, str, str]] = []
+        self.puts: list[dict] = []
 
     async def get(self, key: str) -> str | None:
         return self.store.get(key)
 
-    async def put(self, key: str, caption: str, *, model: str) -> None:
-        self.puts.append((key, caption, model))
+    async def put(self, key, caption, **kwargs) -> None:
+        self.puts.append({"key": key, "caption": caption, **kwargs})
         self.store[key] = caption
 
 

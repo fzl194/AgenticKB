@@ -113,11 +113,13 @@ def test_kb_workflow_prepares_document_states_from_object_storage_identities(mon
         source_locator_service=object(),
         query_expansion_service=None,
         hierarchical_summary_service=None,
+        figure_caption_service=None,
     )
     monkeypatch.setattr(
         run_job,
         "_build_workflow_object_input_services",
-        lambda *, sync_pool, embedding_generator=None, llm_generator=None: v2_services,
+        lambda *, sync_pool, embedding_generator=None, llm_generator=None,
+        vision_captioner=None: v2_services,
     )
     monkeypatch.setattr(
         run_job,
@@ -219,6 +221,8 @@ def test_kb_workflow_services_use_control_plane_object_store_config(monkeypatch)
         "embedding_generator": None,
         # 29号 M3 接线：生成客户端透传（None=实验算子 FALLBACK degraded）
         "llm_generator": None,
+        # 图片VLM图注方案B：vision captioner 透传（None=图注算子 FALLBACK）
+        "vision_captioner": None,
     }
 
 

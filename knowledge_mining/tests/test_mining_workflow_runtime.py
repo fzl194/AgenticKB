@@ -229,6 +229,48 @@ def test_runtime_rejects_parameter_hash_and_missing_exact_handler() -> None:
         MiningWorkflowRuntime(context, run_id="run-1").execute()
 
 
+def test_runtime_accepts_older_catalog_manifests_after_catalog_upgrade(
+    monkeypatch,
+) -> None:
+    """目录演进兼容（feat/figcap-operator B0）。
+
+    运行时升级到支持更高目录版本（如 2）后，存量冻结 manifest
+    （catalogVersion=1，不含新算子）必须继续可执行——历史 Run 与
+    已发布 workflow 不因目录演进而失效。
+    """
+    monkeypatch.setattr(MiningWorkflowRuntime, "SUPPORTED_CATALOG_VERSION", "2")
+    manifest = minimal_manifest()
+    assert manifest["catalogVersion"] == "1"
+    registry = HandlerRegistry()
+    context, input_handler, document_handler, finalize_handler = runtime_context(
+        manifest, registry, []
+    )
+    registry.register("input_ingest", "1", input_handler)
+    registry.register("document_parse", "1", document_handler("document_parse"))
+    registry.register("segment_compile", "1", document_handler("segment_compile"))
+    registry.register("asset_persist", "1", document_handler("asset_persist"))
+    registry.register("mining_finalize", "1", finalize_handler)
+
+    result = MiningWorkflowRuntime(context, run_id="run-1").execute()
+
+    assert result.status == "completed"
+    assert result.capabilities >= {"finalized", "release_published"}
+
+
+@pytest.mark.parametrize("bad_version", ["3", "2.5", "abc", "", None])
+def test_runtime_still_rejects_newer_or_invalid_catalog_version(
+    monkeypatch, bad_version
+) -> None:
+    """目录版本只向后兼容：高于支持值或非整数版本一律拒绝。"""
+    monkeypatch.setattr(MiningWorkflowRuntime, "SUPPORTED_CATALOG_VERSION", "2")
+    manifest = minimal_manifest()
+    manifest["catalogVersion"] = bad_version
+    context, *_ = runtime_context(manifest, HandlerRegistry(), [])
+
+    with pytest.raises(InvalidWorkflowManifest, match="catalog"):
+        MiningWorkflowRuntime(context, run_id="run-1").execute()
+
+
 def test_builtin_registry_has_all_16_exact_handlers() -> None:
     registry = builtin_handler_registry()
 

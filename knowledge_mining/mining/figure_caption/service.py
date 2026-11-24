@@ -112,7 +112,10 @@ class ImageByteSource(Protocol):
 
 
 class FigureCaptioner(Protocol):
-    """VLM 图注调用（同步阻塞——门面用线程池调度，避免卡事件循环）。"""
+    """VLM 图注调用（同步阻塞——门面用线程池调度，避免卡事件循环）。
+
+    model 逐图传入：算子参数可换模型，真实实现按模型名路由 vision 条目。
+    """
 
     def caption(
         self,
@@ -120,6 +123,7 @@ class FigureCaptioner(Protocol):
         image_bytes: bytes,
         mime: str | None,
         native_caption: str | None,
+        model: str,
     ) -> str | None: ...
 
 
@@ -322,6 +326,7 @@ class FigureCaptionFacade:
                         image_bytes=image_bytes,
                         mime=candidate.mime,
                         native_caption=candidate.native_caption or None,
+                        model=params.model,
                     )
                 except Exception as exc:  # noqa: BLE001 —— 单图失败不中断
                     failed += 1

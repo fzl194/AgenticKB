@@ -28,7 +28,10 @@ class MiningWorkflowRuntime:
     """Execute one Run exclusively from its Domain-stored frozen Manifest."""
 
     SUPPORTED_SCHEMA_VERSION = "2.0"
-    SUPPORTED_CATALOG_VERSION = "1"
+    # 图片VLM图注方案B：目录新增 figure_caption_generate（第10个可选
+    # 算子）→ 目录版本升 2；旧冻结 manifest catalogVersion=1 仍可执行
+    #（runtime 已放宽为整数比较）。
+    SUPPORTED_CATALOG_VERSION = "2"
 
     def __init__(self, context: Any, *, run_id: str) -> None:
         self.context = context

@@ -733,6 +733,7 @@ def _publish_workflow_job(
 def _build_workflow_object_input_services(
     *, sync_pool: Any, embedding_generator: Any | None = None,
     llm_generator: Any | None = None,
+    vision_captioner: Any | None = None,
 ) -> Any:
     """Compose v2 KB services from the control-plane MinIO configuration.
 
@@ -759,6 +760,7 @@ def _build_workflow_object_input_services(
         sync_pool=sync_pool,
         embedding_generator=embedding_generator,
         llm_generator=llm_generator,
+        vision_captioner=vision_captioner,
     )
 
 
@@ -812,6 +814,7 @@ class _WorkflowJobServices:
         # Run 结束时统一释放（duck-typed close，见 self.close()）。
         self._llm_stage_services = llm
         self._owned_llm_generator: Any | None = None
+        self._owned_vision_captioner: Any | None = None
         self.pipeline_config = PipelineConfig(
             domain=profile.domain_id,
             parser_factory=create_parser,
@@ -1343,10 +1346,16 @@ class _WorkflowJobServices:
             knowledge_domain=getattr(self, "profile", None) and self.profile.domain_id,
         )
         self._owned_llm_generator = llm_generator
+        vision_captioner = _init_vision_captioner(
+            getattr(self, "llm_base_url", None),
+            knowledge_domain=getattr(self, "profile", None) and self.profile.domain_id,
+        )
+        self._owned_vision_captioner = vision_captioner
         services = _build_workflow_object_input_services(
             sync_pool=self.asset_db.pool,
             embedding_generator=self.pipeline_config.embedding_generator,
             llm_generator=llm_generator,
+            vision_captioner=vision_captioner,
         )
         self.document_parse_service = services.document_parse_service
         self.segment_compile_service = services.segment_compile_service
@@ -1358,6 +1367,8 @@ class _WorkflowJobServices:
         self.hierarchical_summary_service = (
             services.hierarchical_summary_service
         )
+        # 图片VLM图注方案B：同实验算子语义（未配置 → None → FALLBACK）。
+        self.figure_caption_service = services.figure_caption_service
         # A1（38 号 §2.4）：来源记录物化门面。注意必须逐字段搬运——本类是
         # handler 看到的 runtime.services，漏搬即静默降级（E2E 实测教训）。
         self.source_locator_service = services.source_locator_service
@@ -1374,6 +1385,9 @@ class _WorkflowJobServices:
             self._owned_llm_generator,
             *(self._llm_stage_services or {}).values(),
         )
+        captioner = getattr(self, "_owned_vision_captioner", None)
+        if captioner is not None:
+            _close_llm_resources(captioner)
 
 
 def _execute_workflow_job(
@@ -1912,6 +1926,29 @@ def _init_llm_generator(
         poll_interval=cfg.llm_async_poll_interval,
         wait_timeout=cfg.llm_async_chat_wait_timeout,
         max_attempts=cfg.llm_async_max_attempts,
+        knowledge_domain=knowledge_domain,
+    )
+
+
+def _init_vision_captioner(
+    llm_base_url: str | None,
+    *,
+    knowledge_domain: str | None = None,
+) -> Any | None:
+    """图片VLM图注方案B：vision 任务通道 captioner（None = 未配置）。"""
+    if not llm_base_url:
+        return None
+    from knowledge_mining.mining.figure_caption.vlm import VlmFigureCaptioner
+    from knowledge_mining.mining.infra.llm_task_client import LlmTaskClient
+    from knowledge_mining.mining.infra.mining_config import MiningConfig
+
+    cfg = MiningConfig()
+    return VlmFigureCaptioner(
+        LlmTaskClient(
+            base_url=llm_base_url,
+            poll_interval=cfg.llm_async_poll_interval,
+            wait_timeout=cfg.llm_async_chat_wait_timeout,
+        ),
         knowledge_domain=knowledge_domain,
     )
 

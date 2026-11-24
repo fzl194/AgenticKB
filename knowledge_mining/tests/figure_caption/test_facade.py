@@ -111,9 +111,10 @@ class _FakeCaptioner:
         self.caption_text = caption
         self.calls: list[dict] = []
 
-    def caption(self, *, image_bytes, mime, native_caption) -> str | None:
+    def caption(self, *, image_bytes, mime, native_caption, model) -> str | None:
         self.calls.append(
-            {"size": len(image_bytes), "mime": mime, "native": native_caption}
+            {"size": len(image_bytes), "mime": mime, "native": native_caption,
+             "model": model}
         )
         if isinstance(self.caption_text, Exception):
             raise self.caption_text

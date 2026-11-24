@@ -33,6 +33,7 @@ _SPECS = (
     ("embedding", "document", {"retrieval_units"}, {"embeddings"}, "FALLBACK"),
     ("query_expansion_generate", "document", {"retrieval_units"}, {"query_aliases"}, "FALLBACK"),
     ("hierarchical_summary_generate", "document", {"parsed_segments"}, {"summary_aliases"}, "FALLBACK"),
+    ("figure_caption_generate", "document", {"parsed_segments"}, {"figure_captions"}, "FALLBACK"),
     ("asset_persist", "document", {"parsed_segments"}, {"assets_persisted"}, "SKIP_DOCUMENT"),
     ("mining_finalize", "global", {"assets_persisted"}, {"finalized"}, "FAIL_FAST"),
 )
@@ -46,6 +47,7 @@ _LABELS = {
     "embedding": ("向量化", "按 representation 策略矩阵为检索单元生成向量。", "discourse"),
     "query_expansion_generate": ("问题别名生成", "离线 Doc2Query 增强：对合格源证据生成检索别名（实验，可降级）。", "discourse"),
     "hierarchical_summary_generate": ("层级摘要生成", "标题树自底向上生成 section/document 摘要别名（实验，可降级）。", "discourse"),
+    "figure_caption_generate": ("图片图注生成", "对无原生图注的图片调多模态模型生成图注切片（实验，可降级；当前支持 PPTX）。", "discourse"),
     "asset_persist": ("资产持久化", "合并能力线并原子写入文档资产。", "storage"),
     "mining_finalize": ("挖掘收尾", "执行 Build、校验、发布和 Run 收尾。", "publish"),
 }

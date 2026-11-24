@@ -107,6 +107,10 @@ class _FakeBytes:
 
 
 class _FakeCaptioner:
+    # 模拟 VlmFigureCaptioner 已解析 llm_service 默认视觉模型的形态；
+    # 显式传 model 的用例在 params 里覆盖。
+    default_model = "glm-4.5v"
+
     def __init__(self, caption: str | None = "VLM 图注文本") -> None:
         self.caption_text = caption
         self.calls: list[dict] = []
@@ -331,7 +335,7 @@ async def test_cache_hit_skips_captioner_and_bytes():
         source_raw_hash=IDENT.source_raw_hash,
         parser_fingerprint=IDENT.parser_fingerprint,
         figure_element_id="fig1",
-        model=FigureCaptionParams().model,
+        model=_FakeCaptioner.default_model,  # 解析后的默认视觉模型
         prompt_version=FIGCAP_PROMPT_VERSION,
     )
     cache.store[key] = "缓存图注"

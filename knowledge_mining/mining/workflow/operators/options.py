@@ -209,9 +209,10 @@ class FigureCaptionOptions(OperatorOptions):
     ImageCaptioner.max_images；minImageBytes 过滤装饰性小图。
     """
 
-    model: str = Field(
-        "glm-4.5v", alias="model", title="多模态模型",
-        description="llm_service 模型列表中的 vision 条目名。",
+    model: str | None = Field(
+        None, alias="model", title="多模态模型",
+        description="留空＝用 llm_service 配置的默认视觉模型（vision_model）；"
+        "填写则用 llm_service 模型列表中的具体条目名。",
     )
     max_figures: int = Field(
         20, ge=0, le=200, alias="maxFigures", title="每文档图片上限",

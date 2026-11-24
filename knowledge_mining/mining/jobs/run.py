@@ -1935,14 +1935,38 @@ def _init_vision_captioner(
     *,
     knowledge_domain: str | None = None,
 ) -> Any | None:
-    """图片VLM图注方案B：vision 任务通道 captioner（None = 未配置）。"""
+    """图片VLM图注方案B：vision 任务通道 captioner（None = 未配置）。
+
+    默认视觉模型名从 llm_service 解析（模型选择归 llm_service 管）：
+    GET /api/v1/models/vision-default → provider.vision_model，回落
+    active_model。端点不可达时不致命——captioner.default_model=None，
+    算子参数也未填模型时图注全计 failed 走 FALLBACK。
+    """
     if not llm_base_url:
         return None
+    import httpx
+
     from knowledge_mining.mining.figure_caption.vlm import VlmFigureCaptioner
     from knowledge_mining.mining.infra.llm_task_client import LlmTaskClient
     from knowledge_mining.mining.infra.mining_config import MiningConfig
 
     cfg = MiningConfig()
+    default_model: str | None = None
+    try:
+        resp = httpx.get(
+            f"{llm_base_url.rstrip('/')}/api/v1/models/vision-default",
+            timeout=5.0, trust_env=False,
+        )
+        data = (resp.json().get("data") or {}) if resp.status_code == 200 else {}
+        default_model = data.get("model") or None
+    except Exception as exc:  # noqa: BLE001 —— 解析失败不阻断启动
+        logging.getLogger(__name__).warning(
+            "vision-default lookup failed (%s); figure captions need an "
+            "explicit model in operator params", exc,
+        )
+    logging.getLogger(__name__).info(
+        "vision captioner default model resolved: %s", default_model,
+    )
     return VlmFigureCaptioner(
         LlmTaskClient(
             base_url=llm_base_url,
@@ -1950,6 +1974,7 @@ def _init_vision_captioner(
             wait_timeout=cfg.llm_async_chat_wait_timeout,
         ),
         knowledge_domain=knowledge_domain,
+        default_model=default_model,
     )
 
 

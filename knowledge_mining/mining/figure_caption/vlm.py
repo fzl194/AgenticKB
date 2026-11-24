@@ -20,9 +20,18 @@ logger = logging.getLogger(__name__)
 class VlmFigureCaptioner:
     """``FigureCaptioner`` 的生产实现（同步阻塞；失败 raise 由门面计数）."""
 
-    def __init__(self, task_client: Any, *, knowledge_domain: str | None = None) -> None:
+    def __init__(
+        self,
+        task_client: Any,
+        *,
+        knowledge_domain: str | None = None,
+        default_model: str | None = None,
+    ) -> None:
         self._client = task_client
         self._knowledge_domain = knowledge_domain
+        #: llm_service 配置的默认视觉模型（GET /api/v1/models/vision-default
+        #: 启动期解析）。门面在算子参数留空时用它，保证缓存键是具体模型名。
+        self.default_model = default_model
 
     def caption(
         self,

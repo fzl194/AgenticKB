@@ -43,16 +43,20 @@ logger = logging.getLogger(__name__)
 # appender 侧定为 f"{document_key}#f{order}"，与主链 #{index} 命名空间隔离）。
 FIGURE_SEGMENT_INDEX_BASE = 1_000_000
 
-DEFAULT_MODEL = "glm-4.5v"
+DEFAULT_MODEL = None  # 模型选择归 llm_service 管：None = vision-default 端点解析
 DEFAULT_MAX_FIGURES = 20
 DEFAULT_MIN_IMAGE_BYTES = 1024
 
 
 @dataclass(frozen=True)
 class FigureCaptionParams:
-    """算子参数（catalog options 的服务侧形态）。"""
+    """算子参数（catalog options 的服务侧形态）。
 
-    model: str = DEFAULT_MODEL
+    model=None 表示用 llm_service 配置的默认视觉模型（启动期经
+    /api/v1/models/vision-default 解析到 captioner.default_model）。
+    """
+
+    model: str | None = DEFAULT_MODEL
     max_figures: int = DEFAULT_MAX_FIGURES
     min_image_bytes: int = DEFAULT_MIN_IMAGE_BYTES
 
@@ -289,6 +293,24 @@ class FigureCaptionFacade:
         if not candidates:
             return outcome
 
+        # 模型解析：算子参数 > llm_service 默认视觉模型（captioner 启动期
+        # 经 /api/v1/models/vision-default 取名）。解析不出具体模型时
+        # 不打 LLM 不写缓存——图全部计 failed，算子层走 FALLBACK。
+        effective_model = params.model or getattr(
+            self._captioner, "default_model", None
+        )
+        if not effective_model:
+            logger.warning(
+                "figure caption model unresolved (params.model=None and "
+                "llm_service vision-default unavailable); skipping %d figure(s)",
+                len(candidates),
+            )
+            return CaptionOutcome(
+                figures_found=len(candidates),
+                failed=len(candidates),
+                degraded=True,
+            )
+
         source_raw_hash = doc.source_identity.source_raw_hash
         parser_fingerprint = doc.source_identity.parser_fingerprint
 
@@ -300,7 +322,7 @@ class FigureCaptionFacade:
                 source_raw_hash=source_raw_hash,
                 parser_fingerprint=parser_fingerprint,
                 figure_element_id=candidate.element_id,
-                model=params.model,
+                model=effective_model,
                 prompt_version=FIGCAP_PROMPT_VERSION,
             )
             caption = await self._cache.get(key)
@@ -326,7 +348,7 @@ class FigureCaptionFacade:
                         image_bytes=image_bytes,
                         mime=candidate.mime,
                         native_caption=candidate.native_caption or None,
-                        model=params.model,
+                        model=effective_model,
                     )
                 except Exception as exc:  # noqa: BLE001 —— 单图失败不中断
                     failed += 1
@@ -343,7 +365,7 @@ class FigureCaptionFacade:
                 await self._cache.put(
                     key,
                     caption,
-                    model=params.model,
+                    model=effective_model,
                     domain=domain,
                     source_raw_hash=source_raw_hash,
                     parser_fingerprint=parser_fingerprint,
@@ -352,7 +374,7 @@ class FigureCaptionFacade:
                 )
                 captioned += 1
             segments.append(_build_segment(
-                candidate, caption=caption, model=params.model, order=order,
+                candidate, caption=caption, model=effective_model, order=order,
             ))
 
         appended = 0

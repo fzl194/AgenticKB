@@ -28,6 +28,25 @@ def _to_http_error(exc: ModelProviderError) -> HTTPException:
     return HTTPException(status_code=400, detail=exc.message)
 
 
+@router.get("/vision-default")
+async def vision_default(request: Request):
+    """默认视觉模型名（模型选择归 llm_service 管，挖掘侧不存模型名）。
+
+    回落链：provider.vision_model → provider.active_model → null。
+    只返回模型名与来源，不含地址/密钥。
+    """
+    resolver = getattr(request.app.state, "provider_resolver", None)
+    if resolver is None:
+        return {"success": True, "data": {"model": None, "source": "none"}}
+    vision = resolver.vision_default_model()
+    if vision:
+        return {"success": True, "data": {"model": vision, "source": "vision_model"}}
+    active = resolver.active_model_name()
+    if active:
+        return {"success": True, "data": {"model": active, "source": "active_model"}}
+    return {"success": True, "data": {"model": None, "source": "none"}}
+
+
 @router.post("/embeddings", response_model=EmbeddingResponse)
 async def create_embeddings(body: EmbeddingRequest, request: Request):
     svc = request.app.state.model_service

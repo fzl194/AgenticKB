@@ -330,11 +330,19 @@ class DomainConfigs:
                 "embedding_dimensions": emb.get("dimensions"),
             }
 
+        def _vision(cfg: dict[str, Any]) -> Any:
+            return (cfg.get("provider") or {}).get("vision_model")
+
         return {
-            "global": {"active_model": _active(self._global), **_emb(self._global)},
+            "global": {
+                "active_model": _active(self._global),
+                "vision_model": _vision(self._global),
+                **_emb(self._global),
+            },
             "domains": {
                 did: {
                     "active_model": _active(cfg),
+                    "vision_model": _vision(cfg),
                     "rerank_model": (cfg.get("rerank") or {}).get("model"),
                     **_emb(cfg),
                 }

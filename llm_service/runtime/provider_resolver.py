@@ -40,6 +40,10 @@ def build_model_provider(cfg: dict) -> BigModelProvider:
         embedding_timeout=dig_optional(cfg, "embedding", "timeout"),
         embedding_bypass_proxy=dig_optional(cfg, "embedding", "bypass_proxy"),
         embedding_headers=dig_optional(cfg, "embedding", "headers") or {},
+        # BUG-01：不接受 dimensions 参数的 embedding 网关按域关闭（默认开）。
+        embedding_send_dimensions=bool(
+            dig_optional(cfg, "embedding", "send_dimensions", default=True)
+        ),
         rerank_api_key=dig_optional(cfg, "rerank", "api_key"),
         rerank_url=dig_optional(cfg, "rerank", "base_url"),
         rerank_model=dig_optional(cfg, "rerank", "model"),

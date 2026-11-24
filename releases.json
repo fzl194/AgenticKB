@@ -1,6 +1,16 @@
 {
-  "current": "1.2.0",
+  "current": "1.2.1",
   "releases": [
+    {
+      "version": "1.2.1",
+      "released_at": "2026-11-24",
+      "title": "Embedding dimensions 死锁修复（BUG-01）——删配置 500 / 加配置 0 向量",
+      "changes": [
+        "修复 llm_service/runtime/service.py:499：submit_embedding 读可选字段 embedding.dimensions 由严格 dig() 改为 dig_optional()——配置缺失不再 ValueError 500（与同步端点 model_service 对齐），任务正常落库",
+        "新增 embedding.send_dimensions 配置开关（默认 true）：MaaS/bge-m3 等 extra_forbidden 网关设 false 后，请求体绝不携带 dimensions 字段（消除 HTTP 200 + 空 data → 0 向量死信）；dimensions 仍用于 worker 本地维度校验，智谱 embedding-3 行为不变",
+        "回归钉测：配置缺失提交不崩、配置保留解析不变、send_dimensions=false 不进 payload / 默认 true 保留；llm_service 全量 138 例通过"
+      ]
+    },
     {
       "version": "1.2.0",
       "released_at": "2026-11-24",

@@ -20,6 +20,11 @@ class BigModelProvider:
         embedding_timeout: int = 60,
         embedding_bypass_proxy: bool = False,
         embedding_headers: dict | None = None,
+        # BUG-01：MaaS/bge-m3 等网关的 Pydantic 模型 extra_forbidden，
+        # payload 带 dimensions 会 HTTP 200 + 空 data（0 向量死信）。
+        # 默认 True 保持智谱 embedding-3 行为（需 dimensions 压到 1024）；
+        # 不接受该参数的网关在配置里设 embedding.send_dimensions: false。
+        embedding_send_dimensions: bool = True,
         rerank_api_key: str = "",
         rerank_url: str = "https://open.bigmodel.cn/api/paas/v4/rerank",
         rerank_model: str = "",
@@ -31,6 +36,7 @@ class BigModelProvider:
         self._embedding_url = embedding_url.rstrip("/")
         self._embedding_model = embedding_model
         self._embedding_headers = embedding_headers or {}
+        self._embedding_send_dimensions = embedding_send_dimensions
         self._rerank_api_key = rerank_api_key
         self._rerank_url = rerank_url.rstrip("/")
         self._rerank_model = rerank_model
@@ -103,7 +109,10 @@ class BigModelProvider:
             "model": model or self._embedding_model,
             "input": texts,
         }
-        if dimensions is not None:
+        # BUG-01：send_dimensions=False 的网关（MaaS bge-m3 网关
+        # extra_forbidden，带 dimensions 即 200+空 data）绝不写入 payload；
+        # dimensions 仍由 worker._validate_embedding_result 做本地校验。
+        if dimensions is not None and self._embedding_send_dimensions:
             payload["dimensions"] = dimensions
         data = await self._post(
             self._embedding_url,

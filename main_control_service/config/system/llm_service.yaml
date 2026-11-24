@@ -2,11 +2,18 @@ host: "0.0.0.0"
 port: 8900
 pool_max: 20
 provider:
-  active_model: "deepseek-chat"
+  active_model: "qwen3.5:9b"
   headers: {}
-  timeout: 30
+  timeout: 300
   bypass_proxy: false
   models:
+    qwen3.5:9b:
+      model: "qwen3.5:9b"
+      base_url: "http://host.docker.internal:11434/v1/chat/completions"
+      api_key: "ollama-no-auth"
+      timeout: 300
+      bypass_proxy: false
+      headers: {}
     deepseek-chat:
       model: "deepseek-chat"
       base_url: "https://api.deepseek.com/chat/completions"
@@ -70,17 +77,23 @@ provider:
       bypass_proxy: false
       headers: {}
 embedding:
-  base_url: "https://open.bigmodel.cn/api/paas/v4/embeddings"
-  api_key: "bec7cc02fc88529bee532a07070f4e80.PbObZYZROyxvmtfq"
-  model: "embedding-3"
+  base_url: "http://host.docker.internal:18081/v1/embeddings"
+  api_key: "local-tei-no-auth"
+  model: "Qwen3-Embedding-0.6B"
   dimensions: 1024
+  # BUG-01：embedding 网关是否接受请求体里的 dimensions 字段。
+  # true（默认）：智谱 embedding-3 等需要 dimensions 压维度，照常下发；
+  # false：MaaS/bge-m3 等网关（Pydantic extra_forbidden，收到该字段即
+  #        HTTP 200 + 空 data → 0 向量死信）绝不下发，dimensions 仅用于
+  #        worker 本地校验返回向量维度。
+  send_dimensions: true
   timeout: 60
   bypass_proxy: false
   headers: {}
 rerank:
-  base_url: "https://open.bigmodel.cn/api/paas/v4/rerank"
-  api_key: "bec7cc02fc88529bee532a07070f4e80.PbObZYZROyxvmtfq"
-  model: "rerank-pro"
+  base_url: "http://host.docker.internal:18083/rerank"
+  api_key: "local-vllm-no-auth"
+  model: "/models/Qwen3-Reranker-0.6B"
   timeout: 60
   bypass_proxy: false
   headers: {}

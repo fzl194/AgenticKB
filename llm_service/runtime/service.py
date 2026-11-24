@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from string import Template
 
-from llm_service.config import DomainConfigs, dig
+from llm_service.config import DomainConfigs, dig, dig_optional
 from llm_service.db import LlmRuntimeDB
 from llm_service.providers.base import ProviderProtocol
 from llm_service.providers.model_base import ModelProviderProtocol
@@ -496,7 +496,11 @@ class LLMService:
         # （mining）不传时落配置默认值。None 直通会让 provider 请求不带
         # dimensions 参数——智谱 embedding-3 默认 2048 维，与库列 vector(1024)
         # 不匹配，向量化入库报 expected 1024 dimensions, not 2048。
-        actual_dimensions = dimensions if dimensions is not None else dig(domain_cfg, "embedding", "dimensions")
+        # BUG-01：embedding.dimensions 是可选字段（不在 _REQUIRED_PATHS），
+        # 与同步端点（model_service→resolver.embedding_default_dimensions 用
+        # dig_optional）对齐改用 dig_optional——缺失时 None 直通（不进 payload、
+        # 跳过本地维度校验），不再让提交 500。
+        actual_dimensions = dimensions if dimensions is not None else dig_optional(domain_cfg, "embedding", "dimensions")
 
         return await self._submit_with_idempotency(
             idempotency_key=idempotency_key,

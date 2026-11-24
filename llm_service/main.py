@@ -12,6 +12,7 @@ from llm_service.config import (
     DomainConfigs,
     load_llm_config,
     dig,
+    dig_optional,
     resolve_active_model_config,
     fetch_internal_verify_secret,
 )
@@ -157,6 +158,11 @@ def create_app(
                 embedding_timeout=dig(cfg, "embedding", "timeout"),
                 embedding_bypass_proxy=dig(cfg, "embedding", "bypass_proxy"),
                 embedding_headers=dig(cfg, "embedding", "headers") or {},
+                # BUG-01：不接受 dimensions 参数的网关（MaaS bge-m3）设
+                # embedding.send_dimensions: false 关闭；默认 True。
+                embedding_send_dimensions=bool(
+                    dig_optional(cfg, "embedding", "send_dimensions", default=True)
+                ),
                 rerank_api_key=dig(cfg, "rerank", "api_key"),
                 rerank_url=dig(cfg, "rerank", "base_url"),
                 rerank_model=dig(cfg, "rerank", "model"),

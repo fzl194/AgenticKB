@@ -46,6 +46,21 @@ def _as_str(value: Any, default: str = "") -> str:
     return value if isinstance(value, str) and value else default
 
 
+#: 旧二进制 Office（OLE2）→ 计划选链用的 OOXML 目标 MIME。
+#: 转换本体在 parse_operator.service._convert_legacy_office。
+_LEGACY_PLAN_MIME_MAP: dict[str, str] = {
+    "application/msword": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ),
+    "application/vnd.ms-excel": (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ),
+    "application/vnd.ms-powerpoint": (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ),
+}
+
+
 class _SyncPoolAsyncAdapter:
     """Expose a psycopg synchronous pool through the async repository shape.
 
@@ -179,13 +194,11 @@ class DocumentParseFacade:
         mime = _as_str(
             getattr(raw_file, "mime", None), "text/plain",
         )
-        if mime == "application/msword":
-            # 旧二进制 .doc：parse service 入口先转 docx（见
-            # parse_operator.service._convert_legacy_doc），计划按 docx 链选。
-            mime = (
-                "application/vnd.openxmlformats-officedocument."
-                "wordprocessingml.document"
-            )
+        # 旧二进制 Office（OLE2）：parse service 入口先转 OOXML（见
+        # parse_operator.service._convert_legacy_office），计划按目标格式链选。
+        _legacy_office_mime = _LEGACY_PLAN_MIME_MAP.get(mime)
+        if _legacy_office_mime is not None:
+            mime = _legacy_office_mime
         parser_ids = tuple(
             candidate.parser_id for candidate in registry.all()
             if candidate.supports(mime)

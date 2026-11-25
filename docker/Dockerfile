@@ -39,7 +39,7 @@ RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.li
 # ── 运行时系统依赖 ──
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libpq-dev supervisor nginx \
-    openjdk-21-jre-headless p7zip-full libreoffice-writer \
+    openjdk-21-jre-headless p7zip-full libreoffice-writer libreoffice-calc libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 
 # 构建期验证：旧版 .doc 转换依赖必须存在且可以无界面启动

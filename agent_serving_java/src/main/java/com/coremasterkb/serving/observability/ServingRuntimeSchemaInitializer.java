@@ -42,8 +42,9 @@ public class ServingRuntimeSchemaInitializer implements DomainSchemaEnsurer {
     // 迁移 id 含日期+表名全局唯一（双 010 保留，ledger 按整串 id 记账），合并后刷新。
     // 67号工作台 MVP：加 012（kb_workspace_* 七表）后刷新。
     // 图片VLM图注方案B：加 013（asset_figure_caption_cache）后刷新。
+    // S1 文件格式支持补全：加 014（快照 MIME 白名单放宽，legacy office）后刷新。
     private static final String EXPECTED_SCHEMA_CHECKSUM =
-            "1e7c1998ad3e792d9447cb3da331ea03b967307ed872130e2ff4d12d279d3d4f";
+            "574a943b4ab9e5dc4c6a1b60d85d559d4a6fc00d01ba92b8dd1d6e84ffacf3ca";
     private static final String EXPECTED_SCHEMA_MARKER =
             "schema/" + EXPECTED_SCHEMA_VERSION;
 

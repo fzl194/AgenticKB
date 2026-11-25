@@ -17,7 +17,8 @@ CURRENT_SCHEMA_VERSION = "2026.09.user-lifecycle-retrieval-v1"
 # 迁移 id 含日期+表名全局唯一（双 010 保留，ledger 按整串 id 记账），合并后刷新。
 # 67号工作台 MVP：加 012（kb_workspace_* 七表）后刷新。
 # 图片VLM图注方案B：加 013（asset_figure_caption_cache）后刷新。
-CURRENT_SCHEMA_CHECKSUM = "1e7c1998ad3e792d9447cb3da331ea03b967307ed872130e2ff4d12d279d3d4f"
+# S1 文件格式支持补全：加 014（快照 MIME 白名单放宽，legacy office）后刷新。
+CURRENT_SCHEMA_CHECKSUM = "574a943b4ab9e5dc4c6a1b60d85d559d4a6fc00d01ba92b8dd1d6e84ffacf3ca"
 SCHEMA_MARKER_ID = f"schema/{CURRENT_SCHEMA_VERSION}"
 MIGRATION_LEDGER_TABLE = "cmkb_schema_migrations"
 LEGACY_COMPAT_TABLES: tuple[str, ...] = ("mcp_open_kbs", "mcp_access")

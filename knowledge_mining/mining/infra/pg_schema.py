@@ -203,6 +203,16 @@ _FIGCAP_CACHE_DDL = (
     / "schemas"
     / "018_asset_figure_caption_cache.sql"
 )
+# S1 文件格式支持补全：快照 MIME 白名单放宽（旧二进制 Office xls/ppt 直存；
+# 纯放宽 DROP+ADD，存量零变更；存量库同文版本化迁移
+# =core/20261125_014_legacy_office_mime_snapshot）。
+_LEGACY_OFFICE_MIME_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "asset_core"
+    / "schemas"
+    / "019_legacy_office_mime_snapshot.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -324,6 +334,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _KB_WORKSPACES_DDL,
         # 图片VLM图注方案B：asset_figure_caption_cache（自包含，挂链尾）。
         _FIGCAP_CACHE_DDL,
+        # S1 文件格式支持补全：快照 MIME 白名单放宽（挂链尾，纯放宽幂等）。
+        _LEGACY_OFFICE_MIME_DDL,
     )
 
 

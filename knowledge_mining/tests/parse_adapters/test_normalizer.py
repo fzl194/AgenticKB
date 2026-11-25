@@ -308,4 +308,6 @@ def test_default_registry_selects_backends_by_mime() -> None:
     assert by_id["docling"].license_status != "ok"
     assert by_id["cloud_vlm"].license_status != "ok"
     # S2 文件格式支持补全：native_csv/native_json 入册（11 → 13）。
-    assert len(registry.all()) == 13
+    # S3 文件格式支持补全：native_image 入册（13 → 14）。
+    assert len(registry.all()) == 14
+    assert registry.select_for("image/png").parser_id == "native_image"

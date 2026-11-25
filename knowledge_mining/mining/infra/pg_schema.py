@@ -222,6 +222,15 @@ _CSV_JSON_MIME_DDL = (
     / "schemas"
     / "020_csv_json_mime_snapshot.sql"
 )
+# S3 文件格式支持补全：快照 MIME 白名单放宽（独立图片 png/jpeg 入库；
+# 纯放宽幂等；存量库同文版本化迁移=core/20261125_016_image_mime_snapshot）。
+_IMAGE_MIME_DDL = (
+    _REPO_ROOT
+    / "databases"
+    / "asset_core"
+    / "schemas"
+    / "021_image_mime_snapshot.sql"
+)
 _WORKFLOW_CONTROL_DDL = _REPO_ROOT / "databases" / "mining_control" / "schemas" / "001_mining_workflow_postgresql.sql"
 
 
@@ -347,6 +356,8 @@ def domain_schema_paths() -> tuple[Path, ...]:
         _LEGACY_OFFICE_MIME_DDL,
         # S2 文件格式支持补全：快照 MIME 白名单放宽（csv/json，挂链尾）。
         _CSV_JSON_MIME_DDL,
+        # S3 文件格式支持补全：快照 MIME 白名单放宽（image png/jpeg，挂链尾）。
+        _IMAGE_MIME_DDL,
     )
 
 

@@ -76,6 +76,8 @@ def test_include_cloud_slots_false_restores_implemented_set() -> None:
         "legacy_markdown", "legacy_txt", "onenet_jsonl",
         "native_docx", "native_xlsx", "native_pptx", "native_html", "native_pdf",
         "native_csv", "native_json",
+        # S3 文件格式支持补全：独立图片 VLM 解析器入册。
+        "native_image",
         "pdf_text_layer",
     }
 

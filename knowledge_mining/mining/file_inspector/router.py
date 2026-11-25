@@ -39,6 +39,9 @@ _FORMAT_TO_MIME: dict[str, str] = {
     # S2 文件格式支持补全（68号报告）。
     "csv": "text/csv",
     "json": "application/json",
+    # S3 文件格式支持补全：独立 png/jpeg → VLM 图片解析器（68号报告）。
+    "png": "image/png",
+    "jpeg": "image/jpeg",
 }
 
 #: 可作为 local primary 的许可状态（SRS §C04：未过审不选）。

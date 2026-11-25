@@ -41,18 +41,38 @@ class VlmFigureCaptioner:
         native_caption: str | None,
         model: str,
     ) -> str | None:
+        return self.describe(
+            image_bytes=image_bytes,
+            system_prompt=FIGCAP_SYSTEM_PROMPT,
+            user_prompt=build_user_prompt(native_caption),
+            model=model,
+            pipeline_stage="figure_caption",
+        )
+
+    def describe(
+        self,
+        *,
+        image_bytes: bytes,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        pipeline_stage: str = "figure_caption",
+    ) -> str | None:
+        """通用视觉问答通道：图 + 提示词 → 文本（S3 独立图片解析复用）.
+
+        同步阻塞；失败 raise 由调用方决定语义（图注=计数降级，
+        图片解析=诚实 FAILED）。mime 参数历史保留（消息构造只需字节）。
+        """
         from llm_service.providers.multimodal import build_vision_user_message
 
         messages = [
-            {"role": "system", "content": FIGCAP_SYSTEM_PROMPT},
-            build_vision_user_message(
-                build_user_prompt(native_caption), image_bytes=image_bytes,
-            ),
+            {"role": "system", "content": system_prompt},
+            build_vision_user_message(user_prompt, image_bytes=image_bytes),
         ]
         task_id = self._client.submit_chat(
             messages,
             expected_output_type="text",
-            pipeline_stage="figure_caption",
+            pipeline_stage=pipeline_stage,
             model=model,
             knowledge_domain=self._knowledge_domain,
         )
@@ -62,7 +82,7 @@ class VlmFigureCaptioner:
         if status != "succeeded":
             err = entry.get("error") or {}
             raise RuntimeError(
-                f"caption task {task_id} ended as {status}: "
+                f"vision task {task_id} ended as {status}: "
                 f"{err.get('error_type')}: {err.get('error_message')}"
             )
         result = entry.get("result") or {}

@@ -76,3 +76,7 @@ migrations:
     path: core/20261125_015_csv_json_mime_snapshot.sql
     mode: online_expand
     checksum: eac518d000c61982120bc84a96a2d80f1284036e93a8740291dc31fccb8c087c
+  - id: core/20261125_016_image_mime_snapshot
+    path: core/20261125_016_image_mime_snapshot.sql
+    mode: online_expand
+    checksum: 1d37d932f8d6a292b10c631c1d05bfa259f0dc28c12cf900512ed2c9d8613404

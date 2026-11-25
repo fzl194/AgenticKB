@@ -591,6 +591,15 @@ def build_new_chain_services(
     )
     from .compiled_input import SnapshotCompilationCoordinator
 
+    # S3 文件格式支持补全：把同一视觉通道注册给独立图片解析器
+    # （native_image 进程级 provider）。captioner 为 None 时不覆盖——
+    # 未配置态由 native_image 自身缺省（诚实失败），避免测试构建清掉
+    # 生产注册。
+    if vision_captioner is not None:
+        from knowledge_mining.mining.parse_adapters.native import native_image
+
+        native_image.set_vision_describer(vision_captioner)
+
     return NewChainServices(
         document_parse_service=DocumentParseFacade(
             operator=operator, documents=documents,
@@ -649,6 +658,15 @@ def build_new_chain_services(
         ),
         source_locator_service=locator_service,
     )
+
+    # S3 文件格式支持补全：把同一视觉通道注册给独立图片解析器
+    # （native_image 进程级 provider）。captioner 为 None 时不覆盖——
+    # 未配置态由 native_image 自身缺省（诚实失败），避免测试构建清掉
+    # 生产注册。
+    if vision_captioner is not None:
+        from knowledge_mining.mining.parse_adapters.native import native_image
+
+        native_image.set_vision_describer(vision_captioner)
 
 
 def _build_figure_caption_service(

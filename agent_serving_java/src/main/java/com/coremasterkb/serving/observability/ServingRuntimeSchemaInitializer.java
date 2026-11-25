@@ -44,8 +44,9 @@ public class ServingRuntimeSchemaInitializer implements DomainSchemaEnsurer {
     // 图片VLM图注方案B：加 013（asset_figure_caption_cache）后刷新。
     // S1 文件格式支持补全：加 014（快照 MIME 白名单放宽，legacy office）后刷新。
     // S2 文件格式支持补全：加 015（快照 MIME 白名单放宽，csv/json）后刷新。
+    // S3 文件格式支持补全：加 016（快照 MIME 白名单放宽，image png/jpeg）后刷新。
     private static final String EXPECTED_SCHEMA_CHECKSUM =
-            "e98cc4fd47fb58e61235817f065ac894b79902b511c9cf8c87b9c46551b72049";
+            "c2dcb652ddc31c9d70de332ab6b3247d08deae93b2a8e3a2f44d899027ece262";
     private static final String EXPECTED_SCHEMA_MARKER =
             "schema/" + EXPECTED_SCHEMA_VERSION;
 

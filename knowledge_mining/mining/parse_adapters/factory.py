@@ -60,6 +60,10 @@ from knowledge_mining.mining.parse_adapters.native.native_json import (
     NATIVE_JSON_PARSER_ID,
     NativeJsonParser,
 )
+from knowledge_mining.mining.parse_adapters.native.native_image import (
+    NATIVE_IMAGE_PARSER_ID,
+    NativeImageParser,
+)
 from knowledge_mining.mining.parse_adapters.native_pdf import (
     NATIVE_PDF_PARSER_ID,
     NativePdfParser,
@@ -97,6 +101,10 @@ _PIPELINE_FACTORIES: dict[
     # IR 复用行导向 normalizer（与 markdown/onenet 同一已验证路径）。
     NATIVE_CSV_PARSER_ID: (NativeCsvParser, LegacyLineNormalizer),
     NATIVE_JSON_PARSER_ID: (NativeJsonParser, LegacyLineNormalizer),
+    # S3 文件格式支持补全：独立 png/jpg → VLM 整图结构化描述（单
+    # paragraph 块）；视觉通道经 native_image.set_vision_describer 注入
+    # （build_new_chain_services 注册 VlmFigureCaptioner），未配置=诚实失败。
+    NATIVE_IMAGE_PARSER_ID: (NativeImageParser, LegacyLineNormalizer),
     NATIVE_PDF_PARSER_ID: (NativePdfParser, PdfNormalizer),
     PDF_TEXT_LAYER_PARSER_ID: (PdfTextLayerParser, PdfNormalizer),
 }

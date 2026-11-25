@@ -54,6 +54,10 @@ _MIME_TO_FORMAT: dict[str, str] = {
     # S2 文件格式支持补全：csv/json 原生解析（68号报告）。
     "text/csv": "csv",
     "application/json": "json",
+    # S3 文件格式支持补全：独立 png/jpeg 走 VLM 图片解析器（68号报告）。
+    # gif 故意不映射（动图语义不明，留白）。
+    "image/png": "png",
+    "image/jpeg": "jpeg",
 }
 
 #: [Content_Types].xml 中的 OOXML 命名空间标记 -> MIME（zip 消歧用）。

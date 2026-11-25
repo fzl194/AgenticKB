@@ -23,6 +23,7 @@ from knowledge_mining.mining.figure_caption import (
 )
 from knowledge_mining.mining.figure_caption.prompts import (
     FIGCAP_SYSTEM_PROMPT,
+    FIGCAP_USER_PROMPT,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -170,7 +171,10 @@ async def _run(
 
 
 def test_prompt_contract_stable():
-    assert FIGCAP_SYSTEM_PROMPT == "你是技术文档图注助手。"
+    # v2：图注必须完整转述图中文字/数值（用户实测反馈），版本号随之升级
+    assert FIGCAP_PROMPT_VERSION == "vlm-figure-caption-2"
+    assert "转述" in FIGCAP_USER_PROMPT
+    assert "数值" in FIGCAP_USER_PROMPT
     assert build_user_prompt(None) == build_user_prompt("  ")
     assert "原始图注/表注" in build_user_prompt("图1 架构图")
 
@@ -193,7 +197,7 @@ def test_cache_key_deterministic_and_component_sensitive():
         ("parser_fingerprint", "fp2"),
         ("figure_element_id", "e2"),
         ("model", "glm-4.6v"),
-        ("prompt_version", "vlm-figure-caption-2"),
+        ("prompt_version", "vlm-figure-caption-3"),
     ]:
         changed = {**base, field_name: value}
         assert caption_cache_key(**changed) != k1, field_name

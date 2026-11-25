@@ -72,7 +72,9 @@ class FigureCaptionWorkflowFacade:
         if not snapshot_id:
             return CaptionOutcome()
         params_model = FigureCaptionParams(
-            model=str(params.get("model") or "glm-4.5v"),
+            # model 留空（None）＝用 captioner.default_model（llm_service
+            # 的默认视觉模型）；service 层负责解析成具体模型名（缓存键用）。
+            model=(str(params["model"]) if params.get("model") else None),
             max_figures=int(params.get("maxFigures", 20)),
             min_image_bytes=int(params.get("minImageBytes", 1024)),
         )

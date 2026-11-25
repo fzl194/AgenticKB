@@ -116,6 +116,10 @@ class _Appender:
 
 
 class _Captioner:
+    # 真实 VlmFigureCaptioner 有 default_model（llm_service vision-default 解析）；
+    # 门面 params.model 留空时 service 用它解析 effective_model。
+    default_model = "fake-vision-model"
+
     def __init__(self) -> None:
         self.calls = []
 
@@ -224,6 +228,31 @@ def test_workflow_facade_non_pptx_degrades_to_missing_bytes():
     assert outcome.figures_found == 1
     assert outcome.skipped_missing_bytes == 1
     assert outcome.degraded
+
+
+def test_workflow_facade_empty_model_falls_back_to_captioner_default():
+    """回归（401 事故）：params.model 留空/空串时不得回落硬编码模型名。"""
+    blob = _png_bytes()
+    sha = _sha(blob)
+    facade = _build_facade(_ir_doc(sha), _pptx_bytes_with_image(blob))
+    # minImageBytes=0：测试 PNG 只有 ~184B，否则被小图过滤
+    for model_value in (None, "", "explicit-model"):
+        facade._captioner.calls.clear()  # noqa: SLF001
+        facade._cache.store.clear()  # noqa: SLF001 —— 前一轮的缓存命中会绕过 captioner
+        params = {"maxFigures": 5, "minImageBytes": 0}
+        if model_value is not None:
+            params["model"] = model_value
+        outcome = facade.generate_for_snapshot(
+            snapshot_id="snap-1",
+            document_key="doc-1",
+            domain="default",
+            params=params,
+            frozen_input=_frozen(mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+        )
+        assert outcome.captioned == 1, params
+        expected = "explicit-model" if model_value == "explicit-model" else "fake-vision-model"
+        # 门面不得引入自己的模型名；解析交给 service（captioner.default_model）
+        assert facade._captioner.calls[0]["model"] == expected, params  # noqa: SLF001
 
 
 def test_workflow_facade_no_snapshot_is_noop():

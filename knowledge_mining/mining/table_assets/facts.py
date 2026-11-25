@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from knowledge_mining.mining.contracts.parse_ir.types import ParsedDocument
+from knowledge_mining.mining.contracts.parse_ir.types import ParsedDocument, TableAsset
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,10 @@ def extract_table_facts(doc: ParsedDocument) -> TableFacts:
     cells: dict[tuple[str, int, int], CellFact] = {}
     sheets: dict[str, str] = {}
     for asset in doc.structured_assets.values():
+        # structured_assets 是异构资产字典（表格 + 图片 figure 等）；
+        # facts 只认 TableAsset——非表格资产跳过（figcap 实测事故回归）。
+        if not isinstance(asset, TableAsset):
+            continue
         table_ref = asset.table_id
         for cell in asset.cells:
             cells[(table_ref, cell.row_index, cell.column_index)] = CellFact(

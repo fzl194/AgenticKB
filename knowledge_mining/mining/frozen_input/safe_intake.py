@@ -66,6 +66,9 @@ _SUPPORTED_MIMES: frozenset[str] = frozenset(
         "text/plain",
         "text/markdown",
         "text/html",
+        # S2 文件格式支持补全：csv/json 原生解析（68号报告）。
+        "text/csv",
+        "application/json",
         "application/pdf",
         "application/msword",  # .doc (OLE2)
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -91,6 +94,8 @@ _FORMAT_LABELS: dict[str, str] = {
     "text/plain": "text",
     "text/markdown": "markdown",
     "text/html": "html",
+    "text/csv": "csv",
+    "application/json": "json",
     "application/pdf": "pdf",
     "application/msword": "doc",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -129,6 +134,8 @@ _EXT_HINTS: dict[str, str] = {
     ".txt": "text/plain",
     ".html": "text/html",
     ".htm": "text/html",
+    ".csv": "text/csv",
+    ".json": "application/json",
     ".pdf": "application/pdf",
     ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -283,7 +290,11 @@ class SafeIntake:
             # No signature: maybe plain text. Trust text heuristic, fall back
             # to extension hint, else octet-stream.
             if _looks_like_text(head_bytes):
-                if ext_hint in {"text/markdown", "text/html"}:
+                # 文本家族按扩展名定具体子类型（csv/json 与 md/html 同法）。
+                if ext_hint in {
+                    "text/markdown", "text/html", "text/csv",
+                    "application/json",
+                }:
                     return ext_hint
                 return "text/plain"
             if ext_hint is not None:

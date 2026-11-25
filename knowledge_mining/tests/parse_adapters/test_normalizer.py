@@ -307,4 +307,5 @@ def test_default_registry_selects_backends_by_mime() -> None:
     assert pdf_slot is not None and pdf_slot.parser_id == "native_pdf"
     assert by_id["docling"].license_status != "ok"
     assert by_id["cloud_vlm"].license_status != "ok"
-    assert len(registry.all()) == 11
+    # S2 文件格式支持补全：native_csv/native_json 入册（11 → 13）。
+    assert len(registry.all()) == 13

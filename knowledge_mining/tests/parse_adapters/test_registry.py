@@ -75,6 +75,7 @@ def test_include_cloud_slots_false_restores_implemented_set() -> None:
     assert _ids(registry) == {
         "legacy_markdown", "legacy_txt", "onenet_jsonl",
         "native_docx", "native_xlsx", "native_pptx", "native_html", "native_pdf",
+        "native_csv", "native_json",
         "pdf_text_layer",
     }
 

@@ -34,6 +34,8 @@ _MIME_EXT_HINT: dict[str, str] = {
     "text/plain": ".txt",
     "text/markdown": ".md",
     "text/html": ".html",
+    "text/csv": ".csv",
+    "application/json": ".json",
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
@@ -49,6 +51,9 @@ _MIME_TO_FORMAT: dict[str, str] = {
     "text/html": "html",
     "text/markdown": "markdown",
     "text/plain": "txt",
+    # S2 文件格式支持补全：csv/json 原生解析（68号报告）。
+    "text/csv": "csv",
+    "application/json": "json",
 }
 
 #: [Content_Types].xml 中的 OOXML 命名空间标记 -> MIME（zip 消歧用）。

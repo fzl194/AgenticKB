@@ -52,6 +52,14 @@ from knowledge_mining.mining.parse_adapters.native.native_xlsx import (
     NativeXlsxParser,
     XlsxNormalizer,
 )
+from knowledge_mining.mining.parse_adapters.native.native_csv import (
+    NATIVE_CSV_PARSER_ID,
+    NativeCsvParser,
+)
+from knowledge_mining.mining.parse_adapters.native.native_json import (
+    NATIVE_JSON_PARSER_ID,
+    NativeJsonParser,
+)
 from knowledge_mining.mining.parse_adapters.native_pdf import (
     NATIVE_PDF_PARSER_ID,
     NativePdfParser,
@@ -85,6 +93,10 @@ _PIPELINE_FACTORIES: dict[
     NATIVE_XLSX_PARSER_ID: (NativeXlsxParser, XlsxNormalizer),
     NATIVE_PPTX_PARSER_ID: (NativePptxParser, PptxNormalizer),
     NATIVE_HTML_PARSER_ID: (NativeHtmlParser, HtmlNormalizer),
+    # S2 文件格式支持补全：csv/json 产 heading/paragraph/table 块，
+    # IR 复用行导向 normalizer（与 markdown/onenet 同一已验证路径）。
+    NATIVE_CSV_PARSER_ID: (NativeCsvParser, LegacyLineNormalizer),
+    NATIVE_JSON_PARSER_ID: (NativeJsonParser, LegacyLineNormalizer),
     NATIVE_PDF_PARSER_ID: (NativePdfParser, PdfNormalizer),
     PDF_TEXT_LAYER_PARSER_ID: (PdfTextLayerParser, PdfNormalizer),
 }

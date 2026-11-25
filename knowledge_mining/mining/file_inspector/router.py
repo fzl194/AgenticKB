@@ -36,6 +36,9 @@ _FORMAT_TO_MIME: dict[str, str] = {
     "html": "text/html",
     "markdown": "text/markdown",
     "txt": "text/plain",
+    # S2 文件格式支持补全（68号报告）。
+    "csv": "text/csv",
+    "json": "application/json",
 }
 
 #: 可作为 local primary 的许可状态（SRS §C04：未过审不选）。

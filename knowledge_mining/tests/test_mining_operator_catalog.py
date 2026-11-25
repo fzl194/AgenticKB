@@ -74,7 +74,7 @@ def test_legacy_templates_retired_replaced_by_four_presets() -> None:
     """旧 7 类模板已退役；M6 起内置模板=4 套官方预置（M6_presets 展开断言）。"""
     assert set(builtin_templates()) == {
         "lexical_assets", "hybrid_assets",
-        "query_alias_assets", "longdoc_assets",
+        "query_alias_assets", "longdoc_assets", "vision_hybrid_assets",
     }
 
 

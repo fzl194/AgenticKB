@@ -1,9 +1,10 @@
-"""M6 契约（批次8，24 号 §8）：4 套挖掘预置 + 建库默认.
+"""M6 契约（批次8，24 号 §8）：官方挖掘预置 + 建库默认.
 
 - 轻量关键词资产（无 embedding）；
 - 标准混合资产（**官方默认**）；
 - 问题别名增强资产（标准链 + query_expansion，embedding 前）；
 - 长文档全局增强资产（标准链 + hierarchical_summary，embedding 前）；
+- 图文混合资产（标准混合链 + 图片图注生成，切片编译后，实验）；
 - 旧 7 类模板/预置不再出现；resolve 默认指向 system-hybrid-assets。
 """
 from __future__ import annotations
@@ -28,6 +29,9 @@ EXPECTED_PRESET_KEYS = {
     "longdoc_assets": {"input_ingest", "document_parse", "segment_compile",
                        "retrieval_unit_project", "hierarchical_summary_generate",
                        "embedding", "asset_persist", "mining_finalize"},
+    "vision_hybrid_assets": {"input_ingest", "document_parse", "segment_compile",
+                             "figure_caption_generate", "retrieval_unit_project",
+                             "embedding", "asset_persist", "mining_finalize"},
 }
 
 
@@ -67,6 +71,7 @@ async def test_ensure_workflow_library_seeds_four_system_presets_idempotently():
         "system-hybrid-assets",
         "system-query-alias-assets",
         "system-longdoc-assets",
+        "system-vision-hybrid-assets",
     }
     hybrid = next(
         item for item in items if item["id"] == "system-hybrid-assets"
@@ -89,6 +94,25 @@ def test_legacy_preset_names_never_return() -> None:
     for legacy in ("minimal", "fast_retrieval", "discourse_only",
                    "entity_graph", "hybrid_knowledge", "ontology_only", "full"):
         assert legacy not in joined
+
+
+def test_vision_hybrid_assets_inserts_figure_caption_after_compile() -> None:
+    """第 5 套预置：图文混合资产 = 标准混合链 + 图注算子（切片编译后）。
+
+    存量铁律：前 4 套预置节点集合不变（hybrid 不含 figure_caption）。
+    """
+    from knowledge_mining.mining.workflow.templates import builtin_templates
+
+    templates = builtin_templates()
+    vision = templates["vision_hybrid_assets"]
+    order = [n.operator_type for n in vision.nodes]
+    assert order.index("segment_compile") < order.index("figure_caption_generate")
+    assert order.index("figure_caption_generate") < order.index("retrieval_unit_project")
+    # 前四套零变更
+    for key in ("lexical_assets", "hybrid_assets", "query_alias_assets", "longdoc_assets"):
+        assert "figure_caption_generate" not in {
+            n.operator_type for n in templates[key].nodes
+        }, key
 
 
 def test_official_presets_enable_table_rows_and_sections() -> None:

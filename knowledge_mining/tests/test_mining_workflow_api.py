@@ -149,6 +149,7 @@ def test_create_uses_strict_request_model(
         "lexical_assets",
         "query_alias_assets",
         "longdoc_assets",
+        "vision_hybrid_assets",
     ],
 )
 def test_create_accepts_official_four_template_keys(
@@ -207,6 +208,7 @@ def test_template_key_contract_across_layers() -> None:
     builtin = set(builtin_templates())
     assert builtin == {
         "hybrid_assets", "lexical_assets", "query_alias_assets", "longdoc_assets",
+        "vision_hybrid_assets",
     }
     assert _RETIRED_TEMPLATE_KEYS.isdisjoint(builtin)
 

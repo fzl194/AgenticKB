@@ -494,6 +494,68 @@ def hierarchical_summary_generate_handler(state, params, runtime) -> OperatorRes
     return _success(state, updated, "summary_aliases")
 
 
+def figure_caption_generate_handler(state, params, runtime) -> OperatorResult:
+    """无原生图注的 figure → VLM 图注切片追加（可 SKIP/降级）→ bundle 事实.
+
+    图片VLM图注·方案B：可选实验算子；LLM 失败只 degraded
+    （figure_captions 能力事实照记，缺服务/无图/全失败均不阻断）。
+    """
+    from ..bundle import MiningDocumentBundle
+    from ..operators.options import FigureCaptionOptions
+
+    FigureCaptionOptions.model_validate(dict(params))
+    bundle = state.context
+    if not isinstance(bundle, MiningDocumentBundle):
+        return OperatorResult(
+            state, frozenset(), OperatorStatus.FAILED,
+            error_code="figure_caption_bad_input",
+            error_message="figure_caption_generate requires a bundle",
+        )
+    service = getattr(runtime.services, "figure_caption_service", None)
+    if service is None:
+        return _on_error(
+            state,
+            code="figure_caption_unavailable",
+            exc=RuntimeError("figure_caption service is not configured"),
+            mode=OperatorStatus.FALLBACK,
+            capability="figure_captions",
+        )
+    try:
+        outcome = service.generate_for_snapshot(
+            snapshot_id=bundle.snapshot_ref,
+            document_key=bundle.document_ref,
+            domain=getattr(runtime.services, "domain", None) or "default",
+            params=dict(params),
+            **({"frozen_input": bundle.frozen_input}
+               if bundle.frozen_input is not None else {}),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _on_error(
+            state, code="figure_caption_failed", exc=exc,
+            mode=OperatorStatus.FALLBACK, capability="figure_captions",
+        )
+    metrics = outcome.as_metrics()
+    updated = bundle.with_updates(
+        capability_facts=(
+            bundle.capability_facts
+            | frozenset({"figure_captions"}) if metrics["appended"] else
+            bundle.capability_facts
+        ),
+        diagnostics={
+            **dict(bundle.diagnostics),
+            "figure_caption": metrics,
+        },
+    )
+    if metrics["degraded"]:
+        provided = frozenset({"figure_captions"})
+        return OperatorResult(
+            state.with_context(updated, capabilities=provided),
+            provided,
+            OperatorStatus.FALLBACK,
+        )
+    return _success(state, updated, "figure_captions")
+
+
 # 批次8 M0：退役算子（enrich/discourse_line/contextual_retrieval_enrich/
 # retrieval_unit_build）与实体研究算子的 handler 已移除/隔离（research.py）。
 DOCUMENT_HANDLERS = {
@@ -503,5 +565,6 @@ DOCUMENT_HANDLERS = {
     "retrieval_unit_project": retrieval_unit_project_handler,
     "query_expansion_generate": query_expansion_generate_handler,
     "hierarchical_summary_generate": hierarchical_summary_generate_handler,
+    "figure_caption_generate": figure_caption_generate_handler,
     "embedding": embedding_handler,
 }

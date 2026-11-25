@@ -109,11 +109,13 @@ async def test_domain_configs_status_summary():
     status = _dc().status()
     assert status["global"] == {
         "active_model": "g-active",
+        "vision_model": None,
         "embedding_model": "embedding-3",
         "embedding_dimensions": 1024,
     }
     assert status["domains"]["odn"] == {
         "active_model": "odn-chat", "rerank_model": "rerank-odn",
+        "vision_model": None,
         "embedding_model": "emb-odn", "embedding_dimensions": 1024,
     }
     assert status["invalid_domains"] == {}

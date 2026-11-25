@@ -115,6 +115,32 @@ def test_extract_carries_all_cell_facts_and_sheet_name():
     assert facts.sheets["tbl:alarm"] == "告警表"
 
 
+def test_extract_ignores_non_table_structured_assets():
+    """回归（figcap 实测事故）：PPTX 图片资产（FigureAsset）也在
+    structured_assets 里——facts 提取只认 TableAsset，此前对
+    FigureAsset 取 .table_id 直接 AttributeError，挖 PPT 即失败。"""
+    from knowledge_mining.mining.contracts.parse_ir.types import FigureAsset
+
+    doc = _doc()
+    doc = ParsedDocument(
+        schema_version=doc.schema_version,
+        source_identity=doc.source_identity,
+        containers=doc.containers,
+        elements=doc.elements,
+        structured_assets={
+            **doc.structured_assets,
+            "e-00003-figure": FigureAsset(
+                figure_id="e-00003-figure",
+                image_hash="a" * 64,
+            ),
+        },
+    )
+    facts = extract_table_facts(doc)
+    assert set(facts.cells) == {("tbl:alarm", 0, 1), ("tbl:alarm", 1, 1),
+                                ("tbl:alarm", 0, 0), ("tbl:alarm", 1, 0)}
+    assert facts.sheets == {"tbl:alarm": "告警表"}
+
+
 # ---------------------------------------------------------------------------
 # structure_projection 消费 facts
 # ---------------------------------------------------------------------------

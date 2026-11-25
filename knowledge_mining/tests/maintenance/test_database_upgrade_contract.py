@@ -64,8 +64,9 @@ def test_convergence_contract_has_exact_retired_table_set() -> None:
     # 2026-10-26 整库导出：kb_export_tasks 入 FORMAL_TABLES（60→61）。
     # 2026-11-10 合并 fzl194/master：wiki 五表并入（61/65 分叉 → 66）。
     # 2026-11-16 工作台 MVP：kb_workspace_* 七表并入（66→73）。
-    assert EXPECTED_FORMAL_TABLES == 73
-    assert EXPECTED_PHYSICAL_TABLES == 74
+    # 2026-11-24 图片VLM图注方案B：asset_figure_caption_cache 并入（73→74）。
+    assert EXPECTED_FORMAL_TABLES == 74
+    assert EXPECTED_PHYSICAL_TABLES == 75
     assert CURRENT_SCHEMA_VERSION
 
 

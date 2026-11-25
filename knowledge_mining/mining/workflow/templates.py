@@ -1,9 +1,10 @@
-"""批次8 M6（24 号 §8）：4 套官方挖掘预置模板.
+"""批次8 M6（24 号 §8）：官方挖掘预置模板.
 
 - lexical_assets：轻量关键词资产（无 embedding 服务场景）；
 - hybrid_assets：标准混合资产（**官方默认**，system-hybrid-assets）；
 - query_alias_assets：标准链 + query_expansion（embedding 前，实验）；
-- longdoc_assets：标准链 + hierarchical_summary（embedding 前，实验）。
+- longdoc_assets：标准链 + hierarchical_summary（embedding 前，实验）；
+- vision_hybrid_assets：标准混合链 + figure_caption（切片编译后，实验）。
 
 旧 7 类模板（minimal/fast_retrieval/…/full）已在 M0 退役；small-to-big/
 table/code/结构导航是标准资产契约的一部分，不是独立模板。
@@ -22,6 +23,7 @@ _POSITIONS = {
     "retrieval_unit_project": (760, 260),
     "query_expansion_generate": (1000, 120),
     "hierarchical_summary_generate": (1000, 400),
+    "figure_caption_generate": (760, 120),
     "embedding": (1240, 260),
     "asset_persist": (1480, 260),
     "mining_finalize": (1720, 260),
@@ -43,6 +45,7 @@ def _template(
     with_embedding: bool,
     with_query_expansion: bool = False,
     with_summary: bool = False,
+    with_figure_captions: bool = False,
 ) -> WorkflowGraph:
     # 表格行拆分（tableView=both）是标准资产契约的一部分（24 号 §8：
     # "table/code/list/结构导航不是独立范式，是标准资产契约的一部分"）——
@@ -58,8 +61,12 @@ def _template(
         # 标准混合家族追加章节表示（§5.4 矩阵 section 默认 FTS/dense 开）
         node_params["retrieval_unit_project"] = {"includeSections": True}
 
-    types = ["input_ingest", "document_parse", "segment_compile",
-             "retrieval_unit_project"]
+    types = ["input_ingest", "document_parse", "segment_compile"]
+    if with_figure_captions:
+        # 图片图注（方案B）：切片编译后、检索投影前——图注切片追加进快照，
+        # 下游投影/向量化与主链共用 documents 线。
+        types.append("figure_caption_generate")
+    types.append("retrieval_unit_project")
     if with_query_expansion:
         types.append("query_expansion_generate")
     if with_summary:
@@ -71,9 +78,15 @@ def _template(
     edges = [
         EdgeDef("input_ingest", "rawFiles", "document_parse", "rawFiles"),
         EdgeDef("document_parse", "documents", "segment_compile", "documents"),
-        EdgeDef("segment_compile", "documents",
-                "retrieval_unit_project", "documents"),
     ]
+    if with_figure_captions:
+        edges.append(EdgeDef("segment_compile", "documents",
+                             "figure_caption_generate", "documents"))
+        edges.append(EdgeDef("figure_caption_generate", "documents",
+                             "retrieval_unit_project", "documents"))
+    else:
+        edges.append(EdgeDef("segment_compile", "documents",
+                             "retrieval_unit_project", "documents"))
     head = "retrieval_unit_project"
     for optional in ("query_expansion_generate", "hierarchical_summary_generate"):
         if optional in types:
@@ -105,6 +118,9 @@ _BUILTIN_TEMPLATES = {
         with_embedding=True, with_query_expansion=True,
     ),
     "longdoc_assets": _template(with_embedding=True, with_summary=True),
+    "vision_hybrid_assets": _template(
+        with_embedding=True, with_figure_captions=True,
+    ),
 }
 
 

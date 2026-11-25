@@ -261,4 +261,5 @@ def test_catalog_registers_ninth_operator_pair():
         "retrieval_unit_project", "embedding", "asset_persist",
         "mining_finalize",
         "query_expansion_generate", "hierarchical_summary_generate",
+        "figure_caption_generate",  # 图片VLM图注方案B（第10个可选算子）
     }

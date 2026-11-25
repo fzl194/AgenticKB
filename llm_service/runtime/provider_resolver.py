@@ -144,6 +144,22 @@ class ProviderResolver:
         cfg = self._dc.for_domain(domain)
         return str(dig_optional(cfg, "rerank", "model", default="") or "")
 
+    def vision_default_model(self, domain: str | None = None) -> str | None:
+        """该域的默认视觉模型（provider.vision_model；未配置返回 None）。
+
+        模型选择归 llm_service 管：挖掘侧图注等视觉调用方在启动期通过
+        /api/v1/models/vision-default 取名，不在自己配置里存模型名。
+        """
+        cfg = self._dc.for_domain(domain)
+        value = dig_optional(cfg, "provider", "vision_model")
+        return str(value) if value else None
+
+    def active_model_name(self, domain: str | None = None) -> str | None:
+        """该域的 active_model 名（vision-default 回落用）。"""
+        cfg = self._dc.for_domain(domain)
+        value = (cfg.get("provider") or {}).get("active_model") or (cfg.get("provider") or {}).get("model")
+        return str(value) if value else None
+
     def embedding_default_model(self, domain: str | None = None) -> str:
         """该域的 embedding 默认模型（62号二期；effective 已含全局兜底）。"""
         cfg = self._dc.for_domain(domain)

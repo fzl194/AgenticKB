@@ -10,6 +10,7 @@ export type MiningTemplateKey =
   | 'hybrid_assets'
   | 'query_alias_assets'
   | 'longdoc_assets'
+  | 'vision_hybrid_assets'
 
 export interface MiningSlotDecl {
   name: string

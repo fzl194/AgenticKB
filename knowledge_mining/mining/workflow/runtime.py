@@ -28,7 +28,10 @@ class MiningWorkflowRuntime:
     """Execute one Run exclusively from its Domain-stored frozen Manifest."""
 
     SUPPORTED_SCHEMA_VERSION = "2.0"
-    SUPPORTED_CATALOG_VERSION = "1"
+    # 图片VLM图注方案B：目录新增 figure_caption_generate（第10个可选
+    # 算子）→ 目录版本升 2；旧冻结 manifest catalogVersion=1 仍可执行
+    #（runtime 已放宽为整数比较）。
+    SUPPORTED_CATALOG_VERSION = "2"
 
     def __init__(self, context: Any, *, run_id: str) -> None:
         self.context = context
@@ -224,7 +227,14 @@ class MiningWorkflowRuntime:
     def _verify_and_build_plan(self, manifest: dict[str, Any]) -> ExecutionPlan:
         if manifest.get("schemaVersion") != self.SUPPORTED_SCHEMA_VERSION:
             raise InvalidWorkflowManifest("Unsupported Workflow schema version")
-        if manifest.get("catalogVersion") != self.SUPPORTED_CATALOG_VERSION:
+        # 目录版本按整数比较向后兼容：运行时升级支持目录 2 后，存量冻结
+        # manifest（catalogVersion=1，不含新算子）继续可执行；高于支持值
+        # 或非整数版本仍拒绝（feat/figcap-operator B0）。
+        try:
+            manifest_catalog_version = int(str(manifest.get("catalogVersion", "")))
+        except (TypeError, ValueError):
+            raise InvalidWorkflowManifest("Unsupported Workflow catalog version")
+        if manifest_catalog_version > int(self.SUPPORTED_CATALOG_VERSION):
             raise InvalidWorkflowManifest("Unsupported Workflow catalog version")
         graph = WorkflowGraph.from_dict(manifest.get("graph") or {})
         if graph_hash(graph) != manifest.get("graphHash"):

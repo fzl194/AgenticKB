@@ -1,4 +1,4 @@
-"""批次8 M6（24 号 §8）：4 套官方挖掘预置定义.
+"""批次8 M6（24 号 §8）：官方挖掘预置定义.
 
 固定 system id、幂等 seeding、用户可归档不复活；hybrid_assets 为建库默认。
 """
@@ -45,6 +45,14 @@ MINING_PRESETS: tuple[MiningPreset, ...] = (
         name="长文档全局增强资产",
         description="标准混合链 + 标题树层级摘要（实验，LLM 不可用自动降级）。",
         template_key="longdoc_assets",
+        is_system_default=False,
+    ),
+    MiningPreset(
+        workflow_id="system-vision-hybrid-assets",
+        name="图文混合资产",
+        description="标准混合链 + 图片图注生成（实验，VLM 不可用自动降级；"
+        "图片内容可检索，当前支持 PPTX 内嵌图）。",
+        template_key="vision_hybrid_assets",
         is_system_default=False,
     ),
 )

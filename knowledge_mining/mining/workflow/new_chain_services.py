@@ -403,6 +403,9 @@ class NewChainServices:
     # degraded，不阻断基础资产——与 24号 §5.5/§5.6 失败语义一致）。
     query_expansion_service: Any = None
     hierarchical_summary_service: Any = None
+    # 图片VLM图注方案B：图注门面（captioner 未配置 → None → handler
+    # FALLBACK degraded，与实验算子同一失败语义）。
+    figure_caption_service: Any = None
     # A1 来源记录物化（37/38 号）：None → retrieval_unit_project 跳过物化
     #（与实验算子一致，不阻断基础资产）。
     source_locator_service: Any = None
@@ -426,6 +429,7 @@ def build_new_chain_services(
     sync_pool: Any | None = None,
     llm_generator: Any | None = None,
     locator_store: Any | None = None,
+    vision_captioner: Any | None = None,
 ) -> NewChainServices:
     """组合根：默认组装 memory 组件（测试/开发）；传入 PG/MinIO 即生产.
 
@@ -620,7 +624,55 @@ def build_new_chain_services(
                 segment_store, representation_store, llm_generator,
             )
         ),
+        figure_caption_service=(
+            _build_figure_caption_service(
+                snapshots=snapshots,
+                storage_objects=storage_objects,
+                object_store=object_store,
+                segment_store=segment_store,
+                captioner=vision_captioner,
+                repository_pool=repository_pool,
+            )
+        ),
         source_locator_service=locator_service,
+    )
+
+
+def _build_figure_caption_service(
+    *,
+    snapshots: Any,
+    storage_objects: Any,
+    object_store: Any,
+    segment_store: Any,
+    captioner: Any,
+    repository_pool: Any,
+) -> Any:
+    """图片VLM图注方案B：captioner 未配置 → None（handler FALLBACK）。"""
+    if captioner is None:
+        return None
+    from knowledge_mining.mining.figure_caption.workflow_facade import (
+        FigureCaptionWorkflowFacade,
+    )
+
+    if repository_pool is not None:
+        from knowledge_mining.mining.figure_caption.repositories_pg import (
+            PgFigureCaptionCache,
+        )
+
+        cache = PgFigureCaptionCache(repository_pool)
+    else:
+        from knowledge_mining.mining.figure_caption.repositories_memory import (
+            MemoryFigureCaptionCache,
+        )
+
+        cache = MemoryFigureCaptionCache()
+    return FigureCaptionWorkflowFacade(
+        snapshots=snapshots,
+        storage_objects=storage_objects,
+        object_store=object_store,
+        cache=cache,
+        segment_store=segment_store,
+        captioner=captioner,
     )
 
 

@@ -353,6 +353,7 @@ def test_catalog_registers_seventh_operator_and_embedding_dependency() -> None:
         "retrieval_unit_project", "embedding", "asset_persist",
         "mining_finalize",
         "query_expansion_generate", "hierarchical_summary_generate",  # M3
+        "figure_caption_generate",  # 图片VLM图注方案B
     }
     assert "retrieval_unit_project" in DOCUMENT_HANDLERS
     assert DEPENDENCIES.get("embedding") == {"retrieval_unit_project"}
@@ -513,6 +514,7 @@ def test_workflow_job_services_carries_source_locator_service(monkeypatch) -> No
         retrieval_project_service=object(), embedding_service=None,
         asset_persist_service=object(), query_expansion_service=None,
         hierarchical_summary_service=None, source_locator_service=marker,
+        figure_caption_service=None,
     )
     from knowledge_mining.mining.jobs import run as run_module
 

@@ -202,6 +202,26 @@ class HierarchicalSummaryOptions(OperatorOptions):
     )
 
 
+class FigureCaptionOptions(OperatorOptions):
+    """figure_caption_generate 参数（图片VLM图注·方案B）.
+
+    model 进缓存键（换模型必换缓存）；maxFigures 对齐 legacy
+    ImageCaptioner.max_images；minImageBytes 过滤装饰性小图。
+    """
+
+    model: str | None = Field(
+        None, alias="model", title="多模态模型",
+        description="留空＝用 llm_service 配置的默认视觉模型（vision_model）；"
+        "填写则用 llm_service 模型列表中的具体条目名。",
+    )
+    max_figures: int = Field(
+        20, ge=0, le=200, alias="maxFigures", title="每文档图片上限",
+    )
+    min_image_bytes: int = Field(
+        1024, ge=0, le=10_000_000, alias="minImageBytes", title="最小图片字节",
+    )
+
+
 class RetrieProjectOptions(OperatorOptions):
     """retrieval_unit_project 参数（批次8 M2，24 号 §5.4）.
 
@@ -251,6 +271,7 @@ OPTIONS_BY_OPERATOR: dict[str, type[OperatorOptions]] = {
     "embedding": EmbeddingOptions,
     "query_expansion_generate": QueryExpansionOptions,
     "hierarchical_summary_generate": HierarchicalSummaryOptions,
+    "figure_caption_generate": FigureCaptionOptions,
     "asset_persist": EmptyOptions,
     "mining_finalize": FinalizeOptions,
 }

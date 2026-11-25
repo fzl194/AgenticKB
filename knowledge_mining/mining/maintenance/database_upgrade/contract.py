@@ -16,7 +16,8 @@ CURRENT_SCHEMA_VERSION = "2026.09.user-lifecycle-retrieval-v1"
 # 2026-11-10 合并 fzl194/master：整库导出与 wiki 两条分支各自用掉 010——
 # 迁移 id 含日期+表名全局唯一（双 010 保留，ledger 按整串 id 记账），合并后刷新。
 # 67号工作台 MVP：加 012（kb_workspace_* 七表）后刷新。
-CURRENT_SCHEMA_CHECKSUM = "042f05aeed937b9251f427a63932597a374f7fda75bdcc479cc4f27c4e8de34f"
+# 图片VLM图注方案B：加 013（asset_figure_caption_cache）后刷新。
+CURRENT_SCHEMA_CHECKSUM = "1e7c1998ad3e792d9447cb3da331ea03b967307ed872130e2ff4d12d279d3d4f"
 SCHEMA_MARKER_ID = f"schema/{CURRENT_SCHEMA_VERSION}"
 MIGRATION_LEDGER_TABLE = "cmkb_schema_migrations"
 LEGACY_COMPAT_TABLES: tuple[str, ...] = ("mcp_open_kbs", "mcp_access")
@@ -103,6 +104,8 @@ FORMAL_TABLES: frozenset[str] = frozenset({
     "kb_workspace_run_outputs",
     "kb_workspace_output_bindings",
     "kb_workspace_exports",
+    # VLM 图片图注缓存（图片VLM方案B，迁移 013）：方案A/B 共用
+    "asset_figure_caption_cache",
 })
 EXPECTED_FORMAL_TABLES = len(FORMAL_TABLES)
 EXPECTED_PHYSICAL_TABLES = EXPECTED_FORMAL_TABLES + 1
@@ -142,6 +145,8 @@ PREVIOUS_RELEASE_TABLES: frozenset[str] = frozenset(
             "kb_workspace_run_outputs",
             "kb_workspace_output_bindings",
             "kb_workspace_exports",
+            # VLM 图注缓存表（迁移 013）本版新增，一并从上一版基线扣除
+            "asset_figure_caption_cache",
         }
     )
     | {"serving_query_logs"}
@@ -178,5 +183,5 @@ RETIRED_TABLES: tuple[str, ...] = (
 if len(RETIRED_TABLES) != len(set(RETIRED_TABLES)):  # pragma: no cover - import guard
     raise RuntimeError("RETIRED_TABLES contains duplicates")
 
-if EXPECTED_FORMAL_TABLES != 73:  # pragma: no cover - import guard
-    raise RuntimeError("FORMAL_TABLES must contain exactly 73 names")
+if EXPECTED_FORMAL_TABLES != 74:  # pragma: no cover - import guard
+    raise RuntimeError("FORMAL_TABLES must contain exactly 74 names")

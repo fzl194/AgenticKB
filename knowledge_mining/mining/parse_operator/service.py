@@ -136,12 +136,12 @@ class DocumentParseService:
         # 链此前无旧链 ingestion 预处理的等价物——registry 无 parser 支持
         # application/msword，plan 兜底 legacy_markdown 直接 UnsupportedFormat。
         try:
-            frozen = await self._convert_legacy_doc(frozen)
+            frozen = await self._convert_legacy_office(frozen)
         except Exception as exc:  # noqa: BLE001 —— 转换失败留痕为 FAILED 终态
             return await self._reject_scanned(
                 frozen, plan, primary_fp,
-                f"doc_to_docx_failed: {type(exc).__name__}: {exc}",
-                guard="legacy_doc",
+                f"legacy_office_convert_failed: {type(exc).__name__}: {exc}",
+                guard="legacy_office",
             )
 
         rid = run_id or _new_id("parse")
@@ -281,12 +281,12 @@ class DocumentParseService:
         # 链此前无旧链 ingestion 预处理的等价物——registry 无 parser 支持
         # application/msword，plan 兜底 legacy_markdown 直接 UnsupportedFormat。
         try:
-            frozen = await self._convert_legacy_doc(frozen)
+            frozen = await self._convert_legacy_office(frozen)
         except Exception as exc:  # noqa: BLE001 —— 转换失败留痕为 FAILED 终态
             return await self._reject_scanned(
                 frozen, plan, primary_fp,
-                f"doc_to_docx_failed: {type(exc).__name__}: {exc}",
-                guard="legacy_doc",
+                f"legacy_office_convert_failed: {type(exc).__name__}: {exc}",
+                guard="legacy_office",
             )
 
         rid = run_id or _new_id("parse")
@@ -435,24 +435,41 @@ class DocumentParseService:
     _DOCX_MIME = (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
+    _XLSX_MIME = (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    _PPTX_MIME = (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
 
-    async def _convert_legacy_doc(self, frozen: FrozenInput) -> FrozenInput:
-        """application/msword（.doc）→ docx 后重定向 frozen（原地无副作用）。
+    #: 旧二进制 Office（OLE2）→ OOXML 转换分派表。
+    #: mime -> (目标格式, 目标 MIME, 派生对象键中缀)
+    _LEGACY_OFFICE_TARGETS: dict[str, tuple[str, str, str]] = {
+        "application/msword": ("docx", _DOCX_MIME, "doc2docx"),
+        "application/vnd.ms-excel": ("xlsx", _XLSX_MIME, "xls2xlsx"),
+        "application/vnd.ms-powerpoint": ("pptx", _PPTX_MIME, "ppt2pptx"),
+    }
 
-        非-msword 原样返回。转换走 LibreOffice（doc_to_docx，与旧链同一
-        实现）；产物按源内容哈希命名写回对象存储（``原key--doc2docx-<hash>.docx``），
-        **原始对象不动**——下载/审计仍取原件。幂等：产物对象已存在（同源
-        hash 重复挖掘）直接复用，不重复转换。
+    async def _convert_legacy_office(self, frozen: FrozenInput) -> FrozenInput:
+        """旧二进制 Office（.doc/.xls/.ppt，OLE2）→ OOXML 后重定向 frozen。
+
+        非旧二进制 Office MIME 原样返回。转换走 LibreOffice（office_to_ooxml，
+        与旧链同一实现；Word COM 回退仅 .doc）；产物按源内容哈希命名写回
+        对象存储（``原key--<mime中缀>-<hash>.<ext>``，doc 沿用既有
+        ``--doc2docx-`` 约定），**原始对象不动**——下载/审计仍取原件。幂等：
+        产物对象已存在（同源 hash 重复挖掘）直接复用，不重复转换。
 
         ``source_raw_hash``/``size`` 更新为**转换产物**的实际值——shadow
         reader 按本字段校验流字节；幂等探针键（document_id, source_raw_hash,
         parser_fp）随之绑定转换产物（转换器版本变化 → 产物变化 → 重解析，
         语义正确）。
         """
-        if (frozen.mime or "").lower() != "application/msword":
+        legacy = self._LEGACY_OFFICE_TARGETS.get((frozen.mime or "").lower())
+        if legacy is None:
             return frozen
+        target_format, target_mime, key_infix = legacy
         from knowledge_mining.mining.ingestion.doc_preprocessing import (
-            doc_to_docx,
+            office_to_ooxml,
         )
         from knowledge_mining.mining.contracts.storage.types import PutOptions
 
@@ -460,11 +477,14 @@ class DocumentParseService:
             bucket=frozen.bucket, object_key=frozen.object_key,
             version_id=frozen.object_version_id,
         )
-        target_key = f"{frozen.object_key}--doc2docx-{frozen.source_raw_hash[:16]}.docx"
+        target_key = (
+            f"{frozen.object_key}--{key_infix}-"
+            f"{frozen.source_raw_hash[:16]}.{target_format}"
+        )
         target = ObjectLocation(bucket=frozen.bucket, object_key=target_key)
 
         import hashlib
-        docx_bytes: bytes
+        converted_bytes: bytes
         new_hash: str
         try:
             existing = await self._store.stat(target)
@@ -472,46 +492,49 @@ class DocumentParseService:
             existing = None
         if existing is not None and existing.sha256:
             new_hash = existing.sha256
-            docx_size = existing.size
+            converted_size = existing.size
         else:
             data = b"".join(
                 [chunk async for chunk in self._store.get_stream(source)]
             )
+            import os
             import tempfile
             from pathlib import Path
-            tmp_in = Path(tempfile.mkstemp(suffix=".doc")[1])
+            fd, tmp_name = tempfile.mkstemp(suffix=f".{target_format}")
+            os.close(fd)
+            tmp_in = Path(tmp_name)
             try:
                 tmp_in.write_bytes(data)
-                converted = doc_to_docx(tmp_in)
-                docx_bytes = converted.read_bytes()
+                converted = office_to_ooxml(tmp_in, target_format)
+                converted_bytes = converted.read_bytes()
             finally:
                 tmp_in.unlink(missing_ok=True)
-            new_hash = hashlib.sha256(docx_bytes).hexdigest()
+            new_hash = hashlib.sha256(converted_bytes).hexdigest()
 
             async def _one_shot():
-                yield docx_bytes
+                yield converted_bytes
 
             await self._store.put_stream(
                 target, _one_shot(),
                 PutOptions(
                     artifact_class="derived",
-                    mime=self._DOCX_MIME,
-                    content_length=len(docx_bytes),
+                    mime=target_mime,
+                    content_length=len(converted_bytes),
                     expected_sha256=new_hash,
-                    metadata={"converted_from": "application/msword",
+                    metadata={"converted_from": frozen.mime,
                               "source_sha256": frozen.source_raw_hash},
                 ),
             )
-            docx_size = len(docx_bytes)
+            converted_size = len(converted_bytes)
 
         from dataclasses import replace as _replace
         return _replace(
             frozen,
-            mime=self._DOCX_MIME,
+            mime=target_mime,
             object_key=target_key,
             object_version_id=None,
             source_raw_hash=new_hash,
-            size=docx_size,
+            size=converted_size,
         )
 
     async def _reject_scanned(self, frozen, plan, primary_fp: str,

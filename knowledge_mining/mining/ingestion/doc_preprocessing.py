@@ -1,27 +1,30 @@
-"""Legacy .doc preprocessing for ingestion: binary Word (.doc) -> .docx file.
+"""Legacy binary Office preprocessing: .doc/.xls/.ppt -> OOXML counterparts.
 
-The old binary .doc (Word 97-2003) format is NOT a zip package, so python-docx
-cannot read it -- it raises "Package not found". Rather than flatten a .doc to
-plain text (which loses headings/tables), this module converts it to a real
-.docx file so it flows through the structural ``DocxParser`` like a native
-.docx. A fallback chain mirrors the .chm extractor (prefer a cross-platform
-tool, fall back, else clear error):
+The old binary Office 97-2003 formats (OLE2 compound files: ``.doc``, ``.xls``,
+``.ppt``) are NOT zip packages, so the native OOXML parsers cannot read them.
+Rather than flattening them to plain text (which loses headings/tables/sheets),
+this module converts each to its modern counterpart so it flows through the
+structural native parsers (``.docx``/``.xlsx``/``.pptx``). A fallback chain
+mirrors the .chm extractor (prefer a cross-platform tool, fall back, else clear
+error):
 
-  1. LibreOffice ``soffice --headless --convert-to docx`` -- cross-platform,
+  1. LibreOffice ``soffice --headless --convert-to <fmt>`` -- cross-platform,
      preferred. Looked up on PATH and at common install locations. This is the
      backend baked into the Docker image, so it is the production path.
   2. Microsoft Word via COM automation (``win32com``) -- Windows only, used as
      a dev convenience when LibreOffice is unavailable but Word is installed.
+     **Only supports the .doc -> .docx direction.**
   3. Neither available -> a stable ``PreprocessingError`` with an actionable
      message.
 
-The converted .docx is written into a process-lifetime staging directory
+The converted file is written into a process-lifetime staging directory
 (removed at interpreter exit). It must outlive ingestion because the parse
-stage re-opens it via python-docx later in the same run.
+stage re-opens it later in the same run.
 
 Public API:
 
-    doc_to_docx(src) -> Path        (path to the converted .docx)
+    office_to_ooxml(src, target_format) -> Path   (target: docx/xlsx/pptx)
+    doc_to_docx(src) -> Path                       (薄包装，target="docx")
 """
 from __future__ import annotations
 
@@ -33,6 +36,9 @@ import tempfile
 from pathlib import Path
 
 from knowledge_mining.mining.ingestion.errors import PreprocessingError
+
+# 支持的转换目标格式（OOXML 一侧）。
+_LEGACY_TARGET_FORMATS = frozenset({"docx", "xlsx", "pptx"})
 
 # Common LibreOffice install locations checked when soffice is not on PATH.
 _SOFFICE_CANDIDATES = (
@@ -87,8 +93,10 @@ def _word_com_available() -> bool:
     return True
 
 
-def _convert_with_soffice(src: Path, soffice: str, out_dir: Path) -> Path:
-    """Convert .doc -> .docx via LibreOffice headless. Returns the .docx path."""
+def _convert_with_soffice(
+    src: Path, soffice: str, out_dir: Path, target_format: str = "docx",
+) -> Path:
+    """旧二进制 Office -> OOXML via LibreOffice headless. Returns the output path."""
     # Isolate the LibreOffice user profile per conversion: this both supplies a
     # writable profile dir in containers that have no $HOME and avoids the
     # single-instance profile lock when conversions run back-to-back.
@@ -97,17 +105,17 @@ def _convert_with_soffice(src: Path, soffice: str, out_dir: Path) -> Path:
         [
             soffice,
             f"-env:UserInstallation={user_install}",
-            "--headless", "--convert-to", "docx",
+            "--headless", "--convert-to", target_format,
             "--outdir", str(out_dir), str(src.resolve()),
         ],
         check=False,
         capture_output=True,
         timeout=120,
     )
-    out = out_dir / (src.stem + ".docx")
+    out = out_dir / (src.stem + f".{target_format}")
     if not out.is_file():
         raise RuntimeError(
-            f"LibreOffice produced no docx for {src.name}: "
+            f"LibreOffice produced no {target_format} for {src.name}: "
             f"{result.stderr.decode('utf-8', errors='replace')}"
         )
     return out
@@ -139,14 +147,18 @@ def _convert_with_word_com(src: Path, out_dir: Path) -> Path:
     return out
 
 
-def doc_to_docx(src: Path) -> Path:
-    """Convert a legacy binary .doc file to a .docx file.
+def office_to_ooxml(src: Path, target_format: str) -> Path:
+    """Convert a legacy binary Office file to its OOXML counterpart.
 
-    Backend chain: LibreOffice (cross-platform) -> MS Word COM (Windows). The
-    converted .docx lives in a process-lifetime staging dir so the parse stage
-    can re-open it. Raises FileNotFoundError if ``src`` is missing and a typed
-    ``PreprocessingError`` for converter availability or conversion failures.
+    ``target_format``: one of ``docx`` / ``xlsx`` / ``pptx``. Backend chain:
+    LibreOffice (cross-platform, all targets) -> MS Word COM (Windows, docx
+    only). The converted file lives in a process-lifetime staging dir so the
+    parse stage can re-open it. Raises FileNotFoundError if ``src`` is missing,
+    ValueError for an unknown target, and a typed ``PreprocessingError`` for
+    converter availability or conversion failures.
     """
+    if target_format not in _LEGACY_TARGET_FORMATS:
+        raise ValueError(f"unknown conversion target: {target_format!r}")
     src = Path(src)
     if not src.is_file():
         raise FileNotFoundError(src)
@@ -156,14 +168,15 @@ def doc_to_docx(src: Path) -> Path:
     soffice = _find_soffice()
     if soffice is not None:
         try:
-            return _convert_with_soffice(src, soffice, out_dir)
+            return _convert_with_soffice(src, soffice, out_dir, target_format)
         except Exception as exc:
             raise PreprocessingError(
                 "doc_conversion_failed",
-                f"Failed to convert legacy Word document: {src.name}",
+                f"Failed to convert legacy Office document to {target_format}: "
+                f"{src.name}",
             ) from exc
 
-    if _word_com_available():
+    if target_format == "docx" and _word_com_available():
         try:
             return _convert_with_word_com(src, out_dir)
         except Exception as exc:
@@ -174,6 +187,15 @@ def doc_to_docx(src: Path) -> Path:
 
     raise PreprocessingError(
         "doc_converter_unavailable",
-        f"No .doc converter available for {src.name}; install LibreOffice "
-        "or save the document as .docx",
+        f"No converter available for {src.name} -> .{target_format}; install "
+        "LibreOffice or re-save the document in the modern format",
     )
+
+
+def doc_to_docx(src: Path) -> Path:
+    """Convert a legacy binary .doc file to a .docx file (薄包装).
+
+    Kept for the legacy ingestion chain: identical behavior to
+    ``office_to_ooxml(src, "docx")`` (including the Word COM fallback).
+    """
+    return office_to_ooxml(src, "docx")

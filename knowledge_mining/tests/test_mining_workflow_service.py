@@ -213,9 +213,11 @@ async def test_ensure_workflow_library_seeds_four_presets_and_preserves_user_wor
     workflows = await service.list(include_archived=True)
     ids = {item["id"] for item in workflows}
     assert "system-full-baseline" not in ids
-    assert len(ids) == 5  # 4 预置 + 1 用户草稿
+    # v1.2.2（图注功能）：第 5 套「图文混合资产」预置入册 → 5 预置 + 1 用户草稿
+    assert len(ids) == 6
+    assert "system-vision-hybrid-assets" in ids
     system_workflows = [item for item in workflows if item["is_system"]]
-    assert len(system_workflows) == 4
+    assert len(system_workflows) == 5
     assert all(item["current_version"] == 1 for item in system_workflows)
 
 

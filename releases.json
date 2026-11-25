@@ -1,6 +1,20 @@
 {
-  "current": "1.2.1",
+  "current": "1.2.2",
   "releases": [
+    {
+      "version": "1.2.2",
+      "released_at": "2026-11-25",
+      "title": "图片图注生成（VLM）——文档内嵌图自动写图注，图片内容可检索",
+      "changes": [
+        "新增第10个挖掘算子「图片图注生成」（figure_caption_generate，FALLBACK 语义：VLM 失败/无图/格式不支持自动降级，绝不阻断基础资产入库）；默认不进任何官方预置，存量零影响",
+        "新增官方第5套挖掘预置「图文混合资产」（标准混合链+图注算子，直接新建即用，无需手动编排）；预置范式从4套变5套",
+        "覆盖范围：PPTX 内嵌图片（PDF/DOCX 字节抽取为后续规划）；图注完整转述图中可见文字与数值（提示词 v2）；作为独立 figure 切片追加（索引从1,000,000起，与主链隔离）",
+        "默认视觉模型归 llm_service 统一管理：llm_service.yaml 顶层 vision_model 指向多模态条目（未设回落 active_model），GET /api/v1/models/vision-default 巡检端点；算子节点 model 参数留空即用默认",
+        "图注缓存表 asset_figure_caption_cache（018 DDL + 013 存量在线迁移，附加式零变更）：重跑/换范式命中缓存近零成本；切片 metadata.caption_source='vlm' 可审计",
+        "顺带修复：catalogVersion 兼容性放宽为整数比较（旧 manifest 在目录升级后仍可执行）；table facts 误伤 PPT 图片资产导致带图 PPTX 挖掘失败（'FigureAsset' object has no attribute 'table_id'）；图注门面模型回落硬编码导致的 401",
+        "配套：Java agent-serving 校验和同步新 schema（发版包含重建 jar）；帮助中心/平台指南补图注使用说明；新增文件格式支持补全调研报告（docs/下一阶段/68号，下一分支依据）"
+      ]
+    },
     {
       "version": "1.2.1",
       "released_at": "2026-11-24",

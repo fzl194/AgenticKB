@@ -19,12 +19,21 @@ def test_generic_or_missing_declared_mime_falls_back_to_extension() -> None:
     assert resolve_upload_mime("report.pdf", None) == "application/pdf"
 
 
-def test_specific_declared_mime_is_preserved() -> None:
-    # 浏览器明确给了正确类型时不覆盖
+def test_specific_declared_mime_is_preserved_for_unknown_extensions() -> None:
+    # 已知扩展名：服务端扩展名映射为准（S2 收紧，防客户端注册表错标）
     assert resolve_upload_mime("a.md", "text/markdown") == "text/markdown"
     assert resolve_upload_mime("a.pdf", "application/pdf") == "application/pdf"
-    # 声明与扩展名冲突但声明是具体类型：以声明为准（如 .bin 显式声明）
-    assert resolve_upload_mime("weird.md", "application/x-my-format") == "application/x-my-format"
+    # 声明与扩展名冲突且声明具体：**映射仍优先**——weird.md 是已知扩展名
+    assert resolve_upload_mime("weird.md", "application/x-my-format") == "text/markdown"
+    # 未知扩展名的具体声明：以声明为准（保留对未知格式的宽容）
+    assert resolve_upload_mime("weird.xyzbin", "application/x-my-format") == "application/x-my-format"
+
+
+def test_csv_windows_registry_mislabel_loses_to_extension() -> None:
+    """S2 真实事故：Windows/HTTP 库把 .csv 报成 vnd.ms-excel（注册表级错标），
+    盲信会把 csv 送进旧二进制转换链必失败。扩展名映射必须赢。"""
+    assert resolve_upload_mime("data.csv", "application/vnd.ms-excel") == "text/csv"
+    assert resolve_upload_mime("conf.json", "text/plain") == "application/json"
 
 
 def test_unknown_extension_keeps_declared_or_octet_stream() -> None:

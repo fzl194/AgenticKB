@@ -71,11 +71,22 @@ _GENERIC_MIME = {"", "application/octet-stream"}
 
 
 def resolve_upload_mime(filename: str, declared: str | None) -> str:
-    """声明 MIME 缺失或为泛型时按扩展名回落；具体声明（含非匹配扩展名）以声明为准。"""
+    """已知扩展名以扩展名映射为准；未知扩展名回落声明 MIME。
+
+    2026-11-25（S2）策略收紧：原"具体声明优先"会让客户端（浏览器/
+    HTTP 库）注册表级的错标直通入库——典型如 Windows 把 .csv 报成
+    ``application/vnd.ms-excel``（Firefox 同病），csv 文件会进旧二进制
+    转换链必失败。服务端扩展名映射是上传边界的权威事实源；声明 MIME
+    只用于映射表未覆盖的扩展名（保留对未知格式的宽容）。泛型声明
+    （空/octet-stream）同样回落。
+    """
     declared = (declared or "").strip().lower()
+    mapped = _EXTENSION_MIME.get(Path(filename).suffix.lower())
+    if mapped is not None:
+        return mapped
     if declared not in _GENERIC_MIME:
         return declared
-    return _EXTENSION_MIME.get(Path(filename).suffix.lower(), "application/octet-stream")
+    return "application/octet-stream"
 
 
 #: 同步解压的成员数阈值（批次2c）：≤ 此值的归档在 HTTP 请求内同步完成，

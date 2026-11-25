@@ -18,7 +18,8 @@ CURRENT_SCHEMA_VERSION = "2026.09.user-lifecycle-retrieval-v1"
 # 67号工作台 MVP：加 012（kb_workspace_* 七表）后刷新。
 # 图片VLM图注方案B：加 013（asset_figure_caption_cache）后刷新。
 # S1 文件格式支持补全：加 014（快照 MIME 白名单放宽，legacy office）后刷新。
-CURRENT_SCHEMA_CHECKSUM = "574a943b4ab9e5dc4c6a1b60d85d559d4a6fc00d01ba92b8dd1d6e84ffacf3ca"
+# S2 文件格式支持补全：加 015（快照 MIME 白名单放宽，csv/json）后刷新。
+CURRENT_SCHEMA_CHECKSUM = "e98cc4fd47fb58e61235817f065ac894b79902b511c9cf8c87b9c46551b72049"
 SCHEMA_MARKER_ID = f"schema/{CURRENT_SCHEMA_VERSION}"
 MIGRATION_LEDGER_TABLE = "cmkb_schema_migrations"
 LEGACY_COMPAT_TABLES: tuple[str, ...] = ("mcp_open_kbs", "mcp_access")

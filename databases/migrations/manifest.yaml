@@ -72,3 +72,7 @@ migrations:
     path: core/20261125_014_legacy_office_mime_snapshot.sql
     mode: online_expand
     checksum: 4d1fc9b546400627d263f75fc2dec76f8868c0f10f4a21f0aa6429952dcc207f
+  - id: core/20261125_015_csv_json_mime_snapshot
+    path: core/20261125_015_csv_json_mime_snapshot.sql
+    mode: online_expand
+    checksum: eac518d000c61982120bc84a96a2d80f1284036e93a8740291dc31fccb8c087c

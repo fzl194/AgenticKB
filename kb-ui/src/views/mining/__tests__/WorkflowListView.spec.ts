@@ -61,7 +61,7 @@ describe('global mining Workflow list', () => {
     expect((wrapper.vm as unknown as { workflows: unknown[] }).workflows).toHaveLength(2)
   })
 
-  it('shows and creates all four official presets and preserves a conflicting name', async () => {
+  it('shows and creates all five official presets and preserves a conflicting name', async () => {
     const wrapper = shallowMount(WorkflowListView)
     await flushPromises()
     const vm = wrapper.vm as unknown as {
@@ -71,13 +71,16 @@ describe('global mining Workflow list', () => {
     }
 
     // 批次8 M6：官方 4 套预置（旧 7 类模板退役）
+    // v1.2.2（图注功能）：第 5 套「图文混合资产」预置入册
     const templateKeys = [
       'hybrid_assets', 'lexical_assets', 'query_alias_assets', 'longdoc_assets',
+      'vision_hybrid_assets',
     ]
     expect(vm.templates.map(template => template.key)).toEqual(templateKeys)
     expect(vm.templates.map(template => template.label)).toEqual([
       '标准混合资产（推荐）', '轻量关键词资产',
       '问题别名增强资产（实验）', '长文档全局增强资产（实验）',
+      '图文混合资产（实验）',
     ])
 
     for (const template_key of templateKeys) {

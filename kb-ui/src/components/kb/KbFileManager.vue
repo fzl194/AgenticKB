@@ -21,7 +21,7 @@
           :auto-upload="true"
           :http-request="handleUpload"
           :disabled="uploading > 0"
-          accept=".md,.markdown,.txt,.html,.htm,.pdf,.doc,.docx,.xls,.xlsx,.zip,.chm,.hdx"
+          :accept="UPLOAD_ACCEPT"
         >
           <el-button size="small" type="primary" :loading="uploading > 0">
             <el-icon class="el-icon--left"><UploadFilled /></el-icon>{{ t('kbManage.files.uploadHere') }}
@@ -265,6 +265,11 @@ import { docStatusLabel, docStatusTagType } from '@/views/kb/kbMeta'
 import type { Component } from 'vue'
 import type { KbDocument, KbFolder } from '@/types/kb'
 import { t } from '@/locales/t'
+import {
+  UPLOAD_ACCEPT,
+  isArchiveUploadFile,
+  isSupportedUploadFile,
+} from '@/utils/uploadExts'
 
 const NAME_CLICK_DELAY = 250 // 区分「单击进入」与「双击改名」
 
@@ -553,7 +558,8 @@ async function deleteFolder(f: KbFolder) {
 }
 
 // ── 文件操作 ──
-const ARCHIVE_EXTS = ['.zip', '.hdx', '.chm']
+// S4：扩展名清单已上收 utils/uploadExts.ts 单一事实源（ARCHIVE_EXTS
+// 由 isArchiveUploadFile 取代）。
 
 /** 轮询归档后台解压任务直至终态（批次2c）。 */
 async function pollArchiveTask(taskId: string, name: string) {
@@ -581,10 +587,14 @@ function autoMineSuffix(auto?: { auto_mined?: boolean; reason?: string }): strin
 
 async function handleUpload(opts: UploadRequestOptions) {
   const file = opts.file as File
+  // S4 双保险：绕过 accept（选"所有文件"）的非法扩展名在发请求前拦截。
+  if (!isSupportedUploadFile(file.name)) {
+    ElMessage.error(t('kbManage.files.unsupportedExt', { name: file.name }))
+    return
+  }
   uploading.value += 1
   try {
-    const lower = file.name.toLowerCase()
-    if (ARCHIVE_EXTS.some((e) => lower.endsWith(e))) {
+    if (isArchiveUploadFile(file.name)) {
       const r = await kbApi.uploadArchive(props.kbId, file, currentPath.value || undefined)
       if (r.archiveTaskId) {
         ElMessage.info(t('kbManage.files.archiveExtracting', { name: file.name, note: autoMineSuffix(r) }))
